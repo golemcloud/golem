@@ -12,6 +12,13 @@ use derive_more::{Display, FromStr};
 use chrono::{Utc, DateTime};
 use tokio;
 use serde::{Serialize, Deserialize};
+use model::*;
+use golem_examples::model::{
+    ExampleName, GuestLanguage, GuestLanguageTier, PackageName, TemplateName,
+};
+
+pub mod model;
+pub mod examples;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct ProjectId(Uuid);
@@ -22,7 +29,6 @@ enum ProjectRef {
     Name(String),
     Default,
 }
-
 
 
 impl FromArgMatches for ProjectRef {
@@ -204,9 +210,6 @@ struct AccountId(String); // TODO: Validate
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
 struct ProjectPolicyId(Uuid);
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
-struct TemplateName(String);
-
 #[derive(Subcommand, Debug)]
 #[command()]
 enum Command {
@@ -289,13 +292,13 @@ enum Command {
     #[command()]
     New {
         #[arg(short, long)]
-        template: TemplateName,
+        example: ExampleName,
 
         #[arg(short, long)]
-        component_name: ComponentName,
+        template_name: TemplateName,
 
         #[arg(short, long)]
-        package_name: Option<String>,
+        package_name: Option<PackageName>,
     },
     #[command()]
     ListTemplates {
@@ -366,98 +369,6 @@ impl FromStr for ProjectAction {
                         .join(", ");
                 Err(format!("Unknown action: {s}. Expected one of {all}"))
             }
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
-enum GuestLanguageTier {
-    Tier1,
-    Tier2,
-    Tier3,
-    Tier4,
-}
-
-impl Display for GuestLanguageTier {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            GuestLanguageTier::Tier1 => "1",
-            GuestLanguageTier::Tier2 => "2",
-            GuestLanguageTier::Tier3 => "3",
-            GuestLanguageTier::Tier4 => "4",
-        };
-
-        Display::fmt(s, f)
-    }
-}
-
-impl FromStr for GuestLanguageTier {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_ref() {
-            "tier1" | "1" => Ok(GuestLanguageTier::Tier1),
-            "tier2" | "2" => Ok(GuestLanguageTier::Tier2),
-            "tier3" | "3" => Ok(GuestLanguageTier::Tier3),
-            "tier4" | "4" => Ok(GuestLanguageTier::Tier4),
-            _ => Err(format!("Unexpected guest language tier {s}")),
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
-enum GuestLanguage {
-    Rust,
-    Go,
-    C,
-    Zig,
-    JavaScript,
-    CSharp,
-    Swift,
-    Grain,
-    Python,
-}
-
-impl Display for GuestLanguage {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            GuestLanguage::Rust => "Rust",
-            GuestLanguage::Go => "Go",
-            GuestLanguage::C => "C",
-            GuestLanguage::Zig => "Zig",
-            GuestLanguage::JavaScript => "JavaScript",
-            GuestLanguage::CSharp => "C#",
-            GuestLanguage::Swift => "Swift",
-            GuestLanguage::Grain => "Grain",
-            GuestLanguage::Python => "Python",
-        };
-
-        Display::fmt(s, f)
-    }
-}
-
-impl FromStr for GuestLanguage {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_ref() {
-            "rust" => Ok(GuestLanguage::Rust),
-            "go" => Ok(GuestLanguage::Go),
-            "c" | "c++" | "cpp" => Ok(GuestLanguage::C),
-            "zig" => Ok(GuestLanguage::Zig),
-            "js" | "javascript" => Ok(GuestLanguage::JavaScript),
-            "c#" | "cs" | "csharp" => Ok(GuestLanguage::CSharp),
-            "swift" => Ok(GuestLanguage::Swift),
-            "grain" => Ok(GuestLanguage::Grain),
-            "py" | "python" => Ok(GuestLanguage::Python),
-            _ => {
-                let all =
-                    GuestLanguage::iter()
-                        .map(|x| format!("\"{x}\""))
-                        .collect::<Vec<String>>()
-                        .join(", ");
-                Err(format!("Unknown language: {s}. Expected one of {all}"))
-            },
         }
     }
 }
@@ -771,41 +682,6 @@ enum ProjectPolicySubcommand {
     },
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
-enum Format {
-    Json,
-    Yaml,
-}
-
-impl Display for Format {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Json => "json",
-            Self::Yaml => "yaml",
-        };
-        Display::fmt(&s, f)
-    }
-}
-
-impl FromStr for Format {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "json" => Ok(Format::Json),
-            "yaml" => Ok(Format::Yaml),
-            _ => {
-                let all =
-                    Format::iter()
-                        .map(|x| format!("\"{x}\""))
-                        .collect::<Vec<String>>()
-                        .join(", ");
-                Err(format!("Unknown format: {s}. Expected one of {all}"))
-            }
-        }
-    }
-}
-
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None, rename_all = "kebab-case")]
 struct GolemCommand {
@@ -825,7 +701,7 @@ struct GolemCommand {
     command: Command,
 }
 
-fn main() ->  Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = GolemCommand::parse();
 
     tokio::runtime::Builder::new_multi_thread()
@@ -835,75 +711,58 @@ fn main() ->  Result<(), Box<dyn std::error::Error>> {
         .block_on(async_main(command))
 }
 
-enum GolemResult {
-    Ok(Box<dyn PrintRes>),
-    Err(String)
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 struct DeployResult {
-    msg: String
+    msg: String,
 }
 
-
-impl <T> PrintRes for T
-where T: Serialize, {
-    fn println(&self, format: &Format) -> () {
-        match format {
-            Format::Json => println!("{}", serde_json::to_string(self).unwrap()),
-            Format::Yaml => println!("{}", serde_yaml::to_string(self).unwrap()),
-        }
-    }
-}
-
-trait PrintRes {
-    fn println(&self, format: &Format) -> ();
-}
 
 async fn process_deploy(cmd: &Command) -> GolemResult {
-    GolemResult::Ok(Box::new(DeployResult{ msg: format!("{:?}", cmd) }))
+    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
 }
 
 async fn process_component(cmd: &Command) -> GolemResult {
-     GolemResult::Ok(Box::new(DeployResult{ msg: format!("{:?}", cmd) }))
+    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
 }
+
 async fn process_instance(cmd: &Command) -> GolemResult {
-     GolemResult::Ok(Box::new(DeployResult{ msg: format!("{:?}", cmd) }))
+    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
 }
+
 async fn process_account(cmd: &Command) -> GolemResult {
-     GolemResult::Ok(Box::new(DeployResult{ msg: format!("{:?}", cmd) }))
+    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
 }
+
 async fn process_token(cmd: &Command) -> GolemResult {
-     GolemResult::Ok(Box::new(DeployResult{ msg: format!("{:?}", cmd) }))
+    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
 }
+
 async fn process_project(cmd: &Command) -> GolemResult {
-     GolemResult::Ok(Box::new(DeployResult{ msg: format!("{:?}", cmd) }))
+    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
 }
+
 async fn process_share(cmd: &Command) -> GolemResult {
-     GolemResult::Ok(Box::new(DeployResult{ msg: format!("{:?}", cmd) }))
+    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
 }
+
 async fn process_project_policy(cmd: &Command) -> GolemResult {
-     GolemResult::Ok(Box::new(DeployResult{ msg: format!("{:?}", cmd) }))
-}
-async fn process_new(cmd: &Command) -> GolemResult {
-     GolemResult::Ok(Box::new(DeployResult{ msg: format!("{:?}", cmd) }))
-}
-async fn process_list_templates(cmd: &Command) -> GolemResult {
-     GolemResult::Ok(Box::new(DeployResult{ msg: format!("{:?}", cmd) }))
+    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
 }
 
 async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>> {
     let res = match cmd.command {
-        c@ Command::Deploy { .. } => process_deploy(&c).await,
-        c@ Command::Component { .. } => process_component(&c).await,
-        c@ Command::Instance { .. } => process_instance(&c).await,
-        c@ Command::Account { .. } => process_account(&c).await,
-        c@ Command::Token { .. } => process_token(&c).await,
-        c@ Command::Project { .. } => process_project(&c).await,
-        c@ Command::Share { .. } => process_share(&c).await,
-        c@ Command::ProjectPolicy { .. } => process_project_policy(&c).await,
-        c@ Command::New { .. } => process_new(&c).await,
-        c@ Command::ListTemplates { .. } => process_list_templates(&c).await,
+        c @ Command::Deploy { .. } => process_deploy(&c).await,
+        c @ Command::Component { .. } => process_component(&c).await,
+        c @ Command::Instance { .. } => process_instance(&c).await,
+        c @ Command::Account { .. } => process_account(&c).await,
+        c @ Command::Token { .. } => process_token(&c).await,
+        c @ Command::Project { .. } => process_project(&c).await,
+        c @ Command::Share { .. } => process_share(&c).await,
+        c @ Command::ProjectPolicy { .. } => process_project_policy(&c).await,
+        Command::New { example, package_name, template_name } =>
+            examples::process_new(example, template_name, package_name),
+         Command::ListTemplates {min_tier, language} =>
+             examples::process_list_templates(&min_tier, &language),
     };
 
     match res {
@@ -912,6 +771,11 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
 
             Ok(())
         }
-        GolemResult::Err(_) => todo!(),
+        GolemResult::Str(s) => {
+            println!("{s}");
+
+            Ok(())
+        }
+        GolemResult::Err(s) => Err(Box::new(GolemError(s))),
     }
 }
