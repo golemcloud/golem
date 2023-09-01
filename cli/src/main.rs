@@ -16,9 +16,21 @@ use model::*;
 use golem_examples::model::{
     ExampleName, GuestLanguage, GuestLanguageTier, PackageName, TemplateName,
 };
+use reqwest::Url;
+use crate::account::{AccountHandler, AccountHandlerLive};
+use crate::auth::{Auth, AuthLive};
+use crate::clients::account::AccountClientLive;
+use crate::clients::login::LoginClientLive;
+use crate::clients::token::TokenClientLive;
+use crate::token::{TokenHandler, TokenHandlerLive};
 
 pub mod model;
-pub mod examples;
+mod examples;
+mod auth;
+pub mod clients;
+mod account;
+mod token;
+
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct ProjectId(Uuid);
@@ -203,9 +215,6 @@ fn parse_instant(s: &str) -> Result<DateTime<Utc>, Box<dyn std::error::Error + S
         Err(err) => Err(err.into())
     }
 }
-
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
-struct AccountId(String); // TODO: Validate
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
 struct ProjectPolicyId(Uuid);
@@ -514,14 +523,14 @@ enum InstanceSubcommand {
 
 #[derive(Subcommand, Debug)]
 #[command()]
-enum AccountSubcommand {
+pub enum AccountSubcommand {
     #[command()]
     Get {},
 
     #[command()]
     Update {
         // TODO: validate non-empty
-        #[arg(short, long)]
+        #[arg(short = 'n', long)]
         account_name: Option<String>,
 
         #[arg(short = 'e', long)]
@@ -530,7 +539,7 @@ enum AccountSubcommand {
 
     #[command()]
     New {
-        #[arg(short, long)]
+        #[arg(short = 'n', long)]
         account_name: String,
 
         #[arg(short = 'e', long)]
@@ -550,7 +559,7 @@ enum AccountSubcommand {
 
 #[derive(Subcommand, Debug)]
 #[command()]
-enum GrantSubcommand {
+pub enum GrantSubcommand {
     #[command()]
     Get {},
 
@@ -568,7 +577,7 @@ enum GrantSubcommand {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
-enum Role {
+pub enum Role {
     Admin,
     WhitelistAdmin,
     MarketingAdmin,
@@ -618,12 +627,9 @@ impl FromStr for Role {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
-struct TokenId(Uuid);
-
 #[derive(Subcommand, Debug)]
 #[command()]
-enum TokenSubcommand {
+pub enum TokenSubcommand {
     #[command()]
     List {},
 
@@ -717,65 +723,52 @@ struct DeployResult {
 }
 
 
-async fn process_deploy(cmd: &Command) -> GolemResult {
-    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
-}
-
-async fn process_component(cmd: &Command) -> GolemResult {
-    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
-}
-
-async fn process_instance(cmd: &Command) -> GolemResult {
-    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
-}
-
-async fn process_account(cmd: &Command) -> GolemResult {
-    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
-}
-
-async fn process_token(cmd: &Command) -> GolemResult {
-    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
-}
-
-async fn process_project(cmd: &Command) -> GolemResult {
-    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
-}
-
-async fn process_share(cmd: &Command) -> GolemResult {
-    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
-}
-
-async fn process_project_policy(cmd: &Command) -> GolemResult {
-    GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) }))
+async fn process_deploy(cmd: &Command) -> Result<GolemResult, GolemError> {
+    Ok(GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) })))
 }
 
 async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>> {
+    let url = Url::parse("https://release.dev-api.golem.cloud/").unwrap();
+    let home = std::env::var("HOME").unwrap();
+    let default_conf_dir = PathBuf::from(format!("{home}/.golem"));
+
+    let login = LoginClientLive { login: golem_client::login::LoginLive { base_url: url.clone() } };
+    let auth_srv = AuthLive { login };
+    let account_client = AccountClientLive { account: golem_client::account::AccountLive { base_url: url.clone() } };
+    let acc_srv = AccountHandlerLive { client: account_client };
+    let token_client = TokenClientLive { client: golem_client::token::TokenLive {base_url: url.clone()} };
+    let token_srv = TokenHandlerLive {client: token_client};
+
+    let auth = auth_srv.authenticate(cmd.auth_token.clone(), cmd.config_directory.clone().unwrap_or(default_conf_dir)).await?;
+
     let res = match cmd.command {
         c @ Command::Deploy { .. } => process_deploy(&c).await,
-        c @ Command::Component { .. } => process_component(&c).await,
-        c @ Command::Instance { .. } => process_instance(&c).await,
-        c @ Command::Account { .. } => process_account(&c).await,
-        c @ Command::Token { .. } => process_token(&c).await,
-        c @ Command::Project { .. } => process_project(&c).await,
-        c @ Command::Share { .. } => process_share(&c).await,
-        c @ Command::ProjectPolicy { .. } => process_project_policy(&c).await,
+        Command::Component { .. } => todo!(),
+        Command::Instance { .. } => todo!(),
+        Command::Account { account_id, subcommand } => acc_srv.handle(&auth, account_id, subcommand).await,
+        Command::Token { account_id, subcommand } => token_srv.handle(&auth, account_id, subcommand).await,
+        Command::Project { .. } => todo!(),
+        Command::Share { .. } => todo!(),
+        Command::ProjectPolicy { .. } => todo!(),
         Command::New { example, package_name, template_name } =>
             examples::process_new(example, template_name, package_name),
-         Command::ListTemplates {min_tier, language} =>
-             examples::process_list_templates(&min_tier, &language),
+        Command::ListTemplates { min_tier, language } =>
+            examples::process_list_templates(min_tier, language),
     };
 
     match res {
-        GolemResult::Ok(r) => {
-            r.println(&cmd.format);
+        Ok(res) => match res {
+            GolemResult::Ok(r) => {
+                r.println(&cmd.format);
 
-            Ok(())
-        }
-        GolemResult::Str(s) => {
-            println!("{s}");
+                Ok(())
+            }
+            GolemResult::Str(s) => {
+                println!("{s}");
 
-            Ok(())
+                Ok(())
+            }
         }
-        GolemResult::Err(s) => Err(Box::new(GolemError(s))),
+        Err(err) => Err(Box::new(err)),
     }
 }
