@@ -3,8 +3,12 @@ use std::fmt::{Debug, Display, Formatter};
 
 use std::str::FromStr;
 use derive_more::{Display, FromStr, Into};
-use golem_client::model::{AccountEndpointError, LoginEndpointError};
-use indoc::{indoc, formatdoc};
+use golem_client::account::AccountError;
+use golem_client::component::ComponentError;
+use golem_client::login::LoginError;
+use golem_client::project::ProjectError;
+use golem_client::token::TokenError;
+use indoc::indoc;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use serde::Serialize;
@@ -38,45 +42,91 @@ impl<T> PrintRes for T
 #[derive(Clone, PartialEq, Eq)]
 pub struct GolemError(pub String);
 
-impl From<Option<LoginEndpointError>> for GolemError {
-    fn from(value: Option<LoginEndpointError>) -> Self {
-        match value {
-            None => GolemError("Unexpected endpoint call error".to_string()),
-            Some(err) => match err {
-                LoginEndpointError::ArgValidation { errors } => GolemError(format!("Invalid Login API call: {}", errors.join(", "))),
-                LoginEndpointError::NotWhitelisted { .. } => {
-                    let msg = indoc! {r"
-                        At the moment account creation is restricted.
-                        None of your verified emails is whitelisted.
-                        Please contact us to create an account.
-                        "};
 
-                    GolemError(msg.to_string())
-                }
-                LoginEndpointError::Internal { error } => GolemError(format!("Internal server error on Login: {error}")),
-                LoginEndpointError::External { error } => GolemError(format!("External service call error on Login: {error}")),
+impl From<AccountError> for GolemError {
+    fn from(value: AccountError) -> Self {
+        match value {
+            AccountError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
+            AccountError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
+            AccountError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            AccountError::Status404 { message } => GolemError(format!("Not found: {message}")),
+            AccountError::Status400 { errors } => {
+                let msg = errors.join(", ");
+                GolemError(format!("Invalid API call: {msg}"))
             }
+            AccountError::Status500 { error } => GolemError(format!("Internal server error: {error}")),
         }
     }
 }
 
-impl From<Option<AccountEndpointError>> for GolemError {
-    fn from(value: Option<AccountEndpointError>) -> Self {
+impl From<TokenError> for GolemError {
+    fn from(value: TokenError) -> Self {
         match value {
-            None => GolemError("Unexpected endpoint call error".to_string()),
-            Some(err) => match err {
-                AccountEndpointError::ArgValidation { errors } => GolemError(format!("Invalid API call: {}", errors.join(", "))),
-                AccountEndpointError::Internal { error } => GolemError(format!("Internal server error: {error}")),
-                AccountEndpointError::NotFound { message } => GolemError(format!("Not found: {message}")),
-                AccountEndpointError::Unauthorized { message } => {
-                    let msg = formatdoc!("
-                      Authorisation error: {message}.
-                      Consider removing configuration directory $$HOME/.golem
-                    ");
-
-                    GolemError(msg)
-                }
+            TokenError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
+            TokenError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
+            TokenError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            TokenError::Status404 { message } => GolemError(format!("Not found: {message}")),
+            TokenError::Status400 { errors } => {
+                let msg = errors.join(", ");
+                GolemError(format!("Invalid API call: {msg}"))
             }
+            TokenError::Status500 { error } => GolemError(format!("Internal server error: {error}")),
+        }
+    }
+}
+
+impl From<ComponentError> for GolemError {
+    fn from(value: ComponentError) -> Self {
+        match value {
+            ComponentError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
+            ComponentError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
+            ComponentError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            ComponentError::Status504 => GolemError(format!("Gateway Timeout")),
+            ComponentError::Status404 { message } => GolemError(message),
+            ComponentError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
+            ComponentError::Status400 { errors } => {
+                let msg = errors.join(", ");
+                GolemError(format!("Invalid API call: {msg}"))
+            },
+            ComponentError::Status500 { error } => GolemError(format!("Internal server error: {error}")),
+            ComponentError::Status409 { component_id } => GolemError(format!("{component_id} already exists")),
+        }
+    }
+}
+
+impl From<LoginError> for GolemError {
+    fn from(value: LoginError) -> Self {
+        match value {
+            LoginError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
+            LoginError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
+            LoginError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            LoginError::Status403 { .. } => {
+                let msg = indoc! {"
+                    At the moment account creation is restricted.
+                    None of your verified emails is whitelisted.
+                    Please contact us to create an account.
+                "};
+                GolemError(msg.to_string())
+            }
+            LoginError::Status500 { error } => GolemError(format!("Internal server error on Login: {error}")),
+            LoginError::Status401 { error } => GolemError(format!("External service call error on Login: {error}")),
+        }
+    }
+}
+
+impl From<ProjectError> for GolemError {
+    fn from(value: ProjectError) -> Self {
+        match value {
+            ProjectError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
+            ProjectError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
+            ProjectError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            ProjectError::Status404 { message } => GolemError(format!("Not found: {message}")),
+            ProjectError::Status400 { errors } => {
+                let msg = errors.join(", ");
+                GolemError(format!("Invalid API call: {msg}"))
+            }
+            ProjectError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
+            ProjectError::Status500 { error } => GolemError(format!("Internal server error: {error}")),
         }
     }
 }
@@ -151,4 +201,26 @@ impl AccountId {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Into)]
-pub struct TokenId(Uuid);
+pub struct TokenId(pub Uuid);
+
+#[derive(Clone, PartialEq, Eq, Debug, Into)]
+pub struct ProjectId(pub Uuid);
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ProjectRef {
+    Id(ProjectId),
+    Name(String),
+    Default,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RawComponentId(pub Uuid);
+
+#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+pub struct ComponentName(pub String); // TODO: Validate
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ComponentIdOrName {
+    Id(RawComponentId),
+    Name(ComponentName, ProjectRef),
+}
