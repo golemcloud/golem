@@ -78,20 +78,20 @@ fn render_type(tpe: &Type) -> String {
             let tpes: Vec<String> = elems.iter().map(|tpe| render_type(&tpe)).collect();
             format!("({})", tpes.join(", "))
         }
-        Type::List(elem) =>  format!("[{}]", render_type(&elem)),
-        Type::Str => "str".to_string(),
-        Type::Chr => "chr".to_string(),
-        Type::F64 => "f64".to_string(),
-        Type::F32 => "f32".to_string(),
-        Type::U64 => "u64".to_string(),
-        Type::S64 => "s64".to_string(),
-        Type::U32 => "u32".to_string(),
-        Type::S32 => "s32".to_string(),
-        Type::U16 => "u16".to_string(),
-        Type::S16 => "s16".to_string(),
-        Type::U8 => "u8".to_string(),
-        Type::S8 => "s8".to_string(),
-        Type::Bool => "bool".to_string(),
+        Type::List(elem) => format!("[{}]", render_type(&elem)),
+        Type::Str {} => "str".to_string(),
+        Type::Chr {} => "chr".to_string(),
+        Type::F64 {} => "f64".to_string(),
+        Type::F32 {} => "f32".to_string(),
+        Type::U64 {} => "u64".to_string(),
+        Type::S64 {} => "s64".to_string(),
+        Type::U32 {} => "u32".to_string(),
+        Type::S32 {} => "s32".to_string(),
+        Type::U16 {} => "u16".to_string(),
+        Type::S16 {} => "s16".to_string(),
+        Type::U8 {} => "u8".to_string(),
+        Type::S8 {} => "s8".to_string(),
+        Type::Bool {} => "bool".to_string(),
     }
 }
 
@@ -131,9 +131,9 @@ impl<C: golem_client::component::Component + Sync + Send> ComponentClient for Co
         info!("Adding component {name:?} from {path:?}");
 
         let file = File::open(path).await.map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
-        let component_name = golem_client::model::ComponentName{value: name.0};
+        let component_name = golem_client::model::ComponentName { value: name.0 };
 
-        let component = self.client.post_component(ComponentQuery{project_id: project_id.map(|ProjectId(id)| id), component_name}, file, &auth.header()).await?;
+        let component = self.client.post_component(ComponentQuery { project_id: project_id.map(|ProjectId(id)| id), component_name }, file, &auth.header()).await?;
 
         Ok((&component).into())
     }

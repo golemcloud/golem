@@ -1,11 +1,14 @@
 use golem_client::model::{TokenSecret, UnsafeToken};
-use crate::model::AccountId;
+use crate::model::{AccountId, ProjectAction};
 
 pub mod login;
 pub mod account;
 pub mod token;
 pub mod component;
 pub mod project;
+pub mod grant;
+pub mod policy;
+pub mod project_grant;
 
 pub fn token_header(secret: &TokenSecret) -> String {
     format!("bearer {}", secret.value)
@@ -25,5 +28,21 @@ impl CloudAuthentication {
         let CloudAuthentication(value) = self;
 
         AccountId {id: value.data.account_id.clone()}
+    }
+}
+
+pub fn action_cli_to_api(action: ProjectAction) -> golem_client::model::ProjectAction {
+    match action {
+        ProjectAction::ViewComponent => golem_client::model::ProjectAction::ViewComponent {},
+        ProjectAction::CreateComponent => golem_client::model::ProjectAction::CreateComponent {},
+        ProjectAction::UpdateComponent => golem_client::model::ProjectAction::UpdateComponent {},
+        ProjectAction::DeleteComponent => golem_client::model::ProjectAction::DeleteComponent {},
+        ProjectAction::ViewInstance => golem_client::model::ProjectAction::ViewInstance {},
+        ProjectAction::CreateInstance => golem_client::model::ProjectAction::CreateInstance {},
+        ProjectAction::UpdateInstance => golem_client::model::ProjectAction::UpdateInstance {},
+        ProjectAction::DeleteInstance => golem_client::model::ProjectAction::DeleteInstance {},
+        ProjectAction::ViewProjectGrants => golem_client::model::ProjectAction::ViewProjectGrants {},
+        ProjectAction::CreateProjectGrants => golem_client::model::ProjectAction::CreateProjectGrants {},
+        ProjectAction::DeleteProjectGrants => golem_client::model::ProjectAction::DeleteProjectGrants {},
     }
 }
