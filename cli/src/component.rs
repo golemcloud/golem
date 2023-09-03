@@ -1,12 +1,47 @@
+use std::path::PathBuf;
 use async_trait::async_trait;
+use clap::Subcommand;
 use indoc::formatdoc;
 use itertools::Itertools;
 use uuid::Uuid;
 use crate::clients::CloudAuthentication;
 use crate::clients::component::{ComponentClient, ComponentView};
 use crate::clients::project::ProjectClient;
-use crate::ComponentSubcommand;
-use crate::model::{ComponentIdOrName, GolemError, GolemResult, ProjectId, RawComponentId};
+use crate::model::{ComponentIdOrName, ComponentName, GolemError, GolemResult, ProjectId, ProjectRef, RawComponentId};
+
+#[derive(Subcommand, Debug)]
+#[command()]
+pub enum ComponentSubcommand {
+    #[command()]
+    Add {
+        #[command(flatten)]
+        project_ref: ProjectRef,
+
+        #[arg(short, long)]
+        component_name: ComponentName,
+
+        #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
+        component_file: PathBuf, // TODO: validate exists
+    },
+
+    #[command()]
+    Update {
+        #[command(flatten)]
+        component_id_or_name: ComponentIdOrName,
+
+        #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
+        component_file: PathBuf, // TODO: validate exists
+    },
+
+    #[command()]
+    List {
+        #[command(flatten)]
+        project_ref: ProjectRef,
+
+        #[arg(short, long)]
+        component_name: Option<ComponentName>,
+    },
+}
 
 #[async_trait]
 pub trait ComponentHandler {

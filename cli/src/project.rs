@@ -1,8 +1,30 @@
 use async_trait::async_trait;
+use clap::Subcommand;
 use crate::clients::CloudAuthentication;
 use crate::clients::project::ProjectClient;
 use crate::model::{GolemError, GolemResult};
-use crate::ProjectSubcommand;
+
+#[derive(Subcommand, Debug)]
+#[command()]
+pub enum ProjectSubcommand {
+    #[command()]
+    Add {
+        #[arg(short, long)]
+        project_name: String,
+
+        #[arg(short = 't', long)]
+        project_description: Option<String>,
+    },
+
+    #[command()]
+    List {
+        #[arg(short, long)]
+        project_name: Option<String>,
+    },
+
+    #[command()]
+    GetDefault {},
+}
 
 #[async_trait]
 pub trait ProjectHandler {
