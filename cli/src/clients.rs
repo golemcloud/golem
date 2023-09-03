@@ -4,6 +4,8 @@ use crate::model::AccountId;
 pub mod login;
 pub mod account;
 pub mod token;
+pub mod component;
+pub mod project;
 
 pub fn token_header(secret: &TokenSecret) -> String {
     format!("bearer {}", secret.value)

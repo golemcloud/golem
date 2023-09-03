@@ -10,6 +10,8 @@ use uuid::Uuid;
 use clap_verbosity_flag::Verbosity;
 use derive_more::{Display, FromStr};
 use chrono::{Utc, DateTime};
+use golem_client::component::ComponentLive;
+use golem_client::project::ProjectLive;
 use tokio;
 use serde::{Serialize, Deserialize};
 use model::*;
@@ -20,8 +22,12 @@ use reqwest::Url;
 use crate::account::{AccountHandler, AccountHandlerLive};
 use crate::auth::{Auth, AuthLive};
 use crate::clients::account::AccountClientLive;
+use crate::clients::component::ComponentClientLive;
 use crate::clients::login::LoginClientLive;
+use crate::clients::project::ProjectClientLive;
 use crate::clients::token::TokenClientLive;
+use crate::component::{ComponentHandler, ComponentHandlerLive};
+use crate::project::{ProjectHandler, ProjectHandlerLive};
 use crate::token::{TokenHandler, TokenHandlerLive};
 
 pub mod model;
@@ -30,17 +36,8 @@ mod auth;
 pub mod clients;
 mod account;
 mod token;
-
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-struct ProjectId(Uuid);
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-enum ProjectRef {
-    Id(ProjectId),
-    Name(String),
-    Default,
-}
+mod component;
+mod project;
 
 
 impl FromArgMatches for ProjectRef {
@@ -102,15 +99,6 @@ impl From<&ProjectRef> for ProjectRefArgs {
             }
         }
     }
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-struct RawComponentId(Uuid);
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-enum ComponentIdOrName {
-    Id(RawComponentId),
-    Name(ComponentName, ProjectRef),
 }
 
 impl FromArgMatches for ComponentIdOrName {
@@ -195,9 +183,6 @@ impl From<&ComponentIdOrName> for ComponentIdOrNameArgs {
         }
     }
 }
-
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
-struct ComponentName(String); // TODO: Validate
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
 struct InstanceName(String); // TODO: Validate
@@ -384,7 +369,7 @@ impl FromStr for ProjectAction {
 
 #[derive(Subcommand, Debug)]
 #[command()]
-enum ComponentSubcommand {
+pub enum ComponentSubcommand {
     #[command()]
     Add {
         #[command(flatten)]
@@ -649,7 +634,7 @@ pub enum TokenSubcommand {
 
 #[derive(Subcommand, Debug)]
 #[command()]
-enum ProjectSubcommand {
+pub enum ProjectSubcommand {
     #[command()]
     Add {
         #[arg(short, long)]
@@ -736,18 +721,22 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     let auth_srv = AuthLive { login };
     let account_client = AccountClientLive { account: golem_client::account::AccountLive { base_url: url.clone() } };
     let acc_srv = AccountHandlerLive { client: account_client };
-    let token_client = TokenClientLive { client: golem_client::token::TokenLive {base_url: url.clone()} };
-    let token_srv = TokenHandlerLive {client: token_client};
+    let token_client = TokenClientLive { client: golem_client::token::TokenLive { base_url: url.clone() } };
+    let token_srv = TokenHandlerLive { client: token_client };
+    let project_client = ProjectClientLive { client: ProjectLive { base_url: url.clone() } };
+    let project_srv = ProjectHandlerLive { client: &project_client };
+    let component_client = ComponentClientLive { client: ComponentLive { base_url: url.clone() } };
+    let component_srv = ComponentHandlerLive { client: component_client, projects: &project_client };
 
     let auth = auth_srv.authenticate(cmd.auth_token.clone(), cmd.config_directory.clone().unwrap_or(default_conf_dir)).await?;
 
     let res = match cmd.command {
         c @ Command::Deploy { .. } => process_deploy(&c).await,
-        Command::Component { .. } => todo!(),
+        Command::Component { subcommand } => component_srv.handle(&auth, subcommand).await,
         Command::Instance { .. } => todo!(),
         Command::Account { account_id, subcommand } => acc_srv.handle(&auth, account_id, subcommand).await,
         Command::Token { account_id, subcommand } => token_srv.handle(&auth, account_id, subcommand).await,
-        Command::Project { .. } => todo!(),
+        Command::Project { subcommand } => project_srv.handle(&auth, subcommand).await,
         Command::Share { .. } => todo!(),
         Command::ProjectPolicy { .. } => todo!(),
         Command::New { example, package_name, template_name } =>
