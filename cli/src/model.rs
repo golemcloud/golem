@@ -6,6 +6,7 @@ use derive_more::{Display, FromStr, Into};
 use golem_client::account::AccountError;
 use golem_client::component::ComponentError;
 use golem_client::grant::GrantError;
+use golem_client::instance::InstanceError;
 use golem_client::login::LoginError;
 use golem_client::project::ProjectError;
 use golem_client::project_grant::ProjectGrantError;
@@ -19,6 +20,7 @@ use uuid::Uuid;
 
 pub enum GolemResult {
     Ok(Box<dyn PrintRes>),
+    Json(serde_json::value::Value),
     Str(String),
 }
 
@@ -50,8 +52,8 @@ impl From<AccountError> for GolemError {
     fn from(value: AccountError) -> Self {
         match value {
             AccountError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
-            AccountError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
-            AccountError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            AccountError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
+            AccountError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
             AccountError::Status404 { message } => GolemError(format!("Not found: {message}")),
             AccountError::Status400 { errors } => {
                 let msg = errors.join(", ");
@@ -66,8 +68,8 @@ impl From<TokenError> for GolemError {
     fn from(value: TokenError) -> Self {
         match value {
             TokenError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
-            TokenError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
-            TokenError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            TokenError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
+            TokenError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
             TokenError::Status404 { message } => GolemError(format!("Not found: {message}")),
             TokenError::Status400 { errors } => {
                 let msg = errors.join(", ");
@@ -82,15 +84,15 @@ impl From<ComponentError> for GolemError {
     fn from(value: ComponentError) -> Self {
         match value {
             ComponentError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
-            ComponentError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
-            ComponentError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            ComponentError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
+            ComponentError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
             ComponentError::Status504 => GolemError(format!("Gateway Timeout")),
             ComponentError::Status404 { message } => GolemError(message),
             ComponentError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
             ComponentError::Status400 { errors } => {
                 let msg = errors.join(", ");
                 GolemError(format!("Invalid API call: {msg}"))
-            },
+            }
             ComponentError::Status500 { error } => GolemError(format!("Internal server error: {error}")),
             ComponentError::Status409 { component_id } => GolemError(format!("{component_id} already exists")),
         }
@@ -101,8 +103,8 @@ impl From<LoginError> for GolemError {
     fn from(value: LoginError) -> Self {
         match value {
             LoginError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
-            LoginError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
-            LoginError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            LoginError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
+            LoginError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
             LoginError::Status403 { .. } => {
                 let msg = indoc! {"
                     At the moment account creation is restricted.
@@ -121,8 +123,8 @@ impl From<ProjectError> for GolemError {
     fn from(value: ProjectError) -> Self {
         match value {
             ProjectError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
-            ProjectError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
-            ProjectError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            ProjectError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
+            ProjectError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
             ProjectError::Status404 { message } => GolemError(format!("Not found: {message}")),
             ProjectError::Status400 { errors } => {
                 let msg = errors.join(", ");
@@ -138,14 +140,14 @@ impl From<GrantError> for GolemError {
     fn from(value: GrantError) -> Self {
         match value {
             GrantError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
-            GrantError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
-            GrantError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            GrantError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
+            GrantError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
             GrantError::Status404 { message } => GolemError(format!("Not found: {message}")),
             GrantError::Status400 { errors } => {
                 let msg = errors.join(", ");
                 GolemError(format!("Invalid API call: {msg}"))
-            },
-            GrantError::Status500 { error } =>  GolemError(format!("Internal server error: {error}")),
+            }
+            GrantError::Status500 { error } => GolemError(format!("Internal server error: {error}")),
         }
     }
 }
@@ -154,13 +156,13 @@ impl From<ProjectPolicyError> for GolemError {
     fn from(value: ProjectPolicyError) -> Self {
         match value {
             ProjectPolicyError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
-            ProjectPolicyError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
-            ProjectPolicyError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            ProjectPolicyError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
+            ProjectPolicyError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
             ProjectPolicyError::Status404 { message } => GolemError(format!("Not found: {message}")),
             ProjectPolicyError::Status400 { errors } => {
                 let msg = errors.join(", ");
                 GolemError(format!("Invalid API call: {msg}"))
-            } ,
+            }
             ProjectPolicyError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
             ProjectPolicyError::Status500 { error } => GolemError(format!("Internal server error: {error}")),
         }
@@ -171,15 +173,34 @@ impl From<ProjectGrantError> for GolemError {
     fn from(value: ProjectGrantError) -> Self {
         match value {
             ProjectGrantError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
-            ProjectGrantError::InvalidHeaderValue(err) =>  GolemError(format!("Unexpected invalid header value: {err}")),
-            ProjectGrantError::UnexpectedStatus(sc) =>  GolemError(format!("Unexpected status: {sc}")),
+            ProjectGrantError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
+            ProjectGrantError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
             ProjectGrantError::Status404 { message } => GolemError(format!("Not found: {message}")),
             ProjectGrantError::Status400 { errors } => {
                 let msg = errors.join(", ");
                 GolemError(format!("Invalid API call: {msg}"))
-            } ,
+            }
             ProjectGrantError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
             ProjectGrantError::Status500 { error } => GolemError(format!("Internal server error: {error}")),
+        }
+    }
+}
+
+impl From<InstanceError> for GolemError {
+    fn from(value: InstanceError) -> Self {
+        match value {
+            InstanceError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
+            InstanceError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
+            InstanceError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
+            InstanceError::Status504 => GolemError(format!("Gateway timeout")),
+            InstanceError::Status404 { error } => GolemError(format!("Not found: {error}")),
+            InstanceError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
+            InstanceError::Status400 { errors } => {
+                let msg = errors.join(", ");
+                GolemError(format!("Invalid API call: {msg}"))
+            }
+            InstanceError::Status500 { golem_error } => GolemError(format!("Internal server error: {golem_error:?}")),
+            InstanceError::Status409 { error } => GolemError(error),
         }
     }
 }
@@ -538,3 +559,9 @@ impl FromStr for ProjectAction {
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
 pub struct ProjectPolicyId(pub Uuid);
+
+#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+pub struct InstanceName(pub String); // TODO: Validate
+
+#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Serialize)]
+pub struct InvocationKey(pub String); // TODO: Validate

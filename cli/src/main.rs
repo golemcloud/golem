@@ -5,14 +5,15 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use uuid::Uuid;
 use clap_verbosity_flag::Verbosity;
-use derive_more::{Display, FromStr};
 use golem_client::component::ComponentLive;
 use golem_client::grant::GrantLive;
+use golem_client::instance::InstanceLive;
+use golem_client::model::{ComponentInstance, InvokeParameters};
 use golem_client::project::ProjectLive;
 use golem_client::project_grant::ProjectGrantLive;
 use golem_client::project_policy::ProjectPolicyLive;
 use tokio;
-use serde::{Serialize, Deserialize};
+use serde::Serialize;
 use model::*;
 use golem_examples::model::{
     ExampleName, GuestLanguage, GuestLanguageTier, PackageName, TemplateName,
@@ -21,14 +22,17 @@ use reqwest::Url;
 use crate::account::{AccountHandler, AccountHandlerLive, AccountSubcommand};
 use crate::auth::{Auth, AuthLive};
 use crate::clients::account::AccountClientLive;
-use crate::clients::component::ComponentClientLive;
+use crate::clients::CloudAuthentication;
+use crate::clients::component::{ComponentClient, ComponentClientLive, ComponentView};
 use crate::clients::grant::GrantClientLive;
+use crate::clients::instance::{InstanceClient, InstantClientLive};
 use crate::clients::login::LoginClientLive;
 use crate::clients::policy::ProjectPolicyClientLive;
-use crate::clients::project::ProjectClientLive;
+use crate::clients::project::{ProjectClient, ProjectClientLive};
 use crate::clients::project_grant::ProjectGrantClientLive;
 use crate::clients::token::TokenClientLive;
 use crate::component::{ComponentHandler, ComponentHandlerLive, ComponentSubcommand};
+use crate::instance::{InstanceHandler, InstanceHandlerLive, InstanceSubcommand};
 use crate::policy::{ProjectPolicyHandler, ProjectPolicyHandlerLive, ProjectPolicySubcommand};
 use crate::project::{ProjectHandler, ProjectHandlerLive, ProjectSubcommand};
 use crate::project_grant::{ProjectGrantHandler, ProjectGrantHandlerLive};
@@ -44,11 +48,9 @@ mod component;
 mod project;
 mod policy;
 mod project_grant;
+mod instance;
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
-struct InstanceName(String); // TODO: Validate
-
-fn parse_key_val(s: &str) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync + 'static>> {
+pub fn parse_key_val(s: &str) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let pos = s
         .find('=')
         .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
@@ -75,8 +77,8 @@ enum Command {
         #[arg(short, long)]
         function: String,
 
-        #[arg(short = 'j', long)]
-        parameters: String, // TODO: validate json
+        #[arg(short = 'j', long, value_name = "json")]
+        parameters: serde_json::value::Value,
 
         #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
         component_file: PathBuf, // TODO: validate exists,
@@ -155,110 +157,6 @@ enum Command {
     },
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
-struct InvocationKey(String); // TODO: Validate
-
-#[derive(Subcommand, Debug)]
-#[command()]
-enum InstanceSubcommand {
-    #[command()]
-    Add {
-        #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
-
-        #[arg(short, long)]
-        instance_name: InstanceName,
-
-        #[arg(short, long, value_parser = parse_key_val)]
-        env: Vec<(String, String)>,
-
-        #[arg(value_name = "args")]
-        args: Vec<String>,
-    },
-    #[command()]
-    InvocationKey {
-        #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
-
-        #[arg(short, long)]
-        instance_name: InstanceName,
-    },
-    #[command()]
-    InvokeAndAwait {
-        #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
-
-        #[arg(short, long)]
-        instance_name: InstanceName,
-
-        #[arg(short = 'k', long)]
-        invocation_key: Option<InvocationKey>,
-
-        #[arg(short, long)]
-        function: String,
-
-        #[arg(short = 'j', long)]
-        parameters: String, // TODO: validate json
-
-        #[arg(short = 's', long, default_value_t = false)]
-        use_stdio: bool,
-    },
-    #[command()]
-    Invoke {
-        #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
-
-        #[arg(short, long)]
-        instance_name: InstanceName,
-
-        #[arg(short, long)]
-        function: String,
-
-        #[arg(short = 'j', long)]
-        parameters: String, // TODO: validate json
-    },
-    #[command()]
-    Connect {
-        #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
-
-        #[arg(short, long)]
-        instance_name: InstanceName,
-    },
-    #[command()]
-    Interrupt {
-        #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
-
-        #[arg(short, long)]
-        instance_name: InstanceName,
-    },
-    #[command()]
-    SimulatedCrash {
-        #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
-
-        #[arg(short, long)]
-        instance_name: InstanceName,
-    },
-    #[command()]
-    Delete {
-        #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
-
-        #[arg(short, long)]
-        instance_name: InstanceName,
-    },
-    #[command()]
-    Get {
-        #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
-
-        #[arg(short, long)]
-        instance_name: InstanceName,
-    },
-}
-
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None, rename_all = "kebab-case")]
 struct GolemCommand {
@@ -288,13 +186,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .block_on(async_main(command))
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct DeployResult {
-    msg: String,
+#[derive(Debug, Serialize)]
+struct DeployResult{
+    component: ComponentView,
+    instance: ComponentInstance
 }
 
-async fn process_deploy(cmd: &Command) -> Result<GolemResult, GolemError> {
-    Ok(GolemResult::Ok(Box::new(DeployResult { msg: format!("{:?}", cmd) })))
+async fn handle_deploy(
+    project_client: &impl ProjectClient,
+    component_client: &impl ComponentClient,
+    instance_client: &impl InstanceClient,
+    auth: &CloudAuthentication,
+    project_ref: ProjectRef,
+    component_name: ComponentName,
+    instance_name: InstanceName,
+    env: Vec<(String, String)>,
+    function: String,
+    parameters: serde_json::value::Value,
+    component_file: PathBuf,
+    args: Vec<String>,
+) -> Result<GolemResult, GolemError> {
+    let project_id = project_client.resolve_id(project_ref, auth).await?;
+    let component = component_client.add(project_id, component_name, component_file, auth).await?;
+    let component_id = RawComponentId(Uuid::parse_str(&component.component_id).map_err(|e| GolemError(format!("Unexpected error on parsing component id: {e}")))?);
+    let instance = instance_client.new_instance(
+        instance_name.clone(),
+        component_id.clone(),
+        args,
+        env,
+        auth
+    ).await?;
+    instance_client.invoke(instance_name, component_id, function, InvokeParameters{params: parameters}, auth).await?;
+
+    let res = DeployResult {component, instance};
+
+    Ok(GolemResult::Ok(Box::new(res)))
 }
 
 async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>> {
@@ -312,18 +238,22 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     let project_client = ProjectClientLive { client: ProjectLive { base_url: url.clone() } };
     let project_srv = ProjectHandlerLive { client: &project_client };
     let component_client = ComponentClientLive { client: ComponentLive { base_url: url.clone() } };
-    let component_srv = ComponentHandlerLive { client: component_client, projects: &project_client };
+    let component_srv = ComponentHandlerLive { client: component_client.clone(), projects: &project_client };
     let project_policy_client = ProjectPolicyClientLive { client: ProjectPolicyLive { base_url: url.clone() } };
     let project_policy_srv = ProjectPolicyHandlerLive { client: project_policy_client };
     let project_grant_client = ProjectGrantClientLive { client: ProjectGrantLive { base_url: url.clone() } };
     let project_grant_srv = ProjectGrantHandlerLive { client: project_grant_client, project: &project_client };
+    let instance_client = InstantClientLive { client: InstanceLive { base_url: url.clone() } };
+    let instance_srv = InstanceHandlerLive { client: instance_client.clone(), component: &component_srv };
 
     let auth = auth_srv.authenticate(cmd.auth_token.clone(), cmd.config_directory.clone().unwrap_or(default_conf_dir)).await?;
 
     let res = match cmd.command {
-        c @ Command::Deploy { .. } => process_deploy(&c).await,
+        Command::Deploy { project_ref, component_name, instance_name, env, function, parameters, component_file, args } => {
+            handle_deploy(&project_client, &component_client, &instance_client, &auth, project_ref, component_name, instance_name, env, function, parameters, component_file, args).await
+        }
         Command::Component { subcommand } => component_srv.handle(&auth, subcommand).await,
-        Command::Instance { .. } => todo!(),
+        Command::Instance { subcommand } => instance_srv.handle(&auth, subcommand).await,
         Command::Account { account_id, subcommand } => acc_srv.handle(&auth, account_id, subcommand).await,
         Command::Token { account_id, subcommand } => token_srv.handle(&auth, account_id, subcommand).await,
         Command::Project { subcommand } => project_srv.handle(&auth, subcommand).await,
@@ -347,6 +277,12 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
                 println!("{s}");
 
                 Ok(())
+            }
+            GolemResult::Json(json) => {
+                match &cmd.format {
+                    Format::Json => Ok(println!("{}", serde_json::to_string_pretty(&json).unwrap())),
+                    Format::Yaml => Ok(println!("{}", serde_yaml::to_string(&json).unwrap())),
+                }
             }
         }
         Err(err) => Err(Box::new(err)),
