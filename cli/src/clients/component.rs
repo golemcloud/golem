@@ -16,6 +16,7 @@ pub trait ComponentClient {
     async fn update(&self, id: RawComponentId, file: PathBuf, auth: &CloudAuthentication) -> Result<ComponentView, GolemError>;
 }
 
+#[derive(Clone)]
 pub struct ComponentClientLive<C: golem_client::component::Component + Sync + Send> {
     pub client: C,
 }

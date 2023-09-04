@@ -9,6 +9,7 @@ pub mod project;
 pub mod grant;
 pub mod policy;
 pub mod project_grant;
+pub mod instance;
 
 pub fn token_header(secret: &TokenSecret) -> String {
     format!("bearer {}", secret.value)
