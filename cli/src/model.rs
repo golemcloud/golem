@@ -1,7 +1,10 @@
+use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 
 use std::str::FromStr;
-use clap::{ArgMatches, Error, FromArgMatches};
+use clap::{Arg, ArgMatches, Command, Error, FromArgMatches};
+use clap::builder::{StringValueParser, TypedValueParser};
+use clap::error::{ContextKind, ContextValue, ErrorKind};
 use derive_more::{Display, FromStr, Into};
 use golem_client::account::AccountError;
 use golem_client::component::ComponentError;
@@ -565,3 +568,28 @@ pub struct InstanceName(pub String); // TODO: Validate
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Serialize)]
 pub struct InvocationKey(pub String); // TODO: Validate
+
+#[derive(Clone)]
+pub struct JsonValueParser;
+
+impl TypedValueParser for JsonValueParser {
+    type Value = serde_json::value::Value;
+
+    fn parse_ref(&self, cmd: &Command, arg: Option<&Arg>, value: &OsStr) -> Result<Self::Value, Error> {
+        let inner = StringValueParser::new();
+        let val = inner.parse_ref(cmd, arg, value)?;
+        let parsed = <serde_json::Value as std::str::FromStr>::from_str(&val);
+
+        match parsed {
+            Ok(value) => Ok(value),
+            Err(serde_err) => {
+                let mut err = clap::Error::new(ErrorKind::ValueValidation);
+                if let Some(arg) = arg {
+                    err.insert(ContextKind::InvalidArg, ContextValue::String(arg.to_string()));
+                }
+                err.insert(ContextKind::InvalidValue, ContextValue::String(format!("Invalid JSON value: {serde_err}")));
+                Err(err)
+            }
+        }
+    }
+}

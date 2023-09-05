@@ -1,10 +1,11 @@
 use async_trait::async_trait;
 use clap::Subcommand;
+use clap::builder::ValueParser;
 use golem_client::model::InvokeParameters;
 use crate::clients::CloudAuthentication;
 use crate::clients::instance::InstanceClient;
 use crate::component::ComponentHandler;
-use crate::model::{ComponentIdOrName, GolemError, GolemResult, InstanceName, InvocationKey};
+use crate::model::{ComponentIdOrName, GolemError, GolemResult, InstanceName, InvocationKey, JsonValueParser};
 use crate::parse_key_val;
 
 #[derive(Subcommand, Debug)]
@@ -46,7 +47,7 @@ pub enum InstanceSubcommand {
         #[arg(short, long)]
         function: String,
 
-        #[arg(short = 'j', long, value_name = "json")]
+        #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser))]
         parameters: serde_json::value::Value,
 
         #[arg(short = 's', long, default_value_t = false)]
@@ -63,7 +64,7 @@ pub enum InstanceSubcommand {
         #[arg(short, long)]
         function: String,
 
-        #[arg(short = 'j', long, value_name = "json")]
+        #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser))]
         parameters: serde_json::value::Value,
     },
     #[command()]
@@ -143,7 +144,7 @@ impl <'r, C: InstanceClient + Send + Sync, R: ComponentHandler + Send + Sync> In
                     None => self.client.get_invocation_key(&instance_name, &component_id, auth).await?,
                     Some(key) => key,
                 };
-
+                
                 let res = self.client.invoke_and_await(instance_name, component_id, function, InvokeParameters{params: parameters}, invocation_key, use_stdio, auth).await?;
 
                 Ok(GolemResult::Json(res.result))

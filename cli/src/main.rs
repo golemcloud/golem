@@ -2,6 +2,7 @@ extern crate derive_more;
 
 use std::fmt::Debug;
 use clap::{Parser, Subcommand};
+use clap::builder::ValueParser;
 use std::path::PathBuf;
 use uuid::Uuid;
 use clap_verbosity_flag::Verbosity;
@@ -33,6 +34,7 @@ use crate::clients::project_grant::ProjectGrantClientLive;
 use crate::clients::token::TokenClientLive;
 use crate::component::{ComponentHandler, ComponentHandlerLive, ComponentSubcommand};
 use crate::instance::{InstanceHandler, InstanceHandlerLive, InstanceSubcommand};
+use crate::model::JsonValueParser;
 use crate::policy::{ProjectPolicyHandler, ProjectPolicyHandlerLive, ProjectPolicySubcommand};
 use crate::project::{ProjectHandler, ProjectHandlerLive, ProjectSubcommand};
 use crate::project_grant::{ProjectGrantHandler, ProjectGrantHandlerLive};
@@ -77,7 +79,7 @@ enum Command {
         #[arg(short, long)]
         function: String,
 
-        #[arg(short = 'j', long, value_name = "json")]
+        #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser))]
         parameters: serde_json::value::Value,
 
         #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
