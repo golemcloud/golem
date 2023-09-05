@@ -71,10 +71,6 @@ fn render_type(tpe: &Type) -> String {
 
             format!("{{{}}}", pairs.join(", "))
         }
-        Type::Union(types) => {
-            let tpes: Vec<String> = types.iter().map(|tpe| render_type(&tpe)).collect();
-            format!("{{{}}}", tpes.join(" | "))
-        }
         Type::Tuple(elems) => {
             let tpes: Vec<String> = elems.iter().map(|tpe| render_type(&tpe)).collect();
             format!("({})", tpes.join(", "))

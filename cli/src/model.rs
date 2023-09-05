@@ -57,6 +57,7 @@ impl From<AccountError> for GolemError {
             AccountError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
             AccountError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
             AccountError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
+            AccountError::Status401 { message } => GolemError(format!("Unauthorized: {message}")),
             AccountError::Status404 { message } => GolemError(format!("Not found: {message}")),
             AccountError::Status400 { errors } => {
                 let msg = errors.join(", ");
@@ -73,6 +74,7 @@ impl From<TokenError> for GolemError {
             TokenError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
             TokenError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
             TokenError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
+            TokenError::Status401 { message } => GolemError(format!("Unauthorized: {message}")),
             TokenError::Status404 { message } => GolemError(format!("Not found: {message}")),
             TokenError::Status400 { errors } => {
                 let msg = errors.join(", ");
@@ -89,6 +91,7 @@ impl From<ComponentError> for GolemError {
             ComponentError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
             ComponentError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
             ComponentError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
+            ComponentError::Status401 { error } => GolemError(format!("Unauthorized: {error}")),
             ComponentError::Status504 => GolemError(format!("Gateway Timeout")),
             ComponentError::Status404 { message } => GolemError(message),
             ComponentError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
@@ -108,6 +111,10 @@ impl From<LoginError> for GolemError {
             LoginError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
             LoginError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
             LoginError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
+            LoginError::Status400 { errors } => {
+                let joined = errors.join(", ");
+                GolemError(format!("Invalid request: {joined}"))
+            }
             LoginError::Status403 { .. } => {
                 let msg = indoc! {"
                     At the moment account creation is restricted.
@@ -133,6 +140,7 @@ impl From<ProjectError> for GolemError {
                 let msg = errors.join(", ");
                 GolemError(format!("Invalid API call: {msg}"))
             }
+            ProjectError::Status401 { message } => GolemError(format!("Unauthorized: {message}")),
             ProjectError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
             ProjectError::Status500 { error } => GolemError(format!("Internal server error: {error}")),
         }
@@ -145,6 +153,7 @@ impl From<GrantError> for GolemError {
             GrantError::RequestFailure(err) => GolemError(format!("Unexpected request failure: {err}")),
             GrantError::InvalidHeaderValue(err) => GolemError(format!("Unexpected invalid header value: {err}")),
             GrantError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
+            GrantError::Status401 { message } => GolemError(format!("Unauthorized: {message}")),
             GrantError::Status404 { message } => GolemError(format!("Not found: {message}")),
             GrantError::Status400 { errors } => {
                 let msg = errors.join(", ");
@@ -166,6 +175,7 @@ impl From<ProjectPolicyError> for GolemError {
                 let msg = errors.join(", ");
                 GolemError(format!("Invalid API call: {msg}"))
             }
+            ProjectPolicyError::Status401 { message } => GolemError(format!("Unauthorized: {message}")),
             ProjectPolicyError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
             ProjectPolicyError::Status500 { error } => GolemError(format!("Internal server error: {error}")),
         }
@@ -183,6 +193,7 @@ impl From<ProjectGrantError> for GolemError {
                 let msg = errors.join(", ");
                 GolemError(format!("Invalid API call: {msg}"))
             }
+            ProjectGrantError::Status401 { message } => GolemError(format!("Unauthorized: {message}")),
             ProjectGrantError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
             ProjectGrantError::Status500 { error } => GolemError(format!("Internal server error: {error}")),
         }
@@ -202,6 +213,7 @@ impl From<InstanceError> for GolemError {
                 let msg = errors.join(", ");
                 GolemError(format!("Invalid API call: {msg}"))
             }
+            InstanceError::Status401 { error } => GolemError(format!("Unauthorized: {error}")),
             InstanceError::Status500 { golem_error } => GolemError(format!("Internal server error: {golem_error:?}")),
             InstanceError::Status409 { error } => GolemError(error),
         }
