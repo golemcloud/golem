@@ -6,13 +6,15 @@ use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::model::{
     ComponentInstance, InstanceMetadata, InvokeParameters, InvokeResult, WorkerCreationRequest,
 };
+use native_tls::TlsConnector;
 use reqwest::Url;
 use serde::Deserialize;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 use tokio::{task, time};
 use tokio_tungstenite::{
-    connect_async, tungstenite::client::IntoClientRequest, tungstenite::protocol::Message,
+    connect_async_tls_with_config, tungstenite::client::IntoClientRequest,
+    tungstenite::protocol::Message, Connector,
 };
 use tracing::{debug, info};
 
@@ -89,6 +91,7 @@ pub trait WorkerClient {
 pub struct WorkerClientLive<C: golem_client::instance::Instance + Send + Sync> {
     pub client: C,
     pub base_url: Url,
+    pub allow_insecure: bool,
 }
 
 #[async_trait]
@@ -279,7 +282,19 @@ impl<C: golem_client::instance::Instance + Send + Sync> WorkerClient for WorkerC
         let headers = request.headers_mut();
         headers.insert("Authorization", auth.header().parse().unwrap());
 
-        let (ws_stream, _) = connect_async(request)
+        let connector = if self.allow_insecure {
+            Some(Connector::NativeTls(
+                TlsConnector::builder()
+                    .danger_accept_invalid_certs(true)
+                    .danger_accept_invalid_hostnames(true)
+                    .build()
+                    .unwrap(),
+            ))
+        } else {
+            None
+        };
+
+        let (ws_stream, _) = connect_async_tls_with_config(request, None, false, connector)
             .await
             .map_err(|e| GolemError(format!("Failed websocket: {e}")))?;
 

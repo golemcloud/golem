@@ -324,6 +324,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
             allow_insecure,
         },
         base_url: url.clone(),
+        allow_insecure,
     };
     let worker_srv = WorkerHandlerLive {
         client: worker_client.clone(),
