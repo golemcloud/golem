@@ -17,6 +17,7 @@ use golem_client::token::TokenError;
 use indoc::indoc;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use uuid::Uuid;
@@ -38,8 +39,8 @@ pub trait PrintRes {
 }
 
 impl<T> PrintRes for T
-where
-    T: Serialize,
+    where
+        T: Serialize,
 {
     fn println(&self, format: &Format) {
         match format {
@@ -470,18 +471,18 @@ struct TemplateIdOrNameArgs {
     template_name: Option<String>,
 
     #[arg(
-        short = 'P',
-        long,
-        conflicts_with = "project_name",
-        conflicts_with = "template_id"
+    short = 'P',
+    long,
+    conflicts_with = "project_name",
+    conflicts_with = "template_id"
     )]
     project_id: Option<Uuid>,
 
     #[arg(
-        short = 'p',
-        long,
-        conflicts_with = "project_id",
-        conflicts_with = "template_id"
+    short = 'p',
+    long,
+    conflicts_with = "project_id",
+    conflicts_with = "template_id"
     )]
     project_name: Option<String>,
 }
@@ -699,6 +700,25 @@ impl TypedValueParser for JsonValueParser {
                 );
                 Err(err)
             }
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+pub struct ExampleDescription {
+    pub name: ExampleName,
+    pub language: GuestLanguage,
+    pub description: String,
+    pub tier: GuestLanguageTier,
+}
+
+impl ExampleDescription {
+    pub fn from_example(example: &Example) -> Self {
+        Self {
+            name: example.name.clone(),
+            language: example.language.clone(),
+            description: example.description.clone(),
+            tier: example.language.tier(),
         }
     }
 }
