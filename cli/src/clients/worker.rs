@@ -272,7 +272,10 @@ impl<C: golem_client::instance::Instance + Send + Sync> WorkerClient for WorkerC
         auth: &CloudAuthentication,
     ) -> Result<(), GolemError> {
         let mut url = self.base_url.clone();
-        url.set_scheme("wss")
+
+        let ws_schema = if url.scheme() == "http" { "ws" } else { "wss" };
+
+        url.set_scheme(ws_schema)
             .map_err(|_| GolemError("Can't set schema.".to_string()))?;
         url.path_segments_mut()
             .map_err(|_| GolemError("Can't get path.".to_string()))?
