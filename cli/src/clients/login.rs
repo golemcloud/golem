@@ -1,8 +1,8 @@
-use golem_client::login::Login;
-use golem_client::model::{TokenSecret, Token, OAuth2Data, UnsafeToken};
-use async_trait::async_trait;
 use crate::clients::token_header;
 use crate::model::GolemError;
+use async_trait::async_trait;
+use golem_client::login::Login;
+use golem_client::model::{OAuth2Data, Token, TokenSecret, UnsafeToken};
 use tracing::info;
 
 #[async_trait]
@@ -22,7 +22,10 @@ pub struct LoginClientLive<L: Login + Send + Sync> {
 impl<L: Login + Send + Sync> LoginClient for LoginClientLive<L> {
     async fn token_details(&self, manual_token: TokenSecret) -> Result<Token, GolemError> {
         info!("Getting token info");
-        Ok(self.login.current_token(&token_header(&manual_token)).await?)
+        Ok(self
+            .login
+            .current_token(&token_header(&manual_token))
+            .await?)
     }
 
     async fn start_oauth2(&self) -> Result<OAuth2Data, GolemError> {
