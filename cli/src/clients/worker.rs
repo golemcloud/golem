@@ -288,18 +288,17 @@ impl<C: golem_client::instance::Instance + Send + Sync> WorkerClient for WorkerC
         let pings = task::spawn(async move {
             let mut interval = time::interval(Duration::from_secs(5)); // TODO configure
 
-            let cnt: std::cell::Cell<i32> = std::cell::Cell::new(1);
+            let mut cnt: i32 = 1;
 
             loop {
                 interval.tick().await;
 
-                let i = cnt.get();
                 write
-                    .send(Message::Ping(i.to_ne_bytes().to_vec()))
+                    .send(Message::Ping(cnt.to_ne_bytes().to_vec()))
                     .await
                     .unwrap(); // TODO: handle errors: map_err(|e| GolemError(format!("Ping failure: {e}")))?;
 
-                cnt.set(i + 1);
+                cnt += 1;
             }
         });
 
