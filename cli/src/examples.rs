@@ -1,14 +1,19 @@
+use crate::model::GolemError;
 use crate::GolemResult;
-use golem_examples::model::{Example, ExampleName, ExampleParameters, GuestLanguage, GuestLanguageTier, PackageName, TemplateName};
+use golem_examples::model::{
+    Example, ExampleName, ExampleParameters, GuestLanguage, GuestLanguageTier, PackageName,
+    TemplateName,
+};
 use golem_examples::*;
 use std::env;
-use crate::model::GolemError;
 
-pub fn process_new(example_name: ExampleName, template_name: TemplateName, package_name: Option<PackageName>) -> Result<GolemResult, GolemError> {
+pub fn process_new(
+    example_name: ExampleName,
+    template_name: TemplateName,
+    package_name: Option<PackageName>,
+) -> Result<GolemResult, GolemError> {
     let examples = GolemExamples::list_all_examples();
-    let example = examples
-        .iter()
-        .find(|example| example.name == example_name);
+    let example = examples.iter().find(|example| example.name == example_name);
     match example {
         Some(example) => {
             let cwd = env::current_dir().expect("Failed to get current working directory");
@@ -21,7 +26,7 @@ pub fn process_new(example_name: ExampleName, template_name: TemplateName, packa
                     target_path: cwd,
                 },
             ) {
-                Ok(instructions) => Ok(GolemResult::Str(format!("{instructions}"))),
+                Ok(instructions) => Ok(GolemResult::Str(instructions.to_string())),
                 Err(err) => GolemResult::err(format!("Failed to instantiate template: {err}")),
             }
         }
@@ -31,8 +36,11 @@ pub fn process_new(example_name: ExampleName, template_name: TemplateName, packa
     }
 }
 
-pub fn process_list_examples(min_tier: Option<GuestLanguageTier>, language: Option<GuestLanguage>) -> Result<GolemResult, GolemError> {
-   let examples = GolemExamples::list_all_examples()
+pub fn process_list_examples(
+    min_tier: Option<GuestLanguageTier>,
+    language: Option<GuestLanguage>,
+) -> Result<GolemResult, GolemError> {
+    let examples = GolemExamples::list_all_examples()
         .iter()
         .filter(|example| match &language {
             Some(language) => example.language == *language,
@@ -42,7 +50,7 @@ pub fn process_list_examples(min_tier: Option<GuestLanguageTier>, language: Opti
             Some(min_tier) => example.language.tier() <= *min_tier,
             None => true,
         })
-       .map(|r| r.clone())
+        .cloned()
         .collect::<Vec<Example>>();
 
     Ok(GolemResult::Ok(Box::new(examples)))
