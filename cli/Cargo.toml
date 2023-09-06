@@ -17,7 +17,7 @@ clap = { version = "4.4.1", features = ["derive"] }
 clap-verbosity-flag = "2.0.1"
 derive_more = "0.99.17"
 futures-util = "0.3.28"
-golem-client = "0.0.32"
+golem-client = "0.0.40"
 golem-examples = "0.1.3"
 http = "0.2.9"
 indoc = "2.0.3"
