@@ -226,7 +226,8 @@ async fn handle_deploy(
 }
 
 async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>> {
-    let url = Url::parse("https://release.dev-api.golem.cloud/").unwrap();
+    let utl_str = std::env::var("GOLEM_BASE_URL").unwrap_or("https://release.dev-api.golem.cloud/".to_string());
+    let url = Url::parse(&utl_str).unwrap();
     let home = std::env::var("HOME").unwrap();
     let default_conf_dir = PathBuf::from(format!("{home}/.golem"));
 
@@ -245,7 +246,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     let project_policy_srv = ProjectPolicyHandlerLive { client: project_policy_client };
     let project_grant_client = ProjectGrantClientLive { client: ProjectGrantLive { base_url: url.clone() } };
     let project_grant_srv = ProjectGrantHandlerLive { client: project_grant_client, project: &project_client };
-    let instance_client = InstantClientLive { client: InstanceLive { base_url: url.clone() } };
+    let instance_client = InstantClientLive { client: InstanceLive { base_url: url.clone()}, base_url: url.clone() };
     let instance_srv = InstanceHandlerLive { client: instance_client.clone(), component: &component_srv };
 
     let auth = auth_srv.authenticate(cmd.auth_token.clone(), cmd.config_directory.clone().unwrap_or(default_conf_dir)).await?;
