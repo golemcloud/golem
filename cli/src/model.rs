@@ -14,6 +14,7 @@ use golem_client::project::ProjectError;
 use golem_client::project_grant::ProjectGrantError;
 use golem_client::project_policy::ProjectPolicyError;
 use golem_client::token::TokenError;
+use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
 use indoc::indoc;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -699,6 +700,25 @@ impl TypedValueParser for JsonValueParser {
                 );
                 Err(err)
             }
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+pub struct ExampleDescription {
+    pub name: ExampleName,
+    pub language: GuestLanguage,
+    pub description: String,
+    pub tier: GuestLanguageTier,
+}
+
+impl ExampleDescription {
+    pub fn from_example(example: &Example) -> Self {
+        Self {
+            name: example.name.clone(),
+            language: example.language.clone(),
+            description: example.description.clone(),
+            tier: example.language.tier(),
         }
     }
 }
