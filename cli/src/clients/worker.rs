@@ -271,16 +271,17 @@ impl<C: golem_client::instance::Instance + Send + Sync> WorkerClient for WorkerC
         template_id: RawTemplateId,
         auth: &CloudAuthentication,
     ) -> Result<(), GolemError> {
-        let mut base_url = self.base_url.clone();
-        base_url
-            .set_scheme("wss")
+        let mut url = self.base_url.clone();
+        url.set_scheme("wss")
             .map_err(|_| GolemError("Can't set schema.".to_string()))?;
-        let url = base_url
-            .join(&format!(
-                "/v1/templates/{}/workers/{}/connect",
-                template_id.0, name.0
-            ))
-            .map_err(|e| GolemError(format!("Failed to join url: {e:>}")))?;
+        url.path_segments_mut()
+            .map_err(|_| GolemError("Can't get path.".to_string()))?
+            .push("v1")
+            .push("templates")
+            .push(&template_id.0.to_string())
+            .push("workers")
+            .push(&name.0)
+            .push("connect");
 
         let mut request = url
             .into_client_request()
