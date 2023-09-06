@@ -31,7 +31,7 @@ pub fn process_new(example_name: ExampleName, template_name: TemplateName, packa
     }
 }
 
-pub fn process_list_templates(min_tier: Option<GuestLanguageTier>, language: Option<GuestLanguage>) -> Result<GolemResult, GolemError> {
+pub fn process_list_examples(min_tier: Option<GuestLanguageTier>, language: Option<GuestLanguage>) -> Result<GolemResult, GolemError> {
    let examples = GolemExamples::list_all_examples()
         .iter()
         .filter(|example| match &language {

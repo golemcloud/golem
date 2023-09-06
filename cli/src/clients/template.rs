@@ -5,38 +5,38 @@ use golem_client::model::{Component, ComponentQuery, Export, FunctionParameter, 
 use serde::Serialize;
 use tokio::fs::File;
 use crate::clients::CloudAuthentication;
-use crate::model::{ComponentName, GolemError};
-use crate::{ProjectId, RawComponentId};
+use crate::model::{TemplateName, GolemError};
+use crate::{ProjectId, RawTemplateId};
 
 
 #[async_trait]
-pub trait ComponentClient {
-    async fn find(&self, project_id: Option<ProjectId>, name: Option<ComponentName>, auth: &CloudAuthentication) -> Result<Vec<ComponentView>, GolemError>;
-    async fn add(&self, project_id: Option<ProjectId>, name: ComponentName, file: PathBuf, auth: &CloudAuthentication) -> Result<ComponentView, GolemError>;
-    async fn update(&self, id: RawComponentId, file: PathBuf, auth: &CloudAuthentication) -> Result<ComponentView, GolemError>;
+pub trait TemplateClient {
+    async fn find(&self, project_id: Option<ProjectId>, name: Option<TemplateName>, auth: &CloudAuthentication) -> Result<Vec<TemplateView>, GolemError>;
+    async fn add(&self, project_id: Option<ProjectId>, name: TemplateName, file: PathBuf, auth: &CloudAuthentication) -> Result<TemplateView, GolemError>;
+    async fn update(&self, id: RawTemplateId, file: PathBuf, auth: &CloudAuthentication) -> Result<TemplateView, GolemError>;
 }
 
 #[derive(Clone)]
-pub struct ComponentClientLive<C: golem_client::component::Component + Sync + Send> {
+pub struct TemplateClientLive<C: golem_client::component::Component + Sync + Send> {
     pub client: C,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
-pub struct ComponentView {
-    pub component_id: String,
-    pub component_version: i32,
-    pub component_name: String,
-    pub component_size: i32,
+pub struct TemplateView {
+    pub template_id: String,
+    pub template_version: i32,
+    pub template_name: String,
+    pub template_size: i32,
     pub exports: Vec<String>,
 }
 
-impl From<&Component> for ComponentView {
+impl From<&Component> for TemplateView {
     fn from(value: &Component) -> Self {
-        ComponentView {
-            component_id: value.versioned_template_id.raw_template_id.to_string(),
-            component_version: value.versioned_template_id.version,
-            component_name: value.template_name.value.to_string(),
-            component_size: value.template_size,
+        TemplateView {
+            template_id: value.versioned_template_id.raw_template_id.to_string(),
+            template_version: value.versioned_template_id.version,
+            template_name: value.template_name.value.to_string(),
+            template_size: value.template_size,
             exports: value.metadata.exports.iter().flat_map(|exp| match exp {
                 Export::Instance { name, functions } => {
                     let fs: Vec<String> = functions.iter().map(|f| show_exported_function(&format!("{name}/"), &f.name, &f.parameters, &f.results)).collect();
@@ -118,34 +118,34 @@ fn show_exported_function(prefix: &str, name: &str, parameters: &Vec<FunctionPar
 }
 
 #[async_trait]
-impl<C: golem_client::component::Component + Sync + Send> ComponentClient for ComponentClientLive<C> {
-    async fn find(&self, project_id: Option<ProjectId>, name: Option<ComponentName>, auth: &CloudAuthentication) -> Result<Vec<ComponentView>, GolemError> {
-        info!("Getting component");
+impl<C: golem_client::component::Component + Sync + Send> TemplateClient for TemplateClientLive<C> {
+    async fn find(&self, project_id: Option<ProjectId>, name: Option<TemplateName>, auth: &CloudAuthentication) -> Result<Vec<TemplateView>, GolemError> {
+        info!("Getting templates");
 
-        let components = self.client.get_components(project_id.map(|ProjectId(id)| id.to_string()).as_deref(), name.map(|ComponentName(s)| s).as_deref(), &auth.header()).await?;
+        let templates = self.client.get_components(project_id.map(|ProjectId(id)| id.to_string()).as_deref(), name.map(|TemplateName(s)| s).as_deref(), &auth.header()).await?;
 
-        let views = components.iter().map(|c| c.into()).collect();
+        let views = templates.iter().map(|c| c.into()).collect();
         Ok(views)
     }
 
-    async fn add(&self, project_id: Option<ProjectId>, name: ComponentName, path: PathBuf, auth: &CloudAuthentication) -> Result<ComponentView, GolemError> {
-        info!("Adding component {name:?} from {path:?}");
+    async fn add(&self, project_id: Option<ProjectId>, name: TemplateName, path: PathBuf, auth: &CloudAuthentication) -> Result<TemplateView, GolemError> {
+        info!("Adding template {name:?} from {path:?}");
 
-        let file = File::open(path).await.map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
-        let component_name = golem_client::model::ComponentName { value: name.0 };
+        let file = File::open(path).await.map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
+        let template_name = golem_client::model::ComponentName { value: name.0 };
 
-        let component = self.client.post_component(ComponentQuery { project_id: project_id.map(|ProjectId(id)| id), component_name }, file, &auth.header()).await?;
+        let template = self.client.post_component(ComponentQuery { project_id: project_id.map(|ProjectId(id)| id), component_name: template_name }, file, &auth.header()).await?;
 
-        Ok((&component).into())
+        Ok((&template).into())
     }
 
-    async fn update(&self, id: RawComponentId, path: PathBuf, auth: &CloudAuthentication) -> Result<ComponentView, GolemError> {
-        info!("Updating component {id:?} from {path:?}");
+    async fn update(&self, id: RawTemplateId, path: PathBuf, auth: &CloudAuthentication) -> Result<TemplateView, GolemError> {
+        info!("Updating template {id:?} from {path:?}");
 
-        let file = File::open(path).await.map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
+        let file = File::open(path).await.map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
 
-        let component = self.client.put_component(&id.0.to_string(), file, &auth.header()).await?;
+        let template = self.client.put_component(&id.0.to_string(), file, &auth.header()).await?;
 
-        Ok((&component).into())
+        Ok((&template).into())
     }
 }
