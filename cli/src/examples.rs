@@ -1,7 +1,7 @@
 use crate::model::{ExampleDescription, GolemError};
 use crate::GolemResult;
-use golem_examples::model::{ExampleName, ExampleParameters, GuestLanguage, GuestLanguageTier, PackageName,
-                            TemplateName,
+use golem_examples::model::{
+    ExampleName, ExampleParameters, GuestLanguage, GuestLanguageTier, PackageName, TemplateName,
 };
 use golem_examples::*;
 use std::env;
@@ -49,7 +49,7 @@ pub fn process_list_examples(
             Some(min_tier) => example.language.tier() <= *min_tier,
             None => true,
         })
-        .map(|example| ExampleDescription::from_example(example))
+        .map(ExampleDescription::from_example)
         .collect::<Vec<ExampleDescription>>();
 
     Ok(GolemResult::Ok(Box::new(examples)))

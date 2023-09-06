@@ -14,10 +14,10 @@ use golem_client::project::ProjectError;
 use golem_client::project_grant::ProjectGrantError;
 use golem_client::project_policy::ProjectPolicyError;
 use golem_client::token::TokenError;
+use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
 use indoc::indoc;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
-use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use uuid::Uuid;
@@ -39,8 +39,8 @@ pub trait PrintRes {
 }
 
 impl<T> PrintRes for T
-    where
-        T: Serialize,
+where
+    T: Serialize,
 {
     fn println(&self, format: &Format) {
         match format {
@@ -471,18 +471,18 @@ struct TemplateIdOrNameArgs {
     template_name: Option<String>,
 
     #[arg(
-    short = 'P',
-    long,
-    conflicts_with = "project_name",
-    conflicts_with = "template_id"
+        short = 'P',
+        long,
+        conflicts_with = "project_name",
+        conflicts_with = "template_id"
     )]
     project_id: Option<Uuid>,
 
     #[arg(
-    short = 'p',
-    long,
-    conflicts_with = "project_id",
-    conflicts_with = "template_id"
+        short = 'p',
+        long,
+        conflicts_with = "project_id",
+        conflicts_with = "template_id"
     )]
     project_name: Option<String>,
 }
