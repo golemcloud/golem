@@ -587,9 +587,9 @@ dependencies = [
 
 [[package]]
 name = "golem-client"
-version = "0.0.32+14-6d5d0fb4"
+version = "0.0.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5dda1695ecbf0b858cf51f2fa47200fc6cb30ea6a0f5de9acd6f26400d3074e6"
+checksum = "83c3f2d90a0af9cdeef2dc960cee3c295639d6cd3f8865f7a13813e9fadc78ac"
 dependencies = [
  "async-trait",
  "bytes",

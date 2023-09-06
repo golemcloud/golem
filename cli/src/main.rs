@@ -240,26 +240,31 @@ async fn handle_deploy(
 }
 
 async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>> {
-    let utl_str =
+    let url_str =
         std::env::var("GOLEM_BASE_URL").unwrap_or("https://release.api.golem.cloud/".to_string());
-    let url = Url::parse(&utl_str).unwrap();
+    let url = Url::parse(&url_str).unwrap();
     let home = std::env::var("HOME").unwrap();
+    let allow_insecure_str = std::env::var("GOLEM_ALLOW_INSECURE").unwrap_or("false".to_string());
+    let allow_insecure = allow_insecure_str != "false";
     let default_conf_dir = PathBuf::from(format!("{home}/.golem"));
 
     let login = LoginClientLive {
         login: golem_client::login::LoginLive {
             base_url: url.clone(),
+            allow_insecure,
         },
     };
     let auth_srv = AuthLive { login };
     let account_client = AccountClientLive {
         account: golem_client::account::AccountLive {
             base_url: url.clone(),
+            allow_insecure,
         },
     };
     let grant_client = GrantClientLive {
         client: GrantLive {
             base_url: url.clone(),
+            allow_insecure,
         },
     };
     let acc_srv = AccountHandlerLive {
@@ -269,6 +274,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     let token_client = TokenClientLive {
         client: golem_client::token::TokenLive {
             base_url: url.clone(),
+            allow_insecure,
         },
     };
     let token_srv = TokenHandlerLive {
@@ -277,6 +283,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     let project_client = ProjectClientLive {
         client: ProjectLive {
             base_url: url.clone(),
+            allow_insecure,
         },
     };
     let project_srv = ProjectHandlerLive {
@@ -285,6 +292,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     let template_client = TemplateClientLive {
         client: ComponentLive {
             base_url: url.clone(),
+            allow_insecure,
         },
     };
     let template_srv = TemplateHandlerLive {
@@ -294,6 +302,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     let project_policy_client = ProjectPolicyClientLive {
         client: ProjectPolicyLive {
             base_url: url.clone(),
+            allow_insecure,
         },
     };
     let project_policy_srv = ProjectPolicyHandlerLive {
@@ -302,6 +311,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     let project_grant_client = ProjectGrantClientLive {
         client: ProjectGrantLive {
             base_url: url.clone(),
+            allow_insecure,
         },
     };
     let project_grant_srv = ProjectGrantHandlerLive {
@@ -311,6 +321,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     let worker_client = WorkerClientLive {
         client: InstanceLive {
             base_url: url.clone(),
+            allow_insecure,
         },
         base_url: url.clone(),
     };
