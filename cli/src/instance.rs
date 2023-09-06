@@ -156,7 +156,13 @@ impl <'r, C: InstanceClient + Send + Sync, R: ComponentHandler + Send + Sync> In
 
                 Ok(GolemResult::Str("Invoked".to_string()))
             }
-            InstanceSubcommand::Connect { .. } => {todo!()}
+            InstanceSubcommand::Connect { component_id_or_name, instance_name } => {
+                let component_id = self.component.resolve_id(component_id_or_name, &auth).await?;
+
+                self.client.connect(instance_name, component_id, auth).await?;
+
+                Err(GolemError("connect should never complete".to_string()))
+            }
             InstanceSubcommand::Interrupt { component_id_or_name, instance_name } => {
                 let component_id = self.component.resolve_id(component_id_or_name, &auth).await?;
 
