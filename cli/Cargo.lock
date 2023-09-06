@@ -558,7 +558,7 @@ checksum = "6fb8d784f27acf97159b40fc4db5ecd8aa23b9ad5ef69cdd136d3bc80665f0c0"
 
 [[package]]
 name = "golem-cli"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "async-trait",
  "chrono",
