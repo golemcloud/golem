@@ -3,7 +3,9 @@ use crate::model::{GolemError, InvocationKey, RawTemplateId};
 use crate::WorkerName;
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
-use golem_client::model::{ComponentInstance, InstanceMetadata, InvokeParameters, InvokeResult};
+use golem_client::model::{
+    ComponentInstance, InstanceMetadata, InvokeParameters, InvokeResult, WorkerCreationRequest,
+};
 use reqwest::Url;
 use serde::Deserialize;
 use std::fmt::{Display, Formatter};
@@ -101,30 +103,15 @@ impl<C: golem_client::instance::Instance + Send + Sync> WorkerClient for WorkerC
     ) -> Result<ComponentInstance, GolemError> {
         info!("Creating worker {name} of {}", template_id.0);
 
-        let args = if args.is_empty() {
-            None
-        } else {
-            Some(args.join(",")) // TODO: use json
-        };
-
-        let env = if env.is_empty() {
-            None
-        } else {
-            Some(
-                env.into_iter()
-                    .map(|(k, v)| format!("{k}={v}"))
-                    .collect::<Vec<String>>()
-                    .join(","),
-            ) //  TODO use json
-        };
-
         Ok(self
             .client
             .launch_new_instance(
                 &template_id.0.to_string(),
-                &name.0,
-                args.as_deref(),
-                env.as_deref(),
+                WorkerCreationRequest {
+                    name: name.0,
+                    args,
+                    env,
+                },
                 &auth.header(),
             )
             .await?)
