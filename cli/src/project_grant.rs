@@ -1,10 +1,11 @@
+use async_trait::async_trait;
+
 use crate::clients::project::ProjectClient;
 use crate::clients::project_grant::ProjectGrantClient;
 use crate::clients::CloudAuthentication;
 use crate::model::{
     AccountId, GolemError, GolemResult, ProjectAction, ProjectId, ProjectPolicyId, ProjectRef,
 };
-use async_trait::async_trait;
 
 #[async_trait]
 pub trait ProjectGrantHandler {

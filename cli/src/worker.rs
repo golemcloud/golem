@@ -1,3 +1,8 @@
+use async_trait::async_trait;
+use clap::builder::ValueParser;
+use clap::Subcommand;
+use golem_client::model::InvokeParameters;
+
 use crate::clients::worker::WorkerClient;
 use crate::clients::CloudAuthentication;
 use crate::model::{
@@ -5,10 +10,6 @@ use crate::model::{
 };
 use crate::parse_key_val;
 use crate::template::TemplateHandler;
-use async_trait::async_trait;
-use clap::builder::ValueParser;
-use clap::Subcommand;
-use golem_client::model::InvokeParameters;
 
 #[derive(Subcommand, Debug)]
 #[command()]

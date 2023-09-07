@@ -1,6 +1,6 @@
-use crate::clients::CloudAuthentication;
-use crate::model::{GolemError, InvocationKey, RawTemplateId};
-use crate::WorkerName;
+use std::fmt::{Display, Formatter};
+use std::time::Duration;
+
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::model::{
@@ -9,14 +9,15 @@ use golem_client::model::{
 use native_tls::TlsConnector;
 use reqwest::Url;
 use serde::Deserialize;
-use std::fmt::{Display, Formatter};
-use std::time::Duration;
 use tokio::{task, time};
-use tokio_tungstenite::{
-    connect_async_tls_with_config, tungstenite::client::IntoClientRequest,
-    tungstenite::protocol::Message, Connector,
-};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio_tungstenite::{connect_async_tls_with_config, Connector};
 use tracing::{debug, info};
+
+use crate::clients::CloudAuthentication;
+use crate::model::{GolemError, InvocationKey, RawTemplateId};
+use crate::WorkerName;
 
 #[async_trait]
 pub trait WorkerClient {

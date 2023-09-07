@@ -1,9 +1,11 @@
-use crate::clients::{action_cli_to_api, CloudAuthentication};
-use crate::model::{GolemError, ProjectAction, ProjectPolicyId};
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use golem_client::model::{ProjectActions, ProjectPolicy, ProjectPolicyData};
-use std::collections::HashSet;
 use tracing::info;
+
+use crate::clients::{action_cli_to_api, CloudAuthentication};
+use crate::model::{GolemError, ProjectAction, ProjectPolicyId};
 
 #[async_trait]
 pub trait ProjectPolicyClient {

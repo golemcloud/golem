@@ -1,10 +1,11 @@
-use crate::clients::{action_cli_to_api, CloudAuthentication};
-use crate::model::{AccountId, GolemError, ProjectAction, ProjectId, ProjectPolicyId};
 use async_trait::async_trait;
 use golem_client::model::{
     ProjectGrant, ProjectGrantDataRequest, ProjectGrantDataWithProjectActions,
 };
 use tracing::info;
+
+use crate::clients::{action_cli_to_api, CloudAuthentication};
+use crate::model::{AccountId, GolemError, ProjectAction, ProjectId, ProjectPolicyId};
 
 #[async_trait]
 pub trait ProjectGrantClient {

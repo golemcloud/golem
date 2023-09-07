@@ -1,10 +1,12 @@
-use crate::model::{ExampleDescription, GolemError};
-use crate::GolemResult;
+use std::env;
+
 use golem_examples::model::{
     ExampleName, ExampleParameters, GuestLanguage, GuestLanguageTier, PackageName, TemplateName,
 };
 use golem_examples::*;
-use std::env;
+
+use crate::model::{ExampleDescription, GolemError};
+use crate::GolemResult;
 
 pub fn process_new(
     example_name: ExampleName,

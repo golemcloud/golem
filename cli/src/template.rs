@@ -1,15 +1,17 @@
+use std::path::PathBuf;
+
+use async_trait::async_trait;
+use clap::Subcommand;
+use indoc::formatdoc;
+use itertools::Itertools;
+use uuid::Uuid;
+
 use crate::clients::project::ProjectClient;
 use crate::clients::template::{TemplateClient, TemplateView};
 use crate::clients::CloudAuthentication;
 use crate::model::{
     GolemError, GolemResult, ProjectId, ProjectRef, RawTemplateId, TemplateIdOrName, TemplateName,
 };
-use async_trait::async_trait;
-use clap::Subcommand;
-use indoc::formatdoc;
-use itertools::Itertools;
-use std::path::PathBuf;
-use uuid::Uuid;
 
 #[derive(Subcommand, Debug)]
 #[command()]

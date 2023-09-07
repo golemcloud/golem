@@ -1,11 +1,12 @@
-use crate::clients::CloudAuthentication;
-use crate::model::{AccountId, GolemError, TokenId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_client::model;
 use golem_client::model::{CreateTokenDTO, UnsafeToken};
 use golem_client::token::Token;
 use tracing::info;
+
+use crate::clients::CloudAuthentication;
+use crate::model::{AccountId, GolemError, TokenId};
 
 #[async_trait]
 pub trait TokenClient {

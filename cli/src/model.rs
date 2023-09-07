@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
+use std::str::FromStr;
 
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
@@ -17,7 +18,6 @@ use golem_client::token::TokenError;
 use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
 use indoc::indoc;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use uuid::Uuid;

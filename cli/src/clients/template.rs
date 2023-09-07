@@ -1,14 +1,16 @@
-use crate::clients::CloudAuthentication;
-use crate::model::{GolemError, TemplateName};
-use crate::{ProjectId, RawTemplateId};
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 use golem_client::model::{
     Component, ComponentQuery, Export, FunctionParameter, FunctionResult, Type,
 };
 use serde::Serialize;
-use std::path::PathBuf;
 use tokio::fs::File;
 use tracing::info;
+
+use crate::clients::CloudAuthentication;
+use crate::model::{GolemError, TemplateName};
+use crate::{ProjectId, RawTemplateId};
 
 #[async_trait]
 pub trait TemplateClient {

@@ -1,16 +1,18 @@
-use crate::clients::login::LoginClient;
-use crate::clients::CloudAuthentication;
-use crate::model::GolemError;
+use std::fs::{create_dir_all, File, OpenOptions};
+use std::io::{BufReader, BufWriter};
+use std::path::{Path, PathBuf};
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_client::model::{OAuth2Data, Token, TokenSecret, UnsafeToken};
 use indoc::printdoc;
 use serde::{Deserialize, Serialize};
-use std::fs::{create_dir_all, File, OpenOptions};
-use std::io::{BufReader, BufWriter};
-use std::path::{Path, PathBuf};
 use tracing::info;
 use uuid::Uuid;
+
+use crate::clients::login::LoginClient;
+use crate::clients::CloudAuthentication;
+use crate::model::GolemError;
 
 #[async_trait]
 pub trait Auth {

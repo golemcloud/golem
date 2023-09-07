@@ -1,5 +1,8 @@
 extern crate derive_more;
 
+use std::fmt::Debug;
+use std::path::PathBuf;
+
 use clap::builder::ValueParser;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
@@ -10,8 +13,10 @@ use golem_client::model::{ComponentInstance, InvokeParameters};
 use golem_client::project::ProjectLive;
 use golem_client::project_grant::ProjectGrantLive;
 use golem_client::project_policy::ProjectPolicyLive;
-use std::fmt::Debug;
-use std::path::PathBuf;
+use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
+use model::*;
+use reqwest::Url;
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::account::{AccountHandler, AccountHandlerLive, AccountSubcommand};
@@ -33,10 +38,6 @@ use crate::project_grant::{ProjectGrantHandler, ProjectGrantHandlerLive};
 use crate::template::{TemplateHandler, TemplateHandlerLive, TemplateSubcommand};
 use crate::token::{TokenHandler, TokenHandlerLive, TokenSubcommand};
 use crate::worker::{WorkerHandler, WorkerHandlerLive, WorkerSubcommand};
-use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
-use model::*;
-use reqwest::Url;
-use serde::Serialize;
 
 mod account;
 mod auth;
