@@ -1,9 +1,10 @@
-use crate::clients::token::TokenClient;
-use crate::clients::CloudAuthentication;
-use crate::model::{AccountId, GolemError, GolemResult, TokenId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use clap::Subcommand;
+
+use crate::clients::token::TokenClient;
+use crate::clients::CloudAuthentication;
+use crate::model::{AccountId, GolemError, GolemResult, TokenId};
 
 fn parse_instant(
     s: &str,

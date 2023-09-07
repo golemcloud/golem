@@ -1,8 +1,9 @@
+use async_trait::async_trait;
+use clap::Subcommand;
+
 use crate::clients::policy::ProjectPolicyClient;
 use crate::clients::CloudAuthentication;
 use crate::model::{GolemError, GolemResult, ProjectAction, ProjectPolicyId};
-use async_trait::async_trait;
-use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
 #[command()]

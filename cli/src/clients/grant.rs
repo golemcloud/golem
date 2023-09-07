@@ -1,8 +1,8 @@
-use crate::clients::CloudAuthentication;
-use crate::model::Role;
-use crate::model::{AccountId, GolemError};
 use async_trait::async_trait;
 use tracing::info;
+
+use crate::clients::CloudAuthentication;
+use crate::model::{AccountId, GolemError, Role};
 
 #[async_trait]
 pub trait GrantClient {

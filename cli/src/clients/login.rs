@@ -1,9 +1,10 @@
-use crate::clients::token_header;
-use crate::model::GolemError;
 use async_trait::async_trait;
 use golem_client::login::Login;
 use golem_client::model::{OAuth2Data, Token, TokenSecret, UnsafeToken};
 use tracing::info;
+
+use crate::clients::token_header;
+use crate::model::GolemError;
 
 #[async_trait]
 pub trait LoginClient {

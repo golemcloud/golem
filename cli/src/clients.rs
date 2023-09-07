@@ -1,5 +1,6 @@
-use crate::model::{AccountId, ProjectAction};
 use golem_client::model::{TokenSecret, UnsafeToken};
+
+use crate::model::{AccountId, ProjectAction};
 
 pub mod account;
 pub mod grant;

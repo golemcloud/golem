@@ -1,10 +1,11 @@
+use async_trait::async_trait;
+use clap::Subcommand;
+use golem_client::model::AccountData;
+
 use crate::clients::account::AccountClient;
 use crate::clients::grant::GrantClient;
 use crate::clients::CloudAuthentication;
 use crate::model::{AccountId, GolemError, GolemResult, Role};
-use async_trait::async_trait;
-use clap::Subcommand;
-use golem_client::model::AccountData;
 
 #[derive(Subcommand, Debug)]
 #[command()]

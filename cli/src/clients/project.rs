@@ -1,9 +1,10 @@
-use crate::clients::CloudAuthentication;
-use crate::model::{GolemError, ProjectId, ProjectRef};
 use async_trait::async_trait;
 use golem_client::model::{Project, ProjectDataRequest};
 use indoc::formatdoc;
 use tracing::info;
+
+use crate::clients::CloudAuthentication;
+use crate::model::{GolemError, ProjectId, ProjectRef};
 
 #[async_trait]
 pub trait ProjectClient {
