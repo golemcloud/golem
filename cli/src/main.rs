@@ -17,6 +17,7 @@ use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, Packa
 use model::*;
 use reqwest::Url;
 use serde::Serialize;
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::account::{AccountHandler, AccountHandlerLive, AccountSubcommand};
@@ -244,10 +245,15 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     let url_str =
         std::env::var("GOLEM_BASE_URL").unwrap_or("https://release.api.golem.cloud/".to_string());
     let url = Url::parse(&url_str).unwrap();
-    let home = std::env::var("HOME").unwrap();
+    let home = dirs::home_dir().unwrap();
     let allow_insecure_str = std::env::var("GOLEM_ALLOW_INSECURE").unwrap_or("false".to_string());
     let allow_insecure = allow_insecure_str != "false";
-    let default_conf_dir = PathBuf::from(format!("{home}/.golem"));
+    let default_conf_dir = home.join(".golem");
+
+    debug!(
+        "Golem configuration directory: {}",
+        default_conf_dir.display()
+    );
 
     let login = LoginClientLive {
         login: golem_client::login::LoginLive {
