@@ -392,8 +392,7 @@ pub enum InstanceEndpointError {
         #[serde(rename = "golemError")]
         golem_error: golem_client::model::GolemError,
     },
-    GatewayTimeout {
-    },
+    GatewayTimeout {},
     NotFound {
         error: String,
     },
