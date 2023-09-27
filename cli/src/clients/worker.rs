@@ -378,8 +378,7 @@ enum InstanceConnectMessage {
 }
 
 #[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-enum InstanceEndpointError {
+pub enum InstanceEndpointError {
     BadRequest {
         errors: Vec<String>,
     },
@@ -390,9 +389,11 @@ enum InstanceEndpointError {
         error: String,
     },
     Golem {
+        #[serde(rename = "golemError")]
         golem_error: golem_client::model::GolemError,
     },
-    GatewayTimeout {},
+    GatewayTimeout {
+    },
     NotFound {
         error: String,
     },
