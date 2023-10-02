@@ -4,7 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::model::{
-    ComponentInstance, InstanceMetadata, InvokeParameters, InvokeResult, WorkerCreationRequest,
+    InvokeParameters, InvokeResult, VersionedWorkerId, WorkerCreationRequest, WorkerMetadata,
 };
 use native_tls::TlsConnector;
 use reqwest::Url;
@@ -28,7 +28,7 @@ pub trait WorkerClient {
         args: Vec<String>,
         env: Vec<(String, String)>,
         auth: &CloudAuthentication,
-    ) -> Result<ComponentInstance, GolemError>;
+    ) -> Result<VersionedWorkerId, GolemError>;
     async fn get_invocation_key(
         &self,
         name: &WorkerName,
@@ -79,7 +79,7 @@ pub trait WorkerClient {
         name: WorkerName,
         template_id: RawTemplateId,
         auth: &CloudAuthentication,
-    ) -> Result<InstanceMetadata, GolemError>;
+    ) -> Result<WorkerMetadata, GolemError>;
     async fn connect(
         &self,
         name: WorkerName,
@@ -89,14 +89,14 @@ pub trait WorkerClient {
 }
 
 #[derive(Clone)]
-pub struct WorkerClientLive<C: golem_client::instance::Instance + Send + Sync> {
+pub struct WorkerClientLive<C: golem_client::worker::Worker + Send + Sync> {
     pub client: C,
     pub base_url: Url,
     pub allow_insecure: bool,
 }
 
 #[async_trait]
-impl<C: golem_client::instance::Instance + Send + Sync> WorkerClient for WorkerClientLive<C> {
+impl<C: golem_client::worker::Worker + Send + Sync> WorkerClient for WorkerClientLive<C> {
     async fn new_worker(
         &self,
         name: WorkerName,
@@ -104,12 +104,12 @@ impl<C: golem_client::instance::Instance + Send + Sync> WorkerClient for WorkerC
         args: Vec<String>,
         env: Vec<(String, String)>,
         auth: &CloudAuthentication,
-    ) -> Result<ComponentInstance, GolemError> {
+    ) -> Result<VersionedWorkerId, GolemError> {
         info!("Creating worker {name} of {}", template_id.0);
 
         Ok(self
             .client
-            .launch_new_instance(
+            .launch_new_worker(
                 &template_id.0.to_string(),
                 WorkerCreationRequest {
                     name: name.0,
@@ -200,7 +200,7 @@ impl<C: golem_client::instance::Instance + Send + Sync> WorkerClient for WorkerC
 
         Ok(self
             .client
-            .interrupt_instance(
+            .interrupt_worker(
                 &template_id.0.to_string(),
                 &name.0,
                 Some(false),
@@ -219,7 +219,7 @@ impl<C: golem_client::instance::Instance + Send + Sync> WorkerClient for WorkerC
 
         Ok(self
             .client
-            .interrupt_instance(
+            .interrupt_worker(
                 &template_id.0.to_string(),
                 &name.0,
                 Some(true),
@@ -238,7 +238,7 @@ impl<C: golem_client::instance::Instance + Send + Sync> WorkerClient for WorkerC
 
         Ok(self
             .client
-            .delete_instance(&template_id.0.to_string(), &name.0, &auth.header())
+            .delete_worker(&template_id.0.to_string(), &name.0, &auth.header())
             .await?)
     }
 
@@ -247,12 +247,12 @@ impl<C: golem_client::instance::Instance + Send + Sync> WorkerClient for WorkerC
         name: WorkerName,
         template_id: RawTemplateId,
         auth: &CloudAuthentication,
-    ) -> Result<InstanceMetadata, GolemError> {
+    ) -> Result<WorkerMetadata, GolemError> {
         info!("Getting worker {}/{} metadata", template_id.0, name.0);
 
         Ok(self
             .client
-            .get_instance_metadata(&template_id.0.to_string(), &name.0, &auth.header())
+            .get_worker_metadata(&template_id.0.to_string(), &name.0, &auth.header())
             .await?)
     }
 
