@@ -7,14 +7,14 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Command, Error, FromArgMatches};
 use derive_more::{Display, FromStr, Into};
 use golem_client::account::AccountError;
-use golem_client::component::ComponentError;
 use golem_client::grant::GrantError;
-use golem_client::instance::InstanceError;
 use golem_client::login::LoginError;
 use golem_client::project::ProjectError;
 use golem_client::project_grant::ProjectGrantError;
 use golem_client::project_policy::ProjectPolicyError;
+use golem_client::template::TemplateError;
 use golem_client::token::TokenError;
+use golem_client::worker::WorkerError;
 use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
 use indoc::indoc;
 use serde::{Deserialize, Serialize};
@@ -99,28 +99,28 @@ impl From<TokenError> for GolemError {
     }
 }
 
-impl From<ComponentError> for GolemError {
-    fn from(value: ComponentError) -> Self {
+impl From<TemplateError> for GolemError {
+    fn from(value: TemplateError) -> Self {
         match value {
-            ComponentError::RequestFailure(err) => {
+            TemplateError::RequestFailure(err) => {
                 GolemError(format!("Unexpected request failure: {err}"))
             }
-            ComponentError::InvalidHeaderValue(err) => {
+            TemplateError::InvalidHeaderValue(err) => {
                 GolemError(format!("Unexpected invalid header value: {err}"))
             }
-            ComponentError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
-            ComponentError::Status401 { error } => GolemError(format!("Unauthorized: {error}")),
-            ComponentError::Status504 => GolemError("Gateway Timeout".to_string()),
-            ComponentError::Status404 { message } => GolemError(message),
-            ComponentError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
-            ComponentError::Status400 { errors } => {
+            TemplateError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
+            TemplateError::Status401 { error } => GolemError(format!("Unauthorized: {error}")),
+            TemplateError::Status504 => GolemError("Gateway Timeout".to_string()),
+            TemplateError::Status404 { message } => GolemError(message),
+            TemplateError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
+            TemplateError::Status400 { errors } => {
                 let msg = errors.join(", ");
                 GolemError(format!("Invalid API call: {msg}"))
             }
-            ComponentError::Status500 { error } => {
+            TemplateError::Status500 { error } => {
                 GolemError(format!("Internal server error: {error}"))
             }
-            ComponentError::Status409 { component_id } => {
+            TemplateError::Status409 { component_id } => {
                 GolemError(format!("{component_id} already exists"))
             }
         }
@@ -268,28 +268,28 @@ impl From<ProjectGrantError> for GolemError {
     }
 }
 
-impl From<InstanceError> for GolemError {
-    fn from(value: InstanceError) -> Self {
+impl From<WorkerError> for GolemError {
+    fn from(value: WorkerError) -> Self {
         match value {
-            InstanceError::RequestFailure(err) => {
+            WorkerError::RequestFailure(err) => {
                 GolemError(format!("Unexpected request failure: {err}"))
             }
-            InstanceError::InvalidHeaderValue(err) => {
+            WorkerError::InvalidHeaderValue(err) => {
                 GolemError(format!("Unexpected invalid header value: {err}"))
             }
-            InstanceError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
-            InstanceError::Status504 => GolemError("Gateway timeout".to_string()),
-            InstanceError::Status404 { error } => GolemError(format!("Not found: {error}")),
-            InstanceError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
-            InstanceError::Status400 { errors } => {
+            WorkerError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
+            WorkerError::Status504 => GolemError("Gateway timeout".to_string()),
+            WorkerError::Status404 { error } => GolemError(format!("Not found: {error}")),
+            WorkerError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
+            WorkerError::Status400 { errors } => {
                 let msg = errors.join(", ");
                 GolemError(format!("Invalid API call: {msg}"))
             }
-            InstanceError::Status401 { error } => GolemError(format!("Unauthorized: {error}")),
-            InstanceError::Status500 { golem_error } => {
+            WorkerError::Status401 { error } => GolemError(format!("Unauthorized: {error}")),
+            WorkerError::Status500 { golem_error } => {
                 GolemError(format!("Internal server error: {golem_error:?}"))
             }
-            InstanceError::Status409 { error } => GolemError(error),
+            WorkerError::Status409 { error } => GolemError(error),
         }
     }
 }

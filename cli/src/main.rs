@@ -6,13 +6,13 @@ use std::path::PathBuf;
 use clap::builder::ValueParser;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
-use golem_client::component::ComponentLive;
 use golem_client::grant::GrantLive;
-use golem_client::instance::InstanceLive;
-use golem_client::model::{ComponentInstance, InvokeParameters};
+use golem_client::model::{InvokeParameters, VersionedWorkerId};
 use golem_client::project::ProjectLive;
 use golem_client::project_grant::ProjectGrantLive;
 use golem_client::project_policy::ProjectPolicyLive;
+use golem_client::template::TemplateLive;
+use golem_client::worker::WorkerLive;
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
 use model::*;
 use reqwest::Url;
@@ -198,7 +198,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[derive(Debug, Serialize)]
 struct DeployResult {
     template: TemplateView,
-    worker: ComponentInstance,
+    worker: VersionedWorkerId,
 }
 
 async fn handle_deploy(
@@ -297,7 +297,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         client: &project_client,
     };
     let template_client = TemplateClientLive {
-        client: ComponentLive {
+        client: TemplateLive {
             base_url: url.clone(),
             allow_insecure,
         },
@@ -326,7 +326,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         project: &project_client,
     };
     let worker_client = WorkerClientLive {
-        client: InstanceLive {
+        client: WorkerLive {
             base_url: url.clone(),
             allow_insecure,
         },

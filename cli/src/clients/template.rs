@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use golem_client::model::{
-    Component, ComponentQuery, Export, FunctionParameter, FunctionResult, Type,
+    Export, FunctionParameter, FunctionResult, Template, TemplateQuery, Type,
 };
 use serde::Serialize;
 use tokio::fs::File;
@@ -36,7 +36,7 @@ pub trait TemplateClient {
 }
 
 #[derive(Clone)]
-pub struct TemplateClientLive<C: golem_client::component::Component + Sync + Send> {
+pub struct TemplateClientLive<C: golem_client::template::Template + Sync + Send> {
     pub client: C,
 }
 
@@ -49,8 +49,8 @@ pub struct TemplateView {
     pub exports: Vec<String>,
 }
 
-impl From<&Component> for TemplateView {
-    fn from(value: &Component) -> Self {
+impl From<&Template> for TemplateView {
+    fn from(value: &Template) -> Self {
         TemplateView {
             template_id: value.versioned_template_id.raw_template_id.to_string(),
             template_version: value.versioned_template_id.version,
@@ -170,7 +170,7 @@ fn show_exported_function(
 }
 
 #[async_trait]
-impl<C: golem_client::component::Component + Sync + Send> TemplateClient for TemplateClientLive<C> {
+impl<C: golem_client::template::Template + Sync + Send> TemplateClient for TemplateClientLive<C> {
     async fn find(
         &self,
         project_id: Option<ProjectId>,
@@ -181,7 +181,7 @@ impl<C: golem_client::component::Component + Sync + Send> TemplateClient for Tem
 
         let templates = self
             .client
-            .get_components(
+            .get_all_templates(
                 project_id.map(|ProjectId(id)| id.to_string()).as_deref(),
                 name.map(|TemplateName(s)| s).as_deref(),
                 &auth.header(),
@@ -204,12 +204,12 @@ impl<C: golem_client::component::Component + Sync + Send> TemplateClient for Tem
         let file = File::open(path)
             .await
             .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
-        let template_name = golem_client::model::ComponentName { value: name.0 };
+        let template_name = golem_client::model::TemplateName { value: name.0 };
 
         let template = self
             .client
-            .post_component(
-                ComponentQuery {
+            .upload_template(
+                TemplateQuery {
                     project_id: project_id.map(|ProjectId(id)| id),
                     component_name: template_name,
                 },
@@ -235,7 +235,7 @@ impl<C: golem_client::component::Component + Sync + Send> TemplateClient for Tem
 
         let template = self
             .client
-            .put_component(&id.0.to_string(), file, &auth.header())
+            .update_template(&id.0.to_string(), file, &auth.header())
             .await?;
 
         Ok((&template).into())
