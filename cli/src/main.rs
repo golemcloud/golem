@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use clap::builder::ValueParser;
 use clap::{Parser, Subcommand};
-use clap_verbosity_flag::Verbosity;
+use clap_verbosity_flag::{Level, Verbosity};
 use golem_client::grant::GrantLive;
 use golem_client::model::{InvokeParameters, VersionedWorkerId};
 use golem_client::project::ProjectLive;
@@ -18,6 +18,7 @@ use model::*;
 use reqwest::Url;
 use serde::Serialize;
 use tracing::debug;
+use tracing_subscriber::FmtSubscriber;
 use uuid::Uuid;
 
 use crate::account::{AccountHandler, AccountHandlerLive, AccountSubcommand};
@@ -187,6 +188,24 @@ struct GolemCommand {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = GolemCommand::parse();
+
+    if let Some(level) = command.verbosity.log_level() {
+        let tracing_level = match level {
+            Level::Error => tracing::Level::ERROR,
+            Level::Warn => tracing::Level::WARN,
+            Level::Info => tracing::Level::INFO,
+            Level::Debug => tracing::Level::DEBUG,
+            Level::Trace => tracing::Level::TRACE,
+        };
+
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(tracing_level)
+            .with_writer(std::io::stderr)
+            .finish();
+
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
+    }
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
