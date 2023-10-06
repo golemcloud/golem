@@ -3,11 +3,9 @@ extern crate derive_more;
 use std::fmt::Debug;
 use std::path::PathBuf;
 
-use clap::builder::ValueParser;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{Level, Verbosity};
 use golem_client::grant::GrantLive;
-use golem_client::model::{InvokeParameters, VersionedWorkerId};
 use golem_client::project::ProjectLive;
 use golem_client::project_grant::ProjectGrantLive;
 use golem_client::project_policy::ProjectPolicyLive;
@@ -16,7 +14,6 @@ use golem_client::worker::WorkerLive;
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
 use model::*;
 use reqwest::Url;
-use serde::Serialize;
 use tracing::debug;
 use tracing_subscriber::FmtSubscriber;
 use uuid::Uuid;
@@ -27,13 +24,11 @@ use crate::clients::account::AccountClientLive;
 use crate::clients::grant::GrantClientLive;
 use crate::clients::login::LoginClientLive;
 use crate::clients::policy::ProjectPolicyClientLive;
-use crate::clients::project::{ProjectClient, ProjectClientLive};
+use crate::clients::project::ProjectClientLive;
 use crate::clients::project_grant::ProjectGrantClientLive;
-use crate::clients::template::{TemplateClient, TemplateClientLive, TemplateView};
+use crate::clients::template::TemplateClientLive;
 use crate::clients::token::TokenClientLive;
-use crate::clients::worker::{WorkerClient, WorkerClientLive};
-use crate::clients::CloudAuthentication;
-use crate::model::{JsonValueParser, TemplateName};
+use crate::clients::worker::WorkerClientLive;
 use crate::policy::{ProjectPolicyHandler, ProjectPolicyHandlerLive, ProjectPolicySubcommand};
 use crate::project::{ProjectHandler, ProjectHandlerLive, ProjectSubcommand};
 use crate::project_grant::{ProjectGrantHandler, ProjectGrantHandlerLive};
@@ -65,32 +60,6 @@ pub fn parse_key_val(
 #[derive(Subcommand, Debug)]
 #[command()]
 enum Command {
-    #[command()]
-    Deploy {
-        #[command(flatten)]
-        project_ref: ProjectRef,
-
-        #[arg(short, long)]
-        template_name: TemplateName,
-
-        #[arg(short, long)]
-        worker_name: WorkerName,
-
-        #[arg(short, long, value_parser = parse_key_val)]
-        env: Vec<(String, String)>,
-
-        #[arg(short, long)]
-        function: String,
-
-        #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser))]
-        parameters: serde_json::value::Value,
-
-        #[arg(value_name = "template-file", value_hint = clap::ValueHint::FilePath)]
-        template_file: PathBuf, // TODO: validate exists,
-
-        #[arg(value_name = "args")]
-        args: Vec<String>,
-    },
     #[command()]
     Template {
         #[command(subcommand)]
@@ -214,52 +183,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .block_on(async_main(command))
 }
 
-#[derive(Debug, Serialize)]
-struct DeployResult {
-    template: TemplateView,
-    worker: VersionedWorkerId,
-}
-
-async fn handle_deploy(
-    project_client: &impl ProjectClient,
-    template_client: &impl TemplateClient,
-    worker_client: &impl WorkerClient,
-    auth: &CloudAuthentication,
-    project_ref: ProjectRef,
-    template_name: TemplateName,
-    worker_name: WorkerName,
-    env: Vec<(String, String)>,
-    function: String,
-    parameters: serde_json::value::Value,
-    template_file: PathBuf,
-    args: Vec<String>,
-) -> Result<GolemResult, GolemError> {
-    let project_id = project_client.resolve_id(project_ref, auth).await?;
-    let template = template_client
-        .add(project_id, template_name, template_file, auth)
-        .await?;
-    let template_id = RawTemplateId(
-        Uuid::parse_str(&template.template_id)
-            .map_err(|e| GolemError(format!("Unexpected error on parsing template id: {e}")))?,
-    );
-    let worker = worker_client
-        .new_worker(worker_name.clone(), template_id.clone(), args, env, auth)
-        .await?;
-    worker_client
-        .invoke(
-            worker_name,
-            template_id,
-            function,
-            InvokeParameters { params: parameters },
-            auth,
-        )
-        .await?;
-
-    let res = DeployResult { template, worker };
-
-    Ok(GolemResult::Ok(Box::new(res)))
-}
-
 async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>> {
     let url_str =
         std::env::var("GOLEM_BASE_URL").unwrap_or("https://release.api.golem.cloud/".to_string());
@@ -322,7 +245,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         },
     };
     let template_srv = TemplateHandlerLive {
-        client: template_client.clone(),
+        client: template_client,
         projects: &project_client,
     };
     let project_policy_client = ProjectPolicyClientLive {
@@ -353,7 +276,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         allow_insecure,
     };
     let worker_srv = WorkerHandlerLive {
-        client: worker_client.clone(),
+        client: worker_client,
         templates: &template_srv,
     };
 
@@ -365,32 +288,6 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         .await?;
 
     let res = match cmd.command {
-        Command::Deploy {
-            project_ref,
-            template_name,
-            worker_name,
-            env,
-            function,
-            parameters,
-            template_file,
-            args,
-        } => {
-            handle_deploy(
-                &project_client,
-                &template_client,
-                &worker_client,
-                &auth,
-                project_ref,
-                template_name,
-                worker_name,
-                env,
-                function,
-                parameters,
-                template_file,
-                args,
-            )
-            .await
-        }
         Command::Template { subcommand } => template_srv.handle(&auth, subcommand).await,
         Command::Worker { subcommand } => worker_srv.handle(&auth, subcommand).await,
         Command::Account {
