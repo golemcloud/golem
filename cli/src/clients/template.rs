@@ -41,6 +41,7 @@ pub struct TemplateClientLive<C: golem_client::template::Template + Sync + Send>
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TemplateView {
     pub template_id: String,
     pub template_version: i32,
