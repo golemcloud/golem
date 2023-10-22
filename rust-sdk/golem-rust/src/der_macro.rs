@@ -2,18 +2,17 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{spanned::Spanned, Data, Error, Fields};
 
-// TODO
-// 1. write readme
-// 2. cleanup enum fields
 pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
     let name = ast.ident.clone();
 
     let derived_name = extract_data_type_name(ast.attrs.clone(), name.clone())?;
 
     match &ast.data {
+
+        // Struct derivation
         Data::Struct(s) => match &s.fields {
             Fields::Named(n) => {
-                let field_and_names_result: syn::Result<Vec<_>> = n
+                let field_and_names: syn::Result<Vec<_>> = n
                     .named
                     .iter()
                     .map(|f| {
@@ -22,9 +21,7 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                     })
                     .collect();
 
-                let field_and_names = field_and_names_result?;
-
-                let from_fields = field_and_names.clone().into_iter().map(|t| {
+                let from_fields = field_and_names.clone()?.into_iter().map(|t| {
                     let original = t.0.ident.clone().unwrap();
                     let updated = t.1;
                     quote!(
@@ -32,17 +29,7 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                     )
                 });
 
-                let from = quote!(
-                    impl From<#derived_name> for #name {
-                        fn from(value: #derived_name) -> Self {
-                            #name {
-                                #(#from_fields),*
-                            }
-                        }
-                    }
-                );
-
-                let to_fields = field_and_names.into_iter().map(|t| {
+                let to_fields = field_and_names?.into_iter().map(|t| {
                     let original = t.0.ident.clone().unwrap();
                     let updated = t.1;
 
@@ -51,19 +38,22 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                     )
                 });
 
-                let into: TokenStream = quote!(
-                        impl Into<#derived_name> for #name {
-                            fn into(self) -> #derived_name {
-                                #derived_name {
-                                    #(#to_fields),*
-                                }
+                Ok(quote!(
+                    impl From<#derived_name> for #name {
+                        fn from(value: #derived_name) -> Self {
+                            #name {
+                                #(#from_fields),*
                             }
                         }
-                );
-
-                Ok(quote!(
-                    #from
-                    #into
+                    }
+                    
+                    impl Into<#derived_name> for #name {
+                        fn into(self) -> #derived_name {
+                            #derived_name {
+                                #(#to_fields),*
+                            }
+                        }
+                    }
                 ))
             }
             _ => Err(Error::new(
@@ -71,19 +61,18 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                 "Unexpected. Please open an issue with description of your use case https://github.com/golemcloud/golem-rust/issues",
             )),
         },
+
+        // Enum derivation
         Data::Enum(data_enum) => {
             
-            let from_fields_result: syn::Result<Vec<_>> = data_enum.variants.clone().into_iter().map(|variant| {
-
+            let from_fields: syn::Result<Vec<_>> = data_enum.variants.clone().into_iter().map(|variant| {
                 let variant_name = variant.ident.clone();
                 let new_name = extract_field_name(variant.attrs.clone(), variant_name.clone());
 
                 new_name.map(|n| (n, variant))
             }).collect();
 
-            let from_fields = from_fields_result?;
-
-            let from = from_fields.into_iter().map(|(new_name, variant)|{
+            let from = from_fields?.into_iter().map(|(new_name, variant)|{
 
                 let variant_name = variant.ident.clone();
                 
@@ -93,21 +82,9 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                             #derived_name::#new_name => #name::#variant_name
                         )
                     }
-                    // check if From<> and Into<> can be implemented without making out fake names for unnamed enums
+
                     Fields::Unnamed(un) => {
-                        let fake_names = vec![
-                            'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
-                            'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'x', 'y', 'z',
-                        ]
-                        .into_iter()
-                        .take(un.unnamed.len())
-                        .map(|fake_name| {
-                            let fake_ident = syn::Ident::new(
-                                &fake_name.to_string(),
-                                proc_macro2::Span::call_site(),
-                            );
-                            quote!(#fake_ident)
-                        });
+                        let fake_names = create_fake_names(un.unnamed.len());
 
                         let fields = quote!(
                             #(#fake_names),*
@@ -135,7 +112,7 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                 }
             });
 
-            let into_fields_results: syn::Result<Vec<_>>  = data_enum.variants.clone().into_iter().map(|variant| {
+            let into_fields: syn::Result<Vec<_>>  = data_enum.variants.clone().into_iter().map(|variant| {
                 let variant_name = variant.ident.clone();
                 let new_name =
                     extract_field_name(variant.attrs.clone(), variant_name.clone());
@@ -143,9 +120,7 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                 new_name.map(|n| (n, variant))
             }).collect();
 
-            let into_fields = into_fields_results?;
-
-            let into = into_fields.into_iter().map(|(new_name, variant)|{
+            let into = into_fields?.into_iter().map(|(new_name, variant)|{
 
                 let variant_name = variant.ident.clone();
 
@@ -156,20 +131,7 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                         )
                     }
                     Fields::Unnamed(u) => {
-                        // check if From<> and Into<> can be implemented without making out fake names for unnamed enums
-                        let fake_names = vec![
-                            'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
-                            'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'x', 'y', 'z',
-                        ]
-                        .into_iter()
-                        .take(u.unnamed.len())
-                        .map(|fake_name| {
-                            let fake_ident = syn::Ident::new(
-                                &fake_name.to_string(),
-                                proc_macro2::Span::call_site(),
-                            );
-                            quote!(#fake_ident)
-                        });
+                        let fake_names = create_fake_names(u.unnamed.len());
 
                         let fields = quote!(
                             #(#fake_names),*
@@ -197,8 +159,7 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                 }
             });
 
-            let from = quote!(
-
+            Ok(quote!(
                 impl From<#derived_name> for #name {
                     fn from(value: #derived_name) -> Self {
                         match value {
@@ -206,10 +167,6 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                         }
                     }
                 }
-
-            );
-
-            let into = quote!(
                 impl Into<#derived_name> for #name {
                     fn into(self) -> #derived_name {
                         match self {
@@ -217,12 +174,6 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                         }
                     }
                 }
-
-            );
-
-            Ok(quote!(
-                #from
-                #into
             ))
         }
         _ => Err(Error::new(ast.span(), "Supporting only structs for now")),
@@ -297,4 +248,24 @@ fn extract_field_name(attrs: Vec<syn::Attribute>, original: syn::Ident) -> syn::
         Some(ident) => ident,
         None => Ok(original),
     }
+}
+
+
+// check if From<> and Into<> can be implemented without making out fake names for unnamed enums
+fn create_fake_names(take: usize) -> Vec<proc_macro2::TokenStream> {
+    return vec![
+        'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
+        'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'x', 'y', 'z',
+    ]
+        .into_iter()
+        .take(take)
+        .map(|fake_name| {
+            let fake_ident = syn::Ident::new(
+                &fake_name.to_string(),
+                proc_macro2::Span::call_site(),
+            );
+            quote!(#fake_ident)
+        })
+        .collect();
+
 }
