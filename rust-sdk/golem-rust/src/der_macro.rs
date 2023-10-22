@@ -3,91 +3,55 @@ use quote::quote;
 use syn::{spanned::Spanned, Data, Error, Fields};
 
 // TODO
-// 1. error handling
-// 2  more tests in golem-rust-example
-// 3. cleanup
-// 4. write readme
+// 1. write readme
+// 2. cleanup enum fields
 pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
-
-    if ast.attrs.len() > 1 {
-        return Err(syn::Error::new(
-            ast.span(),
-            "Too many attributes provided to wit. Call #[wit(DataTypeName)] instead.",
-        ));
-    }
-
     let name = ast.ident.clone();
 
-    let derived_name = if ast.attrs.len() < 1 {
-        syn::Ident::new(&("Wit".to_owned() + &name.to_string()), name.span())
-    } else {
-        match &ast.attrs.first().unwrap().meta {
-            syn::Meta::List(lm) => {
-                let att_name: syn::Ident = syn::parse2(lm.tokens.clone()).unwrap();
-                att_name
-            }
-            _ => {
-                return Err(syn::Error::new(
-                    ast.span(),
-                    "Unexpected attribute structure. Call #[wit(DataTypeName)] instead.",
-                ))
-            }
-        }
-    };
+    let derived_name = extract_data_type_name(ast.attrs.clone(), name.clone())?;
 
     match &ast.data {
-        Data::Struct(s) => {
-            match &s.fields {
-                Fields::Named(n) => {
+        Data::Struct(s) => match &s.fields {
+            Fields::Named(n) => {
+                let field_and_names_result: syn::Result<Vec<_>> = n
+                    .named
+                    .iter()
+                    .map(|f| {
+                        extract_field_name(f.attrs.clone(), f.ident.clone().unwrap())
+                            .map(|updated| (f, updated))
+                    })
+                    .collect();
 
-                    let field_and_names = n.named.iter().map(|f| {
-                        let field_name = f.ident.clone().unwrap();
+                let field_and_names = field_and_names_result?;
 
-                        if f.attrs.len() > 1 {
-                            //TODO error handling
-                            unimplemented!(
-                                "Supporting only one field attribute #[wit(rename = '')]"
-                            );
+                let from_fields = field_and_names.clone().into_iter().map(|t| {
+                    let original = t.0.ident.clone().unwrap();
+                    let updated = t.1;
+                    quote!(
+                        #original: value.#updated.into()
+                    )
+                });
 
-                            // Err(syn::Error::new(
-                            //     ast.span(),
-                            //     "Unexpected attribute structure. Call #[wit(DataTypeName)] instead.",
-                            // ))
-                        }
-
-                        let updated = extract_name(f.attrs.clone(), field_name);
-
-                        (f, updated)
-                    });
-
-                    let from_fields = field_and_names.clone().into_iter().map(|t| {
-                        let original = t.0.ident.clone().unwrap();
-                        let updated = t.1;
-                        quote!(
-                            #original: value.#updated.into()
-                        )
-                    });
-
-                    let to_fields = field_and_names.clone().into_iter().map(|t| {
-                        let original = t.0.ident.clone().unwrap();
-                        let updated = t.1;
-
-                        quote!(
-                            #updated: self.#original.into()
-                        )
-                    });
-
-                    let from = quote!(
-                        impl From<#derived_name> for #name {
-                            fn from(value: #derived_name) -> Self {
-                                #name {
-                                    #(#from_fields),*
-                                }
+                let from = quote!(
+                    impl From<#derived_name> for #name {
+                        fn from(value: #derived_name) -> Self {
+                            #name {
+                                #(#from_fields),*
                             }
                         }
-                    );
+                    }
+                );
 
-                    let into = quote!(
+                let to_fields = field_and_names.into_iter().map(|t| {
+                    let original = t.0.ident.clone().unwrap();
+                    let updated = t.1;
+
+                    quote!(
+                        #updated: self.#original.into()
+                    )
+                });
+
+                let into: TokenStream = quote!(
                         impl Into<#derived_name> for #name {
                             fn into(self) -> #derived_name {
                                 #derived_name {
@@ -95,31 +59,41 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                                 }
                             }
                         }
-                    );
+                );
 
-                    Ok(quote!(
-                        #from
-                        #into
-                    ))
-                }
-                _ => Err(Error::new(
-                    ast.span(),
-                    "supporting only structs with named fields",
-                )),
+                Ok(quote!(
+                    #from
+                    #into
+                ))
             }
-        }
+            _ => Err(Error::new(
+                ast.span(),
+                "Unexpected. Please open an issue with description of your use case https://github.com/golemcloud/golem-rust/issues",
+            )),
+        },
         Data::Enum(data_enum) => {
+            
+            let from_fields_result: syn::Result<Vec<_>> = data_enum.variants.clone().into_iter().map(|variant| {
 
-            let from_fields = data_enum.variants.clone().into_iter().map(|variant| {
-                let variant_name = variant.ident;
-                let new_name = extract_name(variant.attrs.clone(), variant_name.clone());
+                let variant_name = variant.ident.clone();
+                let new_name = extract_field_name(variant.attrs.clone(), variant_name.clone());
 
+                new_name.map(|n| (n, variant))
+            }).collect();
+
+            let from_fields = from_fields_result?;
+
+            let from = from_fields.into_iter().map(|(new_name, variant)|{
+
+                let variant_name = variant.ident.clone();
+                
                 match variant.fields {
                     Fields::Unit => {
                         quote!(
                             #derived_name::#new_name => #name::#variant_name
                         )
                     }
+                    // check if From<> and Into<> can be implemented without making out fake names for unnamed enums
                     Fields::Unnamed(un) => {
                         let fake_names = vec![
                             'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
@@ -161,9 +135,19 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                 }
             });
 
-            let into_fields = data_enum.variants.clone().into_iter().map(|variant| {
-                let variant_name = variant.ident;
-                let new_name = extract_name(variant.attrs.clone(), variant_name.clone());
+            let into_fields_results: syn::Result<Vec<_>>  = data_enum.variants.clone().into_iter().map(|variant| {
+                let variant_name = variant.ident.clone();
+                let new_name =
+                    extract_field_name(variant.attrs.clone(), variant_name.clone());
+                
+                new_name.map(|n| (n, variant))
+            }).collect();
+
+            let into_fields = into_fields_results?;
+
+            let into = into_fields.into_iter().map(|(new_name, variant)|{
+
+                let variant_name = variant.ident.clone();
 
                 match variant.fields {
                     Fields::Unit => {
@@ -172,7 +156,7 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                         )
                     }
                     Fields::Unnamed(u) => {
-                        // TODO better way to generate fake names
+                        // check if From<> and Into<> can be implemented without making out fake names for unnamed enums
                         let fake_names = vec![
                             'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
                             'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'x', 'y', 'z',
@@ -218,7 +202,7 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                 impl From<#derived_name> for #name {
                     fn from(value: #derived_name) -> Self {
                         match value {
-                            #(#from_fields),*
+                            #(#from),*
                         }
                     }
                 }
@@ -229,7 +213,7 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
                 impl Into<#derived_name> for #name {
                     fn into(self) -> #derived_name {
                         match self {
-                            #(#into_fields),*
+                            #(#into),*
                         }
                     }
                 }
@@ -246,34 +230,71 @@ pub fn expand_wit(ast: &mut syn::DeriveInput) -> syn::Result<TokenStream> {
 }
 
 /**
- * Checks if there are any rename #[wit(rename = "naw_field_name")] field attributes, otherwise returns original name.
+ * Parses #[wit(WitPerson)] or #[wit("WitPerson")] and returns Ok(None) in case "wit" attribute does not exists or errors out in case of weird structure like #[wit(100)]
  */
-fn extract_name(attrs: Vec<syn::Attribute>, original: syn::Ident) -> syn::Ident {
-    if attrs.len() == 1 {
-        match attrs.first().unwrap().meta.clone() {
-            syn::Meta::List(ml) => ml
-                .tokens
-                .clone()
-                .into_iter()
-                .filter_map(|t| match t {
-                    proc_macro2::TokenTree::Literal(lit) => {
-                        let l: syn::Lit =
-                            syn::parse2(proc_macro2::TokenTree::Literal(lit).into()).unwrap();
+fn extract_data_type_name(
+    attrs: Vec<syn::Attribute>,
+    origin: syn::Ident,
+) -> syn::Result<syn::Ident> {
+    let extracted_name = attrs
+        .into_iter()
+        .find_map(|attr| match attr.meta {
+            syn::Meta::List(ml) if ml.path.segments.first().unwrap().ident == "wit" => {
 
-                        let new_name = match &l {
-                            syn::Lit::Str(name) => name.value(),
-                            _ => unimplemented!("Supporting only string for renaming fields."),
-                        };
+                Some(syn::parse2::<syn::Ident>(ml.tokens.clone())
+                    .or({
+                        syn::parse2::<syn::Lit>(ml.tokens.clone())
+                            .map_err(|_| {
+                                syn::Error::new(
+                                    ml.tokens.span(),
+                                    "Argument to \"wit\" must be a either a single data type #[wit(WitPerson)] or a string #[wit(\"WitPerson\")]")})
+                            .and_then(|l| match l {
+                                syn::Lit::Str(lit) => Ok(syn::Ident::new(&lit.value(), lit.span())),
+                                _ => Err(syn::Error::new(
+                                                    l.span(),
+                                                    "Argument to \"wit\" must be a either a data type #[wit(WitPerson)] or a string #[wit(\"WitPerson\")]",
+                                    ))
+                            })
+                    }))
+            }
+            _ => None,
+        });
 
-                        Some(syn::Ident::new(&new_name, l.span()))
-                    }
-                    _ => None,
+    match extracted_name {
+        Some(name) => name,
+        None => Ok(syn::Ident::new(
+            &("Wit".to_owned() + &origin.to_string()),
+            origin.span(),
+        )),
+    }
+}
+
+/**
+ * Looks for #[rename("naw_field_name")] attributes in the attribute list.
+ *
+ * If there are none, returns original ident.
+ * Errors out if there's a wrong format like #[rename("first", "second")] or #[rename(100)]
+ */
+fn extract_field_name(attrs: Vec<syn::Attribute>, original: syn::Ident) -> syn::Result<syn::Ident> {
+    let rename_is_defined = attrs.into_iter().find_map(|attr| match attr.meta.clone() {
+        syn::Meta::List(ml) if (ml.path.segments.first().unwrap().ident == "rename") => Some(
+            syn::parse2::<syn::Lit>(ml.tokens.clone())
+                .map_err(|_| {
+                    syn::Error::new(ml.path.span(), "Argument to rename must be a single String")
                 })
-                .next()
-                .unwrap(),
-            _ => unimplemented!("unexpected branch"),
-        }
-    } else {
-        original
+                .and_then(|l| match l {
+                    syn::Lit::Str(lit) => Ok(syn::Ident::new(&lit.value(), lit.span())),
+                    _ => Err(syn::Error::new(
+                        l.span(),
+                        "Argument to rename must be a String",
+                    )),
+                }),
+        ),
+        _ => None,
+    });
+
+    match rename_is_defined {
+        Some(ident) => ident,
+        None => Ok(original),
     }
 }

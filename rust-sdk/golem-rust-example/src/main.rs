@@ -1,85 +1,79 @@
+mod generated;
 
-use golem_rust::derive_wit;
-use golem_rust::wit_file;
+use generated::*;
 use golem_rust::WIT;
 
-
-// #[wit_file]
-// trait AuctionApi {
-//     fn close_auction() -> Option<String>;
-// }
-
-
+/**
+ * TODO come up with more examples
+ */
 fn main() {
+    // struct without fields
+    let empty = Empty {};
 
+    let wit_empty: WitEmpty = empty.into();
+
+    // struct
     let me = Person {
         name: "Jaro".to_owned(),
-        age: 32
+        age: 32,
     };
 
     let converted: WitPerson = me.into();
 
-    // let black = Colors::Black;
+    println!("Struct converted {} {}", converted.name2, converted.age);
 
-    // let witCollors: WitColors = black.into();
+    // simple enum
+    let yellow = Colors::Yellow;
 
-    // let bid = BidResult::Someone { name: "hey".to_string(), age: 100 };
+    let wit_collors: WitColors = yellow.into();
 
+    println!("Enum converted {} ", wit_collors);
 
-    eprintln!("hello there {} {}", converted.name2, converted.age);
+    // named enum
+    let bid = BidResult::Someone {
+        name: "Ema".to_string(),
+        age: 10,
+    };
+
+    let bid_converted: WitBidResult = bid.into();
 }
-
-
-
 
 #[derive(WIT)]
-//#[wit(WitPerson)]
-//#[derive_wit(WitPerson, name => name2)]
+#[wit(WitEmpty)]
+struct Empty {}
+
+#[rename("dead_code")] // nonsense just to check if such attributes don't interfere
+#[derive(WIT)]
+#[wit(WitPerson)] // optional as "Wit + classname" is the default
 pub struct Person {
-    
-    #[wit(rename = "name2", tpe = "aaa")]
+    #[rustfmt::skip] // to check if other attributes don't interfere
+    #[rename("name2")]
     pub name: String,
-    
-    pub age: i32
+
+    pub age: i32,
 }
 
-
-pub struct WitPerson {
- //   pub id: String,
-    pub name2: String,
-    pub age: i32
-}
-
-// #[derive(WIT)]
-// #[wit(WitColors)]
+#[derive(WIT)]
+#[rename("dead_code")] // nonsense just to check if such attributes don't interfere
 pub enum Colors {
     Red,
     White,
-    Black
+
+    // TODO check this
+    #[rename("Yellow2")]
+   // #[rename("Yellow2")]
+    Yellow,
 }
 
-pub enum WitColors {
-    Red,
-    White,
-    Black
-}
-
-
-// #[derive(WIT)]
-// #[wit(WitBidResult)]
+#[derive(WIT)]
+#[rename("dead_code")] // nonsense just to check if such attributes don't interfere
 pub enum BidResult {
-
-  //  #[wit(rename = "Success2")]
+    #[rename("Success2")]
     Success,
 
-    //#[wit(rename = "Failure2")]
+    #[rename("Failure2")]
     Failure(String, u32),
 
-    //#[wit(rename = "Someone2")]
-    Someone{name: String, age: u32},
-}
-pub enum WitBidResult {
-    Failure2(String, u32),
-    Someone2{name: String, age: u32},
-    Success2
+    #[rename("Someone2")]
+    Someone { name: String, age: u32 },
 }
