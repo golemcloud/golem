@@ -464,7 +464,7 @@ impl clap::Args for TemplateIdOrName {
 
 #[derive(clap::Args, Debug, Clone)]
 struct TemplateIdOrNameArgs {
-    #[arg(short = 'C', long, conflicts_with = "template_name", required = true)]
+    #[arg(short = 'T', long, conflicts_with = "template_name", required = true)]
     template_id: Option<Uuid>,
 
     #[arg(short, long, conflicts_with = "template_id", required = true)]
