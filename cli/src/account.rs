@@ -24,7 +24,7 @@ pub enum AccountSubcommand {
     },
 
     #[command()]
-    New {
+    Add {
         #[arg(short = 'n', long)]
         account_name: String,
 
@@ -104,7 +104,7 @@ impl<C: AccountClient + Sync + Send, G: GrantClient + Sync + Send> AccountHandle
                 let account = self.client.put(&account_id, updated, auth).await?;
                 Ok(GolemResult::Ok(Box::new(account)))
             }
-            AccountSubcommand::New {
+            AccountSubcommand::Add {
                 account_name,
                 account_email,
             } => {
