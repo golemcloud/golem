@@ -16,7 +16,6 @@ use golem_client::template::TemplateError;
 use golem_client::token::TokenError;
 use golem_client::worker::WorkerError;
 use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
-use indoc::indoc;
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -147,7 +146,7 @@ impl From<LoginError> for GolemError {
             LoginError::Status401 { error } => {
                 GolemError(format!("External service call error on Login: {error}"))
             }
-            _ => GolemError(format!("Unexpected error on Login")),
+            _ => GolemError("Unexpected error on Login".to_string()),
         }
     }
 }
