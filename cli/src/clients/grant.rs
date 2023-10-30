@@ -1,3 +1,5 @@
+use core::panic;
+
 use async_trait::async_trait;
 use tracing::info;
 
@@ -106,11 +108,11 @@ impl<C: golem_client::grant::Grant + Send + Sync> GrantClient for GrantClientLiv
 fn api_to_cli(role: golem_client::model::Role) -> Role {
     match role {
         golem_client::model::Role::Admin {} => Role::Admin,
-        golem_client::model::Role::WhitelistAdmin {} => Role::WhitelistAdmin,
         golem_client::model::Role::MarketingAdmin {} => Role::MarketingAdmin,
         golem_client::model::Role::ViewProject {} => Role::ViewProject,
         golem_client::model::Role::DeleteProject {} => Role::DeleteProject,
         golem_client::model::Role::CreateProject {} => Role::CreateProject,
         golem_client::model::Role::InstanceServer {} => Role::InstanceServer,
+        _ => panic!("Unknown role"),
     }
 }

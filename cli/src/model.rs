@@ -141,20 +141,13 @@ impl From<LoginError> for GolemError {
                 let joined = errors.join(", ");
                 GolemError(format!("Invalid request: {joined}"))
             }
-            LoginError::Status403 { .. } => {
-                let msg = indoc! {"
-                    At the moment account creation is restricted.
-                    None of your verified emails is whitelisted.
-                    Please contact us to create an account.
-                "};
-                GolemError(msg.to_string())
-            }
             LoginError::Status500 { error } => {
                 GolemError(format!("Internal server error on Login: {error}"))
             }
             LoginError::Status401 { error } => {
                 GolemError(format!("External service call error on Login: {error}"))
             }
+            _ => GolemError(format!("Unexpected error on Login")),
         }
     }
 }
@@ -550,7 +543,6 @@ pub enum TemplateIdOrName {
 #[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize)]
 pub enum Role {
     Admin,
-    WhitelistAdmin,
     MarketingAdmin,
     ViewProject,
     DeleteProject,
@@ -562,7 +554,6 @@ impl Display for Role {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Role::Admin => "Admin",
-            Role::WhitelistAdmin => "WhitelistAdmin",
             Role::MarketingAdmin => "MarketingAdmin",
             Role::ViewProject => "ViewProject",
             Role::DeleteProject => "DeleteProject",
@@ -580,7 +571,6 @@ impl FromStr for Role {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "Admin" => Ok(Role::Admin),
-            "WhitelistAdmin" => Ok(Role::WhitelistAdmin),
             "MarketingAdmin" => Ok(Role::MarketingAdmin),
             "ViewProject" => Ok(Role::ViewProject),
             "DeleteProject" => Ok(Role::DeleteProject),
