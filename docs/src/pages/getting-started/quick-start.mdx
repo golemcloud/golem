@@ -1,0 +1,109 @@
+import { Callout } from "nextra/components";
+
+# Quickstart
+
+This guide will get you up and running in the Golem Cloud in minutes.
+
+### Install Golem CLI
+
+Golem CLI is a command-line application that allows you to deploy new invincible workers onto Golem Cloud, as well as manage your account, projects, templates, and API tokens.
+
+In order to download the command-line application, you must first [register for the Developer Mode preview](https://golem.cloud/sign-up). You will then be provided with a link to download Golem CLI.
+
+After downloading Golem CLI, you need to place the application on your path, so you can run it from anywhere.
+
+### Authenticate
+
+You need to create an account and authenticate yourself before using any Golem commands. This is easy to do with Github OAuth2. Lets do it right now by using the following command:
+
+```bash filename="Terminal" copy 
+golem-cli account get
+```
+
+Once you authenticate, Golem CLI will cache an API token in a local directory named `$HOME/.golem`. This token will allow you to use Golem CLI without further authentication.
+
+### Building an Example
+
+Golem Cloud runs templates that are WebAssembly programs. Templates are like applications, except they may expose functions that can be called externally.
+
+To deploy to Golem Cloud, you must first [build a template](https://www.notion.so/Building-Templates-03501aa5572b4129aa0a9e9fe9f5d3fc?pvs=21) using any programming language and toolchain that can build WebAssembly components.
+
+To get started quickly, you can use Golem CLI to create a template from an example:
+
+```bash filename="Terminal" copy 
+golem-cli new --example rust-shopping-cart --template-name shopping_cart
+```
+
+This will generate a new `shopping-cart` directory in the current directory with the example for your template.
+
+To **build** the newly created template you need some development tools installed. These are collected for each supported **guest language** on the [Building Templates](https://www.notion.so/Building-Templates-03501aa5572b4129aa0a9e9fe9f5d3fc?pvs=21) page. For the above example, please read the [Rust](https://www.notion.so/Rust-b8f6be94810546c7a222c2838485a04f?pvs=21) specific instructions to set up `cargo-component`.
+
+Once you have that, navigate to the `shopping-cart`, and run:
+
+```bash filename="Terminal" copy 
+cargo component build --release
+```
+
+This will write the resulting template to `shopping-cart/target/wasm32-wasi/release/lib.wasm`.
+
+<Callout>
+  The `golem-cli new` command prints out the necessary steps to build your template exactly as you have to type them - using your custom template and package names and the selected example’s language specific tools.
+</Callout>
+
+### Uploading Your Template
+
+To upload your template to Golem Cloud, you can use the `template add` command. Navigate to `shopping-cart/target/wasm32-wasi/release` and then do:
+
+```bash filename="Terminal" copy 
+golem-cli template add --template-name shopping-cart lib.wasm
+```
+
+Uploading a template to Golem Cloud does not actually execute the template. Instead, it only makes it available for execution to Golem Cloud.
+
+Every separate execution of your template is referred to as a _worker_ based on that template.
+
+### Create Workers
+
+In Golem Cloud, every worker has a unique id, which is arbitrary text that you define. If you don’t need a meaningful id for workers, you can generate a UUID.
+
+Once you have chosen a worker id, you can launch the worker either explicitly, or by invoking any function on the worker (for example, a “main” function).
+
+Here, we creating a new worker `shopping-cart-1` :
+
+```bash filename="Terminal" copy 
+golem-cli worker add \
+  --worker-name shopping-cart-1 \
+  --template-name shopping-cart
+```
+
+When you add a template you will see some basic information about the template such as its name, unique identifier, version, and size. In addition, you will see a list of exports. These are the public API of your worker and can be used to call it with the CLI or REST API, as we will see below.
+
+### Invoking Workers
+
+Thanks to the WebAssembly component model, your Golem Cloud applications are not just an executable. Rather, they may export functions that can be called from the outside. Exported functions allow your workers to be given instructions or queried for their state.
+
+Here, we invoke the function `initialize_cart` on the worker with a single string parameter:
+
+```bash filename="Terminal" copy 
+golem-cli worker invoke-and-await \
+    --template-name=shopping-cart \
+    --worker-name=shopping-cart-1 \
+    --function=golem:template/api/initialize-cart \
+    --parameters='["test-user"]'
+```
+
+If a worker of the specified name has not been created, then when you attempt to invoke a function on the worker, it will first be created.
+
+Check the [Template interface](https://www.notion.so/Template-interface-ac8f610e7e8f465d9e324b6ae0aba3b5?pvs=21) section to learn about how to figure out the **function name** and how to encode your parameters in JSON.
+
+### Next Steps
+
+In this guide, you have learned how to build and deploy invincible serverless workers on Golem Cloud, and seen how you can interact with them as they execute.
+
+Take your next steps with Golem Cloud by exploring the following resources:
+
+- [Building Templates](https://www.notion.so/Building-Templates-03501aa5572b4129aa0a9e9fe9f5d3fc?pvs=21) describes you can use different **programming languages** for building Golem templates
+- [Promises](https://www.notion.so/Promises-62133a19c1144a29a74bf986d118e157?pvs=21) are a way to block your program until an **external condition** fulfills it.
+- The [Golem CLI](https://www.notion.so/Golem-CLI-1aa11fd41dcf4c878b465c15ca815d61?pvs=21) page lists all the commands available on Golem’s **command line interface**
+- Golem can also be controlled using its [REST API](https://www.notion.so/REST-API-fc0b5887cca54261b6b773711f6f23b0?pvs=21)
+- Read the [FAQ](https://www.notion.so/FAQ-0f58ad578cb74a648aedc7bea90c37f9?pvs=21) page for frequently asked questions

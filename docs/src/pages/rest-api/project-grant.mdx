@@ -1,0 +1,198 @@
+# Project grant API
+
+### Summary
+
+Projects can have grants providing access to other accounts than the project’s owner. The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by **policies**, covered by the **Project policy API.**
+
+### Get a project’s grants
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| GET | `/v1/projects/{project-id}/grants` | - | Array of ProjectGrant JSON |
+
+**Response format:**
+
+```json
+[
+	{
+	  "id": "2b21e703-cd02-4873-bb6b-e1caa3c2961f",
+	  "data": {
+	    "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+	    "grantorProjectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
+	    "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2",
+	  }
+	}
+]
+```
+
+**Explanation**
+
+Returns all projects grants associated with the given project. For each grant:
+
+- `id` is the identifier of the grant itself
+- `granteeAccountId` the account that gets access for the project
+- `grantorProjectId` the project ID
+- `projectPolicyId` the associated policy - see the **project policy API** below
+
+**Example cURL:**
+
+```bash
+curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Get a specific grant of a project
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| GET | `/v1/projects/{project-id}/grants/{grant-id}` | - | ProjectGrant JSON |
+
+**Response format:**
+
+```json
+{
+	"id": "2b21e703-cd02-4873-bb6b-e1caa3c2961f",
+	"data": {
+	  "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+	  "grantorProjectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
+	  "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2",
+	}
+}
+```
+
+**Explanation**
+
+Returns a specific grant of a specific project. The returned object is the same as the elements of the grants endpoint’s response described above.
+
+**Example cURL:**
+
+```bash
+curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants/2b21e703-cd02-4873-bb6b-e1caa3c2961f'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Create a project grant
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| POST | `/v1/projects/{project-id}/grants` | ProjectGrantDataRequest JSON | ProjectGrant JSON |
+
+**Request format:**
+
+```json
+{
+  "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+	"projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2",
+}
+```
+
+**Response format:**
+
+```json
+{
+	"id": "2b21e703-cd02-4873-bb6b-e1caa3c2961f",
+	"data": {
+	  "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+	  "grantorProjectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
+	  "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2",
+	}
+}
+```
+
+**Explanation**
+
+Creates a new project grant from the following information:
+
+- `granteeAccountId` the account that gets access for the project
+- `projectPolicyId` the associated policy - see the **project policy API** below
+
+The response describes the new project grant including it’s `id` that can be used to query specifically this grant in the future.
+
+**Example cURL:**
+
+```bash
+curl -X POST
+     'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants'
+     -H 'Content-Type: application/json'
+     -d '{"granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5", "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2"}' 
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Create a project grant with a new policy
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| POST | `/v1/projects/{project-id}/grants` | ProjectGrantDataWithProjectActions JSON | ProjectGrant JSON |
+
+**Request format:**
+
+```json
+{
+  "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+	"projectActions": ["ViewComponent", "ViewInstance"],
+  "projectPolicyName": "my new policy"
+}
+```
+
+**Response format:**
+
+```json
+{
+	"id": "2b21e703-cd02-4873-bb6b-e1caa3c2961f",
+	"data": {
+	  "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+	  "grantorProjectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
+	  "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2",
+	}
+}
+```
+
+**Explanation**
+
+Creates a new project **grant** and its associated **policy** from the following information:
+
+- `granteeAccountId` the account that gets access for the project
+- `projectActions` the set of actions allowed by the policy. See the **project policy API** section below for a list of all the available actions
+- `projectPolicyName` is optional and associates a human-readable name with the policy
+
+The response describes the new project grant including it’s `id` that can be used to query specifically this grant in the future.
+
+**Example cURL:**
+
+```bash
+curl -X POST
+     'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants'
+     -H 'Content-Type: application/json'
+     -d '{"granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5", "projectActions": ["ViewComponent", "ViewInstance"], "projectPolicyName": "my new policy"}' 
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Delete a project grant
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| DELETE | `/v1/projects/{project-id}/grants/{grant-id}` | - | - |
+
+**Explanation**
+
+Deletes an existing grant of a specific project. 
+
+**Example cURL:**
+
+```bash
+curl -X DELETE
+     'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants/2b21e703-cd02-4873-bb6b-e1caa3c2961f'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Project grant API errors
+
+All project grant endpoints can return with the following errors:
+
+| Status | Body | Description |
+| --- | --- | --- |
+| 400 | `{ "errors": ["error1"}` | Invalid request, returning with a list of issues detected in the request. |
+| 401 | `{ "message": "..." }` | Unauthorized |
+| 403 | `{ "error": "..." }` | Maximum number of projects exceeded |
+| 404 | `{ "message": "..." }` | Project not found |
+| 500 | `{ "error": "..." }` | Internal server error |

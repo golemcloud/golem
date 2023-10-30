@@ -1,0 +1,41 @@
+
+import { Callout } from "nextra/components";
+import { Card, Cards } from "nextra/components";
+import {InfoIcon, TerminalIcon, ArrowUpDownIcon, HardHatIcon, BookTypeIcon, NetworkIcon, PlayCircleIcon, ArrowRightFromLineIcon, HelpCircleIcon, GalleryVerticalEnd} from "lucide-react";
+
+# Learn
+
+Welcome to the Golem Cloud developer documentation portal! Here you will find comprehensive documentation on how to build, deploy, and manage applications on Golem Cloud.
+
+<Callout type="warning">
+  Golem Cloud is currently in Developer Preview. We encourage experimentation
+  and prototypes, but please do not deploy mission-critical production
+  applications on a Developer Preview account.
+</Callout>
+
+<br/>
+
+### Getting Started
+<Cards>
+  <Card title="Get Started" href="/getting-started" icon={<InfoIcon/>}/>
+  <Card title="Building Templates" href="/building-templates" icon={<HardHatIcon/>}/>
+  <Card title="FAQ" href="/faq" icon={<HelpCircleIcon/>}/>
+  <Card title="Release Notes" href="/release-notes" icon={<GalleryVerticalEnd/>}/>
+</Cards>
+
+
+### Concepts
+<Cards>
+  <Card title="Template Interface" href="/template-interface" icon={<BookTypeIcon/>}/>
+  <Card title="API Gateway" href="/api-gateway" icon={<NetworkIcon/>}/>
+  <Card title="Promises" href="/promises" icon={<ArrowRightFromLineIcon/>}/>
+</Cards>
+
+### Reference
+<Cards>
+  <Card title="Golem CLI" href="/golem-cli" icon={<TerminalIcon/>}/>
+  <Card title="REST API" href="/rest-api" icon={<ArrowUpDownIcon/>}/>
+  <Card title="Runtime API" href="/runtime-api" icon={<PlayCircleIcon/>}/>
+</Cards>
+
+

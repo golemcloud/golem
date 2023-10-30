@@ -1,0 +1,88 @@
+import { Callout } from "nextra/components";
+
+# Key Value API
+
+The key value API allows you to record arbitrary values in a key value store.
+
+Often you can just use in memory data structures to maintain your application’s state because these data structures are durable with Golem. However, sometimes you will still want to use a more traditional key value store, for example because you expect the total size to be large.
+
+This is where Golem’s key value API comes in! It is based on https://github.com/WebAssembly/wasi-keyvalue so it is fully open source and anyone can provide an implementation of it. When you run your program in Golem Cloud we provide an implementation that supports durable execution.
+
+Golem’s implementation of the key value API currently uses Redis, though all of the APIs abstract over different underlying key value providers. In the future we will allow users of Golem Cloud to select the key value provider they wish to use as well as other configuration options.
+
+To use the key value API, first make sure to add the contents of the `wit/deps` folders from https://github.com/golemcloud/golem-wit to your own `wit/deps` folder. You can then interact with the key value interface from your own code in whatever language you are working in.
+
+Let’s see what this looks like with an example. For this example we will create a simple service that lets us set arbitrary key value pairs in specified buckets and get those values, implemented using the key value API.
+
+Our WIT file will look like this:
+
+```
+package golem:examples
+
+interface api {
+  get: func(bucket: string, key: string) -> option<list<u8>>
+
+  set: func(bucket: string, key: string, value: list<u8>) -> ()
+}
+
+world key-value-example {
+  import wasi:keyvalue/readwrite
+  export api
+}
+```
+
+Notice that we imported the `wasi:keyvalue/readwrite` functionality. WASI Key Value includes a variety of interfaces for simple read / write operations, batch operations, atomic operations, and even caching.
+
+<Callout>
+    **Golem** supports the **readwrite** and **batch** interfaces right now. Support for additional interfaces will be provided in the future.
+</Callout>
+
+<Callout>
+    The **WASI Key Value** interface is still in the proposal stage and is likely to change in the future. Some of the interfaces have already been modified based on feedback from the Golem team.
+</Callout>
+
+Now that we have our interface we are ready to implement it. Let’s take a look at how we would do that:
+
+```rust
+cargo_component_bindings::generate!();
+
+use crate::bindings::exports::golem::examples::api::*;
+use crate::bindings::wasi::keyvalue::readwrite::*;
+use crate::bindings::wasi::keyvalue::types::*;
+use crate::bindings::wasi::keyvalue::wasi_cloud_error::*;
+
+struct Component;
+
+impl Guest for Component {
+    fn get(bucket: String, key: String) -> Option<Vec<u8>> {
+        let bucket = open_bucket(&bucket).unwrap();
+        match get(bucket, &key) {
+            Ok(incoming_value) => {
+                let value = incoming_value_consume_sync(incoming_value).unwrap();
+                Some(value)
+            }
+            Err(error) => {
+                let trace = trace(error);
+                if trace == "Key not found" {
+                    None
+                } else {
+                    panic!("Unexpected error: {}", trace);
+                }
+            }
+        }
+    }
+
+    fn set(bucket: String, key: String, value: Vec<u8>) {
+        let bucket = open_bucket(&bucket).unwrap();
+        let outgoing_value = new_outgoing_value();
+        outgoing_value_write_body_sync(outgoing_value, &value).unwrap();
+        set(bucket, &key, outgoing_value).unwrap()
+    }
+}
+```
+
+To set a value we first open a bucket, then create an outgoing value that will contain the value we want to write. We then write our value to the outgoing value and finally set it in the key value store.
+
+Similarly to get a value we open a bucket, then get the value at the corresponding key. WASI Key Value currently returns an error if the key does not exist, so we introspect on the value and either return `None` if the key does not exist or retail with the error if another error occurred.
+
+And there we have it! We have taken advantage of key value functionality in our own program with a few lines of code and without having to stand up any infrastructure of our own.

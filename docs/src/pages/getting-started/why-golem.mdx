@@ -1,0 +1,65 @@
+# Why Golem?
+
+Golem Cloud is an evolution of serverless computing that allows workers to be long-lived and stateful. Through a new paradigm called _durable computing_, workers deployed onto Golem Cloud can survive hardware failures, upgrades, and updates, offering a reliable foundation for building distributed, stateful applications.
+
+Golem Cloud does not let you build anything you couldn’t build before, with great expertise and enough time and resources. However, Golem Cloud does radically simplify the way you build many classes of cloud applications.
+
+## Benefits
+
+Golem Cloud shares many of the benefits of serverless computing, including faster development, lower maintenance overhead, and no need for ops.
+
+However, there are additional benefits that are unique to Golem Cloud, including:
+
+- **Durable State**. Golem Cloud lets you store session information, shopping carts, sensor data, user events, and much more in memory, because all workers state is durable. This not only lets you reduce your dependency on databases and dramatically simplify application code, but can also improve performance.
+- **Indefinite Life**. Workers deployed to Golem Cloud can run indefinitely. Though the node they are executing on might go down, the workers will be transferred to another node and resume execution where they left off. Durable computation can radically simplify orchestration processes and eliminate the need for event sourcing.
+- **Distributed Computing**. Workers deployed to Golem Cloud can call other workers, which makes them equivalent in expressive power to distributed, persistent actors. As such, workers deployed to Golem Cloud can solve virtually any problem in distributed computing, using techniques pioneered by actor frameworks such as Akka or Dapr.
+
+## Examples
+
+In the following examples, you will learn how several different types of applications could be written for Golem Cloud, and how this would simplify architecture.
+
+### Order Processing
+
+In an online storefront, we may have to take many steps during end-to-end processing of an order:
+
+1. Check and reserve sufficient inventory.
+2. Validate details of the order, such as shipping address.
+3. Validate payment method details.
+4. Charge the user’s credit card or debit their bank account.
+5. Retry or abort on an failed charge (as appropriate), or continue on success.
+6. Record the successful charge in a database.
+7. Dispatch the order to fulfillment.
+8. Send the customer an email with their order details.
+9. Send the user updates as the state of the order is updated by fulfillment.
+10. Handle unexpected errors during fulfillment, or the user’s cancellation of the order before dispatch (if supported).
+
+The major part of this process can take several seconds to several minutes, while the entire process could take days or even weeks.
+
+In a perfect world, we could write a simple program that performs all of these steps, more or less in order, in a handful of functions that call out to other web services.
+
+However, if we were to push this naive approach into production, we would run into numerous issues. Due to hardware failures, updates, and upgrades, our program could be interrupted before it finishes, leaving all systems in an inconsistent state. The user might be surprised to see they were charged for the items they ordered, without hope of them ever arriving, for example.
+
+In order to compensate for these failure scenarios, we would traditionally switch to an event-sourcing approach. Because events are stored persistently in a durable message queue like Apache Kafka or Apache Pulsar, we now have a reliable means to detect which steps have been performed, and which have not, and we can write processes that recover partially completed orders, and resume at the point where they left off.
+
+While industry-proven and reliable, this approach ends up significantly increasing our development and maintenance costs, and turns what could be a simple and short program into many disparate services, all introducing additional overhead and points of failure.
+
+With Golem Cloud, the entire order processing process can be written and deployed as a simple serverless worker. The worker will run invincibly with durable state, allowing us to focus on business logic and disregard the complexities of reliable, distributed, stateful computation in the cloud.
+
+### Session Management
+
+In a multiplayer online betting game, each gaming session could last several minutes to an hour, and depending on the nature of the game, players may be able to place bets days or weeks in advance of the live session.
+
+The responsibilities of session management include:
+
+1. Taking bets in advance, which involve traditional commerce processes such as the preceding storefront example.
+2. Managing the state of the game session during play, as gameplay unfolds.
+3. Taking bets and computing odds during the game session, so long as the state of the game itself permits the placing of new bets.
+4. Settlement when the game concludes.
+
+Due to the financial nature of betting games, it is important that bets be tracked precisely and placed only be allowed when the state of the game and the rules of the game permit the bets to be placed. Moreover, failure events can occur at any point and may not halt the progress of a game nor interfere or change the bets that have been placed so far.
+
+One way of solving this problem would be to use a relational database in order to obtain ACID guarantees on bets. However, the state of the game evolves in real-time, so to make concurrent bets in the presence of a changing game state, it would also be necessary to store the game state in the database. Storing both all bets and the game state itself in the relational database could negatively impact performance, necessitating alternate approaches, such as event-sourcing with CQRS.
+
+In the end, a traditional solution to the problem of session management is likely to be highly tailored to the specific nature of the game and the audience size, and likely to involve some kind of event-sourcing, potentially with CQRS, in order to ensure consistency and recoverability in the event of unanticipated failures.
+
+With Golem Cloud, the entire game session can be deployed as a single serverless worker, which responds to updates in game state and new bets. Since the data is stored in memory and latency of workers in Golem Cloud is very low, performance can be very high, without sacrificing the durability guarantees of other approaches based on ACID databases or event-sourcing.

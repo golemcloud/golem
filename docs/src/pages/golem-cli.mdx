@@ -1,0 +1,267 @@
+# Golem CLI
+
+Golem CLI is a command-line interface for interacting with Golem Cloud Services. Golem CLI allows users to upload their templates, launch new workers based on these templates and call functions on running workers.
+
+## The main functions of the CLI are:
+
+- creating new projects from templates
+- uploading a new template
+- launching new workers based on these templates
+- invoking functions on workers
+- connecting to workers to see their logs
+
+## Secondary functions of the tool are:
+
+- authentication
+- creating projects and organizing templates into projects
+- managing permissions for projects and accounts
+- managing (transferring) ownership of projects
+
+## Registration
+
+A new user can launch the binary and create a new account on Golem Cloud by signing up with their Github account via the oauth2 protocol.
+
+### Account registration workflow
+
+1. Users runs any Golem CLI command that requires an account, initiating authentication.
+    
+    ```bash
+    golem-cli account get
+     >>
+     >>  Application requests to perform OAuth2
+     >>  authorization.
+     >>
+     >>  Visit following URL in a browser:
+     >>
+     >>   ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+     >>   ┃ https://github.com/login/device ┃
+     >>   ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+     >>
+     >>  And enter following code:
+     >>
+     >>   ┏━━━━━━━━━━━┓
+     >>   ┃ 1234-ABCD ┃
+     >>   ┗━━━━━━━━━━━┛
+     >>
+     >>  Code will expire in 14 minutes at 01:03:51.
+     >>
+    
+    Waiting...
+    ```
+    
+2. The Github OAuth server returns an access_token id to Golem CLI.
+3. Golem CLI then registers a new golem_token using the access_token
+    1. Golem service queries the external using the access_token to obtain login name, user name and primary email.
+    2. If Golem Cloud doesn’t have this user, a new account is created on-demand.
+    3. Golem Cloud creates a new golem_token linked for the user and returns it.
+    4. All tokens are cached in `$HOME/.golem` directory. It is safe to delete this directory in case of login issues, as it can be re-created through re-authentication.
+
+## Getting help
+
+To obtain help for using the CLI, use `--help`. Similarly, use `--help` option after a subcommand to get subcommand documentation.
+
+## Creating a new template
+
+The compiled code Golem can execute is called a **golem template**. Before we can upload a template we need to create its guest-language specific source and compile it to a WebAssembly program. 
+
+The following CLI commands help with this:
+
+### `golem-cli list-examples`
+
+Golem has a library of **examples** which you can use as a starting point for your program. (The templates are defined in the open-source https://github.com/golemcloud/golem-templates repository).
+
+The `list-examples` command can list and filter the available commands for you.
+
+- Use `--language X` to filter for your chosen guest language, such as `Rust`, `Go`, etc.
+- Use `--tier N` to show only examples for a given **language tier** - see [Building Templates](https://www.notion.so/Building-Templates-03501aa5572b4129aa0a9e9fe9f5d3fc?pvs=21) for a definition of tiers.
+
+### `golem-cli new`
+
+Once you selected the example to use you can use the `new` command to create a new directory ready to be compiled to a **golem template**.
+
+You have to specify two parameters:
+
+- `--example NAME` with the selected example’s name, for example `rust-actor-minimal`
+- `--template-name NAME` with your chosen name for the new template. You can use either PascalCase, snake_case or kebab-case for the name. Try to avoid numbers if possible, as some templates may have problems with it.
+
+Optionally you can also specify a package name:
+
+- `--package-name NAME` which should be in a `pack:name` format. If not specified the default should will be `golem:component`.
+
+The command prints out the **instructions** specific to the generated source that describes how to compile it to a WASM file ready to be uploaded to **Golem Cloud**.
+
+### `golem-cli template add`
+
+Once you have the compiled WASM you have to **upload** it to the system before you can start creating workers based on it. If it is a new template, use the `template add` command (if it is a new version of an existing template you can use `template update`).
+
+Required parameters:
+
+- `--template-name NAME` is the name of the template in the **Golem Cloud**. You can use the same name you used for instantiating the example, but it is not necessary.
+- `template.wasm` the path to the compiled WASM program
+
+Optionally you can also organise your templates into separate **projects**. If not specified, each new template is added to the **default project** of your account.
+
+If needed, you can select an already created project (read below for information about how to create one) by either its ID or its name:
+
+- `--project-name NAME`
+- `--project-id UUID`
+
+Once the template is successfully uploaded the CLI will print its **metadata**. The metadata contains all the detected **exported functions** with their type signature. See the [Template interface](https://www.notion.so/Template-interface-ac8f610e7e8f465d9e324b6ae0aba3b5?pvs=21) page for more information about types and how they are mapped to JSON structures.
+
+## Creating and invoking workers
+
+The uploaded template is just a definition of a runnable code but it does not run by itself. You can create an arbitrary number of **workers** based on a template, each holding to its own state and allowing you to invoke **exported functions** on them.
+
+Workers hold some per-worker data which you can specify when you create one, and can be used to store configuration of that worker. These are **environment variables** and the list of **arguments** (which would be passed to the `main` function if it was a regular executable process). 
+
+If you try to invoke a function on a worker that does not exist yet, it will be automatically created with the default properties (empty list of environment variables and arguments).
+
+### `golem-cli worker add`
+
+The `worker add` command creates a new worker based on a template, but does not invoke it yet. This prepares the worker, initializes it and loads in memory.
+
+You need to give a **unique name** to your worker (unique **per template**). If the worker corresponds to some business entity in your system, you can use the identifier of that for example.
+
+- `--worker-name NAME`
+
+You also have to specify which **template** to create the worker based on. This can be done by name or by the template’s ID (an UUID you get when you execute `template add`).
+
+Either specify:
+
+- `--template-id UUID` if you know the identifier of the template
+
+Or:
+
+- `--template-name` if you only know its name.
+
+Note that template names are only unique within a project. If you have multiple **projects** with templates you also have to specify which project you mean, either by its name or its ID:
+
+- `--project-name NAME`
+- OR `--project-id UUID`
+
+Optionally you can also specify a list of **environment variables** and a list of **command line arguments** which are static during the worker’s lifetime and accessible through standard library functions of your chosen guest language:
+
+- `--env NAME1=VALUE1` defines an environment variable `NAME1` with a value `VALUE1`. You can have multiple `--env` parameters to define more.
+- `arg1 arg2 ...` all the remaining parameters of the command are passed to the worker as command line arguments.
+
+The newly created worker will always use the **latest version** of the template that you uploaded via `template add` or `template update`.
+
+### `golem-cli worker invoke-and-await`
+
+The `worker invoke-and-await` command executes an **exported function** of a **worker** and waits for its return value.
+
+This is the primary command to execute something in **Golem Cloud** if you are also interested in its result value. Alternatively you can use `worker invoke` to just trigger the execution of a function without waiting for it. This is useful for long-running functions where you don’t want to block until they finish running.
+
+When invoking a function you have to specify the template your worker is based on (as worker names are only unique within a template’s scope!). This can be done in multiple ways, as described above.
+
+Either specify:
+
+- `--template-id UUID` if you know the identifier of the template
+
+Or:
+
+- `--template-name` if you only know its name.
+
+Note that template names are only unique within a project. If you have multiple **projects** with templates you also have to specify which project you mean, either by its name or its ID:
+
+- `--project-name NAME`
+- OR `--project-id UUID`
+
+You also have to specify the worker **name**:
+
+- `--worker-name NAME` which is the name you gave the worker in the `worker add` command. If the worker does not exist, it will be created with default parameters (empty environment variables and command line arguments).
+
+And the function to be called with all its parameters:
+
+- `--function NAME` the fully qualified name of the exported function
+- `--parameters JSON_ARR` a JSON array with all the parameters to be passed to the exported function. If the function does not expect any parameters it should be an empty array (`[]`)
+
+See the [Template interface](https://www.notion.so/Template-interface-ac8f610e7e8f465d9e324b6ae0aba3b5?pvs=21) page for more information about what a fully qualified exported function name is, and how to encode the different types in JSON.
+
+There are two more optional parameters to this command:
+
+- `--invocation-key KEY` associates an invocation key, previously created with the `worker invocation-key` CLI command. This is an advanced features you can use to avoid accidentally invoking the same thing twice. Creating an invocation key always succeeds. Once you have an invocation key, if you accidentally invoke the same function twice with the same ID, Golem guarantees that it won’t be executed twice.
+- `--use-stdio` switches the call into **stdio mode**. This is useful for **tier 3 languages** (see [Building Templates](https://www.notion.so/Building-Templates-03501aa5572b4129aa0a9e9fe9f5d3fc?pvs=21) to learn more about tiers) where you cannot define your program’s interface with a WIT file. In stdio mode the JSON you provide in `--parameters` is passed directly to the component’s `run` (or `main`) function through the standard input, and the result of the call is the program’s standard output.
+
+## Observing workers
+
+## `golem-cli worker get`
+
+To get the status and some additional metadata about a worker you can use the `worker get` command.
+
+To use this command you need to specify the template and the worker name, the same way as described above for `worker invoke-and-await`.
+
+### `golem-cli worker connect`
+
+Connecting to a worker allows you to have a stream of the worker’s output, similar to how `kubectl log` works in a Kubernetes environment. 
+
+This is an aggregated streaming log from the following sources:
+
+- The worker’s **standard output**
+- The worker’s **standard error**
+- The worker’s **logs** via the WASI [logging interface](https://github.com/WebAssembly/wasi-logging)
+
+To use this command you need to specify the template and the worker name, the same way as described above for `worker invoke-and-await`.
+
+## Full command reference
+
+### Deployment
+
+The deployment facilities of Golem CLI allow developers to create, deploy, manage, and interact with user-defined templates within Golem Cloud. There is optional `--project-name` parameters in all deployment commands. If no project is specified, the default project for the account is used.
+
+| golem-cli template add --template-name &lt;text&gt; &lt;template.wasm&gt; | Adds a new template to the registry in the specified project. Returns new template details. |
+| --- | --- |
+| golem-cli template update --template-name &lt;text&gt; &lt;template.wasm&gt; | Updates a template, which does not change the template id, but which associates a new “latest version” of the template for subsequent worker creation. |
+| golem-cli template list [--template-name &lt;text&gt;] | Lists all templates in default project. Use --project-name to specify different project. You can also specify template name to search by name |
+| golem-cli worker add --worker-name &lt;text&gt; --template-name &lt;text&gt; [(-e, --env &lt;text&gt;)] &lt;args&gt;… | Given a template name, launches a new worker based on the template that will have the specified name.Returns worker details. |
+| golem-cli worker invoke --template-name &lt;text&gt; --worker-name &lt;text&gt; --function &lt;text&gt; --parameters &lt;json&gt; | Invokes a function on the worker, passing it the specified (flattened) parameters. Returns immediately after invocation without waiting for completion.|
+| golem-cli worker invocation-key --template-name &lt;text&gt; --worker-name &lt;text&gt; | Creates new invocation key to that can be used only once to call invoke-and-await. |
+| golem-cli worker invoke-and-await --template-name &lt;text&gt; --worker-name &lt;text&gt; [--invocation-key &lt;key&gt;] --function &lt;text&gt; --parameters &lt;json&gt; [--use-stdio] | Invokes a function on the worker, passing it the specified (flattened) parameters. Waits for completion and returns function result as json. If no invocation key provided CLI creates a new one. |
+| golem-cli worker connect --template-name &lt;text&gt; --worker-name &lt;text&gt; | Connects to a running worker, displaying the messages logged or written to the standard output from the worker. |
+| golem-cli worker interrupt --template-name &lt;text&gt; --worker-name &lt;text&gt; | Interrupts running worker. |
+| golem-cli worker simulated-crash --template-name &lt;text&gt; --worker-name &lt;text&gt; | Simulates a hardware failure or fatal crash in the specified worker (for testing purposes). Note that Golem will detect and recover the worker so the worker will not stay down for long. |
+| golem-cli worker delete --template-name &lt;text&gt; --worker-name &lt;text&gt; | Deletes worker. |
+
+
+### Projects
+
+The projects facilities of Golem CLI allow developers to create and manage projects, which are collections of templates that are owned by an account within Golem Cloud.
+
+When a new user account is created, an automatic default project is created for this user. When a user is working with templates and workers and doesn’t specify the project, the default one is assumed.
+
+| golem-cli project list [--project-name &lt;text&gt;] | Lists all projects the user has access to. |
+| --- | --- |
+| golem-cli project add --project-name &lt;text&gt; [--project-description &lt;text&gt;] | Creates new project owned by current account. |
+| golem-cli project get-default | Shows default project details. |
+
+### Sharing
+
+The sharing facilities of Golem CLI allow developers to share either account- or project-level access with other accounts on Golem Cloud.
+
+| golem-cli share --project-name &lt;text&gt; --recipient-account-id &lt;text&gt; --project-policy-id &lt;text&gt; | Share project access with a given account using specified project policy. |
+| --- | --- |
+| golem-cli share --project-name &lt;text&gt; --recipient-account-id &lt;text&gt; --project-actions &lt;text&gt; | Share project access with a given account using specified list of allowed actions. |
+
+### Tokens
+
+The tokens facility of Golem CLI allow developers to create and manage tokens, which are API keys that can be used in programmatic scenarios for interacting with Golem Cloud Services.
+
+| golem-cli token list | Lists all tokens that the user created. |
+| --- | --- |
+| golem-cli token add [--expires-at &lt;instant&gt;] | Creates a new token with the optional expiration.Returns token details. |
+
+### Examples
+
+Templates allow developers to create example component source code for different languages
+
+| golem-cli list-examples [--language &lt;text&gt;] | Lists existing examples. |
+| --- | --- |
+| golem-cli new --example &lt;text&gt; --template-name &lt;text&gt; [--package-name &lt;text&gt;] | Create example template source code project using specified example. |
+
+### Account
+
+Account command allows users to get or update account details.
+
+| golem-cli account get | Get current account details. Can also be used to troubleshoot login issues. |
+| --- | --- |
+| golem-cli account update [--account-name &lt;text&gt;] [--account-email &lt;text&gt;] | Updates account name and/or email. |

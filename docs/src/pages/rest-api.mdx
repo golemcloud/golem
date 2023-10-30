@@ -1,0 +1,27 @@
+import { Card, Cards } from "nextra/components";
+
+# REST API
+
+The Golem REST API is located at [https://release.api.golem.cloud](https://release.api.golem.cloud/v1). For all API calls, the user must provide a token for authentication. To obtain the golem token, the user should register an external oauth2 token with the Golem service using the `v1/oauth2` endpoint.
+
+# Authentication
+
+All endpoints (except for `/v1/oauth2` ) requires authorization header `Authorization: bearer <token-secret>`  where `token-secret` is one of:
+
+- the `secret` field of the response of the `v1/oauth2` endpoint.
+- a custom API token created using the **Token API**
+
+# API reference
+
+This section contains the full reference of all user facing Golem Cloud endpoints, categorized and presented in alphabetical order.
+
+<Cards>
+  <Card title="Account API" href="https://www.notion.so/Account-API-037805466e1b4e89908ec93fe5a87807?pvs=21" />
+  <Card title="Login API" href="https://www.notion.so/Login-API-464ff34faf4c45139aad148e4a9017a1?pvs=21" />
+  <Card title="Project API" href="https://www.notion.so/Project-API-2533c9a769d1480cb6f8a0ddb22efeec?pvs=21" />
+  <Card title="Project grant API" href="https://www.notion.so/Project-grant-API-543101db6c3744d09b99d780d972c2f2?pvs=21" />
+  <Card title="Project policy API" href="https://www.notion.so/Project-policy-API-44e72a6f02fb4df7a2b3c2bbe3362ef0?pvs=21" />
+  <Card title="Template API" href="https://www.notion.so/Template-API-5514540dfc754afea0e7567f11536aea?pvs=21" />
+  <Card title="Token API" href="https://www.notion.so/Token-API-96c4c6e51b8e4633a7d755d4e0dd76b4?pvs=21" />
+  <Card title="Worker API" href="https://www.notion.so/Worker-API-20b0013576db440fa91386d2b324f4e5?pvs=21" />
+</Cards>

@@ -1,0 +1,136 @@
+# Token API
+
+### Summary
+
+The **token API** allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
+
+### Get all tokens
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| GET | `/v1/accounts/{accountId}/tokens` | - |  Array of Token JSON |
+
+**Response format:**
+
+```json
+[
+  {
+    "id": "d7746eb5-7a7f-4e40-abfa-a736a3a28ef9",
+    "accountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+    "createdAt": "2023-09-05T13:40:13.364870Z",
+    "expiresAt": "2100-01-01T01:00:00Z"
+  }
+]
+```
+
+**Explanation**
+
+Gets all created tokens of an account. The format of each element is the same as the `data` object in the `oauth2` endpoint’s response.
+
+**Example cURL:**
+
+```bash
+curl 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5/tokens'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Get a specific token
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| GET | `/v1/accounts/{accountId}/tokens/{tokenId}` | - | Token JSON |
+
+**Response format:**
+
+```json
+{
+  "id": "d7746eb5-7a7f-4e40-abfa-a736a3a28ef9",
+  "accountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+  "createdAt": "2023-09-05T13:40:13.364870Z",
+  "expiresAt": "2100-01-01T01:00:00Z"
+}
+```
+
+**Explanation**
+
+Gets information about a token given by it’s identifier. The JSON is the same as the `data` object in the `oauth2` endpoint’s response.
+
+**Example cURL:**
+
+```bash
+curl 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5/tokens/d7746eb5-7a7f-4e40-abfa-a736a3a28ef9'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Create a new token
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| POST | `/v1/accounts/{accountId}/tokens` | CreateTokenDTO JSON | UnsafeToken JSON |
+
+**Request format:**
+
+```json
+{
+  "expiresAt": "2100-01-01T01:00:00Z"
+}
+```
+
+**Response format:**
+
+```json
+{
+  "data": {
+    "id": "d7746eb5-7a7f-4e40-abfa-a736a3a28ef9",
+    "accountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+    "createdAt": "2023-09-05T13:40:13.364870Z",
+    "expiresAt": "2100-01-01T01:00:00Z"
+  },
+  "secret": "03f17466-202f-43ac-86cc-52e6c6a42d2d"
+}
+```
+
+**Explanation**
+
+Creates a new token with a given expiration date. The response not only contains the token `data` but also the `secret` which can be passed as a bearer token to the `Authorization` header to the Golem Cloud REST API.
+
+Note that this is the only time this `secret` is returned!
+
+**Example cURL:**
+
+```bash
+curl -X POST
+     'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5/tokens'
+     -H 'Content-Type: application/json'
+     -d '{"expiresAt": "2100-01-01T01:00:00Z"}' 
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Delete a token
+
+| Method | Path | Request | Response |
+| --- | --- | --- | --- |
+| DELETE | `/v1/accounts/{accountId}/tokens/{tokenId}` | - | - |
+
+**Explanation**
+
+Deletes a previously created token given by it’s identifier.
+
+**Example cURL:**
+
+```bash
+curl -X DELETE
+     'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5/tokens/d7746eb5-7a7f-4e40-abfa-a736a3a28ef9'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Token API errors
+
+All token endpoints can return with the following errors:
+
+| Status | Body | Description |
+| --- | --- | --- |
+| 400 | `{ "errors": ["error1"]}` | Invalid request, returning with a list of issues detected in the request. |
+| 401 | `{ "message": "..." }` | Unauthorized |
+| 404 | `{ "message": "..." }` | Token not found |
+| 500 | `{ "error": "..." }` | Internal server error |

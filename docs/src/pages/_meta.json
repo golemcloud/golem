@@ -1,0 +1,22 @@
+{
+  "index": {
+    "title": "Home"
+  },
+  "-- Docs": {
+    "type": "separator",
+    "title": "Docs"
+  },
+  "getting-started": "",
+  "building-templates": "Building Templates",
+  "promises": "Promises",
+  "api-gateway": "API Gateway",
+  "faq": "FAQ",
+  "template-interface": "Template Interface",
+  "-- API Reference": {
+    "type": "separator",
+    "title": "API Reference"
+  },
+  "golem-cli": "Golem CLI",
+  "rest-api": "REST API",
+  "runtime-api": "Runtime API"
+}

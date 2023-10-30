@@ -1,0 +1,24 @@
+# Promises
+
+Promises allow your Golem program to wait on a condition that can be fulfilled by another Golem program or an external API call. This allows your Golem program to coordinate with other services.
+
+For example, if your Golem program is a workflow that represents an insurance underwriting process, you might wait on a Promise that represents the result of some part of the underwriting process, such as the customer submitting requested information. Your Golem program would pause execution and as soon as the Promise was completed it would resume execution and be able to use the provided information to continue the underwriting process.
+
+In this way, a Golem Promise is much like a promise in many programming languages except it is “durable” and outlives the life of any individual computer. Like promises in other languages, you can think of a Golem Promise as a “box” that starts out empty and can be filled exactly once with a value.
+
+You can create a Golem Promise from within your Golem program using the Golem Runtime API. For example, here is how you could create and wait on a Golem Promise in Rust:
+
+```rust
+// create a promise
+let promise_id = golem_create_promise();
+
+// send promise to another service that will complete it
+...
+
+// wait on the promise
+golem_await_promise(&promise_id)
+```
+
+Once you have created a Promise, you can provide it to another Golem program or an external service. That service can then complete the Promise either by using the Golem Runtime API as discussed above or by using the REST API.
+
+To complete a Promise using the Rest API use the complete promise endpoint at `POST/templates/{template-id}/workers/{worker-name}/complete`. The body should include the promise identifier and the payload, for example `{”oplogIdx” : “10”, "data": [<bytes>]}`.
