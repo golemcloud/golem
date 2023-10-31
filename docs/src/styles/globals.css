@@ -11,3 +11,10 @@
 aside.nextra-sidebar-container > div:last-child {
     @apply bg-background-light dark:bg-background-dark shadow-none;
 }
+
+/* Handle overly bold fonts in safari */
+@layer base {
+    * {
+      -webkit-font-smoothing: antialiased;
+    }
+  }
