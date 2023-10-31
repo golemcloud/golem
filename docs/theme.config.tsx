@@ -85,15 +85,22 @@ const config: DocsThemeConfig = {
     </svg>
   ),
   project: {
-    link: "https://github.com/shuding/nextra-docs-template",
+    link: "https://github.com/golemcloud/docs",
   },
   chat: {
-    link: "https://discord.com",
+    link: "https://discord.gg/UjXeH8uG4x",
   },
-  docsRepositoryBase: "https://github.com/shuding/nextra-docs-template",
+  docsRepositoryBase: "https://github.com/golemcloud/docs/blob/master",
   footer: {
     text: "Golem Cloud Docs",
   },
+    useNextSeoProps() {
+      return {
+        titleTemplate: '%s – Golem Cloud'
+    }
+  },
 };
 
-export default config;
+
+export default config
+
