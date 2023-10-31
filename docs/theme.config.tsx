@@ -81,6 +81,25 @@ const config: DocsThemeConfig = {
       </g>
     </svg>
   ),
+  banner: {
+    key: 'docs-launch',
+    text: (
+      <div className="flex justify-center items-center gap-2">
+        Welcome to the new Golem Cloud Docs! 👋
+      </div>
+    ),
+  },
+  primaryHue: {
+    dark: 226,
+    light: 226
+  },
+  primarySaturation: {
+    light: 90,
+    dark: 70,
+  },
+  sidebar: {
+    toggleButton: true,
+  },
   project: {
     link: "https://github.com/golemcloud/docs",
   },
@@ -90,6 +109,9 @@ const config: DocsThemeConfig = {
   docsRepositoryBase: "https://github.com/golemcloud/docs/blob/master",
   footer: {
     text: "Golem Cloud Docs",
+  },
+  nextThemes: {
+    defaultTheme: 'dark',
   },
   useNextSeoProps() {
     return {
