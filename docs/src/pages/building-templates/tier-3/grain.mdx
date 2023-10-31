@@ -1,4 +1,4 @@
-import { Callout } from "nextra/components";
+import { Callout } from "nextra/components"
 
 # Grain
 
@@ -12,7 +12,7 @@ brew install --no-quarantine --cask grain-lang/tap/grain
 
 You also have to install everything as described in [Common tooling](/building-templates/common-tooling).
 
-The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart). 
+The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart).
 
 Otherwise you can start writing some code, the whole program will be exposed to Golem as a single parameterless `run` function:
 
@@ -39,8 +39,6 @@ This results in a `main.gr.wasm` file which is a WASM **module**. We cannot writ
 wasm-tools component new main.gr.wasm -o template.wasm --adapt tier3/wasi_snapshot_preview1.wasm
 ```
 
-<Callout>
-Make sure you use the **tier3 adapter** from the golem package!
-</Callout>
+<Callout>Make sure you use the **tier3 adapter** from the golem package!</Callout>
 
 The resulting `template.wasm` is ready to be used with Golem!

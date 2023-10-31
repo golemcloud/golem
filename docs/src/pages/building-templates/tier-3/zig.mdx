@@ -1,14 +1,14 @@
-import { Callout } from "nextra/components";
+import { Callout } from "nextra/components"
 
 # Zig
 
-Install the latest version (**0.11**) of **Zig** (for example `brew install zig`). 
+Install the latest version (**0.11**) of **Zig** (for example `brew install zig`).
 
 You also have to install everything as described in [Common tooling](/building-templates/common-tooling).
 
 Currently we consider **Zig** a **Tier 3** guest language, which means we cannot use any WIT interface definitions for it and can only call the Zig program’s `main` function exposed as a parameterless `run` function for Golem.
 
-The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart). 
+The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart).
 
 If you prefer to do it from scratch, first write a Zig program that has a `main` function `src/main.zig`:
 
@@ -31,7 +31,7 @@ pub fn build(b: *Builder) void {
     });
 
     const exe = b.addExecutable(.{
-        .name = "main", 
+        .name = "main",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = .{
             .cpu_arch = .wasm32,
@@ -51,7 +51,7 @@ zig build
 
 The resulting WASM file in `zig-out/bin/main.wasm` is just a WASM **module**, not ready to be used with **Golem.**
 
-Then we have to convert the module to a WASM component, including mapping its WASI Preview1 imports into WASI Preview2 imports. 
+Then we have to convert the module to a WASM component, including mapping its WASI Preview1 imports into WASI Preview2 imports.
 
 This is done with `wasm-tools`:
 
@@ -61,8 +61,6 @@ wasm-tools component new zig-out/bin/main.wasm -o template.wasm --adapt tier3/wa
 
 The `wasi_snapshot_preview1.wasm` describes the mapping from WASI Preview1 to Preview2. You **must** use the version of this file packaged together with `golem-cli.`
 
-<Callout>
-    Make sure you use the **tier3 adapter** from the golem package!
-</Callout>
+<Callout>Make sure you use the **tier3 adapter** from the golem package!</Callout>
 
 The resulting `template.wasm` is ready to be used with **Golem**.

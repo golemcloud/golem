@@ -2,13 +2,13 @@
 
 ### Summary
 
-The account API allows users to query and manipulate their own account data. 
+The account API allows users to query and manipulate their own account data.
 
 ### Get account
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/accounts/{account_id}` | - | Account JSON |
+| Method | Path                        | Request | Response     |
+| ------ | --------------------------- | ------- | ------------ |
+| GET    | `/v1/accounts/{account_id}` | -       | Account JSON |
 
 **Response format:**
 
@@ -30,9 +30,9 @@ curl 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecd
 
 ### Get account’s plan
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/accounts/{account_id}/plan` | - | Plan JSON |
+| Method | Path                             | Request | Response  |
+| ------ | -------------------------------- | ------- | --------- |
+| GET    | `/v1/accounts/{account_id}/plan` | -       | Plan JSON |
 
 **Response format:**
 
@@ -68,12 +68,11 @@ curl 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecd
 
 ### Update account
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| PUT | `/v1/accounts/{account_id}` | Account JSON | Account JSON |
+| Method | Path                        | Request      | Response     |
+| ------ | --------------------------- | ------------ | ------------ |
+| PUT    | `/v1/accounts/{account_id}` | Account JSON | Account JSON |
 
 **Request and response format:**
-
 
 ```json
 {
@@ -93,10 +92,10 @@ The response is the updated account data.
 **Example cURL:**
 
 ```bash
-curl 
+curl
   -X PUT 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5'
   -H 'Content-Type: application/json'
-  -d '{"id": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5", "name": "User name", "email": "user2@ema.il", "planId": "26b3c9da-e11c-4643-9271-26c8f3d025a1"}' 
+  -d '{"id": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5", "name": "User name", "email": "user2@ema.il", "planId": "26b3c9da-e11c-4643-9271-26c8f3d025a1"}'
   -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -104,9 +103,9 @@ curl
 
 All account endpoints can return with the following errors:
 
-| Status | Body | Description |
-| --- | --- | --- |
-| 400 | `{ "errors": ["error1", "..."] }` | Invalid request, returning with a list of issues detected in the request. |
-| 401 | `{ "message": "..." }` | Unauthorized |
-| 404 | `{ "message": "..." }` | Account not found |
-| 500 | `{ "error": "..." }` | Internal server error |
+| Status | Body                              | Description                                                               |
+| ------ | --------------------------------- | ------------------------------------------------------------------------- |
+| 400    | `{ "errors": ["error1", "..."] }` | Invalid request, returning with a list of issues detected in the request. |
+| 401    | `{ "message": "..." }`            | Unauthorized                                                              |
+| 404    | `{ "message": "..." }`            | Account not found                                                         |
+| 500    | `{ "error": "..." }`              | Internal server error                                                     |

@@ -1,4 +1,4 @@
-import {Callout} from "nextra/components"
+import { Callout } from "nextra/components"
 
 # Swift
 
@@ -8,7 +8,7 @@ You also have to install everything as described in [Common tooling](/building-t
 
 As Swift is currently a Tier 3 guest language, you can only call your whole Swift program from Golem exposed as a parameterless `run` function.
 
-The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart). 
+The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart).
 
 If you prefer to do it from scratch, take the following simple Swift program saved into `main.swift`:
 
@@ -38,8 +38,6 @@ wasm-tools component new main.wasm -o template.wasm --adapt tier3/wasi_snapshot_
 
 The `wasi_snapshot_preview1.wasm` describes the mapping from WASI Preview1 to Preview2. You **must** use the version of this file packaged together with `golem-cli.`
 
-<Callout>
-Make sure you use the **tier3 adapter** from the golem package!
-</Callout>
+<Callout>Make sure you use the **tier3 adapter** from the golem package!</Callout>
 
 The resulting `template.wasm` is ready to be used with Golem.

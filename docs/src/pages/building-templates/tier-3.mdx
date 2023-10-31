@@ -1,11 +1,11 @@
-import { Callout } from "nextra/components";
-import { Card, Cards } from "nextra/components";
+import { Callout } from "nextra/components"
+import { Card, Cards } from "nextra/components"
 
 # Tier 3 languages
 
 Tier 3 languages can be compiled to WASM **modules** and they support **WASI Preview 1** but there is no way to generate bindings for WIT interfaces.
 
-This restricts them to only expose a single, parameterless `run` function and they can only access the host functionalities part of **WASI Preview 1**. (standard IO, files and filesystems, clock, random, cmd args / environment variables). 
+This restricts them to only expose a single, parameterless `run` function and they can only access the host functionalities part of **WASI Preview 1**. (standard IO, files and filesystems, clock, random, cmd args / environment variables).
 
 It is possible to pass input to these functions using the **standard input** and to get back their **standard output** as the call’s results, but this function can only be called once for each worker.
 
@@ -17,9 +17,9 @@ Golem provides two special **calling conventions** for workers implemented with 
 The currently supported Tier 3 languages are:
 
 <Cards>
-  <Card title="Swift" href="/building-templates/tier-3/swift"/>
-  <Card title="Zig" href="/building-templates/tier-3/zig"/>
-  <Card title="Grain" href="/building-templates/tier-3/grain"/>
+  <Card title="Swift" href="/building-templates/tier-3/swift" />
+  <Card title="Zig" href="/building-templates/tier-3/zig" />
+  <Card title="Grain" href="/building-templates/tier-3/grain" />
 </Cards>
 
 <Callout>

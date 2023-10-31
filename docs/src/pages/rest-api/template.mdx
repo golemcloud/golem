@@ -8,9 +8,9 @@ The template API provides endpoint to upload, download and find Golem templates 
 
 ### Get the metadata of a template’s all versions
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/templates/{template_id}` | - | Array of Template JSON |
+| Method | Path                          | Request | Response               |
+| ------ | ----------------------------- | ------- | ---------------------- |
+| GET    | `/v1/templates/{template_id}` | -       | Array of Template JSON |
 
 **Response format:**
 
@@ -89,8 +89,6 @@ The template API provides endpoint to upload, download and find Golem templates 
 ]
 ```
 
-
-
 **Explanation**
 
 Each template can have multiple **versions**. Every time a new WASM is uploaded for a given **template id**, that creates a new version.
@@ -102,8 +100,8 @@ This endpoint returns a list of **all versions** for the template id provided as
 - `templateName` is the human-readable name of the template
 - `templateSize` is the WASM binary’s size in bytes
 - `metadata` contains information extracted from the WASM itself:
-    - `exports` is a list of exported functions, including their parameter’s and return value’s types
-    - `producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem template.
+  - `exports` is a list of exported functions, including their parameter’s and return value’s types
+  - `producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem template.
 
 **Example cURL:**
 
@@ -114,9 +112,9 @@ curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b1752
 
 ### Update a template
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| PUT | `/v1/templates/{template_id}/upload` | application/octet-stream | Template JSON |
+| Method | Path                                 | Request                  | Response      |
+| ------ | ------------------------------------ | ------------------------ | ------------- |
+| PUT    | `/v1/templates/{template_id}/upload` | application/octet-stream | Template JSON |
 
 **Request format**
 
@@ -138,9 +136,9 @@ curl -X PUT
 
 ### Get all templates of a project
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/templates?projectId={projectId}` | - | Array of Template JSON |
+| Method | Path                                  | Request | Response               |
+| ------ | ------------------------------------- | ------- | ---------------------- |
+| GET    | `/v1/templates?projectId={projectId}` | -       | Array of Template JSON |
 
 **Response format:**
 
@@ -159,9 +157,9 @@ curl 'https://release.api.golem.cloud/v1/templates?projectId=866e1f4a-cf1a-40aa-
 
 ### Get templates in a project with a given name
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/templates?project-id={projectId}&template-name={templateName}` | - | Array of Template JSON |
+| Method | Path                                                                | Request | Response               |
+| ------ | ------------------------------------------------------------------- | ------- | ---------------------- |
+| GET    | `/v1/templates?project-id={projectId}&template-name={templateName}` | -       | Array of Template JSON |
 
 **Response format:**
 
@@ -180,9 +178,9 @@ curl 'https://release.api.golem.cloud/v1/templates?project-id=866e1f4a-cf1a-40aa
 
 ### Upload a new template
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/templates` | multipart/form-data | Template JSON |
+| Method | Path            | Request             | Response      |
+| ------ | --------------- | ------------------- | ------------- |
+| POST   | `/v1/templates` | multipart/form-data | Template JSON |
 
 **Request format**
 
@@ -219,9 +217,9 @@ curl -X POST
 
 ### Download a template
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/templates/{template_id}/download?version={version}` | - | application/octet-stream WASM |
+| Method | Path                                                     | Request | Response                      |
+| ------ | -------------------------------------------------------- | ------- | ----------------------------- |
+| GET    | `/v1/templates/{template_id}/download?version={version}` | -       | application/octet-stream WASM |
 
 **Response format:**
 
@@ -240,9 +238,9 @@ curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b1752
 
 ### Get the latest version of a given template
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/templates/{template_id}/latest` | - | JSON number |
+| Method | Path                                 | Request | Response    |
+| ------ | ------------------------------------ | ------- | ----------- |
+| GET    | `/v1/templates/{template_id}/latest` | -       | JSON number |
 
 **Response format:**
 
@@ -263,11 +261,11 @@ curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b1752
 
 All template endpoints can return with the following errors:
 
-| Status | Body | Description |
-| --- | --- | --- |
-| 400 | `{ "errors": ["error1"}` | Invalid request, returning with a list of issues detected in the request. |
-| 401 | `{ "error": "..." }` | Unauthorized |
-| 403 | `{ "error": "..." }` | Maximum number of templates exceeded |
-| 404 | `{ "message": "..." }` | Template not found |
-| 409 | `{ "component_id": "..." }` | Template already exists |
-| 500 | `{ "error": "..." }` | Internal server error |
+| Status | Body                        | Description                                                               |
+| ------ | --------------------------- | ------------------------------------------------------------------------- |
+| 400    | `{ "errors": ["error1"}`    | Invalid request, returning with a list of issues detected in the request. |
+| 401    | `{ "error": "..." }`        | Unauthorized                                                              |
+| 403    | `{ "error": "..." }`        | Maximum number of templates exceeded                                      |
+| 404    | `{ "message": "..." }`      | Template not found                                                        |
+| 409    | `{ "component_id": "..." }` | Template already exists                                                   |
+| 500    | `{ "error": "..." }`        | Internal server error                                                     |

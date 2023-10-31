@@ -51,11 +51,11 @@ If a node running your worker gets downed, due to hardware failure, updates, or 
 
 ### What guarantees does Golem Cloud provide when a worker is resumed due to a failure event?
 
-Golem Cloud restores the state of the worker exactly, allowing your worker to continue where it left off. If, however, your worker was calling a web service during the failure event, but that call had not yet completed, then Golem Cloud replays this call, in order to guarantee its completion. 
+Golem Cloud restores the state of the worker exactly, allowing your worker to continue where it left off. If, however, your worker was calling a web service during the failure event, but that call had not yet completed, then Golem Cloud replays this call, in order to guarantee its completion.
 
-Therefore, with respect to calling web services, you should assume *at least once* semantics, but limited to the call during which the failure event occurred. Calls that happened prior to the last call are not replayed, only the “in-flight” call is replayed.
+Therefore, with respect to calling web services, you should assume _at least once_ semantics, but limited to the call during which the failure event occurred. Calls that happened prior to the last call are not replayed, only the “in-flight” call is replayed.
 
-Many web services provide a robust way for obtaining *exactly once* semantics even in the presence of a duplicate service call. For example, Stripe’s API for payment processing allows you to create a payment intent, which is then used to make the charge in a subsequent call. On Golem Cloud, this two-phase protocol guarantees that the payment charge happens exactly once.
+Many web services provide a robust way for obtaining _exactly once_ semantics even in the presence of a duplicate service call. For example, Stripe’s API for payment processing allows you to create a payment intent, which is then used to make the charge in a subsequent call. On Golem Cloud, this two-phase protocol guarantees that the payment charge happens exactly once.
 
 ### What is the latency of deploying new workers on Golem Cloud?
 

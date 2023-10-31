@@ -1,4 +1,4 @@
-import { Callout } from 'nextra/components'
+import { Callout } from "nextra/components"
 
 # C
 
@@ -8,7 +8,7 @@ You also have to install everything as described in [Common tooling](/building-t
 
 First download and extract wasi-sdk somewhere - in the examples we assume it is put in `~/wasi-sdk-20.0`.
 
-The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart). 
+The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart).
 
 If you prefer to do it manually from scratch, you first need to create a `wit` directory and a `main.wit` file in it describing your template’s interface, and optionally adding additional dependencies in `wit/deps` from the golem package (wasi-http, promise api, etc).
 
@@ -64,11 +64,9 @@ and compile it to WASM using the `clang` included in `wasi-sdk`:
 ~/wasi-sdk-20.0/bin/clang --sysroot ~/wasi-sdk-20.0/share/wasi-sysroot main.c c_api1.c c_api1_component_type.o  -o main.wasm
 ```
 
-<Callout>
-    Use `~/wasi-sdk-20.0/bin/clang++` if you are using C++ instead
-</Callout>
+<Callout>Use `~/wasi-sdk-20.0/bin/clang++` if you are using C++ instead</Callout>
 
-The resulting `main.wasm` is a WASM **module** which already has the binary representation of the **WIT** definitions embedded (that’s what is in the generated `.o`). 
+The resulting `main.wasm` is a WASM **module** which already has the binary representation of the **WIT** definitions embedded (that’s what is in the generated `.o`).
 
 So the only remaining step is to turn this into a WASM **component** using `wasm-tools`:
 

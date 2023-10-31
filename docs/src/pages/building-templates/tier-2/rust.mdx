@@ -1,4 +1,4 @@
-import { Callout } from "nextra/components";
+import { Callout } from "nextra/components"
 
 # Rust
 
@@ -25,15 +25,20 @@ cargo-component-component 0.1.0 (e57d1d1 2023-08-31 wasi:134dddc)
 ```
 
 <Callout>
-  Read the following section if your IDE is not recognizing the generated bindings in Rust projects using cargo-component: [https://github.com/bytecodealliance/cargo-component#using-rust-analyzer](https://github.com/bytecodealliance/cargo-component#using-rust-analyzer)
+  Read the following section if your IDE is not recognizing the generated bindings in Rust projects
+  using cargo-component:
+  [https://github.com/bytecodealliance/cargo-component#using-rust-analyzer](https://github.com/bytecodealliance/cargo-component#using-rust-analyzer)
 </Callout>
 
 <Callout>
-  The `cargo` build tool does not know how to build WebAssembly **components alone.** The above installed `cargo-component` tool is an extension to it adding a new subset of commands starting with `cargo component ...`
-  Using these new commands such as `cargo component build` makes sure the compiler toolchain produces a WebAssembly component model target and that all the necessary bindings are generated.
+  The `cargo` build tool does not know how to build WebAssembly **components alone.** The above
+  installed `cargo-component` tool is an extension to it adding a new subset of commands starting
+  with `cargo component ...` Using these new commands such as `cargo component build` makes sure the
+  compiler toolchain produces a WebAssembly component model target and that all the necessary
+  bindings are generated.
 </Callout>
 
-The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart). 
+The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart).
 
 If you prefer to set up your project manually, you first need to create a new template:
 
@@ -105,7 +110,7 @@ struct Component;
 
 impl Guest for Component {
   fn initialize_cart(user_id: String) {
-    // ... 
+    // ...
   }
   // ...
 }
@@ -189,7 +194,7 @@ To use it, just add the following dependency to your component’s `Cargo.toml`:
 reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-aug-2023", features = ["json"] }
 ```
 
-There is no need to manually add the WASI-HTTP interfaces to your `wit/deps` folder. 
+There is no need to manually add the WASI-HTTP interfaces to your `wit/deps` folder.
 
 The fork provides the same API as the official `reqwest` blocking API, so please use the library’s documentation for more information: [https://docs.rs/reqwest/latest/reqwest/](https://docs.rs/reqwest/latest/reqwest/)
 

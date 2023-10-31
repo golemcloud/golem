@@ -8,9 +8,9 @@ Every account has a **default project** which is assumed when no specific projec
 
 ### Get the default project
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/projects/default` | - | Project JSON |
+| Method | Path                   | Request | Response     |
+| ------ | ---------------------- | ------- | ------------ |
+| GET    | `/v1/projects/default` | -       | Project JSON |
 
 **Response format:**
 
@@ -42,9 +42,9 @@ curl 'https://release.api.golem.cloud/v1/projects/default'
 
 ### Get project by ID
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/projects/{project-id}` | - | Project JSON |
+| Method | Path                        | Request | Response     |
+| ------ | --------------------------- | ------- | ------------ |
+| GET    | `/v1/projects/{project-id}` | -       | Project JSON |
 
 **Response format:**
 
@@ -74,24 +74,24 @@ curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e332
 
 ### List all projects
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/projects` | - | Array of Project JSON |
+| Method | Path           | Request | Response              |
+| ------ | -------------- | ------- | --------------------- |
+| GET    | `/v1/projects` | -       | Array of Project JSON |
 
 **Response format:**
 
 ```json
 [
-	{
-	  "projectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
-	  "projectData": {
-	    "name": "default-project",
-	    "ownerAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-	    "description": "Default project of the account ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-	    "defaultEnvironmentId": "default",
-	    "projectType": "Default"
-	  }
-	}
+  {
+    "projectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
+    "projectData": {
+      "name": "default-project",
+      "ownerAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+      "description": "Default project of the account ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+      "defaultEnvironmentId": "default",
+      "projectType": "Default"
+    }
+  }
 ]
 ```
 
@@ -108,24 +108,24 @@ curl 'https://release.api.golem.cloud/v1/projects'
 
 ### List projects with a given name
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/projects?project-name=xxx` | - | Array of Project JSON |
+| Method | Path                            | Request | Response              |
+| ------ | ------------------------------- | ------- | --------------------- |
+| GET    | `/v1/projects?project-name=xxx` | -       | Array of Project JSON |
 
 **Response format:**
 
 ```json
 [
-	{
-	  "projectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
-	  "projectData": {
-	    "name": "xxx",
-	    "ownerAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-	    "description": "A project named xxx",
-	    "defaultEnvironmentId": "default",
-	    "projectType": "NonDefault"
-	  }
-	}
+  {
+    "projectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
+    "projectData": {
+      "name": "xxx",
+      "ownerAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+      "description": "A project named xxx",
+      "defaultEnvironmentId": "default",
+      "projectType": "NonDefault"
+    }
+  }
 ]
 ```
 
@@ -142,9 +142,9 @@ curl 'https://release.api.golem.cloud/v1/projects?project-name=xxx'
 
 ### Create project
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/projects` | ProjectDataRequest JSON | Project JSON |
+| Method | Path           | Request                 | Response     |
+| ------ | -------------- | ----------------------- | ------------ |
+| POST   | `/v1/projects` | ProjectDataRequest JSON | Project JSON |
 
 **Request format:**
 
@@ -184,9 +184,9 @@ curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e332
 
 ### Delete project
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| DELETE | `/v1/projects/{project-id}` | - | - |
+| Method | Path                        | Request | Response |
+| ------ | --------------------------- | ------- | -------- |
+| DELETE | `/v1/projects/{project-id}` | -       | -        |
 
 **Explanation**
 
@@ -204,10 +204,10 @@ curl -X DELETE
 
 All project endpoints can return with the following errors:
 
-| Status | Body | Description |
-| --- | --- | --- |
-| 400 | `{ "errors": ["error1"}` | Invalid request, returning with a list of issues detected in the request. |
-| 401 | `{ "message": "..." }` | Unauthorized |
-| 403 | `{ "error": "..." }` | Maximum number of projects exceeded |
-| 404 | `{ "message": "..." }` | Project not found |
-| 500 | `{ "error": "..." }` | Internal server error |
+| Status | Body                     | Description                                                               |
+| ------ | ------------------------ | ------------------------------------------------------------------------- |
+| 400    | `{ "errors": ["error1"}` | Invalid request, returning with a list of issues detected in the request. |
+| 401    | `{ "message": "..." }`   | Unauthorized                                                              |
+| 403    | `{ "error": "..." }`     | Maximum number of projects exceeded                                       |
+| 404    | `{ "message": "..." }`   | Project not found                                                         |
+| 500    | `{ "error": "..." }`     | Internal server error                                                     |

@@ -6,22 +6,22 @@ Projects can have grants providing access to other accounts than the project’s
 
 ### Get a project’s grants
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/projects/{project-id}/grants` | - | Array of ProjectGrant JSON |
+| Method | Path                               | Request | Response                   |
+| ------ | ---------------------------------- | ------- | -------------------------- |
+| GET    | `/v1/projects/{project-id}/grants` | -       | Array of ProjectGrant JSON |
 
 **Response format:**
 
 ```json
 [
-	{
-	  "id": "2b21e703-cd02-4873-bb6b-e1caa3c2961f",
-	  "data": {
-	    "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-	    "grantorProjectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
-	    "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2",
-	  }
-	}
+  {
+    "id": "2b21e703-cd02-4873-bb6b-e1caa3c2961f",
+    "data": {
+      "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+      "grantorProjectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
+      "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2"
+    }
+  }
 ]
 ```
 
@@ -43,20 +43,20 @@ curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e332
 
 ### Get a specific grant of a project
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/projects/{project-id}/grants/{grant-id}` | - | ProjectGrant JSON |
+| Method | Path                                          | Request | Response          |
+| ------ | --------------------------------------------- | ------- | ----------------- |
+| GET    | `/v1/projects/{project-id}/grants/{grant-id}` | -       | ProjectGrant JSON |
 
 **Response format:**
 
 ```json
 {
-	"id": "2b21e703-cd02-4873-bb6b-e1caa3c2961f",
-	"data": {
-	  "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-	  "grantorProjectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
-	  "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2",
-	}
+  "id": "2b21e703-cd02-4873-bb6b-e1caa3c2961f",
+  "data": {
+    "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+    "grantorProjectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
+    "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2"
+  }
 }
 ```
 
@@ -73,16 +73,16 @@ curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e332
 
 ### Create a project grant
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/projects/{project-id}/grants` | ProjectGrantDataRequest JSON | ProjectGrant JSON |
+| Method | Path                               | Request                      | Response          |
+| ------ | ---------------------------------- | ---------------------------- | ----------------- |
+| POST   | `/v1/projects/{project-id}/grants` | ProjectGrantDataRequest JSON | ProjectGrant JSON |
 
 **Request format:**
 
 ```json
 {
   "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-	"projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2",
+  "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2"
 }
 ```
 
@@ -90,12 +90,12 @@ curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e332
 
 ```json
 {
-	"id": "2b21e703-cd02-4873-bb6b-e1caa3c2961f",
-	"data": {
-	  "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-	  "grantorProjectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
-	  "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2",
-	}
+  "id": "2b21e703-cd02-4873-bb6b-e1caa3c2961f",
+  "data": {
+    "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+    "grantorProjectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
+    "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2"
+  }
 }
 ```
 
@@ -114,22 +114,22 @@ The response describes the new project grant including it’s `id` that can be u
 curl -X POST
      'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants'
      -H 'Content-Type: application/json'
-     -d '{"granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5", "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2"}' 
+     -d '{"granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5", "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2"}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
 ### Create a project grant with a new policy
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/projects/{project-id}/grants` | ProjectGrantDataWithProjectActions JSON | ProjectGrant JSON |
+| Method | Path                               | Request                                 | Response          |
+| ------ | ---------------------------------- | --------------------------------------- | ----------------- |
+| POST   | `/v1/projects/{project-id}/grants` | ProjectGrantDataWithProjectActions JSON | ProjectGrant JSON |
 
 **Request format:**
 
 ```json
 {
   "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-	"projectActions": ["ViewComponent", "ViewInstance"],
+  "projectActions": ["ViewComponent", "ViewInstance"],
   "projectPolicyName": "my new policy"
 }
 ```
@@ -138,12 +138,12 @@ curl -X POST
 
 ```json
 {
-	"id": "2b21e703-cd02-4873-bb6b-e1caa3c2961f",
-	"data": {
-	  "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-	  "grantorProjectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
-	  "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2",
-	}
+  "id": "2b21e703-cd02-4873-bb6b-e1caa3c2961f",
+  "data": {
+    "granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+    "grantorProjectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
+    "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2"
+  }
 }
 ```
 
@@ -163,19 +163,19 @@ The response describes the new project grant including it’s `id` that can be u
 curl -X POST
      'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants'
      -H 'Content-Type: application/json'
-     -d '{"granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5", "projectActions": ["ViewComponent", "ViewInstance"], "projectPolicyName": "my new policy"}' 
+     -d '{"granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5", "projectActions": ["ViewComponent", "ViewInstance"], "projectPolicyName": "my new policy"}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
 ### Delete a project grant
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| DELETE | `/v1/projects/{project-id}/grants/{grant-id}` | - | - |
+| Method | Path                                          | Request | Response |
+| ------ | --------------------------------------------- | ------- | -------- |
+| DELETE | `/v1/projects/{project-id}/grants/{grant-id}` | -       | -        |
 
 **Explanation**
 
-Deletes an existing grant of a specific project. 
+Deletes an existing grant of a specific project.
 
 **Example cURL:**
 
@@ -189,10 +189,10 @@ curl -X DELETE
 
 All project grant endpoints can return with the following errors:
 
-| Status | Body | Description |
-| --- | --- | --- |
-| 400 | `{ "errors": ["error1"}` | Invalid request, returning with a list of issues detected in the request. |
-| 401 | `{ "message": "..." }` | Unauthorized |
-| 403 | `{ "error": "..." }` | Maximum number of projects exceeded |
-| 404 | `{ "message": "..." }` | Project not found |
-| 500 | `{ "error": "..." }` | Internal server error |
+| Status | Body                     | Description                                                               |
+| ------ | ------------------------ | ------------------------------------------------------------------------- |
+| 400    | `{ "errors": ["error1"}` | Invalid request, returning with a list of issues detected in the request. |
+| 401    | `{ "message": "..." }`   | Unauthorized                                                              |
+| 403    | `{ "error": "..." }`     | Maximum number of projects exceeded                                       |
+| 404    | `{ "message": "..." }`   | Project not found                                                         |
+| 500    | `{ "error": "..." }`     | Internal server error                                                     |

@@ -6,9 +6,9 @@ The login endpoints are implementing an OAuth2 flow.
 
 ### Acquire token with OAuth2 authorization
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/oauth2?provider=github&access_token=Y` | - | UnsafeToken JSON |
+| Method | Path                                        | Request | Response         |
+| ------ | ------------------------------------------- | ------- | ---------------- |
+| POST   | `/v1/oauth2?provider=github&access_token=Y` | -       | UnsafeToken JSON |
 
 **Response format:**
 
@@ -26,7 +26,7 @@ The login endpoints are implementing an OAuth2 flow.
 
 **Explanation**
 
-Gets a token by authorizing with an external OAuth2 provider. Currently only `github` is supported. 
+Gets a token by authorizing with an external OAuth2 provider. Currently only `github` is supported.
 
 In the response:
 
@@ -42,9 +42,9 @@ curl -X POST 'https://release.api.golem.cloud/v1/oauth2?provider=github&access_t
 
 ### Get information about a token
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/login/token` | - | Token JSON |
+| Method | Path              | Request | Response   |
+| ------ | ----------------- | ------- | ---------- |
+| GET    | `/v1/login/token` | -       | Token JSON |
 
 **Response format:**
 
@@ -70,11 +70,11 @@ curl 'https://release.api.golem.cloud/v1/login/token'
 
 ### Start GitHub OAuth2 interactive flow
 
-An interactive authorization flow can be initiated with 
+An interactive authorization flow can be initiated with
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/oauth2/device/start` | - | OAuth2Data JSON |
+| Method | Path                   | Request | Response        |
+| ------ | ---------------------- | ------- | --------------- |
+| POST   | `/oauth2/device/start` | -       | OAuth2Data JSON |
 
 **Response format:**
 
@@ -99,11 +99,11 @@ curl -X POST 'https://release.api.golem.cloud/oauth2/device/start'
 
 ### Finish GitHub OAuth2 interactive flow
 
-An interactive authorization flow can be initiated with 
+An interactive authorization flow can be initiated with
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/oauth2/device/complete` | "..." encoded session JSON string | UnsafeToken JSON |
+| Method | Path                      | Request                           | Response         |
+| ------ | ------------------------- | --------------------------------- | ---------------- |
+| POST   | `/oauth2/device/complete` | "..." encoded session JSON string | UnsafeToken JSON |
 
 **Request format:**
 
@@ -130,19 +130,19 @@ Finishes an interactive authorization flow. The returned JSON is equivalent to t
 **Example cURL:**
 
 ```bash
-curl 
+curl
   -X POST 'https://release.api.golem.cloud/oauth2/device/complete'
   -H 'Content-Type: application/json'
-  -d '"..."' 
+  -d '"..."'
 ```
 
 ### Login API errors
 
 All login endpoints can return with the following errors:
 
-| Status | Body | Description |
-| --- | --- | --- |
-| 400 | `{ "errors": ["error1"] }` | Invalid request, returning with a list of issues detected in the request. |
-| 401 | `{ "message": "..." }` | Failed to login |
-| 403 | `{ "message": "..." }` | Whitelisting - Golem Cloud may temporarily restrict new account creation |
-| 500 | `{ "error": "..." }` | External service call failed during login |
+| Status | Body                       | Description                                                               |
+| ------ | -------------------------- | ------------------------------------------------------------------------- |
+| 400    | `{ "errors": ["error1"] }` | Invalid request, returning with a list of issues detected in the request. |
+| 401    | `{ "message": "..." }`     | Failed to login                                                           |
+| 403    | `{ "message": "..." }`     | Whitelisting - Golem Cloud may temporarily restrict new account creation  |
+| 500    | `{ "error": "..." }`       | External service call failed during login                                 |

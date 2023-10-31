@@ -1,4 +1,4 @@
-import { Callout } from "nextra/components";
+import { Callout } from "nextra/components"
 
 # Quickstart
 
@@ -16,7 +16,7 @@ After downloading Golem CLI, you need to place the application on your path, so 
 
 You need to create an account and authenticate yourself before using any Golem commands. This is easy to do with Github OAuth2. Lets do it right now by using the following command:
 
-```bash filename="Terminal" copy 
+```bash filename="Terminal" copy
 golem-cli account get
 ```
 
@@ -30,7 +30,7 @@ To deploy to Golem Cloud, you must first [build a template](/building-templates)
 
 To get started quickly, you can use Golem CLI to create a template from an example:
 
-```bash filename="Terminal" copy 
+```bash filename="Terminal" copy
 golem-cli new --example rust-shopping-cart --template-name shopping_cart
 ```
 
@@ -40,21 +40,23 @@ To **build** the newly created template you need some development tools installe
 
 Once you have that, navigate to the `shopping-cart`, and run:
 
-```bash filename="Terminal" copy 
+```bash filename="Terminal" copy
 cargo component build --release
 ```
 
 This will write the resulting template to `shopping-cart/target/wasm32-wasi/release/lib.wasm`.
 
 <Callout>
-  The `golem-cli new` command prints out the necessary steps to build your template exactly as you have to type them - using your custom template and package names and the selected example’s language specific tools.
+  The `golem-cli new` command prints out the necessary steps to build your template exactly as you
+  have to type them - using your custom template and package names and the selected example’s
+  language specific tools.
 </Callout>
 
 ### Uploading Your Template
 
 To upload your template to Golem Cloud, you can use the `template add` command. Navigate to `shopping-cart/target/wasm32-wasi/release` and then do:
 
-```bash filename="Terminal" copy 
+```bash filename="Terminal" copy
 golem-cli template add --template-name shopping-cart lib.wasm
 ```
 
@@ -70,7 +72,7 @@ Once you have chosen a worker id, you can launch the worker either explicitly, o
 
 Here, we creating a new worker `shopping-cart-1` :
 
-```bash filename="Terminal" copy 
+```bash filename="Terminal" copy
 golem-cli worker add \
   --worker-name shopping-cart-1 \
   --template-name shopping-cart
@@ -84,7 +86,7 @@ Thanks to the WebAssembly component model, your Golem Cloud applications are not
 
 Here, we invoke the function `initialize_cart` on the worker with a single string parameter:
 
-```bash filename="Terminal" copy 
+```bash filename="Terminal" copy
 golem-cli worker invoke-and-await \
     --template-name=shopping-cart \
     --worker-name=shopping-cart-1 \

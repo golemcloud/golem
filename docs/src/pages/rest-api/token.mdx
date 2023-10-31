@@ -6,9 +6,9 @@ The **token API** allows creating custom access tokens for the Golem Cloud REST 
 
 ### Get all tokens
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/accounts/{accountId}/tokens` | - |  Array of Token JSON |
+| Method | Path                              | Request | Response            |
+| ------ | --------------------------------- | ------- | ------------------- |
+| GET    | `/v1/accounts/{accountId}/tokens` | -       | Array of Token JSON |
 
 **Response format:**
 
@@ -36,9 +36,9 @@ curl 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecd
 
 ### Get a specific token
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/accounts/{accountId}/tokens/{tokenId}` | - | Token JSON |
+| Method | Path                                        | Request | Response   |
+| ------ | ------------------------------------------- | ------- | ---------- |
+| GET    | `/v1/accounts/{accountId}/tokens/{tokenId}` | -       | Token JSON |
 
 **Response format:**
 
@@ -64,9 +64,9 @@ curl 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecd
 
 ### Create a new token
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/accounts/{accountId}/tokens` | CreateTokenDTO JSON | UnsafeToken JSON |
+| Method | Path                              | Request             | Response         |
+| ------ | --------------------------------- | ------------------- | ---------------- |
+| POST   | `/v1/accounts/{accountId}/tokens` | CreateTokenDTO JSON | UnsafeToken JSON |
 
 **Request format:**
 
@@ -102,15 +102,15 @@ Note that this is the only time this `secret` is returned!
 curl -X POST
      'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5/tokens'
      -H 'Content-Type: application/json'
-     -d '{"expiresAt": "2100-01-01T01:00:00Z"}' 
+     -d '{"expiresAt": "2100-01-01T01:00:00Z"}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
 ### Delete a token
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| DELETE | `/v1/accounts/{accountId}/tokens/{tokenId}` | - | - |
+| Method | Path                                        | Request | Response |
+| ------ | ------------------------------------------- | ------- | -------- |
+| DELETE | `/v1/accounts/{accountId}/tokens/{tokenId}` | -       | -        |
 
 **Explanation**
 
@@ -128,9 +128,9 @@ curl -X DELETE
 
 All token endpoints can return with the following errors:
 
-| Status | Body | Description |
-| --- | --- | --- |
-| 400 | `{ "errors": ["error1"]}` | Invalid request, returning with a list of issues detected in the request. |
-| 401 | `{ "message": "..." }` | Unauthorized |
-| 404 | `{ "message": "..." }` | Token not found |
-| 500 | `{ "error": "..." }` | Internal server error |
+| Status | Body                      | Description                                                               |
+| ------ | ------------------------- | ------------------------------------------------------------------------- |
+| 400    | `{ "errors": ["error1"]}` | Invalid request, returning with a list of issues detected in the request. |
+| 401    | `{ "message": "..." }`    | Unauthorized                                                              |
+| 404    | `{ "message": "..." }`    | Token not found                                                           |
+| 500    | `{ "error": "..." }`      | Internal server error                                                     |

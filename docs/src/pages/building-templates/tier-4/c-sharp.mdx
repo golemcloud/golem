@@ -1,4 +1,4 @@
-import { Callout } from "nextra/components";
+import { Callout } from "nextra/components"
 
 # C#
 
@@ -13,7 +13,7 @@ dotnet new console -o csharp-1
 dotnet add package Wasi.Sdk --prerelease
 ```
 
-The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart). 
+The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart).
 
 An example program that takes some use of WASI could be the following `Program.cs`:
 
@@ -45,8 +45,6 @@ wasm-tools component new main.wasm -o template.wasm --adapt tier3/wasi_snapshot_
 
 The `wasi_snapshot_preview1.wasm` describes the mapping from WASI Preview1 to Preview2. You **must** use the version of this file packaged together with `golem-cli.`
 
-<Callout>
-    Make sure you use the **tier3 adapter** from the golem package!
-</Callout>
+<Callout>Make sure you use the **tier3 adapter** from the golem package!</Callout>
 
 The resulting `template.wasm` is ready to be used with Golem.

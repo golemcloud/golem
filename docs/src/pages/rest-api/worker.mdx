@@ -6,9 +6,9 @@ The worker API allows to launch new workers, query and manipulate their status, 
 
 ### Get a versioned worker id given by it’s template id and worker name
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/templates/workers/{workerId}` | - | VersionedWorkerId JSON |
+| Method | Path                               | Request | Response               |
+| ------ | ---------------------------------- | ------- | ---------------------- |
+| GET    | `/v1/templates/workers/{workerId}` | -       | VersionedWorkerId JSON |
 
 **Response format:**
 
@@ -41,9 +41,9 @@ curl 'https://release.api.golem.cloud/v1/templates/workers/70ff8f69-e121-40ea-b5
 
 ### Get metadata of a worker
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/templates/{templateId}/workers/{workerName}` | - | WorkerMetadata JSON |
+| Method | Path                                              | Request | Response            |
+| ------ | ------------------------------------------------- | ------- | ------------------- |
+| GET    | `/v1/templates/{templateId}/workers/{workerName}` | -       | WorkerMetadata JSON |
 
 **Response format:**
 
@@ -73,13 +73,13 @@ Returns metadata about an existing worker:
 - `templateVersion` is the version of the template used by the worker
 - `retryCount` is the number of retries the worker did in case of a failure
 - `status` is the worker’s current status, one of the following:
-    - `Running` if the worker is currently executing
-    - `Idle` if the worker is waiting for an invocation
-    - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
-    - `Interrupted` if the worker was interrupted by the user
-    - `Retrying` if the worker failed, and an automatic retry was scheduled for it
-    - `Failed` if the worker failed and there are no more retries scheduled for it
-    - `Exited` if the worker explicitly exited using the `exit` WASI function
+  - `Running` if the worker is currently executing
+  - `Idle` if the worker is waiting for an invocation
+  - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
+  - `Interrupted` if the worker was interrupted by the user
+  - `Retrying` if the worker failed, and an automatic retry was scheduled for it
+  - `Failed` if the worker failed and there are no more retries scheduled for it
+  - `Exited` if the worker explicitly exited using the `exit` WASI function
 
 **Example cURL:**
 
@@ -90,9 +90,9 @@ curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b1752
 
 ### Launch a new worker
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/templates/{templateId}/workers}` | WorkerCreationRequest JSON | VersionedWorkerId JSON |
+| Method | Path                                  | Request                    | Response               |
+| ------ | ------------------------------------- | -------------------------- | ---------------------- |
+| POST   | `/v1/templates/{templateId}/workers}` | WorkerCreationRequest JSON | VersionedWorkerId JSON |
 
 **Request format:**
 
@@ -101,7 +101,7 @@ curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b1752
   "name": "test-worker-1",
   "args": ["-v", "4"]
   "env": [
-    ["MODE", "prod"], 
+    ["MODE", "prod"],
     ["DEBUG", "0"]
   ]
 }
@@ -133,15 +133,15 @@ Creates a new worker. The worker initially is in `Idle` status, waiting to be in
 curl -X POST
      'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers'
      -H 'Content-Type: application/json'
-     -d '{"name": "test-worker-1", "args": [], "env": []}' 
+     -d '{"name": "test-worker-1", "args": [], "env": []}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
 ### Delete a worker
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| DELETE | `/v1/templates/{templateId}/workers/{workerName}` | - | - |
+| Method | Path                                              | Request | Response |
+| ------ | ------------------------------------------------- | ------- | -------- |
+| DELETE | `/v1/templates/{templateId}/workers/{workerName}` | -       | -        |
 
 **Explanation**
 
@@ -157,9 +157,9 @@ curl -X DELETE
 
 ### Get an invocation key
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/templates/{templateId}/workers/{workerName}/key` | - | InvocationKey JSON |
+| Method | Path                                                  | Request | Response           |
+| ------ | ----------------------------------------------------- | ------- | ------------------ |
+| POST   | `/v1/templates/{templateId}/workers/{workerName}/key` | -       | InvocationKey JSON |
 
 **Response format**
 
@@ -185,24 +185,24 @@ curl -X POST
 
 ### Invoke a function and await for it’s results
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/templates/{templateId}/workers/{workerName}/invoke-and-await` | InvokeParameters JSON | InvokeResult JSON |
+| Method | Path                                                               | Request               | Response          |
+| ------ | ------------------------------------------------------------------ | --------------------- | ----------------- |
+| POST   | `/v1/templates/{templateId}/workers/{workerName}/invoke-and-await` | InvokeParameters JSON | InvokeResult JSON |
 
 **Query parameters**
 
 - `invocation-key` must be created with the **create invokation key** endpoint
 - `function` the name of the exported function to be invoked
 - `calling-convention` is an optional query parameter, which can be one of
-    - `component`
-    - `stdio`
-    - `stdio-event-loop`
+  - `component`
+  - `stdio`
+  - `stdio-event-loop`
 
 **Request format**
 
 ```json
 {
-  "params": ["x", 10, {"msg": "hello"}]
+  "params": ["x", 10, { "msg": "hello" }]
 }
 ```
 
@@ -216,9 +216,9 @@ curl -X POST
 
 **Explanation**
 
-Using a previously created invocation key, invokes a function on the worker and awaits until it is done, returning the function’s response. 
+Using a previously created invocation key, invokes a function on the worker and awaits until it is done, returning the function’s response.
 
-To learn more about how exactly the **function name,** the **parameters** and the **result value** are encoded and what difference the **calling convention** makes, check [Template interface](/template-interface)  .
+To learn more about how exactly the **function name,** the **parameters** and the **result value** are encoded and what difference the **calling convention** makes, check [Template interface](/template-interface) .
 
 **Example cURL:**
 
@@ -226,15 +226,15 @@ To learn more about how exactly the **function name,** the **parameters** and th
 curl -X POST
      'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/invoke-and-await?invocation-key=4fb80f49-d9c1-4b11-9d46-26261f26e0bf&function=golem:test/run'
      -H 'Content-Type: application/json'
-     -d '{"params": ["x", 10, {"msg": "hello"}]}' 
+     -d '{"params": ["x", 10, {"msg": "hello"}]}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
 ### Invoke a function
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/templates/{templateId}/workers/{workerName}/invoke` | InvokeParameters JSON | - |
+| Method | Path                                                     | Request               | Response |
+| ------ | -------------------------------------------------------- | --------------------- | -------- |
+| POST   | `/v1/templates/{templateId}/workers/{workerName}/invoke` | InvokeParameters JSON | -        |
 
 **Query parameters**
 
@@ -244,7 +244,7 @@ curl -X POST
 
 ```json
 {
-  "params": ["x", 10, {"msg": "hello"}]
+  "params": ["x", 10, { "msg": "hello" }]
 }
 ```
 
@@ -252,7 +252,7 @@ curl -X POST
 
 A simpler version of the previously defined **invoke and await** endpoint just triggers the execution of a function and immediately returns. Custom calling convention and invocation key is not supported.
 
-To understand how to get the function name and how to encode the function parameters check [Template interface](/template-interface) 
+To understand how to get the function name and how to encode the function parameters check [Template interface](/template-interface)
 
 **Example cURL:**
 
@@ -260,15 +260,15 @@ To understand how to get the function name and how to encode the function parame
 curl -X POST
      'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/invoke?function=golem:test/run'
      -H 'Content-Type: application/json'
-     -d '{"params": ["x", 10, {"msg": "hello"}]}' 
+     -d '{"params": ["x", 10, {"msg": "hello"}]}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
 ### Complete a promise
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/templates/{templateId}/workers/{workerName}/complete` | CompleteParameters JSON | JSON bool |
+| Method | Path                                                       | Request                 | Response  |
+| ------ | ---------------------------------------------------------- | ----------------------- | --------- |
+| POST   | `/v1/templates/{templateId}/workers/{workerName}/complete` | CompleteParameters JSON | JSON bool |
 
 **Request format**
 
@@ -287,7 +287,7 @@ A JSON bool, true if the completion succeeded.
 
 Completes a promise with a given custom array of bytes. The promise must be previously created from within the worker, and it’s identifier (a combination of a worker identifier and an `oplogIdx` ) must be sent out to an external caller so it can use this endpoint to mark the promise completed. The `data` field is sent back to the worker and it has no predefined meaning.
 
-Learn more about promises in [Promises](/promises) 
+Learn more about promises in [Promises](/promises)
 
 **Example cURL:**
 
@@ -295,15 +295,15 @@ Learn more about promises in [Promises](/promises)
 curl -X POST
      'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/complete'
      -H 'Content-Type: application/json'
-     -d '{"oplogIdx": 101, "data": [1, 22, 0, 5, 100]}' 
+     -d '{"oplogIdx": 101, "data": [1, 22, 0, 5, 100]}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
 ### Interrupt a worker
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/templates/{templateId}/workers/{workerName}/interrupt` | CompleteParameters JSON | JSON bool |
+| Method | Path                                                        | Request                 | Response  |
+| ------ | ----------------------------------------------------------- | ----------------------- | --------- |
+| POST   | `/v1/templates/{templateId}/workers/{workerName}/interrupt` | CompleteParameters JSON | JSON bool |
 
 **Query parameters**
 
@@ -311,7 +311,7 @@ curl -X POST
 
 **Explanation**
 
-Interrupts the execution of a worker. The worker’s status will be `Interrupted` unless the `recover-immediately` parameter was used, in which case it remains as it was. 
+Interrupts the execution of a worker. The worker’s status will be `Interrupted` unless the `recover-immediately` parameter was used, in which case it remains as it was.
 
 An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used (for example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed).
 
@@ -327,12 +327,12 @@ curl -X POST
 
 All worker endpoints can return with the following errors:
 
-| Status | Body | Description |
-| --- | --- | --- |
-| 400 | `{ "errors": ["error1"}` | Invalid request, returning with a list of issues detected in the request. |
-| 401 | `{ "error": "..." }` | Unauthorized |
-| 403 | `{ "error": "..." }` | Maximum number of workers exceeded |
-| 404 | `{ "error": "..." }` | Template / worker / promise not found |
-| 409 | `{ "error": "..." }` | Worker already exists |
-| 500 | `{ "error": "..." }` | Internal server error |
-| 504 |  | Timeout |
+| Status | Body                     | Description                                                               |
+| ------ | ------------------------ | ------------------------------------------------------------------------- |
+| 400    | `{ "errors": ["error1"}` | Invalid request, returning with a list of issues detected in the request. |
+| 401    | `{ "error": "..." }`     | Unauthorized                                                              |
+| 403    | `{ "error": "..." }`     | Maximum number of workers exceeded                                        |
+| 404    | `{ "error": "..." }`     | Template / worker / promise not found                                     |
+| 409    | `{ "error": "..." }`     | Worker already exists                                                     |
+| 500    | `{ "error": "..." }`     | Internal server error                                                     |
+| 504    |                          | Timeout                                                                   |

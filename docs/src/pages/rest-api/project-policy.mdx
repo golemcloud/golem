@@ -20,9 +20,9 @@ The following actions can be used in the `projectActions` fields of this API:
 
 ### Get a project policy
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| GET | `/v1/project-policies/{project-policy-id}` | - | ProjectPolicy JSON |
+| Method | Path                                       | Request | Response           |
+| ------ | ------------------------------------------ | ------- | ------------------ |
+| GET    | `/v1/project-policies/{project-policy-id}` | -       | ProjectPolicy JSON |
 
 **Response format:**
 
@@ -47,9 +47,9 @@ curl 'https://release.api.golem.cloud/v1/project-policies/2b41858e-a327-4e63-953
 
 ### Create project policy
 
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| POST | `/v1/project-policies` | ProjectPolicyData JSON | ProjectPolicy JSON |
+| Method | Path                   | Request                | Response           |
+| ------ | ---------------------- | ---------------------- | ------------------ |
+| POST   | `/v1/project-policies` | ProjectPolicyData JSON | ProjectPolicy JSON |
 
 **Request format:**
 
@@ -80,7 +80,7 @@ Creates a new project policy and returns the object describing it, including the
 curl -X POST
      'https://release.api.golem.cloud/v1/project-policies'
      -H 'Content-Type: application/json'
-     -d '{"name": "a policy", "projectActions": ["ViewComponent", "ViewInstance"]}' 
+     -d '{"name": "a policy", "projectActions": ["ViewComponent", "ViewInstance"]}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -88,10 +88,10 @@ curl -X POST
 
 All project policy endpoints can return with the following errors:
 
-| Status | Body | Description |
-| --- | --- | --- |
-| 400 | `{ "errors": ["error1"}` | Invalid request, returning with a list of issues detected in the request. |
-| 401 | `{ "message": "..." }` | Unauthorized |
-| 403 | `{ "error": "..." }` | Maximum number of projects exceeded |
-| 404 | `{ "message": "..." }` | Project not found |
-| 500 | `{ "error": "..." }` | Internal server error |
+| Status | Body                     | Description                                                               |
+| ------ | ------------------------ | ------------------------------------------------------------------------- |
+| 400    | `{ "errors": ["error1"}` | Invalid request, returning with a list of issues detected in the request. |
+| 401    | `{ "message": "..." }`   | Unauthorized                                                              |
+| 403    | `{ "error": "..." }`     | Maximum number of projects exceeded                                       |
+| 404    | `{ "message": "..." }`   | Project not found                                                         |
+| 500    | `{ "error": "..." }`     | Internal server error                                                     |

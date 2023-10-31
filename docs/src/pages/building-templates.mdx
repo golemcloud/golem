@@ -1,4 +1,4 @@
-import { Callout, Card, Cards } from "nextra/components";
+import { Callout, Card, Cards } from "nextra/components"
 
 # Building Templates
 
@@ -8,19 +8,20 @@ This page describes the latest recommended way of how to build **Golem Templates
     **Golem** is using the **WASM component model** and provides access to the outside world through **WASI Preview2**.
 
     As both the component model and preview2 are work in progress, it is important to the exact version of tooling and interface definitions which are compatible with the actual version of Golem Cloud, described in this document.
+
 </Callout>
 
 ## Writing Templates
 
 Any programming language that can be compiled to WASM can be used to create Golem templates. It is not necessary to have **WASM component model support** ready as there are external tools to convert a WASM module into a WASM component.
 
-In order to work with standard IO, file and filesystems, random number generation, HTTP calls, etc. the chosen programming language must have library support built on [WASI](https://wasi.dev) - it can be **WASI Preview1** (all the current implementations are targeting that), as there are external tools to wrap a WASM module using WASI Preview1 as a WASM component targeting WASI Preview2. 
+In order to work with standard IO, file and filesystems, random number generation, HTTP calls, etc. the chosen programming language must have library support built on [WASI](https://wasi.dev) - it can be **WASI Preview1** (all the current implementations are targeting that), as there are external tools to wrap a WASM module using WASI Preview1 as a WASM component targeting WASI Preview2.
 
 To use the new features of WASI Preview2 (such as sending HTTP requests) you have to explicitly depend on the WASI interfaces and write low-level code or wait until libraries get released targeting the new version.
 
 ## Guest Language Support
 
-Based on their support of WASI and the Component Model we categorize **Guest Languages of Golem into **4 tiers:**
+Based on their support of WASI and the Component Model we categorize **Guest Languages of Golem into **4 tiers:\*\*
 
 ### Tier 1 Languages
 
@@ -44,11 +45,11 @@ This makes Tier 2 languages applicable in both **actor-like** and **workflow-lik
 The currently supported Tier 2 languages are:
 
 <Cards>
-  <Card title="Rust" href="/building-templates/tier-2/rust"/>
-  <Card title="Go" href="/building-templates/tier-2/go"/>
-  <Card title="Go" href="/building-templates/tier-2/c"/>
-  <Card title="Python" href="/building-templates/tier-2/python"/>
-  <Card title="Javascript" href="/building-templates/tier-2/javascript"/>
+  <Card title="Rust" href="/building-templates/tier-2/rust" />
+  <Card title="Go" href="/building-templates/tier-2/go" />
+  <Card title="Go" href="/building-templates/tier-2/c" />
+  <Card title="Python" href="/building-templates/tier-2/python" />
+  <Card title="Javascript" href="/building-templates/tier-2/javascript" />
 </Cards>
 
 <Callout>
@@ -63,7 +64,7 @@ The currently supported Tier 2 languages are:
 
 Tier 3 languages can be compiled to WASM **modules** and they support **WASI Preview 1** but there is no way to generate bindings for WIT interfaces.
 
-This restricts them to only expose a single, parameterless `run` function and they can only access the host functionalities part of **WASI Preview 1**. (standard IO, files and filesystems, clock, random, cmd args / environment variables). 
+This restricts them to only expose a single, parameterless `run` function and they can only access the host functionalities part of **WASI Preview 1**. (standard IO, files and filesystems, clock, random, cmd args / environment variables).
 
 It is possible to pass input to these functions using the **standard input** and to get back their **standard output** as the call’s results, but this function can only be called once for each worker.
 
@@ -75,11 +76,10 @@ Golem provides two special **calling conventions** for workers implemented with 
 The currently supported Tier 3 languages are:
 
 <Cards>
-  <Card title="Swift" href="/building-templates/tier-3/swift"/>
-  <Card title="Zig" href="/building-templates/tier-3/zig"/>
-  <Card title="Grain" href="/building-templates/tier-3/grain"/>
+  <Card title="Swift" href="/building-templates/tier-3/swift" />
+  <Card title="Zig" href="/building-templates/tier-3/zig" />
+  <Card title="Grain" href="/building-templates/tier-3/grain" />
 </Cards>
-
 
 <Callout>
 Possible other supported Tier 3 languages added in the near future are **Ruby,** **PHP and Haskell**.

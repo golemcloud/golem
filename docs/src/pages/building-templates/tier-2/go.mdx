@@ -1,4 +1,4 @@
-import { Callout } from "nextra/components";
+import { Callout } from "nextra/components"
 
 # Go
 
@@ -13,7 +13,7 @@ brew install tinygo
 
 You also have to install everything as described in [Common tooling](/building-templates/common-tooling).
 
-The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart). 
+The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart).
 
 If you prefer to do it from scratch, first we have to create a now Go module:
 
@@ -31,7 +31,7 @@ world tinygo-example {
     import wasi:io/streams
     import wasi:http/types
     import wasi:http/outgoing-handler
-    
+
     export example1: func(s: string) -> s32
 }
 ```
@@ -95,9 +95,9 @@ First we need to embed the WIT interface definition with `wasm-tools`:
 wasm-tools component embed ./wit main.wasm --output main.embed.wasm
 ```
 
-The resulting WASM is still not a WASM component, but it has the binary encoding of the WIT file in a custom section. 
+The resulting WASM is still not a WASM component, but it has the binary encoding of the WIT file in a custom section.
 
-The final step is converting the module in a WASM component, including mapping its WASI Preview1 imports into WASI Preview2 imports. 
+The final step is converting the module in a WASM component, including mapping its WASI Preview1 imports into WASI Preview2 imports.
 
 This is done with `wasm-tools` too:
 
@@ -118,7 +118,7 @@ The resulting `template.wasm` is ready to be used with **Golem**.
 
 We provide a [Go package](https://github.com/zivergetech/go-wasi-http/) for integration Go’s `http` package with the WASI-HTTP interface provided by Golem.
 
-To use this, first add the package to your module by 
+To use this, first add the package to your module by
 
 ```toml
 go get github.com/zivergetech/go-wasi-http@main

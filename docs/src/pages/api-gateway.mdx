@@ -1,4 +1,4 @@
-import { Callout } from "nextra/components";
+import { Callout } from "nextra/components"
 
 # API Gateway
 
@@ -41,7 +41,7 @@ Here is an overview of the syntax you can use for capturing variables in your HT
 - **Query Parameters** - Defined with curly braces in path definition following `?`, for example `users/{user-id}?{active}`. Accessed as `${path.active}`.
 - **Request Body** - Accessed as `${request.body}`.
 - **Request Body Fields** - Accessed as `${request.body.field}`, where `field` is the name of the field.
-- **Request Headers** - Accessed as  `${request.headers.header}`, where `header` is the name of the header.
+- **Request Headers** - Accessed as `${request.headers.header}`, where `header` is the name of the header.
 
 <Callout>
 Code is always indicated by `${…}`. Any text that is not wrapped this way is interpreted as a string.

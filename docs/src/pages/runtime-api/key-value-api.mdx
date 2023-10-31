@@ -1,4 +1,4 @@
-import { Callout } from "nextra/components";
+import { Callout } from "nextra/components"
 
 # Key Value API
 
@@ -34,11 +34,13 @@ world key-value-example {
 Notice that we imported the `wasi:keyvalue/readwrite` functionality. WASI Key Value includes a variety of interfaces for simple read / write operations, batch operations, atomic operations, and even caching.
 
 <Callout>
-    **Golem** supports the **readwrite** and **batch** interfaces right now. Support for additional interfaces will be provided in the future.
+  **Golem** supports the **readwrite** and **batch** interfaces right now. Support for additional
+  interfaces will be provided in the future.
 </Callout>
 
 <Callout>
-    The **WASI Key Value** interface is still in the proposal stage and is likely to change in the future. Some of the interfaces have already been modified based on feedback from the Golem team.
+  The **WASI Key Value** interface is still in the proposal stage and is likely to change in the
+  future. Some of the interfaces have already been modified based on feedback from the Golem team.
 </Callout>
 
 Now that we have our interface we are ready to implement it. Let’s take a look at how we would do that:

@@ -1,23 +1,23 @@
-import { Callout } from "nextra/components";
+import { Callout } from "nextra/components"
 
 # JavaScript
 
 JavaScript can be used as a Tier 2 guest language using https://github.com/bytecodealliance/componentize-js.
 
-The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart). 
+The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quickstart).
 
 If you prefer doing it from scratch, start with a npm `package.json` like this:
 
 ```json
 {
-    "type": "module",
-    "devDependencies": {
-      "@bytecodealliance/jco": "0.11.1",
-      "@bytecodealliance/componentize-js": "0.2.0"
-    },
-    "scripts": {
-      "build": "node componentize.js"
-    }
+  "type": "module",
+  "devDependencies": {
+    "@bytecodealliance/jco": "0.11.1",
+    "@bytecodealliance/componentize-js": "0.2.0"
+  },
+  "scripts": {
+    "build": "node componentize.js"
+  }
 }
 ```
 
@@ -30,20 +30,20 @@ npm install
 Then add the following build script called `componentize.js` to your project:
 
 ```jsx
-import { componentize } from '@bytecodealliance/componentize-js';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { componentize } from "@bytecodealliance/componentize-js"
+import { readFile, writeFile, mkdir } from "node:fs/promises"
+import { resolve } from "node:path"
 
-const jsSource = await readFile('main.js', 'utf8');
+const jsSource = await readFile("main.js", "utf8")
 
 const { component } = await componentize(jsSource, {
-  witPath: resolve('wit'),
+  witPath: resolve("wit"),
   enableStdout: true,
-  preview2Adapter: 'adapters/tier2/wasi_snapshot_preview1.wasm'
-});
+  preview2Adapter: "adapters/tier2/wasi_snapshot_preview1.wasm",
+})
 
-await mkdir('out', { recursive: true });
-await writeFile('out/component_name.wasm', component);
+await mkdir("out", { recursive: true })
+await writeFile("out/component_name.wasm", component)
 ```
 
 The `adapters/tier2/wasi_snapshot_preview1.wasm` to be used can be downloaded from the `golem-wit` repository: [https://github.com/golemcloud/golem-wit/blob/main/adapters/tier2/wasi_snapshot_preview1.wasm](https://github.com/golemcloud/golem-wit/blob/main/adapters/tier2/wasi_snapshot_preview1.wasm)
@@ -75,17 +75,17 @@ If needed you can put additional WIT files from [https://github.com/golemcloud/g
 Finally write a JS file implementing the interface defined in the WIT file:
 
 ```jsx
-var state = 0;
+var state = 0
 
 export const api = {
-    "add": function (value) {
-        console.log(`Adding ${value} to the counter`);
-        state += Number(value);
-    },
-    "get": function() {
-        console.log(`Returning the current counter value: ${state}`);
-        return BigInt(state);
-    }
+  add: function (value) {
+    console.log(`Adding ${value} to the counter`)
+    state += Number(value)
+  },
+  get: function () {
+    console.log(`Returning the current counter value: ${state}`)
+    return BigInt(state)
+  },
 }
 ```
 

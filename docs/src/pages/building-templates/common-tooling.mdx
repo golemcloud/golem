@@ -1,5 +1,5 @@
-import { Callout, Steps } from 'nextra/components'
-import { Tabs } from 'nextra/components'
+import { Callout, Steps } from "nextra/components"
+import { Tabs } from "nextra/components"
 
 # Common tooling
 
@@ -10,32 +10,35 @@ First of all, to install `wasm-tools` via `cargo`, you need to install the lates
 <Steps>
 
 ### Install Rust
+
 Install rustup
+
 ```bash copy
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
 Install the latest stable version of Rust
+
 ```bash copy
 rustup install stable && rustup default stable
 ```
 
 Add the WASI target
+
 ```bash copy
 rustup target add wasm32-wasi
 ```
 
-
-### Install `wasm-tools` 
+### Install `wasm-tools`
 
 ```bash copy
-cargo install wasm-tools@1.0.40 
+cargo install wasm-tools@1.0.40
 ```
 
 Confirm the installation:
 
 ```bash
-wasm-tools --version 
+wasm-tools --version
 wasm-tools 1.0.40
 ```
 
@@ -45,6 +48,7 @@ wasm-tools 1.0.40
     Only required for non-Rust [Tier 2 Languages](/building-templates/tier-2)
 
     Rust users can skip this step as `wit-bindgen` is encapsulated by `cargo-component`
+
 </Callout>
 
 ```bash copy
@@ -52,7 +56,6 @@ cargo install wit-bindgen-cli@0.11.0
 ```
 
 Confirm the installation:
-
 
 ```bash
 wit-bindgen --version
@@ -67,17 +70,10 @@ An optional tool for making the `wasm` modules smaller (recommended for Swift) i
 
 First you need to install the latest version of Go:
 
-<Tabs items={['macos', 'other']}>
-    <Tabs.Tab>
-    ```bash copy
-    brew install golang
-    ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        View the [official installation instructions](https://go.dev/doc/install)
-    </Tabs.Tab>
+<Tabs items={["macos", "other"]}>
+  <Tabs.Tab>```bash copy brew install golang ```</Tabs.Tab>
+  <Tabs.Tab>View the [official installation instructions](https://go.dev/doc/install)</Tabs.Tab>
 </Tabs>
-
 
 Then use it to install `wasm-opt`:
 
