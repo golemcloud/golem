@@ -218,7 +218,7 @@ curl -X POST
 
 Using a previously created invocation key, invokes a function on the worker and awaits until it is done, returning the function’s response. 
 
-To learn more about how exactly the **function name,** the **parameters** and the **result value** are encoded and what difference the **calling convention** makes, check [Template interface](https://www.notion.so/Template-interface-ac8f610e7e8f465d9e324b6ae0aba3b5?pvs=21)  .
+To learn more about how exactly the **function name,** the **parameters** and the **result value** are encoded and what difference the **calling convention** makes, check [Template interface](/template-interface)  .
 
 **Example cURL:**
 
@@ -252,7 +252,7 @@ curl -X POST
 
 A simpler version of the previously defined **invoke and await** endpoint just triggers the execution of a function and immediately returns. Custom calling convention and invocation key is not supported.
 
-To understand how to get the function name and how to encode the function parameters check [Template interface](https://www.notion.so/Template-interface-ac8f610e7e8f465d9e324b6ae0aba3b5?pvs=21) 
+To understand how to get the function name and how to encode the function parameters check [Template interface](/template-interface) 
 
 **Example cURL:**
 
@@ -287,7 +287,7 @@ A JSON bool, true if the completion succeeded.
 
 Completes a promise with a given custom array of bytes. The promise must be previously created from within the worker, and it’s identifier (a combination of a worker identifier and an `oplogIdx` ) must be sent out to an external caller so it can use this endpoint to mark the promise completed. The `data` field is sent back to the worker and it has no predefined meaning.
 
-Learn more about promises in [Promises](https://www.notion.so/Promises-62133a19c1144a29a74bf986d118e157?pvs=21) 
+Learn more about promises in [Promises](/promises) 
 
 **Example cURL:**
 

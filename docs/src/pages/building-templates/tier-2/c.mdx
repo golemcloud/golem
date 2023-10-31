@@ -4,11 +4,11 @@ import { Callout } from 'nextra/components'
 
 C and C++ can be used to compile WASM modules using WASI Preview 1 by using https://github.com/WebAssembly/wasi-sdk/releases.
 
-You also have to install everything as described in [Common tooling](https://www.notion.so/Common-tooling-7e2325eb710b415e8b22c530e3e17918?pvs=21).
+You also have to install everything as described in [Common tooling](/building-templates/common-tooling).
 
 First download and extract wasi-sdk somewhere - in the examples we assume it is put in `~/wasi-sdk-20.0`.
 
-The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](https://www.notion.so/Quickstart-7e991194292a405cb99e66e0933f70a6?pvs=21). 
+The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/getting-started/quick-start). 
 
 If you prefer to do it manually from scratch, you first need to create a `wit` directory and a `main.wit` file in it describing your template’s interface, and optionally adding additional dependencies in `wit/deps` from the golem package (wasi-http, promise api, etc).
 

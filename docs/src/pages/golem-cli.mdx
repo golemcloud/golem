@@ -73,7 +73,7 @@ Golem has a library of **examples** which you can use as a starting point for yo
 The `list-examples` command can list and filter the available commands for you.
 
 - Use `--language X` to filter for your chosen guest language, such as `Rust`, `Go`, etc.
-- Use `--tier N` to show only examples for a given **language tier** - see [Building Templates](https://www.notion.so/Building-Templates-03501aa5572b4129aa0a9e9fe9f5d3fc?pvs=21) for a definition of tiers.
+- Use `--tier N` to show only examples for a given **language tier** - see [Building Templates](/building-templates) for a definition of tiers.
 
 ### `golem-cli new`
 
@@ -106,7 +106,7 @@ If needed, you can select an already created project (read below for information
 - `--project-name NAME`
 - `--project-id UUID`
 
-Once the template is successfully uploaded the CLI will print its **metadata**. The metadata contains all the detected **exported functions** with their type signature. See the [Template interface](https://www.notion.so/Template-interface-ac8f610e7e8f465d9e324b6ae0aba3b5?pvs=21) page for more information about types and how they are mapped to JSON structures.
+Once the template is successfully uploaded the CLI will print its **metadata**. The metadata contains all the detected **exported functions** with their type signature. See the [Template Interface](/template-interface) page for more information about types and how they are mapped to JSON structures.
 
 ## Creating and invoking workers
 
@@ -176,12 +176,12 @@ And the function to be called with all its parameters:
 - `--function NAME` the fully qualified name of the exported function
 - `--parameters JSON_ARR` a JSON array with all the parameters to be passed to the exported function. If the function does not expect any parameters it should be an empty array (`[]`)
 
-See the [Template interface](https://www.notion.so/Template-interface-ac8f610e7e8f465d9e324b6ae0aba3b5?pvs=21) page for more information about what a fully qualified exported function name is, and how to encode the different types in JSON.
+See the [Template Interface](/template-interface) page for more information about what a fully qualified exported function name is, and how to encode the different types in JSON.
 
 There are two more optional parameters to this command:
 
 - `--invocation-key KEY` associates an invocation key, previously created with the `worker invocation-key` CLI command. This is an advanced features you can use to avoid accidentally invoking the same thing twice. Creating an invocation key always succeeds. Once you have an invocation key, if you accidentally invoke the same function twice with the same ID, Golem guarantees that it won’t be executed twice.
-- `--use-stdio` switches the call into **stdio mode**. This is useful for **tier 3 languages** (see [Building Templates](https://www.notion.so/Building-Templates-03501aa5572b4129aa0a9e9fe9f5d3fc?pvs=21) to learn more about tiers) where you cannot define your program’s interface with a WIT file. In stdio mode the JSON you provide in `--parameters` is passed directly to the component’s `run` (or `main`) function through the standard input, and the result of the call is the program’s standard output.
+- `--use-stdio` switches the call into **stdio mode**. This is useful for **tier 3 languages** (see [Building Templates](/building-templates) to learn more about tiers) where you cannot define your program’s interface with a WIT file. In stdio mode the JSON you provide in `--parameters` is passed directly to the component’s `run` (or `main`) function through the standard input, and the result of the call is the program’s standard output.
 
 ## Observing workers
 

@@ -26,7 +26,7 @@ Once you authenticate, Golem CLI will cache an API token in a local directory na
 
 Golem Cloud runs templates that are WebAssembly programs. Templates are like applications, except they may expose functions that can be called externally.
 
-To deploy to Golem Cloud, you must first [build a template](https://www.notion.so/Building-Templates-03501aa5572b4129aa0a9e9fe9f5d3fc?pvs=21) using any programming language and toolchain that can build WebAssembly components.
+To deploy to Golem Cloud, you must first [build a template](/building-templates) using any programming language and toolchain that can build WebAssembly components.
 
 To get started quickly, you can use Golem CLI to create a template from an example:
 
@@ -36,7 +36,7 @@ golem-cli new --example rust-shopping-cart --template-name shopping_cart
 
 This will generate a new `shopping-cart` directory in the current directory with the example for your template.
 
-To **build** the newly created template you need some development tools installed. These are collected for each supported **guest language** on the [Building Templates](https://www.notion.so/Building-Templates-03501aa5572b4129aa0a9e9fe9f5d3fc?pvs=21) page. For the above example, please read the [Rust](https://www.notion.so/Rust-b8f6be94810546c7a222c2838485a04f?pvs=21) specific instructions to set up `cargo-component`.
+To **build** the newly created template you need some development tools installed. These are collected for each supported **guest language** on the [Building Templates](/building-templates) page. For the above example, please read the [Rust](/building-templates/tier-2/rust) specific instructions to set up `cargo-component`.
 
 Once you have that, navigate to the `shopping-cart`, and run:
 
@@ -94,7 +94,7 @@ golem-cli worker invoke-and-await \
 
 If a worker of the specified name has not been created, then when you attempt to invoke a function on the worker, it will first be created.
 
-Check the [Template interface](https://www.notion.so/Template-interface-ac8f610e7e8f465d9e324b6ae0aba3b5?pvs=21) section to learn about how to figure out the **function name** and how to encode your parameters in JSON.
+Check the [Template interface](/template-interface) section to learn about how to figure out the **function name** and how to encode your parameters in JSON.
 
 ### Next Steps
 
@@ -102,8 +102,8 @@ In this guide, you have learned how to build and deploy invincible serverless wo
 
 Take your next steps with Golem Cloud by exploring the following resources:
 
-- [Building Templates](https://www.notion.so/Building-Templates-03501aa5572b4129aa0a9e9fe9f5d3fc?pvs=21) describes you can use different **programming languages** for building Golem templates
-- [Promises](https://www.notion.so/Promises-62133a19c1144a29a74bf986d118e157?pvs=21) are a way to block your program until an **external condition** fulfills it.
-- The [Golem CLI](https://www.notion.so/Golem-CLI-1aa11fd41dcf4c878b465c15ca815d61?pvs=21) page lists all the commands available on Golem’s **command line interface**
-- Golem can also be controlled using its [REST API](https://www.notion.so/REST-API-fc0b5887cca54261b6b773711f6f23b0?pvs=21)
-- Read the [FAQ](https://www.notion.so/FAQ-0f58ad578cb74a648aedc7bea90c37f9?pvs=21) page for frequently asked questions
+- [Building Templates](/building-templates) describes you can use different **programming languages** for building Golem templates
+- [Promises](/promises) are a way to block your program until an **external condition** fulfills it.
+- The [Golem CLI](/golem-cli) page lists all the commands available on Golem’s **command line interface**
+- Golem can also be controlled using its [REST API](/rest-api)
+- Read the [FAQ](/faq) page for frequently asked questions
