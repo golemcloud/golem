@@ -1,0 +1,44 @@
+import { Callout } from "nextra/components"
+
+# Grain
+
+[Grain](https://grain-lang.org/docs/getting_grain) is a functional language targeting WASM. Its standard library uses WASI Preview 1.
+
+First install `grain` from its official source:
+
+```bash
+brew install --no-quarantine --cask grain-lang/tap/grain
+```
+
+You also have to install everything as described in [Common tooling](/docs/building-templates/common-tooling).
+
+The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/docs/quickstart).
+
+Otherwise you can start writing some code, the whole program will be exposed to Golem as a single parameterless `run` function:
+
+```rust
+let example1 = (a, b) => {
+    print(a)
+    print(b)
+    a + b
+}
+
+print("Hello world!")
+example1(100, 10)
+```
+
+First we have to compile the `grain` program to WASM:
+
+```bash
+grain compile --release main.gr
+```
+
+This results in a `main.gr.wasm` file which is a WASM **module**. We cannot write any WIT documents because there is no Grain binding generator available currently. This makes Grain a Tier 3 language, so we can convert the compiled module into a WASM **component** using the adapter from the `tier3` directory of the golem package:
+
+```bash
+wasm-tools component new main.gr.wasm -o template.wasm --adapt tier3/wasi_snapshot_preview1.wasm
+```
+
+<Callout>Make sure you use the **tier3 adapter** from the golem package!</Callout>
+
+The resulting `template.wasm` is ready to be used with Golem!

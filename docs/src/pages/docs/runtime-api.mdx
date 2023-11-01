@@ -1,0 +1,20 @@
+import { Card, Cards } from "nextra/components"
+
+# Runtime API
+
+The Golem Runtime API allows you to access additional functionality from within your program.
+
+The Runtime API is completely open source so anyone can provide an implementation of it. When you run your program in Golem Cloud we provide an implementation that supports durable execution.
+
+The Runtime API is provided as a host interface, so you can consume it from any language. We expect that over time language specific libraries will leverage the Runtime API to provide an even more ergonomic experience in select languages.
+
+The entire host interface is available at https://github.com/golemcloud/golem-wit. If you have questions about any of the interfaces or would like to see additional interfaces supported please feel free to open an issue!
+
+To use it in your program include the content of `wit/deps` from `golem-wit` in your the `wit/deps` folder in your project. Then in your `wit` file you can import it as `import golem:api/host`.
+
+This will allow you to call the Golem Runtime API from whatever language you are using. For instance, to use the Golem Runtime API in Rust, you would just add `use golem::api::host::*` to your imports.
+
+<Cards>
+  <Card title="Key Value API" href="/docs/runtime-api/key-value-api" />
+  <Card title="Promise API" href="/docs/runtime-api/promise-api" />
+</Cards>

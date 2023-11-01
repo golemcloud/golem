@@ -1,0 +1,131 @@
+# Template Interface
+
+This section describes how your **Golem Template**’s public interface is defined using the **WASM component model** and how is it mapped into the Golem API.
+
+The page is divided into two major sections by tiers, as the ability to define your template’s interface is one of the primary differentiators between our different language tiers. Read the [Building Templates](/docs/building-templates) page for more information.
+
+This page will use [Golem CLI](/docs/golem-cli) parameter names when talking about how to invoke functions, but the same rules apply when using the [REST API](/docs/rest-api) too.
+
+## Tier 2 languages
+
+**Tier 2 languages** use the **WASM component model**’s tooling to define their interface using WIT files. Please read the [official design document of the WIT format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md) to learn what it is capable of.
+
+For each tier 2 language there is a **binding generator** tool that takes the WIT definition and generates the appropriate binding code in the given guest language. Read [Building Templates](/docs/building-templates) for more information about how these tools work.
+
+The WIT definition is also embeded in the compiled WASM that you upload to **Golem Cloud**. This is how Golem knows what the exported functions are, and it can validate the provided parameters to make sure they have the correct type.
+
+### Function names
+
+This section explains how you can map the exported function names from your WIT definition to fully qualified names to be passed in the `--function` parameter when invoking an instance.
+
+The component you define has a WIT **package,** specified in the top of your WIT definition.
+
+For example if you generated your code using `golem new` and did not specify a custom package name, it will be:
+
+```rust
+package golem:component
+```
+
+You can have any other pair of names following the above syntax.
+
+The WIT definition should contain a **single world** (otherwise the world to be used have to be specified for the tools used during compilation). The name of this world does not matter for **Golem -** it won’t be part of the function’s fully qualified name.
+
+For example it can be:
+
+```rust
+world my-component-world {
+  // ...
+}
+```
+
+In this `world` you can either export
+
+- one or more **interface**
+- or one or more **functions** directly
+
+The following example demonstrates both:
+
+```rust
+package golem:component
+
+interface api {
+  record product-item {
+    product-id: string,
+    name: string,
+    price: float32,
+    quantity: u32,
+  }
+
+  add-item: func(item: product-item) -> ()
+  remove-item: func(product-id: string) -> ()
+}
+
+world my-component-world {
+  export api
+  export dump: func() -> result<string, string>
+}
+```
+
+The name of the interface(s) and function(s) are completely user defined, there are no rules to follow other than the syntax rules of WIT itself.
+
+In the above example we have **3 exported functions** and we can refer to them in the `--function` parameter with the following fully qualified names, consisting of the package name and the exported path:
+
+- `golem:component/api/add-item`
+- `golem:component/api/remove-item`
+- `golem:component/dump`
+
+### Parameters and results
+
+This section defines the mapping from the different types you can use or define in your WIT definition and the JSON you pass to the `--parameters` parameter of the invocation and see as your invocation’s result.
+
+When invoking a function, the JSON passed to `--parameters` always has to be a **JSON array**. Each element of this array corresponds to one **parameter** of the function. So to call a function without any parameters pass an empty array (`[]`). The result of a function invocation is also a JSON.
+
+The following table maps types you can use in WIT to their JSON encoding:
+
+| WIT type        | JSON type                                                                                                                                                        | Description                                                                   |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| bool            | JSON boolean                                                                                                                                                     | Primitive boolean type                                                        |
+| u8              | JSON number                                                                                                                                                      | Unsigned 8-bit integer                                                        |
+| s8              | JSON number                                                                                                                                                      | Signed 8-bit integer                                                          |
+| u16             | JSON number                                                                                                                                                      | Unsigned 16-bit integer                                                       |
+| s16             | JSON number                                                                                                                                                      | Signed 16-bit integer                                                         |
+| u32             | JSON number                                                                                                                                                      | Unsigned 32-bit integer                                                       |
+| s32             | JSON number                                                                                                                                                      | Signed 32-bit integer                                                         |
+| u64             | JSON number                                                                                                                                                      | Unsigned 64-bit integer                                                       |
+| s64             | JSON number                                                                                                                                                      | Signed 64-bit integer                                                         |
+| float32         | JSON number                                                                                                                                                      | 32-bit floating point number                                                  |
+| float64         | JSON number                                                                                                                                                      | 64-bit floating point number                                                  |
+| char            | JSON number                                                                                                                                                      | ASCII character                                                               |
+| string          | JSON string                                                                                                                                                      | String                                                                        |
+| `<t1, t2, ...>` | JSON array of the items: [v1, v2, …]                                                                                                                             | Tuple of types t1, t2, …                                                      |
+| `list<t>`       | JSON array of the items: [item1, item2, …]                                                                                                                       | List of items of type t                                                       |
+| `option<t>`     | null if not defined the inner value if defined                                                                                                                   | An option of type t                                                           |
+| `result<t, e>`  | Object with either an ok or an err field:`{ "ok": ... }` `{ "err": ... }` If t or e is unit (\_ in WIT) then use null in the JSON, for example `{ "ok": null }`. | Type representing either a success of type t or a failure of type e           |
+| handle          |                                                                                                                                                                  | not supported yet                                                             |
+| id              |                                                                                                                                                                  | not supported yet                                                             |
+| record          | JSON object where for each record field there is a field with the same name.                                                                                     | Record containing a series of named fields.                                   |
+| variant         | JSON object with a single field that has the name of one of the variants. For example: `{ "child": 10 }`                                                         | Variant that can be one of the specified types, discriminated by a case name. |
+| enum            | JSON string holding the name of the enum, for example "low"                                                                                                      | Enum is a set of possible named values                                        |
+| flags           | A JSON array of strings                                                                                                                                          | Set of possible name values, where you can select more than one of them.      |
+
+## Tier 3 languages
+
+For **Tier 3 languages** you cannot define more than one function to be exported. The function that Golem will run is your program’s main function, without passing any arguments or getting any result values.
+
+## Function names
+
+The function name for **tier 3** languages that you need to pass to the `--function` parameter of [Golem CLI](/docs/golem-cli) is always:
+
+- `wasi:cli/run/run`
+
+### Parameters and results
+
+As you cannot define any parameter or result types in **tier 3** the only option is to use **the stdio mode or the stdio event loop mode**.
+
+This is enabled in the [Golem CLI](/docs/golem-cli) using the `--use-stdio` or `--use-stdio-eventloop` commands when invoking an instance.
+
+Once it is enabled, the JSON you pass to the `--parameters` parameter will be directly available to read from the worker’s **standard input**, and **Golem** expects the `run` function to write a result JSON to the **standard output**.
+
+No further type checking is performed, but both the input and the output is expected to be JSONs.
+
+When using an **event loop** the worker is expected to run an infinite loop in which each iteration reads a **single line** and parses it as JSON, and outputs a single line JSON as the invocation’s results before reading the next one.

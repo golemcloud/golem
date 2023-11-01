@@ -1,0 +1,338 @@
+# Worker API
+
+### Summary
+
+The worker API allows to launch new workers, query and manipulate their status, and invoke their exported functions.
+
+### Get a versioned worker id given by it’s template id and worker name
+
+| Method | Path                               | Request | Response               |
+| ------ | ---------------------------------- | ------- | ---------------------- |
+| GET    | `/v1/templates/workers/{workerId}` | -       | VersionedWorkerId JSON |
+
+**Response format:**
+
+```json
+{
+  "workerId": {
+    "rawTemplateId": "70ff8f69-e121-40ea-b59a-b17526f37a78",
+    "workerName": "test-worker-1"
+  },
+  "templateVersionUsed": 1
+}
+```
+
+**Explanation**
+
+This endpoint just returns the components of a worker identifier based on a textual `workerId` of the format `templateId.workerName`
+
+These components are:
+
+- `rawTemplateId` the same as the `templateId` part of the input string
+- `workerName` the same as the `workerName` part of the input string
+- `templateVersionUsed` is the specific template **version** the worker is running with
+
+**Example cURL:**
+
+```bash
+curl 'https://release.api.golem.cloud/v1/templates/workers/70ff8f69-e121-40ea-b59a-b17526f37a78.test-worker-1'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Get metadata of a worker
+
+| Method | Path                                              | Request | Response            |
+| ------ | ------------------------------------------------- | ------- | ------------------- |
+| GET    | `/v1/templates/{templateId}/workers/{workerName}` | -       | WorkerMetadata JSON |
+
+**Response format:**
+
+```json
+{
+  "workerId": {
+    "rawTemplateId": "70ff8f69-e121-40ea-b59a-b17526f37a78",
+    "workerName": "test-worker-1"
+  },
+  "accountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
+  "args": [],
+  "env": {},
+  "status": "Idle",
+  "templateVersion": 1,
+  "retryCount": 0
+}
+```
+
+**Explanation**
+
+Returns metadata about an existing worker:
+
+- `workerId` is a combination of the used **template** and the worker’s user specified name
+- `accountId` the account the worker is created by
+- `args` is the provided command line arguments passed to the worker
+- `env` is the provided map of environment variables passed to the worker
+- `templateVersion` is the version of the template used by the worker
+- `retryCount` is the number of retries the worker did in case of a failure
+- `status` is the worker’s current status, one of the following:
+  - `Running` if the worker is currently executing
+  - `Idle` if the worker is waiting for an invocation
+  - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
+  - `Interrupted` if the worker was interrupted by the user
+  - `Retrying` if the worker failed, and an automatic retry was scheduled for it
+  - `Failed` if the worker failed and there are no more retries scheduled for it
+  - `Exited` if the worker explicitly exited using the `exit` WASI function
+
+**Example cURL:**
+
+```bash
+curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Launch a new worker
+
+| Method | Path                                  | Request                    | Response               |
+| ------ | ------------------------------------- | -------------------------- | ---------------------- |
+| POST   | `/v1/templates/{templateId}/workers}` | WorkerCreationRequest JSON | VersionedWorkerId JSON |
+
+**Request format:**
+
+```json
+{
+  "name": "test-worker-1",
+  "args": ["-v", "4"]
+  "env": [
+    ["MODE", "prod"],
+    ["DEBUG", "0"]
+  ]
+}
+```
+
+**Response format:**
+
+```json
+{
+  "workerId": {
+    "rawTemplateId": "70ff8f69-e121-40ea-b59a-b17526f37a78",
+    "workerName": "test-worker-1"
+  },
+  "templateVersionUsed": 1
+}
+```
+
+**Explanation**
+
+Creates a new worker. The worker initially is in `Idle` status, waiting to be invoked. The parameters in the request are the following:
+
+- `name` is the name of the created worker. This has to be unique, but only for a given **template**
+- `args` is a list of strings which appear as command line arguments for the worker
+- `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
+
+**Example cURL:**
+
+```bash
+curl -X POST
+     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers'
+     -H 'Content-Type: application/json'
+     -d '{"name": "test-worker-1", "args": [], "env": []}'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Delete a worker
+
+| Method | Path                                              | Request | Response |
+| ------ | ------------------------------------------------- | ------- | -------- |
+| DELETE | `/v1/templates/{templateId}/workers/{workerName}` | -       | -        |
+
+**Explanation**
+
+Interrupts and deletes an existing worker.
+
+**Example cURL:**
+
+```bash
+curl -X DELETE
+     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Get an invocation key
+
+| Method | Path                                                  | Request | Response           |
+| ------ | ----------------------------------------------------- | ------- | ------------------ |
+| POST   | `/v1/templates/{templateId}/workers/{workerName}/key` | -       | InvocationKey JSON |
+
+**Response format**
+
+```json
+{
+  "value": "4fb80f49-d9c1-4b11-9d46-26261f26e0bf"
+}
+```
+
+**Explanation**
+
+Creates an invocation key for a given worker.
+
+An invocation key is passed to the below defined invoke APIs to guarantee that retrying those invocations only performs the operation on the worker once.
+
+**Example cURL:**
+
+```bash
+curl -X POST
+     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/key'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Invoke a function and await for it’s results
+
+| Method | Path                                                               | Request               | Response          |
+| ------ | ------------------------------------------------------------------ | --------------------- | ----------------- |
+| POST   | `/v1/templates/{templateId}/workers/{workerName}/invoke-and-await` | InvokeParameters JSON | InvokeResult JSON |
+
+**Query parameters**
+
+- `invocation-key` must be created with the **create invokation key** endpoint
+- `function` the name of the exported function to be invoked
+- `calling-convention` is an optional query parameter, which can be one of
+  - `component`
+  - `stdio`
+  - `stdio-event-loop`
+
+**Request format**
+
+```json
+{
+  "params": ["x", 10, { "msg": "hello" }]
+}
+```
+
+**Response format**
+
+```json
+{
+  "result": ["hello world"]
+}
+```
+
+**Explanation**
+
+Using a previously created invocation key, invokes a function on the worker and awaits until it is done, returning the function’s response.
+
+To learn more about how exactly the **function name,** the **parameters** and the **result value** are encoded and what difference the **calling convention** makes, check [Template interface](/docs/template-interface) .
+
+**Example cURL:**
+
+```bash
+curl -X POST
+     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/invoke-and-await?invocation-key=4fb80f49-d9c1-4b11-9d46-26261f26e0bf&function=golem:test/run'
+     -H 'Content-Type: application/json'
+     -d '{"params": ["x", 10, {"msg": "hello"}]}'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Invoke a function
+
+| Method | Path                                                     | Request               | Response |
+| ------ | -------------------------------------------------------- | --------------------- | -------- |
+| POST   | `/v1/templates/{templateId}/workers/{workerName}/invoke` | InvokeParameters JSON | -        |
+
+**Query parameters**
+
+- `function` the name of the exported function to be invoked
+
+**Request format**
+
+```json
+{
+  "params": ["x", 10, { "msg": "hello" }]
+}
+```
+
+**Explanation**
+
+A simpler version of the previously defined **invoke and await** endpoint just triggers the execution of a function and immediately returns. Custom calling convention and invocation key is not supported.
+
+To understand how to get the function name and how to encode the function parameters check [Template interface](/docs/template-interface)
+
+**Example cURL:**
+
+```bash
+curl -X POST
+     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/invoke?function=golem:test/run'
+     -H 'Content-Type: application/json'
+     -d '{"params": ["x", 10, {"msg": "hello"}]}'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Complete a promise
+
+| Method | Path                                                       | Request                 | Response  |
+| ------ | ---------------------------------------------------------- | ----------------------- | --------- |
+| POST   | `/v1/templates/{templateId}/workers/{workerName}/complete` | CompleteParameters JSON | JSON bool |
+
+**Request format**
+
+```json
+{
+  "oplogIdx": 101,
+  "data": [1, 22, 0, 5, 100]
+}
+```
+
+**Response format**
+
+A JSON bool, true if the completion succeeded.
+
+**Explanation**
+
+Completes a promise with a given custom array of bytes. The promise must be previously created from within the worker, and it’s identifier (a combination of a worker identifier and an `oplogIdx` ) must be sent out to an external caller so it can use this endpoint to mark the promise completed. The `data` field is sent back to the worker and it has no predefined meaning.
+
+Learn more about promises in [Promises](/docs/promises)
+
+**Example cURL:**
+
+```bash
+curl -X POST
+     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/complete'
+     -H 'Content-Type: application/json'
+     -d '{"oplogIdx": 101, "data": [1, 22, 0, 5, 100]}'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Interrupt a worker
+
+| Method | Path                                                        | Request                 | Response  |
+| ------ | ----------------------------------------------------------- | ----------------------- | --------- |
+| POST   | `/v1/templates/{templateId}/workers/{workerName}/interrupt` | CompleteParameters JSON | JSON bool |
+
+**Query parameters**
+
+- An optional parameter, `recover-immediately` can be set to `true` to simulate a worker recovery (for example that it’s host server gets restarted)
+
+**Explanation**
+
+Interrupts the execution of a worker. The worker’s status will be `Interrupted` unless the `recover-immediately` parameter was used, in which case it remains as it was.
+
+An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used (for example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed).
+
+**Example cURL:**
+
+```bash
+curl -X POST
+     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/interrupt'
+     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```
+
+### Worker API errors
+
+All worker endpoints can return with the following errors:
+
+| Status | Body                     | Description                                                               |
+| ------ | ------------------------ | ------------------------------------------------------------------------- |
+| 400    | `{ "errors": ["error1"}` | Invalid request, returning with a list of issues detected in the request. |
+| 401    | `{ "error": "..." }`     | Unauthorized                                                              |
+| 403    | `{ "error": "..." }`     | Maximum number of workers exceeded                                        |
+| 404    | `{ "error": "..." }`     | Template / worker / promise not found                                     |
+| 409    | `{ "error": "..." }`     | Worker already exists                                                     |
+| 500    | `{ "error": "..." }`     | Internal server error                                                     |
+| 504    |                          | Timeout                                                                   |

@@ -1,0 +1,30 @@
+{
+  "-- Getting Started": {
+    "type": "separator",
+    "title": "Getting Started"
+  },
+  "intro": "Introduction",
+  "why-golem": "Why Golem?",
+  "quickstart": "Quickstart",
+  "-- Docs": {
+    "type": "separator",
+    "title": "Docs"
+  },
+  "building-templates": "Building Templates",
+  "promises": "Promises",
+  "api-gateway": "API Gateway",
+  "template-interface": "Template Interface",
+  "-- API Reference": {
+    "type": "separator",
+    "title": "API Reference"
+  },
+  "golem-cli": "Golem CLI",
+  "rest-api": "REST API",
+  "runtime-api": "Runtime API",
+  "-- Other": {
+    "type": "separator",
+    "title": "Other"
+  },
+  "faq": "FAQ",
+  "release-notes": "Release Notes"
+}

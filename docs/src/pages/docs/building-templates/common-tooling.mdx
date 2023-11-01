@@ -1,0 +1,92 @@
+import { Callout, Steps } from "nextra/components"
+import { Tabs } from "nextra/components"
+
+# Common tooling
+
+The following tools are required or optionally usable for most the supported guest languages.
+
+First of all, to install `wasm-tools` via `cargo`, you need to install the latest stable version of Rust. The recommended way to do so is using [https://rustup.rs](https://rustup.rs/):
+
+<Steps>
+
+### Install Rust
+
+Install rustup
+
+```bash copy
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Install the latest stable version of Rust
+
+```bash copy
+rustup install stable && rustup default stable
+```
+
+Add the WASI target
+
+```bash copy
+rustup target add wasm32-wasi
+```
+
+### Install `wasm-tools`
+
+```bash copy
+cargo install wasm-tools@1.0.40
+```
+
+Confirm the installation:
+
+```bash
+wasm-tools --version
+wasm-tools 1.0.40
+```
+
+### Install `wit-bindgen`
+
+<Callout type="info">
+    Only required for non-Rust [Tier 2 Languages](/docs/building-templates/tier-2)
+
+    Rust users can skip this step as `wit-bindgen` is encapsulated by `cargo-component`
+
+</Callout>
+
+```bash copy
+cargo install wit-bindgen-cli@0.11.0
+```
+
+Confirm the installation:
+
+```bash
+wit-bindgen --version
+wit-bindgen-cli 0.11.0
+```
+
+</Steps>
+
+### Install `wasm-opt` (optional)
+
+An optional tool for making the `wasm` modules smaller (recommended for Swift) is `wasm-opt`
+
+First you need to install the latest version of Go:
+
+<Tabs items={["macos", "other"]}>
+  {/* prettier-ignore */}
+  <Tabs.Tab>
+    ```bash copy
+    brew install golang
+    ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+
+{/* prettier-ignore */}
+> View the [official installation instructions](https://go.dev/doc/install)
+
+  </Tabs.Tab>
+</Tabs>
+
+Then use it to install `wasm-opt`:
+
+```bash copy
+go install github.com/gonowa/wasm-opt@latest
+```

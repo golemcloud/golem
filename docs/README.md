@@ -1,40 +1,45 @@
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
-
 ## Getting Started
 
-First, run the development server:
+1. [Install Bun](https://bun.sh/docs/installation)
+2. Install dependencies
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+   `bun install`
+
+3. Run the development server
+
+   `bun run dev`
+
+4. Open http://localhost:3000 with your browser to see the result.
+
+## Developing Guide
+
+This docs site is built with [Nextra](https://nextra.site/)
+
+## Adding a new page
+
+Each docs page is created from a .mdx file. To add a new page, create a new .mdx file in the `pages` directory. The file name will be the URL path.
+
+For example, `pages/docs/getting-started.mdx` will be available at `/docs/getting-started`.
+
+### Changing page metadata
+
+In order to change the page's title or placement on the left hand sidebar, you need to create a `_meta.json` file in the same directory as the .mdx file.
+
+[Read more about Nextra's \_meta.json files](https://nextra.site/docs/guide/organize-files#_metajson).
+
+[Read more about Nextra's docs theme](https://nextra.site/docs/docs-theme).
+
+If we had a page `/pages/docs/getting-started.mdx`, we could add a `_meta.json` file to change the title and make it the first entry in the sidebar.
+
+```json
+{
+  "getting-started": {
+    "title": "Getting Started - Overview"
+  },
+  "other-page": "Other Page"
+}
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Note how the key in the json object matches the file name. This is how Nextra knows which page to apply the metadata to.
 
-You can start editing the page by modifying `pages/index.tsx`. The page auto-updates as you edit the file.
-
-[API routes](https://nextjs.org/docs/api-routes/introduction) can be accessed on [http://localhost:3000/api/hello](http://localhost:3000/api/hello). This endpoint can be edited in `pages/api/hello.ts`.
-
-The `pages/api` directory is mapped to `/api/*`. Files in this directory are treated as [API routes](https://nextjs.org/docs/api-routes/introduction) instead of React pages.
-
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+> If the value is a json object, you can set multiple parameters. If it's a string, it will just change the title.

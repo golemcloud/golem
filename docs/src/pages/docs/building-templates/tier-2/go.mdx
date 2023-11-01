@@ -1,0 +1,162 @@
+import { Callout } from "nextra/components"
+
+# Go
+
+[TinyGo](https://tinygo.org) can compile Go code into core WASM modules and has limited support to WASI. Support for TinyGo-generated WASM files is limited in Golem right now but it can work in some cases.
+
+Install it on OSX via `brew`:
+
+```bash
+brew tap tinygo-org/tools
+brew install tinygo
+```
+
+You also have to install everything as described in [Common tooling](/docs/building-templates/common-tooling).
+
+The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/docs/quickstart).
+
+If you prefer to do it from scratch, first we have to create a now Go module:
+
+```toml
+go mod init golem.com/tinygo_example
+```
+
+Then create a `wit` directory with a `main.wit` describing your template, optionally importing WASI or Golem specific extra interfaces (put them in `wit/deps`, copied from `golem-cli`'s package):
+
+```go
+package my:template
+
+world tinygo-example {
+    import wasi:poll/poll
+    import wasi:io/streams
+    import wasi:http/types
+    import wasi:http/outgoing-handler
+
+    export example1: func(s: string) -> s32
+}
+```
+
+The next step is generating **bindings** with `wit-bindgen`:
+
+```toml
+wit-bindgen tiny-go --out-dir tinygo_example ./wit
+```
+
+And write your template in the module’s `main` package (`main.go` in the root):
+
+```go
+package main
+
+import (
+	"fmt"
+	"math/rand"
+	"time"
+
+	"golem.com/tinygo_example/tinygo_example"
+)
+
+func init() {
+	a := TinygoExampleImpl{}
+	tinygo_example.SetTinygoExample(a)
+}
+
+type TinygoExampleImpl struct {
+}
+
+func (e TinygoExampleImpl) Example1(s string) int32 {
+	fmt.Println(s)
+
+	s1 := rand.NewSource(time.Now().UnixNano())
+	r1 := rand.New(s1)
+	v1 := r1.Int31()
+	currentTime := time.Now()
+
+	fmt.Println("test", currentTime.Year(), v1)
+	return v1
+}
+
+func main() {
+}
+```
+
+It’s important to have an (empty) `main` function as well.
+
+Finally compile the go source to a core WASM module:
+
+```go
+tinygo build -target=wasi -o main.wasm main.go
+```
+
+The resulting WASM file in `main.wasm` is just a WASM **module**, not ready to be used with **Golem.**
+
+First we need to embed the WIT interface definition with `wasm-tools`:
+
+```bash
+wasm-tools component embed ./wit main.wasm --output main.embed.wasm
+```
+
+The resulting WASM is still not a WASM component, but it has the binary encoding of the WIT file in a custom section.
+
+The final step is converting the module in a WASM component, including mapping its WASI Preview1 imports into WASI Preview2 imports.
+
+This is done with `wasm-tools` too:
+
+```bash
+wasm-tools component new main.embed.wasm -o template.wasm --adapt adapters/tier2/wasi_snapshot_preview1.wasm
+```
+
+The `wasi_snapshot_preview1.wasm` describes the mapping from WASI Preview1 to Preview2. You **must** use the version of this file packaged together with `golem-cli.`
+
+<Callout>
+Make sure you use the **tier2 adapter** from the golem package!
+
+</Callout>
+
+The resulting `template.wasm` is ready to be used with **Golem**.
+
+### HTTP
+
+We provide a [Go package](https://github.com/zivergetech/go-wasi-http/) for integration Go’s `http` package with the WASI-HTTP interface provided by Golem.
+
+To use this, first add the package to your module by
+
+```toml
+go get github.com/zivergetech/go-wasi-http@main
+```
+
+Then import and set the `RoundTrip` implementation provided by this package:
+
+```go
+import (
+	"net/http"
+	go_wasi_http "github.com/zivergetech/go-wasi-http/roundtrip"
+)
+
+// ...
+
+http.DefaultClient.Transport = go_wasi_http.WasiHttpTransport{}
+```
+
+Then use the `http` package or any other libraries built on top of that to communicate with external services:
+
+```go
+postBody, _ := json.Marshal(ExampleRequest{
+		Name:     "Something",
+		Amount:   42,
+		Comments: []string{"Hello", "World"},
+	})
+resp, err := http.Post("http://localhost:9999/post-example", "application/json", bytes.NewBuffer(postBody))
+if err != nil {
+	return fmt.Sprintln(err)
+}
+body, err := ioutil.ReadAll(resp.Body)
+if err != nil {
+	return fmt.Sprintln(err)
+}
+
+var response ExampleResponse
+err = json.Unmarshal(body, &response)
+if err != nil {
+	return fmt.Sprintln(err)
+}
+```

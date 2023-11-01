@@ -4,17 +4,17 @@
 
 /* Table of contents */
 .nextra-toc > div.nextra-scrollbar > div:last-child {
-    @apply bg-background-light dark:bg-background-dark shadow-none;
+  @apply bg-background-light dark:bg-background-dark shadow-none;
 }
 
 /* Theme switcher and collapse */
 aside.nextra-sidebar-container > div:last-child {
-    @apply bg-background-light dark:bg-background-dark shadow-none;
+  @apply bg-background-light dark:bg-background-dark shadow-none;
 }
 
 /* Handle overly bold fonts in safari */
 @layer base {
-    * {
-      -webkit-font-smoothing: antialiased;
-    }
+  * {
+    -webkit-font-smoothing: antialiased;
   }
+}

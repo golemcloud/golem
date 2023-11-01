@@ -1,0 +1,13 @@
+import { Card, Cards } from "nextra/components"
+
+# Tier 4 languages
+
+Tier 4 languages can be compiled to WASM modules but they don’t (or don’t fully) support even **WASI Preview 1**. In case they partially support WASI, they may still be used to implement stateless single-invocation workers which could be useful as parts of a bigger Golem application to expose some platform-specific functionality or third party libraries, for example.
+
+The currently supported Tier 4 languages are:
+
+- [C#](/docs/building-templates/tier-4/c-sharp) - does not support **reading** from the standard input, so the `stdio` and `stdio-eventloop` calling conventions cannot be used. Parameters can be passed via environment variables and output can be written to the standard output.
+
+<Cards>
+  <Card title="C#" href="/docs/building-templates/tier-4/c-sharp" />
+</Cards>

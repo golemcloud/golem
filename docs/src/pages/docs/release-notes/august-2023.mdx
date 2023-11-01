@@ -1,0 +1,104 @@
+# Breaking changes August 2023
+
+The **Golem Cloud August release** (released on 5th of September 2023) contains a couple of breaking changes requiring installation of new tooling and rebuilding/re-uploading the user’s projects.
+
+This page summarizes these breaking changes:
+
+## Changed vocabulary
+
+Starting from this release we renamed some of the core entities of **Golem Cloud.** This renaming affects the whole solution including the **CLI tool**, the **REST API**, the documentation and examples.
+
+| Old name  | New name | Description                                                                                                                                                  |
+| --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| instance  | worker   | A running worker identified by its unique worker-id can export multiple functions that can be invoked to produce a result and manipulate the worker’s state. |
+| component | template | Each worker is constructed from a worker template, which contains the compiled WASM code to be executed by the workers, as well as additional metadata.      |
+| template  | example  | The CLI tool contains several examples available for creating new templates using the golem new command. These are living in the open source repository.     |
+
+## Update to the latest WASI and component model versions
+
+The new version is built on the latest version of the WASM component model and implements the latest version of WASI Preview 2.
+
+The WASI interface definitions had breaking changes since the version implemented in earlier Golem Cloud versions, having the following consequences:
+
+- The **required versions of** tooling (depending on the guest language) has been changed. Make sure to install the new versions before compiling any template for Golem Cloud!
+- The existing templates (previously components) **cannot run** on the updated version of Golem Cloud. They need to be recompiled with the new tooling.
+- There are some differences in the generated bindings / required settings etc, depending on the used guest language, so the template’s source code may have to be updated before recompilation. These differences are collected below.
+
+### Rust specific changes
+
+The new version of `cargo-component` uses a new way to generate bindings from the WIT files, and also introduces some changes in how the output WASM is generated.
+
+First you need to update `cargo-component` to the following version:
+
+```bash
+cargo install --git https://github.com/bytecodealliance/cargo-component cargo-component --rev e57d1d1405ed2d76f1f3d8647480dea700379ff8 --locked --force
+```
+
+In the `Cargo.toml` you no longer depend on `wit-bindgen` instead on the proper version of `cargo-component-bindings`:
+
+```toml
+cargo-component-bindings = { git = "https://github.com/bytecodealliance/cargo-component", rev = "e57d1d1405ed2d76f1f3d8647480dea700379ff8" }
+```
+
+Additionally, you **must not** specify a `name` for your `lib` in the `Cargo.toml` otherwise you won’t get a WASM component just a module (this is possibly a cargo-component bug that will be fixed later).
+
+In the `lib.rs`, first you have to generate the bindings with a macro:
+
+```rust
+cargo_component_bindings::generate!();
+```
+
+And then import the generated bindings. In case you exported an interface, it is located in a submodule consisting of the package name and the interface name, for example:
+
+```rust
+use crate::bindings::exports::golem::it::api::*;
+```
+
+If you only exported functions, the binding is directly in the `binding` module:
+
+```rust
+use crate::bindings::*;
+```
+
+The next difference is when **implementing** the exported trait. It is now always called `Guest`, and the struct you implement the trait for **must be called** `Component`:
+
+```rust
+struct Component;
+
+impl Guest for Component {
+// ...
+}
+```
+
+If your template uses the **reqwest** fork for Golem, it needs to be updated to the following depenency:
+
+```toml
+reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-aug-2023", features = ["json"] }
+```
+
+### Python specific changes
+
+A new version of `componentize-py` must be downloaded from https://github.com/golemcloud/componentize-py/releases/tag/untagged-1d33f43a20e6729ca9f9
+
+### Tier 3 language specific changes
+
+You need to update `wasm-tools` and `wit-bindgen` to the following versions:
+
+```bash
+cargo install wasm-tools@1.0.40
+cargo install wit-bindgen-cli@0.11.0 wit-bindgen-cli
+```
+
+Additionally now instead of `run`, the exported function of Tier 3 templates is called `wasi:cli/run/run`.
+
+## Guest language independent changes
+
+For those guest languages that require using `wasm-tools` with a **preview2 adapter** to construct the Golem templates (see [Building Templates](https://www.notion.so/Building-Templates-03501aa5572b4129aa0a9e9fe9f5d3fc?pvs=21)) (everything except Rust and Python now), need to use the updated **adapter wasm**s coming with the updated version of `golem-cli`.
+
+For new templates (created with `golem new`) this is automatically put into the `adapters` directory of the generated template.
+
+For existing ones please download the correct one from [https://github.com/golemcloud/golem-wit/tree/29e5cdbd6432fe4e0ab6cd09048ccf1767821b17/adapters](https://github.com/golemcloud/golem-wit/tree/29e5cdbd6432fe4e0ab6cd09048ccf1767821b17/adapters) and replace the old one with it.
+
+If your existing template uses any of the **Golem or WASI WIT definitions** (in `wit/deps` ) they have to be updated to the latest version of these interface definitions.
+
+Just like with the adapters, new templates contain the updated ones but for existing ones you need to update manually by downloading them from [https://github.com/golemcloud/golem-wit/tree/29e5cdbd6432fe4e0ab6cd09048ccf1767821b17/wit](https://github.com/golemcloud/golem-wit/tree/29e5cdbd6432fe4e0ab6cd09048ccf1767821b17/wit)

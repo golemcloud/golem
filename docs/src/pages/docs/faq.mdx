@@ -1,0 +1,112 @@
+# FAQ
+
+Frequently answered questions about Golem Cloud.
+
+1. [General Information](/docs/faq#general-information)
+2. [Technology and Functionality](/docs/faq#technology-and-functionality)
+3. [Usage and Development](/docs/faq#usage-and-development)
+4. [Comparisons and Alternatives](/docs/faq#comparisons-and-alternatives)
+5. [Security and Reliability](/docs/faq#security-and-reliability)
+
+## General Information
+
+### What is Golem Cloud?
+
+Golem Cloud is an invincible cloud platform for serverless workers. Thanks to the new paradigm of durable execution, workers on Golem Cloud survive hardware failures, updates, and upgrades, and can run forever, providing developers with powerful new ways to build modern cloud applications.
+
+### Is Golem Cloud ready for production?
+
+Golem Cloud is in Developer Preview, which means you can built pre-production applications on Golem Cloud, but you should not deploy to production. If you have an urgent need to deploy an application to production, you should first contact us.
+
+### What will the pricing be for Golem Cloud?
+
+We are still working on the pricing model for Golem Cloud, but factors that will be considered include active workers, memory per worker, total workers (including suspended workers), and lifespan of workers. Our goal is to make Golem Cloud so affordable you can build as much of your infrastructure as you like using invincible serverless workers.
+
+### What are the primary use cases for Golem Cloud?
+
+Most use cases fall into one of two categories: workflows, which are potentially long-running, stateful sequences of steps that must be executed as part of some business or AI process; and actors, which can statefully store and process information in a distributed fashion.
+
+Examples include:
+
+- The process of making an airline reservation, which is complex, involving orchestration of many different third-party systems over a potentially long period of time.
+- Creating and updating state for a mobile gaming session, which could last anywhere from a few minutes to days or weeks, depending on the type of game.
+- Orchestrating a series of API or microservice calls in a reliable way, such that hardware failures, upgrades, and updates do not affect the execution of the steps in any way.
+- Business process automation and AI-driven processes, which frequently involve human interaction and may run over minutes to months, depending on the process.
+
+## Technology and Functionality
+
+### How does Golem Cloud work?
+
+Golem Cloud is built on WebAssembly. Any WebAssembly program can be deployed to Golem Cloud, and Golem Cloud will execute it durably until the program is done (some programs may execute forever).
+
+A bit like continuous snapshotting, but radically more efficient, Golem continuously persists the running state of each serverless worker, and transfers this state to new machines as necessary in response to hardware failures, hot spots, upgrades, and updates.
+
+### Which public / private clouds does Golem support?
+
+In the Developer Preview, Golem Cloud runs in Amazon Web Services (AWS). Golem Cloud will be available both on-premise and in other cloud providers. If you would like to be an early tester of the on-premise edition, please contact us.
+
+### What happens if the node running a worker goes down or gets overloaded?
+
+If a node running your worker gets downed, due to hardware failure, updates, or upgrades, or becomes unresponsive due to excessive load on a given node, Golem Cloud will transparently relocate your worker, including its state, to another node, which allows your worker to resume at the exact point where it left off.
+
+### What guarantees does Golem Cloud provide when a worker is resumed due to a failure event?
+
+Golem Cloud restores the state of the worker exactly, allowing your worker to continue where it left off. If, however, your worker was calling a web service during the failure event, but that call had not yet completed, then Golem Cloud replays this call, in order to guarantee its completion.
+
+Therefore, with respect to calling web services, you should assume _at least once_ semantics, but limited to the call during which the failure event occurred. Calls that happened prior to the last call are not replayed, only the “in-flight” call is replayed.
+
+Many web services provide a robust way for obtaining _exactly once_ semantics even in the presence of a duplicate service call. For example, Stripe’s API for payment processing allows you to create a payment intent, which is then used to make the charge in a subsequent call. On Golem Cloud, this two-phase protocol guarantees that the payment charge happens exactly once.
+
+### What is the latency of deploying new workers on Golem Cloud?
+
+We will publish benchmarks before commercial launch, but Golem Cloud is engineered to launch new workers in milliseconds (or faster), and is suitable for low-latency applications.
+
+## Usage and Development
+
+### Where do I find the control panel for Golem Cloud?
+
+In the Developer Preview, there is no control panel for Golem Cloud, and you may only interact with Golem Cloud through the command-line interface or the REST API. When Golem Cloud commercial launches, we anticipate having a full-featured management portal for each account.
+
+### Do I have to use an SDK or library to build applications on Golem Cloud?
+
+Absolutely not! Golem Cloud is vendor-neutral by design. There is no SDK, library, or framework. You can bring your own software libraries. Golem Cloud will run any kind of application written in any programming language, so long as you can compile it to a WebAssembly program.
+
+The top languages for developing WebAssembly programs are Rust, C/C++, and Go, although an increasing number of programming languages have experimental support for WebAssembly.
+
+See our guide to [building templates](/docs/building-templates) for more information.
+
+### How can I test my serverless workers?
+
+Your serverless workers are just ordinary code written in the programming language of your choice, so you can probably unit test them without even needing to compile them to WebAssembly. In the near future, we intend to provide a local version of Golem Cloud to help developers do end-to-end testing without needing network connectivity.
+
+### What programming languages can I use to build applications for Golem Cloud?
+
+The top languages for developing WebAssembly programs are Rust, C/C++, and Go, although an increasing number of programming languages have experimental support for WebAssembly.
+
+See our guide to [building templates](/docs/building-templates) for more information.
+
+## Comparisons and Alternatives
+
+### What are alternatives to Golem Cloud?
+
+The primary alternative to Golem Cloud is Do-It-Yourself, typically using event-sourcing to support stateful logic that is resilient to hardware failures, updates, and upgrades. Other alternatives include Temporal.io, Uber Cadence, AWS Step Functions, and other workflow solutions; as well as Akka Cluster and similar solutions for managing both distributed state and computation.
+
+### How does Golem Cloud compare to function-as-a-service solutions from other providers, such as AWS Lambda?
+
+Golem Cloud is targeting more sophisticated use cases that benefit from invincible, immortal, and reactive workers with durable state and low latency. If you do not need these features, then you are better served by existing providers.
+
+Compared to solutions like Azure Durable Functions or AWS Step Functions, Golem Cloud is pure code solution that does not require you to write your application in any specific way. A programmer can write simple code in any WebAssembly language and deploy it on Golem’s invincible cloud without having to adopt any specific architecture or use any specific SDK or library.
+
+### How does Golem Cloud compare to WebAssembly-based serverless workers from companies like Fastly or Fermyon?
+
+Golem Cloud is targeting more complex use cases that benefit from invincible, immortal, and reactive workers with durable state. If you do not need these features, then you are better served by existing providers, which focus on short-lived, stateless workers without fault-tolerant guarantees.
+
+Like Fastly and Fermyon, Golem Cloud is part of a growing ecosystem around WebAssembly that provides you with next-generation ways to build and deploy cloud-native applications.
+
+## Security and Reliability
+
+### What kind of security guarantees does Golem Cloud provide?
+
+Golem Cloud is built on WebAssembly, a [formally-verified](https://www.cl.cam.ac.uk/~caw77/papers/mechanising-and-verifying-the-webassembly-specification.pdf) specification that provides capability-based sandboxing and complete per-instance isolation. Interacting with active workers through the REST API requires an API key with appropriate permissions. All data for active workers is stored in memory, making external access impossible, and replicated for redundancy.
+
+Before the commercial launch of Golem Cloud, we anticipate having full at-rest encryption using customer-specific keys that makes it impossible for anyone but the customer to interpret the data being stored in Golem Cloud.

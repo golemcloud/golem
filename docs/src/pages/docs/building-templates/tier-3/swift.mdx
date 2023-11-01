@@ -1,0 +1,43 @@
+import { Callout } from "nextra/components"
+
+# Swift
+
+First you have to install the Swift-WASM package from [https://book.swiftwasm.org/setup.html](https://book.swiftwasm.org/setup.html).
+
+You also have to install everything as described in [Common tooling](/docs/building-templates/common-tooling).
+
+As Swift is currently a Tier 3 guest language, you can only call your whole Swift program from Golem exposed as a parameterless `run` function.
+
+The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/docs/quickstart).
+
+If you prefer to do it from scratch, take the following simple Swift program saved into `main.swift`:
+
+```swift
+import Foundation
+
+let date = Date()
+let calendar = Calendar.current
+
+let year = calendar.component(.year, from: date)
+
+print("Hello world!")
+print(year)
+```
+
+And compile it to WASM using **Swift-WASM:**
+
+```bash
+/Library/Developer/Toolchains/swift-latest.xctoolchain/usr/bin/swiftc -target wasm32-unknown-wasi main.swift -o main.wasm -sdk /Library/Developer/Toolchains/swift-wasm-5.7.3-RELEASE.xctoolchain/usr/share/wasi-sysroot/
+```
+
+The resulting `main.wasm` is a WASM **module** not a component, so we have to use the **tier 3** WASI adapter and `wasm-tools` to convert it to a WASM **component**
+
+```bash
+wasm-tools component new main.wasm -o template.wasm --adapt tier3/wasi_snapshot_preview1.wasm
+```
+
+The `wasi_snapshot_preview1.wasm` describes the mapping from WASI Preview1 to Preview2. You **must** use the version of this file packaged together with `golem-cli.`
+
+<Callout>Make sure you use the **tier3 adapter** from the golem package!</Callout>
+
+The resulting `template.wasm` is ready to be used with Golem.
