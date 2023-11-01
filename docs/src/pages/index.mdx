@@ -1,7 +1,7 @@
 import { Callout } from "nextra/components"
 import { Card, Cards } from "nextra/components"
 import {
-  InfoIcon,
+  HelpIcon,
   TerminalIcon,
   ArrowUpDownIcon,
   HardHatIcon,
@@ -13,6 +13,7 @@ import {
   GalleryVerticalEnd,
   RocketIcon,
 } from "lucide-react"
+import { GolemIcon } from "src/components/golem-logo"
 
 # Golem Cloud Documentation
 
@@ -20,18 +21,16 @@ Welcome to the Golem Cloud developer documentation portal! Here you will find co
 
 <Callout type="warning">
   <p> Golem Cloud is currently in Developer Preview. </p>
-  <p>We encourage experimentation and prototypes, but please do not deploy mission-critical production applications on a Developer Preview account.</p>
+  {/* prettier-ignore */}
+  <p> We encourage experimentation and prototypes, but please do not deploy mission-critical production applications on a Developer Preview account.</p>
 </Callout>
-
-<br />
 
 ### Getting Started
 
 <Cards>
-  <Card title="Introduction" href="/docs/intro" icon={<InfoIcon />} />
-  <Card title="Quickstart" href="/docs/quickstart" icon={<RocketIcon/>} />
+  <Card title="Why Golem?" href="/docs/why-golem" icon={<GolemIcon />} />
+  <Card title="Quickstart" href="/docs/quickstart" icon={<RocketIcon />} />
   <Card title="Building Templates" href="/docs/building-templates" icon={<HardHatIcon />} />
-
 </Cards>
 
 ### Concepts
@@ -44,7 +43,7 @@ Welcome to the Golem Cloud developer documentation portal! Here you will find co
 
 ### Reference
 
-<Cards>
+<Cards num={2}>
   <Card title="Golem CLI" href="/docs/golem-cli" icon={<TerminalIcon />} />
   <Card title="REST API" href="/docs/rest-api" icon={<ArrowUpDownIcon />} />
   <Card title="Runtime API" href="/docs/runtime-api" icon={<PlayCircleIcon />} />
