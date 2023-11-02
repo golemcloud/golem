@@ -9,5 +9,12 @@
   "docs": {
     "title": "Documentation",
     "type": "page"
+  },
+  "404": {
+    "type": "page",
+    "theme": {
+      "timestamp": false,
+      "typesetting": "article"
+    }
   }
 }
