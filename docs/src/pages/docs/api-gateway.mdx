@@ -2,7 +2,7 @@ import { Callout } from "nextra/components"
 
 # API Gateway
 
-Golem’s API Gateway makes it easy for you to build WASM based microservices by translating incoming requests into invocations of worker functions and constructing responses based on the return values of those functions.
+Golem's API Gateway makes it easy for you to build WASM based microservices by translating incoming requests into invocations of worker functions and constructing responses based on the return values of those functions.
 
 ## APIs
 
@@ -12,13 +12,13 @@ To view your APIs go to [https://console.golem.cloud](https://console.golem.clou
 
 This will list all the APIs you have defined in your project. To create a new API click the “Create New” button in the top right and specify an **API name** and **version**.
 
-Now that we have an API we’re ready to create some routes!
+Now that we have an API we're ready to create some routes!
 
 ## Routes
 
 Creating a new API will take you to the overview page of that API, which shows an overview of the routes and deployments associated with the API. To view all the routes associated with the API click the “View All” button under routes.
 
-Right now this doesn’t include any routes. Let’s click the “Add New” button to create our first route.
+Right now this doesn't include any routes. Let's click the “Add New” button to create our first route.
 
 Every route consists of four parts:
 
@@ -61,7 +61,7 @@ The user interface of the management console has extensive help to make it easy 
 
 ## Deployments
 
-So far we have just described our API. We haven’t deployed it anywhere where it can serve live traffic.
+So far we have just described our API. We haven't deployed it anywhere where it can serve live traffic.
 
 To view all of our deployments go back to the overview and then click on “View All” under deployments. This will show us all of our current deployments.
 
@@ -71,4 +71,4 @@ By default, our API will be deployed to a subdomain of `api.golem.cloud`. This m
 
 To do this click on “Configure Custom Domain” after “New Deployment” and follow the instructions there. After specifying your custom domain you will be provided with a set of custom name servers that you will need to add to your domain registrar (e.g. GoDaddy) and Golem will then be able to confirm they have been successfully configured.
 
-With this you’re ready to go! Try hitting the endpoints you have defined with requests and see the responses you get back powered by your WASM workers.
+With this you're ready to go! Try hitting the endpoints you have defined with requests and see the responses you get back powered by your WASM workers.

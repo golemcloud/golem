@@ -8,7 +8,7 @@ https://github.com/golemcloud/componentize-py/releases/tag/canary-golem
 
 The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/docs/quickstart).
 
-If you prefer to do it manually, first create a WIT interface definition in your project’s `wit` directory:
+If you prefer to do it manually, first create a WIT interface definition in your project's `wit` directory:
 
 ```rust
 package my:component
@@ -31,7 +31,7 @@ componentize-py bindings bindings
 
 The second parameter here is the **name** of the Python module to be generated. This module will contain all the types described in the interface description, as well as **base classes** to implement the exported functions.
 
-Let’s implement the two exported function in a `[main.py](http://main.py)` file:
+Let's implement the two exported function in a `[main.py](http://main.py)` file:
 
 ```python
 from bindings.component_name import exports
@@ -50,7 +50,7 @@ class Api(exports.Api):
        return state
 ```
 
-The name of the class **must be** `Api`! The base class is imported from the generated `bindings` module’s submodule which is named as the **world** in your WIT file. If you are not sure what name to use, check the generated bindings, in this case in `bindings/exports/__init__.py`.
+The name of the class **must be** `Api`! The base class is imported from the generated `bindings` module's submodule which is named as the **world** in your WIT file. If you are not sure what name to use, check the generated bindings, in this case in `bindings/exports/__init__.py`.
 
 The last step is to compile the Python program to a WASM component using `componentize-py`:
 

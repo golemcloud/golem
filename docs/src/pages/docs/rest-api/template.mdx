@@ -6,7 +6,7 @@
 
 The template API provides endpoint to upload, download and find Golem templates (WASM files with associated metadata).
 
-### Get the metadata of a template’s all versions
+### Get the metadata of a template's all versions
 
 | Method | Path                          | Request | Response               |
 | ------ | ----------------------------- | ------- | ---------------------- |
@@ -98,9 +98,9 @@ This endpoint returns a list of **all versions** for the template id provided as
 - `versionedTemplateId` associates a specific version with the template id
 - `userTemplateId` and `protectedTemplateId` are implementation details, not used elsewhere on the public API
 - `templateName` is the human-readable name of the template
-- `templateSize` is the WASM binary’s size in bytes
+- `templateSize` is the WASM binary's size in bytes
 - `metadata` contains information extracted from the WASM itself:
-  - `exports` is a list of exported functions, including their parameter’s and return value’s types
+  - `exports` is a list of exported functions, including their parameter's and return value's types
   - `producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem template.
 
 **Example cURL:**
@@ -122,7 +122,7 @@ The request body contains the new version of the template as a binary WASM strea
 
 **Response format**
 
-The response is a JSON containing the updated template metadata as described in above in the get metadata endpoint’s description.
+The response is a JSON containing the updated template metadata as described in above in the get metadata endpoint's description.
 
 **Example cURL:**
 
@@ -167,7 +167,7 @@ Same array of `Template` JSON as described above at the **get all template metad
 
 **Explanation**
 
-Gets all templates belonging to the given project **with a given name**. Because the uniqueness of a template’s name is not enforced, the response may contain templates with different **template id**s.
+Gets all templates belonging to the given project **with a given name**. Because the uniqueness of a template's name is not enforced, the response may contain templates with different **template id**s.
 
 **Example cURL:**
 
@@ -202,7 +202,7 @@ The `projectId` is optional, in case it is missing the **default project** is us
 
 **Response format**
 
-The response is a JSON containing the updated template metadata as described in above in the get metadata endpoint’s description.
+The response is a JSON containing the updated template metadata as described in above in the get metadata endpoint's description.
 
 **Example cURL:**
 
@@ -227,7 +227,7 @@ Same array of `Template` JSON as described above at the **get all template metad
 
 **Explanation**
 
-Downloads a specific version of the template’s WASM.
+Downloads a specific version of the template's WASM.
 
 **Example cURL:**
 

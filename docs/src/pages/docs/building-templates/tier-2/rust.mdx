@@ -120,7 +120,7 @@ The struct you implement the trait for **must be called** `Component`!
 
 ### State in Rust
 
-When running a Golem component you don’t have to care about concurrent access of global state - each worker based on the template runs completely separated. The worker’s state is persisted by Golem so all you have to do for state handling is to store data in a global mutable variable.
+When running a Golem component you don't have to care about concurrent access of global state - each worker based on the template runs completely separated. The worker's state is persisted by Golem so all you have to do for state handling is to store data in a global mutable variable.
 
 In Rust we recommend the following pattern for this:
 
@@ -187,7 +187,7 @@ Golem implements the WASI-HTTP interface so any library built on that could be u
 
 At the time of writing the only library available is our fork of `reqwest`
 
-To use it, just add the following dependency to your component’s `Cargo.toml`:
+To use it, just add the following dependency to your component's `Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -196,7 +196,7 @@ reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-aug
 
 There is no need to manually add the WASI-HTTP interfaces to your `wit/deps` folder.
 
-The fork provides the same API as the official `reqwest` blocking API, so please use the library’s documentation for more information: [https://docs.rs/reqwest/latest/reqwest/](https://docs.rs/reqwest/latest/reqwest/)
+The fork provides the same API as the official `reqwest` blocking API, so please use the library's documentation for more information: [https://docs.rs/reqwest/latest/reqwest/](https://docs.rs/reqwest/latest/reqwest/)
 
 ### Compiling Rust
 
@@ -206,4 +206,4 @@ Creating the Golem template is just running:
 cargo component build --release
 ```
 
-The output is `target/wasm32-wasi/release/component_name.wasm` and it is ready to be uploaded to **Golem Cloud.** (the output file’s name depends on the project!)
+The output is `target/wasm32-wasi/release/component_name.wasm` and it is ready to be uploaded to **Golem Cloud.** (the output file's name depends on the project!)

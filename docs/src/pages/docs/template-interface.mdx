@@ -1,14 +1,14 @@
 # Template Interface
 
-This section describes how your **Golem Template**’s public interface is defined using the **WASM component model** and how is it mapped into the Golem API.
+This section describes how your **Golem Template**'s public interface is defined using the **WASM component model** and how is it mapped into the Golem API.
 
-The page is divided into two major sections by tiers, as the ability to define your template’s interface is one of the primary differentiators between our different language tiers. Read the [Building Templates](/docs/building-templates) page for more information.
+The page is divided into two major sections by tiers, as the ability to define your template's interface is one of the primary differentiators between our different language tiers. Read the [Building Templates](/docs/building-templates) page for more information.
 
 This page will use [Golem CLI](/docs/golem-cli) parameter names when talking about how to invoke functions, but the same rules apply when using the [REST API](/docs/rest-api) too.
 
 ## Tier 2 languages
 
-**Tier 2 languages** use the **WASM component model**’s tooling to define their interface using WIT files. Please read the [official design document of the WIT format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md) to learn what it is capable of.
+**Tier 2 languages** use the **WASM component model**'s tooling to define their interface using WIT files. Please read the [official design document of the WIT format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md) to learn what it is capable of.
 
 For each tier 2 language there is a **binding generator** tool that takes the WIT definition and generates the appropriate binding code in the given guest language. Read [Building Templates](/docs/building-templates) for more information about how these tools work.
 
@@ -28,7 +28,7 @@ package golem:component
 
 You can have any other pair of names following the above syntax.
 
-The WIT definition should contain a **single world** (otherwise the world to be used have to be specified for the tools used during compilation). The name of this world does not matter for **Golem -** it won’t be part of the function’s fully qualified name.
+The WIT definition should contain a **single world** (otherwise the world to be used have to be specified for the tools used during compilation). The name of this world does not matter for **Golem -** it won't be part of the function's fully qualified name.
 
 For example it can be:
 
@@ -76,7 +76,7 @@ In the above example we have **3 exported functions** and we can refer to them i
 
 ### Parameters and results
 
-This section defines the mapping from the different types you can use or define in your WIT definition and the JSON you pass to the `--parameters` parameter of the invocation and see as your invocation’s result.
+This section defines the mapping from the different types you can use or define in your WIT definition and the JSON you pass to the `--parameters` parameter of the invocation and see as your invocation's result.
 
 When invoking a function, the JSON passed to `--parameters` always has to be a **JSON array**. Each element of this array corresponds to one **parameter** of the function. So to call a function without any parameters pass an empty array (`[]`). The result of a function invocation is also a JSON.
 
@@ -110,7 +110,7 @@ The following table maps types you can use in WIT to their JSON encoding:
 
 ## Tier 3 languages
 
-For **Tier 3 languages** you cannot define more than one function to be exported. The function that Golem will run is your program’s main function, without passing any arguments or getting any result values.
+For **Tier 3 languages** you cannot define more than one function to be exported. The function that Golem will run is your program's main function, without passing any arguments or getting any result values.
 
 ## Function names
 
@@ -124,8 +124,8 @@ As you cannot define any parameter or result types in **tier 3** the only option
 
 This is enabled in the [Golem CLI](/docs/golem-cli) using the `--use-stdio` or `--use-stdio-eventloop` commands when invoking an instance.
 
-Once it is enabled, the JSON you pass to the `--parameters` parameter will be directly available to read from the worker’s **standard input**, and **Golem** expects the `run` function to write a result JSON to the **standard output**.
+Once it is enabled, the JSON you pass to the `--parameters` parameter will be directly available to read from the worker's **standard input**, and **Golem** expects the `run` function to write a result JSON to the **standard output**.
 
 No further type checking is performed, but both the input and the output is expected to be JSONs.
 
-When using an **event loop** the worker is expected to run an infinite loop in which each iteration reads a **single line** and parses it as JSON, and outputs a single line JSON as the invocation’s results before reading the next one.
+When using an **event loop** the worker is expected to run an infinite loop in which each iteration reads a **single line** and parses it as JSON, and outputs a single line JSON as the invocation's results before reading the next one.

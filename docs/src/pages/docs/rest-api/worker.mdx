@@ -4,7 +4,7 @@
 
 The worker API allows to launch new workers, query and manipulate their status, and invoke their exported functions.
 
-### Get a versioned worker id given by it’s template id and worker name
+### Get a versioned worker id given by it's template id and worker name
 
 | Method | Path                               | Request | Response               |
 | ------ | ---------------------------------- | ------- | ---------------------- |
@@ -66,13 +66,13 @@ curl 'https://release.api.golem.cloud/v1/templates/workers/70ff8f69-e121-40ea-b5
 
 Returns metadata about an existing worker:
 
-- `workerId` is a combination of the used **template** and the worker’s user specified name
+- `workerId` is a combination of the used **template** and the worker's user specified name
 - `accountId` the account the worker is created by
 - `args` is the provided command line arguments passed to the worker
 - `env` is the provided map of environment variables passed to the worker
 - `templateVersion` is the version of the template used by the worker
 - `retryCount` is the number of retries the worker did in case of a failure
-- `status` is the worker’s current status, one of the following:
+- `status` is the worker's current status, one of the following:
   - `Running` if the worker is currently executing
   - `Idle` if the worker is waiting for an invocation
   - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
@@ -183,7 +183,7 @@ curl -X POST
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
-### Invoke a function and await for it’s results
+### Invoke a function and await for it's results
 
 | Method | Path                                                               | Request               | Response          |
 | ------ | ------------------------------------------------------------------ | --------------------- | ----------------- |
@@ -216,7 +216,7 @@ curl -X POST
 
 **Explanation**
 
-Using a previously created invocation key, invokes a function on the worker and awaits until it is done, returning the function’s response.
+Using a previously created invocation key, invokes a function on the worker and awaits until it is done, returning the function's response.
 
 To learn more about how exactly the **function name,** the **parameters** and the **result value** are encoded and what difference the **calling convention** makes, check [Template interface](/docs/template-interface) .
 
@@ -285,7 +285,7 @@ A JSON bool, true if the completion succeeded.
 
 **Explanation**
 
-Completes a promise with a given custom array of bytes. The promise must be previously created from within the worker, and it’s identifier (a combination of a worker identifier and an `oplogIdx` ) must be sent out to an external caller so it can use this endpoint to mark the promise completed. The `data` field is sent back to the worker and it has no predefined meaning.
+Completes a promise with a given custom array of bytes. The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an `oplogIdx` ) must be sent out to an external caller so it can use this endpoint to mark the promise completed. The `data` field is sent back to the worker and it has no predefined meaning.
 
 Learn more about promises in [Promises](/docs/promises)
 
@@ -307,11 +307,11 @@ curl -X POST
 
 **Query parameters**
 
-- An optional parameter, `recover-immediately` can be set to `true` to simulate a worker recovery (for example that it’s host server gets restarted)
+- An optional parameter, `recover-immediately` can be set to `true` to simulate a worker recovery (for example that it's host server gets restarted)
 
 **Explanation**
 
-Interrupts the execution of a worker. The worker’s status will be `Interrupted` unless the `recover-immediately` parameter was used, in which case it remains as it was.
+Interrupts the execution of a worker. The worker's status will be `Interrupted` unless the `recover-immediately` parameter was used, in which case it remains as it was.
 
 An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used (for example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed).
 

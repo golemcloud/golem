@@ -2,9 +2,9 @@
 
 ### Summary
 
-Projects can have grants providing access to other accounts than the project’s owner. The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by **policies**, covered by the **Project policy API.**
+Projects can have grants providing access to other accounts than the project's owner. The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by **policies**, covered by the **Project policy API.**
 
-### Get a project’s grants
+### Get a project's grants
 
 | Method | Path                               | Request | Response                   |
 | ------ | ---------------------------------- | ------- | -------------------------- |
@@ -62,7 +62,7 @@ curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e332
 
 **Explanation**
 
-Returns a specific grant of a specific project. The returned object is the same as the elements of the grants endpoint’s response described above.
+Returns a specific grant of a specific project. The returned object is the same as the elements of the grants endpoint's response described above.
 
 **Example cURL:**
 
@@ -106,7 +106,7 @@ Creates a new project grant from the following information:
 - `granteeAccountId` the account that gets access for the project
 - `projectPolicyId` the associated policy - see the **project policy API** below
 
-The response describes the new project grant including it’s `id` that can be used to query specifically this grant in the future.
+The response describes the new project grant including it's `id` that can be used to query specifically this grant in the future.
 
 **Example cURL:**
 
@@ -155,7 +155,7 @@ Creates a new project **grant** and its associated **policy** from the following
 - `projectActions` the set of actions allowed by the policy. See the **project policy API** section below for a list of all the available actions
 - `projectPolicyName` is optional and associates a human-readable name with the policy
 
-The response describes the new project grant including it’s `id` that can be used to query specifically this grant in the future.
+The response describes the new project grant including it's `id` that can be used to query specifically this grant in the future.
 
 **Example cURL:**
 

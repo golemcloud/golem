@@ -2,7 +2,7 @@
 
 Golem Cloud is an evolution of serverless computing that allows workers to be long-lived and stateful. Through a new paradigm called _durable computing_, workers deployed onto Golem Cloud can survive hardware failures, upgrades, and updates, offering a reliable foundation for building distributed, stateful applications.
 
-Golem Cloud does not let you build anything you couldn’t build before, with great expertise and enough time and resources. However, Golem Cloud does radically simplify the way you build many classes of cloud applications.
+Golem Cloud does not let you build anything you couldn't build before, with great expertise and enough time and resources. However, Golem Cloud does radically simplify the way you build many classes of cloud applications.
 
 ## Benefits
 
@@ -25,13 +25,13 @@ In an online storefront, we may have to take many steps during end-to-end proces
 1. Check and reserve sufficient inventory.
 2. Validate details of the order, such as shipping address.
 3. Validate payment method details.
-4. Charge the user’s credit card or debit their bank account.
+4. Charge the user's credit card or debit their bank account.
 5. Retry or abort on an failed charge (as appropriate), or continue on success.
 6. Record the successful charge in a database.
 7. Dispatch the order to fulfillment.
 8. Send the customer an email with their order details.
 9. Send the user updates as the state of the order is updated by fulfillment.
-10. Handle unexpected errors during fulfillment, or the user’s cancellation of the order before dispatch (if supported).
+10. Handle unexpected errors during fulfillment, or the user's cancellation of the order before dispatch (if supported).
 
 The major part of this process can take several seconds to several minutes, while the entire process could take days or even weeks.
 

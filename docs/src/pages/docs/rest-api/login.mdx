@@ -31,7 +31,7 @@ Gets a token by authorizing with an external OAuth2 provider. Currently only `gi
 In the response:
 
 - `id` is the identifier of the token itself
-- `accountId` is the account’s identifier, can be used on the **account API**
+- `accountId` is the account's identifier, can be used on the **account API**
 - `secret` is the secret key to be sent in the `Authorization` header as a bearer token for all the other endpoints
 
 **Example cURL:**
@@ -59,7 +59,7 @@ curl -X POST 'https://release.api.golem.cloud/v1/oauth2?provider=github&access_t
 
 **Explanation**
 
-Gets information about a token that is selected by the secret key passed in the `Authorization` header. The JSON is the same as the `data` object in the `oauth2` endpoint’s response.
+Gets information about a token that is selected by the secret key passed in the `Authorization` header. The JSON is the same as the `data` object in the `oauth2` endpoint's response.
 
 **Example cURL:**
 
@@ -107,7 +107,7 @@ An interactive authorization flow can be initiated with
 
 **Request format:**
 
-A `JSON` string containing the `encodedSession` from the start endpoint’s response.
+A `JSON` string containing the `encodedSession` from the start endpoint's response.
 
 **Response format:**
 
@@ -125,7 +125,7 @@ A `JSON` string containing the `encodedSession` from the start endpoint’s resp
 
 **Explanation**
 
-Finishes an interactive authorization flow. The returned JSON is equivalent to the `oauth2` endpoint’s response.
+Finishes an interactive authorization flow. The returned JSON is equivalent to the `oauth2` endpoint's response.
 
 **Example cURL:**
 

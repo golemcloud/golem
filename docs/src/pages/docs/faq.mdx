@@ -55,7 +55,7 @@ Golem Cloud restores the state of the worker exactly, allowing your worker to co
 
 Therefore, with respect to calling web services, you should assume _at least once_ semantics, but limited to the call during which the failure event occurred. Calls that happened prior to the last call are not replayed, only the “in-flight” call is replayed.
 
-Many web services provide a robust way for obtaining _exactly once_ semantics even in the presence of a duplicate service call. For example, Stripe’s API for payment processing allows you to create a payment intent, which is then used to make the charge in a subsequent call. On Golem Cloud, this two-phase protocol guarantees that the payment charge happens exactly once.
+Many web services provide a robust way for obtaining _exactly once_ semantics even in the presence of a duplicate service call. For example, Stripe's API for payment processing allows you to create a payment intent, which is then used to make the charge in a subsequent call. On Golem Cloud, this two-phase protocol guarantees that the payment charge happens exactly once.
 
 ### What is the latency of deploying new workers on Golem Cloud?
 
@@ -95,7 +95,7 @@ The primary alternative to Golem Cloud is Do-It-Yourself, typically using event-
 
 Golem Cloud is targeting more sophisticated use cases that benefit from invincible, immortal, and reactive workers with durable state and low latency. If you do not need these features, then you are better served by existing providers.
 
-Compared to solutions like Azure Durable Functions or AWS Step Functions, Golem Cloud is pure code solution that does not require you to write your application in any specific way. A programmer can write simple code in any WebAssembly language and deploy it on Golem’s invincible cloud without having to adopt any specific architecture or use any specific SDK or library.
+Compared to solutions like Azure Durable Functions or AWS Step Functions, Golem Cloud is pure code solution that does not require you to write your application in any specific way. A programmer can write simple code in any WebAssembly language and deploy it on Golem's invincible cloud without having to adopt any specific architecture or use any specific SDK or library.
 
 ### How does Golem Cloud compare to WebAssembly-based serverless workers from companies like Fastly or Fermyon?
 

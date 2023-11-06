@@ -4,15 +4,15 @@ import { Callout } from "nextra/components"
 
 The key value API allows you to record arbitrary values in a key value store.
 
-Often you can just use in memory data structures to maintain your application’s state because these data structures are durable with Golem. However, sometimes you will still want to use a more traditional key value store, for example because you expect the total size to be large.
+Often you can just use in memory data structures to maintain your application's state because these data structures are durable with Golem. However, sometimes you will still want to use a more traditional key value store, for example because you expect the total size to be large.
 
-This is where Golem’s key value API comes in! It is based on https://github.com/WebAssembly/wasi-keyvalue so it is fully open source and anyone can provide an implementation of it. When you run your program in Golem Cloud we provide an implementation that supports durable execution.
+This is where Golem's key value API comes in! It is based on https://github.com/WebAssembly/wasi-keyvalue so it is fully open source and anyone can provide an implementation of it. When you run your program in Golem Cloud we provide an implementation that supports durable execution.
 
-Golem’s implementation of the key value API currently uses Redis, though all of the APIs abstract over different underlying key value providers. In the future we will allow users of Golem Cloud to select the key value provider they wish to use as well as other configuration options.
+Golem's implementation of the key value API currently uses Redis, though all of the APIs abstract over different underlying key value providers. In the future we will allow users of Golem Cloud to select the key value provider they wish to use as well as other configuration options.
 
 To use the key value API, first make sure to add the contents of the `wit/deps` folders from https://github.com/golemcloud/golem-wit to your own `wit/deps` folder. You can then interact with the key value interface from your own code in whatever language you are working in.
 
-Let’s see what this looks like with an example. For this example we will create a simple service that lets us set arbitrary key value pairs in specified buckets and get those values, implemented using the key value API.
+Let's see what this looks like with an example. For this example we will create a simple service that lets us set arbitrary key value pairs in specified buckets and get those values, implemented using the key value API.
 
 Our WIT file will look like this:
 
@@ -43,7 +43,7 @@ Notice that we imported the `wasi:keyvalue/readwrite` functionality. WASI Key Va
   future. Some of the interfaces have already been modified based on feedback from the Golem team.
 </Callout>
 
-Now that we have our interface we are ready to implement it. Let’s take a look at how we would do that:
+Now that we have our interface we are ready to implement it. Let's take a look at how we would do that:
 
 ```rust
 cargo_component_bindings::generate!();

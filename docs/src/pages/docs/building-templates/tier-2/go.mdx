@@ -42,7 +42,7 @@ The next step is generating **bindings** with `wit-bindgen`:
 wit-bindgen tiny-go --out-dir tinygo_example ./wit
 ```
 
-And write your template in the module’s `main` package (`main.go` in the root):
+And write your template in the module's `main` package (`main.go` in the root):
 
 ```go
 package main
@@ -79,7 +79,7 @@ func main() {
 }
 ```
 
-It’s important to have an (empty) `main` function as well.
+It's important to have an (empty) `main` function as well.
 
 Finally compile the go source to a core WASM module:
 
@@ -116,7 +116,7 @@ The resulting `template.wasm` is ready to be used with **Golem**.
 
 ### HTTP
 
-We provide a [Go package](https://github.com/zivergetech/go-wasi-http/) for integration Go’s `http` package with the WASI-HTTP interface provided by Golem.
+We provide a [Go package](https://github.com/zivergetech/go-wasi-http/) for integration Go's `http` package with the WASI-HTTP interface provided by Golem.
 
 To use this, first add the package to your module by
 

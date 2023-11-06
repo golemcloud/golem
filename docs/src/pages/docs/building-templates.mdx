@@ -27,7 +27,7 @@ Based on their support of WASI and the Component Model we categorize Guest Langu
 
 Tier 1 languages have native support for building WASM **components,** working with **WIT** interfaces and their libraries are built on top of the latest version of **WASI Preview 2**
 
-We don’t have any language in this category yet, but we expect languages from the lower tiers to graduate here soon.
+We don't have any language in this category yet, but we expect languages from the lower tiers to graduate here soon.
 
 Tier 1 languages can fully take advantage of Golem.
 
@@ -35,7 +35,7 @@ Tier 1 languages can fully take advantage of Golem.
 
 Tier 2 languages can be compiled to WASM **modules** their standard library is built on **WASI Preview 1** and there is a **WIT binding** generator available for them.
 
-Using the binding generator Tier 2 languages can take full advantage of Golem’s features:
+Using the binding generator Tier 2 languages can take full advantage of Golem's features:
 
 - They can define their own typed interface that can be invoked via Golem
 - They can use additional host interfaces such as WASI-HTTP and the Golem Promise API
@@ -66,11 +66,11 @@ Tier 3 languages can be compiled to WASM **modules** and they support **WASI Pre
 
 This restricts them to only expose a single, parameterless `run` function and they can only access the host functionalities part of **WASI Preview 1**. (standard IO, files and filesystems, clock, random, cmd args / environment variables).
 
-It is possible to pass input to these functions using the **standard input** and to get back their **standard output** as the call’s results, but this function can only be called once for each worker.
+It is possible to pass input to these functions using the **standard input** and to get back their **standard output** as the call's results, but this function can only be called once for each worker.
 
 Golem provides two special **calling conventions** for workers implemented with a **tier 3** language:
 
-- The `stdio` calling convention passes the invocation’s parameters through the worker’s standard input, and parses it’s standard output as JSON, returning as the invocation’s result. A worker after an `stdio` invocation is no longer usable.
+- The `stdio` calling convention passes the invocation's parameters through the worker's standard input, and parses it's standard output as JSON, returning as the invocation's result. A worker after an `stdio` invocation is no longer usable.
 - The `stdio-eventloop` calling convention makes it possible to implement stateful workers with a **tier 3** language but it requires the worker to be implemented as a **loop** that in each iteration reads a single line containing the invocation parameters as JSON, and before reading the next line is responsible to write the response to the standard output as a single-line JSON.
 
 The currently supported Tier 3 languages are:
@@ -88,7 +88,7 @@ Possible other supported Tier 3 languages added in the near future are **Ruby,**
 
 ### Tier 4 Languages
 
-Tier 4 languages can be compiled to WASM modules but they don’t (or don’t fully) support even **WASI Preview 1**. In case they partially support WASI, they may still be used to implement stateless single-invocation workers which could be useful as parts of a bigger Golem application to expose some platform-specific functionality or third party libraries, for example.
+Tier 4 languages can be compiled to WASM modules but they don't (or don't fully) support even **WASI Preview 1**. In case they partially support WASI, they may still be used to implement stateless single-invocation workers which could be useful as parts of a bigger Golem application to expose some platform-specific functionality or third party libraries, for example.
 
 The currently supported Tier 4 languages are:
 
@@ -96,4 +96,4 @@ The currently supported Tier 4 languages are:
 
 ## Writing and Building Templates
 
-Please refer to the chosen guest language’s subpage for more information about what tools to install and how to build Golem templates.
+Please refer to the chosen guest language's subpage for more information about what tools to install and how to build Golem templates.
