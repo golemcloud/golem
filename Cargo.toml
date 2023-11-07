@@ -1,0 +1,27 @@
+[package]
+name = "wasm-ast"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+description = "WASM AST"
+
+[dependencies]
+wasmparser = { version = "0.116.1", optional = true }
+wasm-encoder = { version = "0.36.2", optional = true }
+wasm-metadata = { version = "0.10.11", optional = true }
+
+[features]
+default = ["parser", "writer", "component", "metadata"]
+parser = ["dep:wasmparser"]
+writer = ["dep:wasm-encoder"]
+component = []
+metadata = ["dep:wasm-metadata"]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "wasm-ast-test"
+path = "src/main.rs"
+required-features = ["default"]
