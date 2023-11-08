@@ -1,7 +1,6 @@
 use crate::core::*;
-use wasmparser::{Operator, OperatorsReader, Parser, Payload};
-
-// impl<'a> From<Payload<'a>> for
+use std::io::Write;
+use wasmparser::{BinaryReader, Operator, OperatorsReader, Parser, Payload};
 
 impl TryFrom<wasmparser::RefType> for RefType {
     type Error = String;
@@ -245,19 +244,18 @@ impl<'a> TryFrom<wasmparser::ElementKind<'a>> for ElemMode {
     }
 }
 
-impl<'a> TryFrom<wasmparser::Element<'a>> for Elem {
+impl<'a, T: TryFromExprSource> TryFrom<wasmparser::Element<'a>> for Elem<T> {
     type Error = String;
 
     fn try_from(value: wasmparser::Element) -> Result<Self, Self::Error> {
-        let r: Result<(RefType, Vec<Expr>), String> = match value.items {
+        let r: Result<(RefType, Vec<T>), String> = match value.items {
             wasmparser::ElementItems::Functions(indices) => {
                 let mut init = Vec::new();
                 for func_idx in indices {
                     let func_idx = func_idx
                         .map_err(|e| format!("Error parsing core module element: {:?}", e))?;
-                    init.push(Expr {
-                        instrs: vec![Instr::RefFunc(func_idx)],
-                    });
+                    let expr_source = RefFuncExprSource::new(func_idx);
+                    init.push(T::try_from(expr_source)?);
                 }
                 Ok((RefType::FuncRef, init))
             }
@@ -266,8 +264,8 @@ impl<'a> TryFrom<wasmparser::Element<'a>> for Elem {
                 for expr in exprs {
                     let expr =
                         expr.map_err(|e| format!("Error parsing core module element: {:?}", e))?;
-                    let op_reader = expr.get_operators_reader();
-                    let expr = op_reader.try_into()?;
+                    let expr_source = OperatorsReaderExprSource::new(expr.get_operators_reader());
+                    let expr: T = T::try_from(expr_source)?;
                     init.push(expr);
                 }
                 Ok((ref_type.try_into()?, init))
@@ -283,7 +281,9 @@ impl<'a> TryFrom<wasmparser::Element<'a>> for Elem {
     }
 }
 
-impl<'a> TryFrom<wasmparser::DataKind<'a>> for DataMode {
+impl<'a, T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<wasmparser::DataKind<'a>>
+    for DataMode<T>
+{
     type Error = String;
 
     fn try_from(value: wasmparser::DataKind) -> Result<Self, Self::Error> {
@@ -292,15 +292,21 @@ impl<'a> TryFrom<wasmparser::DataKind<'a>> for DataMode {
             wasmparser::DataKind::Active {
                 memory_index,
                 offset_expr,
-            } => Ok(DataMode::Active {
-                memory: memory_index,
-                offset: offset_expr.get_operators_reader().try_into()?,
-            }),
+            } => {
+                let operators_reader =
+                    OperatorsReaderExprSource::new(offset_expr.get_operators_reader());
+                Ok(DataMode::Active {
+                    memory: memory_index,
+                    offset: T::try_from(operators_reader)?,
+                })
+            }
         }
     }
 }
 
-impl<'a> TryFrom<wasmparser::Data<'a>> for Data {
+impl<'a, T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<wasmparser::Data<'a>>
+    for Data<T>
+{
     type Error = String;
 
     fn try_from(value: wasmparser::Data) -> Result<Self, Self::Error> {
@@ -311,7 +317,7 @@ impl<'a> TryFrom<wasmparser::Data<'a>> for Data {
     }
 }
 
-impl<'a> TryFrom<wasmparser::FunctionBody<'a>> for FuncCode {
+impl<'a, T: TryFromExprSource> TryFrom<wasmparser::FunctionBody<'a>> for FuncCode<T> {
     type Error = String;
 
     fn try_from(value: wasmparser::FunctionBody) -> Result<Self, Self::Error> {
@@ -329,10 +335,12 @@ impl<'a> TryFrom<wasmparser::FunctionBody<'a>> for FuncCode {
             }
         }
 
-        let body = value
-            .get_operators_reader()
-            .map_err(|e| format!("Error parsing core module function body: {:?}", e))?
-            .try_into()?;
+        let expr_source = OperatorsReaderExprSource::new(
+            value
+                .get_operators_reader()
+                .map_err(|e| format!("Error parsing core module function body: {:?}", e))?,
+        );
+        let body: T = T::try_from(expr_source)?;
 
         Ok(FuncCode { locals, body })
     }
@@ -393,7 +401,7 @@ impl<'a> TryFrom<OperatorsReader<'a>> for Expr {
                         _ => {
                             return Err(
                                 "Else operator must be preceded by an if operator".to_string()
-                            )
+                            );
                         }
                     }
                     None
@@ -1577,7 +1585,9 @@ impl<'a> TryFrom<OperatorsReader<'a>> for Expr {
     }
 }
 
-impl TryFrom<(Parser, &[u8])> for Sections<CoreIndexSpace, CoreSectionType, CoreSection> {
+impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])>
+    for Sections<CoreIndexSpace, CoreSectionType, CoreSection<T>>
+{
     type Error = String;
 
     fn try_from(value: (Parser, &[u8])) -> Result<Self, Self::Error> {
@@ -1692,11 +1702,76 @@ impl TryFrom<(Parser, &[u8])> for Sections<CoreIndexSpace, CoreSectionType, Core
     }
 }
 
-impl TryFrom<(Parser, &[u8])> for Module {
+impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])> for Module<T> {
     type Error = String;
 
     fn try_from(value: (Parser, &[u8])) -> Result<Self, Self::Error> {
-        let sections = Sections::<CoreIndexSpace, CoreSectionType, CoreSection>::try_from(value)?;
+        let sections =
+            Sections::<CoreIndexSpace, CoreSectionType, CoreSection<T>>::try_from(value)?;
         Ok(sections.into())
+    }
+}
+
+struct OperatorsReaderExprSource<'a> {
+    reader: OperatorsReader<'a>,
+}
+
+impl<'a> OperatorsReaderExprSource<'a> {
+    pub fn new(reader: OperatorsReader<'a>) -> Self {
+        Self { reader }
+    }
+}
+
+impl<'a> ExprSource for OperatorsReaderExprSource<'a> {
+    fn unparsed(self) -> Result<Vec<u8>, String> {
+        let binary_reader: BinaryReader = self.reader.get_binary_reader();
+        let range = binary_reader.range();
+        let bytes = self.reader.get_binary_reader().read_bytes(range.count());
+        bytes
+            .map_err(|e| format!("Error reading bytes from binary reader: {:?}", e))
+            .map(|bytes| bytes.to_vec())
+    }
+}
+
+impl<'a> IntoIterator for OperatorsReaderExprSource<'a> {
+    type Item = Result<Instr, String>;
+    type IntoIter = Box<dyn Iterator<Item = Result<Instr, String>>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        // TODO: parse incrementally
+        let expr: Result<Expr, String> = self.reader.try_into();
+        match expr {
+            Err(err) => Box::new(vec![Err(err)].into_iter()),
+            Ok(expr) => Box::new(expr.instrs.into_iter().map(Ok)),
+        }
+    }
+}
+
+struct RefFuncExprSource {
+    func_idx: FuncIdx,
+}
+
+impl RefFuncExprSource {
+    pub fn new(func_idx: FuncIdx) -> Self {
+        Self { func_idx }
+    }
+}
+
+impl ExprSource for RefFuncExprSource {
+    fn unparsed(self) -> Result<Vec<u8>, String> {
+        let mut result: Vec<u8> = Vec::new();
+        result.write(&[0xd2u8]).unwrap();
+        leb128::write::unsigned(&mut result, self.func_idx as u64).unwrap();
+        result.write(&[0x0bu8]).unwrap();
+        Ok(result)
+    }
+}
+
+impl IntoIterator for RefFuncExprSource {
+    type Item = Result<Instr, String>;
+    type IntoIter = Box<dyn Iterator<Item = Result<Instr, String>>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(vec![Instr::RefFunc(self.func_idx)].into_iter().map(Ok))
     }
 }

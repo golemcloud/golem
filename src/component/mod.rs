@@ -9,11 +9,11 @@ pub mod parser;
 pub mod writer;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ComponentSection {
-    Module(Module),
+pub enum ComponentSection<Expr: Debug + Clone + PartialEq> {
+    Module(Module<Expr>),
     CoreInstance(Instance),
     CoreType(CoreType),
-    Component(Component),
+    Component(Component<Expr>),
     Instance(ComponentInstance),
     Alias(Alias),
     Type(ComponentType),
@@ -24,7 +24,9 @@ pub enum ComponentSection {
     Custom(Custom),
 }
 
-impl Section<ComponentIndexSpace, ComponentSectionType> for ComponentSection {
+impl<Expr: Debug + Clone + PartialEq> Section<ComponentIndexSpace, ComponentSectionType>
+    for ComponentSection<Expr>
+{
     fn index_space(&self) -> ComponentIndexSpace {
         match self {
             ComponentSection::Module(module) => module.index_space(),
@@ -607,44 +609,49 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for Custom {
     }
 }
 
-struct ComponentInner {
-    sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection>,
+struct ComponentInner<Expr: Debug + Clone + PartialEq> {
+    sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
 }
 
-impl ComponentInner {
+impl<Expr: Debug + Clone + PartialEq> ComponentInner<Expr> {
     fn new(
-        sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection>,
+        sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
     ) -> Self {
         Self { sections }
     }
 }
 
-impl Debug for ComponentInner {
+impl<Expr: Debug + Clone + PartialEq> Debug for ComponentInner<Expr> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.sections.fmt(f)
     }
 }
 
-impl PartialEq for ComponentInner {
+impl<Expr: Debug + Clone + PartialEq> PartialEq for ComponentInner<Expr> {
     fn eq(&self, other: &Self) -> bool {
         self.sections.eq(&other.sections)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Component {
-    inner: Arc<Mutex<ComponentInner>>,
+pub struct Component<Expr: Debug + Clone + PartialEq> {
+    inner: Arc<Mutex<ComponentInner<Expr>>>,
 }
 
-impl From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection>> for Component {
-    fn from(value: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection>) -> Self {
+impl<Expr: Debug + Clone + PartialEq>
+    From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>>
+    for Component<Expr>
+{
+    fn from(
+        value: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
+    ) -> Self {
         Component {
             inner: Arc::new(Mutex::new(ComponentInner::new(value))),
         }
     }
 }
 
-impl PartialEq for Component {
+impl<Expr: Debug + Clone + PartialEq> PartialEq for Component<Expr> {
     fn eq(&self, other: &Self) -> bool {
         let inner = self.inner.lock().unwrap();
         let other_inner = other.inner.lock().unwrap();
@@ -652,7 +659,9 @@ impl PartialEq for Component {
     }
 }
 
-impl Section<ComponentIndexSpace, ComponentSectionType> for Component {
+impl<Expr: Debug + Clone + PartialEq> Section<ComponentIndexSpace, ComponentSectionType>
+    for Component<Expr>
+{
     fn index_space(&self) -> ComponentIndexSpace {
         ComponentIndexSpace::Component
     }

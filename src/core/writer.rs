@@ -42,12 +42,15 @@ impl From<FuncTypeRef> for wasm_encoder::FunctionSection {
     }
 }
 
-impl From<FuncCode> for wasm_encoder::CodeSection {
-    fn from(value: FuncCode) -> Self {
+impl<T: ExprSink> From<FuncCode<T>> for wasm_encoder::CodeSection {
+    fn from(value: FuncCode<T>) -> Self {
         let mut function = wasm_encoder::Function::new_with_locals_types(
             value.locals.into_iter().map(|v| (&v).into()),
         );
-        encode_expr(&value.body, &mut function);
+        let body = Expr {
+            instrs: value.body.into_iter().collect(),
+        };
+        encode_expr(&body, &mut function);
 
         let mut section = wasm_encoder::CodeSection::new();
         section.function(&function);
@@ -165,18 +168,18 @@ impl From<Global> for wasm_encoder::GlobalSection {
     }
 }
 
-impl From<Elem> for wasm_encoder::ElementSection {
-    fn from(value: Elem) -> Self {
+impl<T: ExprSink> From<Elem<T>> for wasm_encoder::ElementSection {
+    fn from(value: Elem<T>) -> Self {
         let mut section = wasm_encoder::ElementSection::new();
         match value.ref_type {
             RefType::FuncRef => {
                 let func_indices: Vec<u32> = value
                     .init
-                    .iter()
-                    .map(|expr| &expr.instrs)
+                    .into_iter()
+                    .map(|expr| expr.into_iter())
                     .flatten()
                     .filter_map(|instr| match instr {
-                        Instr::RefFunc(func_idx) => Some(*func_idx),
+                        Instr::RefFunc(func_idx) => Some(func_idx),
                         _ => None,
                     })
                     .collect();
@@ -198,8 +201,11 @@ impl From<Elem> for wasm_encoder::ElementSection {
             RefType::ExternRef => {
                 let init: Vec<wasm_encoder::ConstExpr> = value
                     .init
-                    .iter()
-                    .map(|expr| expr.try_into().unwrap())
+                    .into_iter()
+                    .map(|expr| {
+                        let instrs = expr.into_iter().collect();
+                        (&Expr { instrs }).try_into().unwrap()
+                    })
                     .collect(); // TODO: propagate failure
                 let elements =
                     wasm_encoder::Elements::Expressions(wasm_encoder::RefType::EXTERNREF, &init);
@@ -222,12 +228,15 @@ impl From<Elem> for wasm_encoder::ElementSection {
     }
 }
 
-impl From<Data> for wasm_encoder::DataSection {
-    fn from(value: Data) -> Self {
+impl<T: ExprSink> From<Data<T>> for wasm_encoder::DataSection {
+    fn from(value: Data<T>) -> Self {
         let mut section = wasm_encoder::DataSection::new();
         match value.mode {
             DataMode::Passive => section.passive(value.init),
             DataMode::Active { memory, offset } => {
+                let offset = Expr {
+                    instrs: offset.into_iter().collect(),
+                };
                 section.active(memory, &(&offset).try_into().unwrap(), value.init)
             } // TODO: propagate failure
         };
@@ -272,8 +281,8 @@ impl<'a> From<Custom> for wasm_encoder::CustomSection<'a> {
     }
 }
 
-impl From<Module> for wasm_encoder::Module {
-    fn from(value: Module) -> Self {
+impl<T: ExprSink + Debug + Clone + PartialEq> From<Module<T>> for wasm_encoder::Module {
+    fn from(value: Module<T>) -> Self {
         let mut module = wasm_encoder::Module::new();
 
         // TODO: use groups

@@ -20,15 +20,15 @@ pub type TableIdx = u32;
 pub type TypeIdx = u32;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum CoreSection {
+pub enum CoreSection<Expr> {
     Type(FuncType),
     Func(FuncTypeRef),
-    Code(FuncCode),
+    Code(FuncCode<Expr>),
     Table(Table),
     Mem(Mem),
     Global(Global),
-    Elem(Elem),
-    Data(Data),
+    Elem(Elem<Expr>),
+    Data(Data<Expr>),
     DataCount(DataCount),
     Start(Start),
     Export(Export),
@@ -36,7 +36,9 @@ pub enum CoreSection {
     Custom(Custom),
 }
 
-impl Section<CoreIndexSpace, CoreSectionType> for CoreSection {
+impl<Expr: Debug + Clone + PartialEq> Section<CoreIndexSpace, CoreSectionType>
+    for CoreSection<Expr>
+{
     fn index_space(&self) -> CoreIndexSpace {
         match self {
             CoreSection::Type(inner) => inner.index_space(),
@@ -288,12 +290,12 @@ impl Section<CoreIndexSpace, CoreSectionType> for FuncTypeRef {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct FuncCode {
+pub struct FuncCode<Expr> {
     pub locals: Vec<ValType>,
     pub body: Expr,
 }
 
-impl Section<CoreIndexSpace, CoreSectionType> for FuncCode {
+impl<Expr: Debug + Clone + PartialEq> Section<CoreIndexSpace, CoreSectionType> for FuncCode<Expr> {
     fn index_space(&self) -> CoreIndexSpace {
         CoreIndexSpace::Func
     }
@@ -319,7 +321,7 @@ impl Section<CoreIndexSpace, CoreSectionType> for FuncCode {
 /// type.
 /// /
 #[derive(Debug, Clone, PartialEq)]
-pub struct Func {
+pub struct Func<Expr> {
     pub type_idx: TypeIdx,
     pub locals: Vec<ValType>,
     pub body: Expr,
@@ -421,13 +423,13 @@ pub enum ElemMode {
 /// Element segments are referenced through element indices.
 ///
 #[derive(Debug, Clone, PartialEq)]
-pub struct Elem {
+pub struct Elem<Expr> {
     pub ref_type: RefType,
     pub init: Vec<Expr>,
     pub mode: ElemMode,
 }
 
-impl Section<CoreIndexSpace, CoreSectionType> for Elem {
+impl<Expr: Debug + Clone + PartialEq> Section<CoreIndexSpace, CoreSectionType> for Elem<Expr> {
     fn index_space(&self) -> CoreIndexSpace {
         CoreIndexSpace::Elem
     }
@@ -438,7 +440,7 @@ impl Section<CoreIndexSpace, CoreSectionType> for Elem {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum DataMode {
+pub enum DataMode<Expr> {
     Passive,
     Active { memory: MemIdx, offset: Expr },
 }
@@ -456,12 +458,12 @@ pub enum DataMode {
 /// Data segments are referenced through data indices.
 ///
 #[derive(Debug, Clone, PartialEq)]
-pub struct Data {
+pub struct Data<Expr> {
     init: Vec<u8>,
-    mode: DataMode,
+    mode: DataMode<Expr>,
 }
 
-impl Section<CoreIndexSpace, CoreSectionType> for Data {
+impl<Expr: Debug + Clone + PartialEq> Section<CoreIndexSpace, CoreSectionType> for Data<Expr> {
     fn index_space(&self) -> CoreIndexSpace {
         CoreIndexSpace::Data
     }
@@ -586,6 +588,25 @@ impl Section<CoreIndexSpace, CoreSectionType> for Custom {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
     pub instrs: Vec<Instr>,
+}
+
+pub trait ExprSource: IntoIterator<Item = Result<Instr, String>> {
+    fn unparsed(self) -> Result<Vec<u8>, String>;
+}
+
+pub trait ExprSink: IntoIterator<Item = Instr> {}
+
+pub trait TryFromExprSource {
+    fn try_from<S: ExprSource>(value: S) -> Result<Self, String>
+    where
+        Self: Sized;
+}
+
+impl TryFromExprSource for Expr {
+    fn try_from<S: ExprSource>(value: S) -> Result<Self, String> {
+        let instrs = value.into_iter().collect::<Result<Vec<Instr>, String>>()?;
+        Ok(Self { instrs })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -922,41 +943,41 @@ pub enum Instr {
 }
 
 #[derive(Debug, Clone)]
-pub enum ImportOrFunc {
+pub enum ImportOrFunc<Expr> {
     Import(Import),
-    Func(Func),
+    Func(Func<Expr>),
 }
 
-struct ModuleInner {
-    sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection>,
+struct ModuleInner<Expr: Debug + Clone + PartialEq> {
+    sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>,
 
     types: Option<Vec<FuncType>>,
-    funcs: Option<Vec<Func>>,
+    funcs: Option<Vec<Func<Expr>>>,
     tables: Option<Vec<Table>>,
     mems: Option<Vec<Mem>>,
     globals: Option<Vec<Global>>,
-    elems: Option<Vec<Elem>>,
-    datas: Option<Vec<Data>>,
+    elems: Option<Vec<Elem<Expr>>>,
+    datas: Option<Vec<Data<Expr>>>,
     start: Option<Start>,
     imports: Option<Vec<Import>>,
     exports: Option<Vec<Export>>,
     customs: Option<Vec<Custom>>,
 
-    type_index: Option<HashMap<u32, CoreSection>>,
-    func_index: Option<HashMap<u32, CoreSection>>,
-    code_index: Option<HashMap<u32, CoreSection>>,
-    table_index: Option<HashMap<u32, CoreSection>>,
-    mem_index: Option<HashMap<u32, CoreSection>>,
-    global_index: Option<HashMap<u32, CoreSection>>,
-    elem_index: Option<HashMap<u32, CoreSection>>,
-    data_index: Option<HashMap<u32, CoreSection>>,
-    export_index: Option<HashMap<u32, CoreSection>>,
-    import_index: Option<HashMap<u32, CoreSection>>,
-    custom_index: Option<HashMap<u32, CoreSection>>,
+    type_index: Option<HashMap<u32, CoreSection<Expr>>>,
+    func_index: Option<HashMap<u32, CoreSection<Expr>>>,
+    code_index: Option<HashMap<u32, CoreSection<Expr>>>,
+    table_index: Option<HashMap<u32, CoreSection<Expr>>>,
+    mem_index: Option<HashMap<u32, CoreSection<Expr>>>,
+    global_index: Option<HashMap<u32, CoreSection<Expr>>>,
+    elem_index: Option<HashMap<u32, CoreSection<Expr>>>,
+    data_index: Option<HashMap<u32, CoreSection<Expr>>>,
+    export_index: Option<HashMap<u32, CoreSection<Expr>>>,
+    import_index: Option<HashMap<u32, CoreSection<Expr>>>,
+    custom_index: Option<HashMap<u32, CoreSection<Expr>>>,
 }
 
-impl ModuleInner {
-    pub fn new(sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection>) -> Self {
+impl<Expr: Debug + Clone + PartialEq> ModuleInner<Expr> {
+    pub fn new(sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>) -> Self {
         Self {
             sections,
             types: None,
@@ -988,7 +1009,7 @@ impl ModuleInner {
         self.ensure_types();
         self.types.clone().unwrap()
     }
-    pub fn funcs(&mut self) -> Vec<Func> {
+    pub fn funcs(&mut self) -> Vec<Func<Expr>> {
         self.ensure_funcs();
         self.funcs.clone().unwrap()
     }
@@ -1004,11 +1025,11 @@ impl ModuleInner {
         self.ensure_globals();
         self.globals.clone().unwrap()
     }
-    pub fn elems(&mut self) -> Vec<Elem> {
+    pub fn elems(&mut self) -> Vec<Elem<Expr>> {
         self.ensure_elems();
         self.elems.clone().unwrap()
     }
-    pub fn datas(&mut self) -> Vec<Data> {
+    pub fn datas(&mut self) -> Vec<Data<Expr>> {
         self.ensure_datas();
         self.datas.clone().unwrap()
     }
@@ -1029,7 +1050,7 @@ impl ModuleInner {
         self.customs.clone().unwrap()
     }
 
-    pub fn add_data(&mut self, data: Data) {
+    pub fn add_data(&mut self, data: Data<Expr>) {
         self.invalidate();
         self.sections.add_to_last_group(CoreSection::Data(data));
         self.sections
@@ -1040,7 +1061,7 @@ impl ModuleInner {
             });
     }
 
-    pub fn add_elem(&mut self, elem: Elem) {
+    pub fn add_elem(&mut self, elem: Elem<Expr>) {
         self.invalidate();
         self.sections.add_to_last_group(CoreSection::Elem(elem));
     }
@@ -1099,7 +1120,7 @@ impl ModuleInner {
             .add_to_last_group(CoreSection::Type(func_type));
     }
 
-    pub fn get_code(&mut self, func_idx: FuncIdx) -> Option<FuncCode> {
+    pub fn get_code(&mut self, func_idx: FuncIdx) -> Option<FuncCode<Expr>> {
         self.ensure_code_index();
         match self.code_index.as_ref().unwrap().get(&func_idx) {
             Some(CoreSection::Code(code)) => Some(code.clone()),
@@ -1107,7 +1128,7 @@ impl ModuleInner {
         }
     }
 
-    pub fn get_data(&mut self, data_idx: DataIdx) -> Option<Data> {
+    pub fn get_data(&mut self, data_idx: DataIdx) -> Option<Data<Expr>> {
         self.ensure_data_index();
         match self.data_index.as_ref().unwrap().get(&data_idx) {
             Some(CoreSection::Data(data)) => Some(data.clone()),
@@ -1115,7 +1136,7 @@ impl ModuleInner {
         }
     }
 
-    pub fn get_elem(&mut self, elem_idx: ElemIdx) -> Option<Elem> {
+    pub fn get_elem(&mut self, elem_idx: ElemIdx) -> Option<Elem<Expr>> {
         self.ensure_elem_index();
         match self.elem_index.as_ref().unwrap().get(&elem_idx) {
             Some(CoreSection::Elem(elem)) => Some(elem.clone()),
@@ -1131,7 +1152,7 @@ impl ModuleInner {
         }
     }
 
-    pub fn get_function(&mut self, func_idx: FuncIdx) -> Option<ImportOrFunc> {
+    pub fn get_function(&mut self, func_idx: FuncIdx) -> Option<ImportOrFunc<Expr>> {
         self.ensure_func_index();
         match self.func_index.as_ref().unwrap().get(&func_idx) {
             Some(CoreSection::Func(FuncTypeRef { type_idx })) => {
@@ -1456,13 +1477,13 @@ impl ModuleInner {
     }
 }
 
-impl Debug for ModuleInner {
+impl<Expr: Debug + Clone + PartialEq> Debug for ModuleInner<Expr> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.sections.fmt(f)
     }
 }
 
-impl PartialEq for ModuleInner {
+impl<Expr: Debug + Clone + PartialEq> PartialEq for ModuleInner<Expr> {
     fn eq(&self, other: &Self) -> bool {
         self.sections.eq(&other.sections)
     }
@@ -1470,24 +1491,24 @@ impl PartialEq for ModuleInner {
 
 // TODO: parametric Expr type
 #[derive(Debug, Clone)]
-pub struct Module {
-    inner: Arc<Mutex<ModuleInner>>,
+pub struct Module<Expr: Debug + Clone + PartialEq> {
+    inner: Arc<Mutex<ModuleInner<Expr>>>,
 }
 
-impl Module {
+impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(ModuleInner::new(Sections::new()))),
         }
     }
 
-    pub fn from_flat(sections: Vec<CoreSection>) -> Self {
+    pub fn from_flat(sections: Vec<CoreSection<Expr>>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ModuleInner::new(Sections::from_flat(sections)))),
         }
     }
 
-    pub fn from_grouped(groups: Vec<(CoreSectionType, Vec<CoreSection>)>) -> Self {
+    pub fn from_grouped(groups: Vec<(CoreSectionType, Vec<CoreSection<Expr>>)>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ModuleInner::new(Sections::from_grouped(groups)))),
         }
@@ -1497,7 +1518,7 @@ impl Module {
         self.inner.lock().unwrap().types()
     }
 
-    pub fn funcs(&self) -> Vec<Func> {
+    pub fn funcs(&self) -> Vec<Func<Expr>> {
         self.inner.lock().unwrap().funcs()
     }
 
@@ -1513,11 +1534,11 @@ impl Module {
         self.inner.lock().unwrap().globals()
     }
 
-    pub fn elems(&self) -> Vec<Elem> {
+    pub fn elems(&self) -> Vec<Elem<Expr>> {
         self.inner.lock().unwrap().elems()
     }
 
-    pub fn datas(&self) -> Vec<Data> {
+    pub fn datas(&self) -> Vec<Data<Expr>> {
         self.inner.lock().unwrap().datas()
     }
 
@@ -1537,11 +1558,11 @@ impl Module {
         self.inner.lock().unwrap().customs()
     }
 
-    pub fn add_data(&self, data: Data) {
+    pub fn add_data(&self, data: Data<Expr>) {
         self.inner.lock().unwrap().add_data(data);
     }
 
-    pub fn add_elem(&self, elem: Elem) {
+    pub fn add_elem(&self, elem: Elem<Expr>) {
         self.inner.lock().unwrap().add_elem(elem);
     }
 
@@ -1572,15 +1593,15 @@ impl Module {
         self.inner.lock().unwrap().add_type(func_type);
     }
 
-    pub fn get_code(&self, func_idx: FuncIdx) -> Option<FuncCode> {
+    pub fn get_code(&self, func_idx: FuncIdx) -> Option<FuncCode<Expr>> {
         self.inner.lock().unwrap().get_code(func_idx)
     }
 
-    pub fn get_data(&self, data_idx: DataIdx) -> Option<Data> {
+    pub fn get_data(&self, data_idx: DataIdx) -> Option<Data<Expr>> {
         self.inner.lock().unwrap().get_data(data_idx)
     }
 
-    pub fn get_elem(&self, elem_idx: ElemIdx) -> Option<Elem> {
+    pub fn get_elem(&self, elem_idx: ElemIdx) -> Option<Elem<Expr>> {
         self.inner.lock().unwrap().get_elem(elem_idx)
     }
 
@@ -1588,7 +1609,7 @@ impl Module {
         self.inner.lock().unwrap().get_export(export_idx)
     }
 
-    pub fn get_function(&self, func_idx: FuncIdx) -> Option<ImportOrFunc> {
+    pub fn get_function(&self, func_idx: FuncIdx) -> Option<ImportOrFunc<Expr>> {
         self.inner.lock().unwrap().get_function(func_idx)
     }
 
@@ -1604,7 +1625,7 @@ impl Module {
         self.inner.lock().unwrap().get_table(table_idx)
     }
 
-    pub fn into_sections(self) -> Vec<CoreSection> {
+    pub fn into_sections(self) -> Vec<CoreSection<Expr>> {
         self.inner.lock().unwrap().sections.take_all()
     }
 
@@ -1615,15 +1636,17 @@ impl Module {
     // TODO: metadata section support
 }
 
-impl From<Sections<CoreIndexSpace, CoreSectionType, CoreSection>> for Module {
-    fn from(sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection>) -> Self {
+impl<Expr: Debug + Clone + PartialEq>
+    From<Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>> for Module<Expr>
+{
+    fn from(sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ModuleInner::new(sections))),
         }
     }
 }
 
-impl PartialEq for Module {
+impl<Expr: Debug + Clone + PartialEq> PartialEq for Module<Expr> {
     fn eq(&self, other: &Self) -> bool {
         let inner = self.inner.lock().unwrap();
         let other_inner = other.inner.lock().unwrap();
@@ -1632,8 +1655,9 @@ impl PartialEq for Module {
 }
 
 #[cfg(feature = "component")]
-impl Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>
-    for Module
+impl<Expr: Debug + Clone + PartialEq>
+    Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>
+    for Module<Expr>
 {
     fn index_space(&self) -> crate::component::ComponentIndexSpace {
         crate::component::ComponentIndexSpace::Module

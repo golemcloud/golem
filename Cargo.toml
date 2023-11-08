@@ -10,10 +10,11 @@ description = "WASM AST"
 wasmparser = { version = "0.116.1", optional = true }
 wasm-encoder = { version = "0.36.2", optional = true }
 wasm-metadata = { version = "0.10.11", optional = true }
+leb128 = {  version = "0.2.5", optional = true }
 
 [features]
 default = ["parser", "writer", "component", "metadata"]
-parser = ["dep:wasmparser"]
+parser = ["dep:wasmparser", "dep:leb128"]
 writer = ["dep:wasm-encoder"]
 component = []
 metadata = ["dep:wasm-metadata"]

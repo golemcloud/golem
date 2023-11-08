@@ -1,4 +1,6 @@
 use std::path::Path;
+use wasm_ast::component::Component;
+use wasm_ast::core::{ExprSource, Instr, TryFromExprSource};
 use wasm_metadata::Metadata;
 use wasmparser::{ComponentExternalKind, Parser, Payload, Validator, WasmFeatures};
 
@@ -10,6 +12,42 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>, std::io::Error> {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
     Ok(bytes)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct AnalysedExpr {
+    contains_table_manipulation: bool,
+}
+
+impl TryFromExprSource for AnalysedExpr {
+    fn try_from<S: ExprSource>(value: S) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        let mut found = false;
+        for instr in value {
+            let instr = instr?;
+            match instr {
+                Instr::TableSet(_) => {
+                    found = true;
+                }
+                Instr::TableFill(_) => {
+                    found = true;
+                }
+                Instr::TableCopy { .. } => {
+                    found = true;
+                }
+                Instr::TableInit(_, _) => {
+                    found = true;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(AnalysedExpr {
+            contains_table_manipulation: found,
+        })
+    }
 }
 
 fn main() {
@@ -33,8 +71,10 @@ fn main() {
     //let mut current_module_sections: Option<Sections<'_, CoreIndexSpace>> = None;
 
     let parser = Parser::new(0);
-    let module = wasm_ast::core::Module::try_from((parser, bytes.as_slice())).unwrap();
-    println!("module: {:?}", module);
+    let component: Component<AnalysedExpr> =
+        wasm_ast::component::Component::try_from((parser, bytes.as_slice())).unwrap();
+    println!("component parsed successfully");
+    println!("component: {:?}", component);
 
     let parser = Parser::new(0);
     for payload in parser.parse_all(&bytes) {

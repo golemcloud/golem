@@ -1,6 +1,7 @@
 use crate::component::*;
+use crate::core::TryFromExprSource;
 use crate::Sections;
-use wasmparser::{ComponentStartFunction, Parser, Payload};
+use wasmparser::{Chunk, ComponentStartFunction, Parser, Payload};
 
 impl<'a> TryFrom<wasmparser::InstantiationArg<'a>> for InstantiationArg {
     type Error = String;
@@ -621,78 +622,92 @@ impl TryFrom<wasmparser::ComponentStartFunction> for ComponentStart {
     }
 }
 
-impl TryFrom<(Parser, &[u8])>
-    for Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection>
+impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])>
+    for Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<T>>
 {
     type Error = String;
 
     fn try_from(value: (Parser, &[u8])) -> Result<Self, Self::Error> {
-        let (parser, data) = value;
+        let (mut parser, data) = value;
         let mut sections = Vec::new();
-        for payload in parser.parse_all(data) {
-            let payload = payload.map_err(|e| format!("Error parsing core module: {:?}", e))?;
+        let mut remaining = data;
+        loop {
+            let payload = match parser
+                .parse(remaining, true)
+                .map_err(|e| format!("Error parsing core module: {:?}", e))?
+            {
+                Chunk::Parsed { payload, consumed } => {
+                    remaining = &remaining[consumed..];
+                    payload
+                }
+                Chunk::NeedMoreData { .. } => {
+                    return Err("Unexpected end of component binary".to_string())
+                }
+            };
             match payload {
                 Payload::Version { .. } => {}
                 Payload::TypeSection(_) => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core type section in component".to_string())
                 }
 
                 Payload::ImportSection(_) => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core import section in component".to_string())
                 }
 
                 Payload::FunctionSection(_) => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core function section in component".to_string())
                 }
 
                 Payload::TableSection(_) => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core table section in component".to_string())
                 }
 
                 Payload::MemorySection(_) => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core memory section in component".to_string())
                 }
 
                 Payload::TagSection(_) => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core tag section in component".to_string())
                 }
                 Payload::GlobalSection(_) => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core global section in component".to_string())
                 }
 
                 Payload::ExportSection(_) => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core export section in component".to_string())
                 }
 
                 Payload::StartSection { .. } => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core start section in component".to_string())
                 }
 
                 Payload::ElementSection(_) => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core element section in component".to_string())
                 }
 
                 Payload::DataCountSection { .. } => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core data count section in component".to_string())
                 }
 
                 Payload::DataSection(_) => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core data section in component".to_string())
                 }
 
                 Payload::CodeSectionStart { .. } => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core code section in component".to_string())
                 }
 
                 Payload::CodeSectionEntry(_) => {
-                    return Err("Unexpected core section in component".to_string())
+                    return Err("Unexpected core code section in component".to_string())
                 }
 
                 Payload::CustomSection(reader) => sections.push(ComponentSection::Custom(Custom {
                     name: reader.name().to_string(),
                     data: reader.data().to_vec(),
                 })),
-                Payload::End(_) => {}
+                Payload::End(_) => {
+                    break;
+                }
                 Payload::InstanceSection(reader) => {
                     for instance in reader {
                         let instance = instance.map_err(|e| {
@@ -710,11 +725,14 @@ impl TryFrom<(Parser, &[u8])>
                     }
                 }
                 Payload::ModuleSection { parser, range } => {
-                    let module: Module = (parser, &data[range]).try_into()?;
+                    let module: Module<T> = (parser, &data[range.start..range.end]).try_into()?;
+                    remaining = &remaining[(range.end - range.start)..];
                     sections.push(ComponentSection::Module(module))
                 }
                 Payload::ComponentSection { parser, range } => {
-                    let component: Component = (parser, &data[range]).try_into()?;
+                    let component: Component<T> =
+                        (parser, &data[range.start..range.end]).try_into()?;
+                    remaining = &remaining[(range.end - range.start)..];
                     sections.push(ComponentSection::Component(component))
                 }
                 Payload::ComponentInstanceSection(reader) => {
@@ -773,16 +791,20 @@ impl TryFrom<(Parser, &[u8])>
                 }
             }
         }
-        Ok(Sections::from_flat(sections))
+        if remaining.is_empty() {
+            Ok(Sections::from_flat(sections))
+        } else {
+            Err(format!("Unexpected {} trailing bytes in component", remaining.len()).to_string())
+        }
     }
 }
 
-impl TryFrom<(Parser, &[u8])> for Component {
+impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])> for Component<T> {
     type Error = String;
 
     fn try_from(value: (Parser, &[u8])) -> Result<Self, Self::Error> {
         let sections =
-            Sections::<ComponentIndexSpace, ComponentSectionType, ComponentSection>::try_from(
+            Sections::<ComponentIndexSpace, ComponentSectionType, ComponentSection<T>>::try_from(
                 value,
             )?;
         Ok(sections.into())
