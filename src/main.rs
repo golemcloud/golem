@@ -1,4 +1,7 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
+use std::rc::Rc;
 use wasm_ast::component::Component;
 use wasm_ast::core::{ExprSource, Instr, TryFromExprSource};
 use wasm_metadata::Metadata;
@@ -12,6 +15,19 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>, std::io::Error> {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
     Ok(bytes)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct IgnoredExpr {
+}
+
+impl TryFromExprSource for IgnoredExpr {
+    fn try_from<S: ExprSource>(_value: S) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        Ok(IgnoredExpr {})
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,7 +87,7 @@ fn main() {
     //let mut current_module_sections: Option<Sections<'_, CoreIndexSpace>> = None;
 
     let parser = Parser::new(0);
-    let component: Component<AnalysedExpr> =
+    let component: Component<IgnoredExpr> =
         wasm_ast::component::Component::try_from((parser, bytes.as_slice())).unwrap();
     println!("component parsed successfully");
     println!("component: {:?}", component);

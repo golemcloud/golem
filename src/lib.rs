@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
+use mappable_rc::Mrc;
 
 #[cfg(feature = "component")]
 pub mod component;
@@ -21,8 +22,8 @@ pub trait Section<IS: IndexSpace, ST: SectionType>: Debug + Clone + PartialEq {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Sections<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> {
-    sections: Vec<S>,
+pub struct Sections<IS: IndexSpace, ST: SectionType, S: Section<IS, ST> + 'static> {
+    sections: Vec<Mrc<S>>,
     phantom_is: PhantomData<IS>,
     phantom_st: PhantomData<ST>,
 }
@@ -38,7 +39,7 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
 
     pub fn from_flat(sections: Vec<S>) -> Self {
         Self {
-            sections,
+            sections: sections.into_iter().map(|s| Mrc::new(s)).collect(),
             phantom_is: PhantomData,
             phantom_st: PhantomData,
         }
@@ -47,9 +48,10 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
     pub fn from_grouped(groups: Vec<(ST, Vec<S>)>) -> Self {
         Self {
             sections: groups
-                .iter()
-                .map(|(_, sections)| sections.clone())
+                .into_iter()
+                .map(|(_, sections)| sections)
                 .flatten()
+                .map(|s| Mrc::new(s))
                 .collect(),
             phantom_is: PhantomData,
             phantom_st: PhantomData,
@@ -57,11 +59,11 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
     }
 
     pub fn add_to_beginning(&mut self, section: S) {
-        self.sections.insert(0, section);
+        self.sections.insert(0, Mrc::new(section));
     }
 
     pub fn add_to_end(&mut self, section: S) {
-        self.sections.push(section);
+        self.sections.push(Mrc::new(section));
     }
 
     pub fn add_to_first_group_start(&mut self, section: S) {
@@ -72,7 +74,7 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
             }
             i += 1;
         }
-        self.sections.insert(i, section);
+        self.sections.insert(i, Mrc::new(section));
     }
 
     pub fn add_to_last_group(&mut self, section: S) {
@@ -87,14 +89,18 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
             if i == 0 && self.sections[0].section_type() != section.section_type() {
                 self.add_to_end(section);
             } else {
-                self.sections.insert(i + 1, section);
+                self.sections.insert(i + 1, Mrc::new(section));
             }
         } else {
             self.add_to_end(section);
         }
     }
 
-    pub fn indexed(&self, index_space: IS) -> HashMap<IS::Index, S> {
+    pub fn clear_group(&mut self, section_type: &ST) {
+        self.sections.retain(|s| s.section_type() != *section_type);
+    }
+
+    pub fn indexed(&self, index_space: &IS) -> HashMap<IS::Index, Mrc<S>> {
         self.filter_by_index_space(index_space)
             .into_iter()
             .enumerate()
@@ -102,38 +108,25 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
             .collect()
     }
 
-    pub fn filter_by_index_space(&self, index_space: IS) -> Vec<S> {
+    pub fn filter_by_index_space(&self, index_space: &IS) -> Vec<Mrc<S>> {
         self.sections
             .iter()
-            .filter(|&section| section.index_space() == index_space)
+            .filter(|&section| section.index_space() == *index_space)
             .cloned()
             .collect()
     }
 
-    pub fn filter_by_section_type(&self, section_type: ST) -> Vec<S> {
+    pub fn filter_by_section_type(&self, section_type: &ST) -> Vec<Mrc<S>> {
         self.sections
             .iter()
-            .filter(|&section| section.section_type() == section_type)
+            .filter(|&section| section.section_type() == *section_type)
             .cloned()
             .collect()
-    }
-
-    pub fn map_section_by_section_type<F>(&mut self, section_type: ST, mut f: F)
-    where
-        F: FnMut(&mut S),
-    {
-        for section in self
-            .sections
-            .iter_mut()
-            .filter(|section| section.section_type() == section_type)
-        {
-            f(section);
-        }
     }
 
     pub fn move_to_end(&mut self, section: S) {
-        self.sections.retain(|s| *s != section);
-        self.sections.push(section);
+        self.sections.retain(|s| **s != section);
+        self.sections.push(Mrc::new(section));
     }
 
     pub fn replace(&mut self, index_space: IS, idx: IS::Index, section: S) {
@@ -148,10 +141,10 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
             }
             i += 1;
         }
-        self.sections[i] = section;
+        self.sections[i] = Mrc::new(section);
     }
 
-    pub fn into_grouped(self) -> Vec<(ST, Vec<S>)> {
+    pub fn into_grouped(self) -> Vec<(ST, Vec<Mrc<S>>)> {
         if self.sections.len() == 0 {
             Vec::new()
         } else {
@@ -174,7 +167,7 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
         }
     }
 
-    pub fn take_all(&mut self) -> Vec<S> {
+    pub fn take_all(&mut self) -> Vec<Mrc<S>> {
         std::mem::replace(&mut self.sections, Vec::new())
     }
 }

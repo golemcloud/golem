@@ -23,32 +23,32 @@ impl From<&ValType> for wasm_encoder::ValType {
     }
 }
 
-impl From<FuncType> for wasm_encoder::TypeSection {
-    fn from(value: FuncType) -> Self {
+impl From<&FuncType> for wasm_encoder::TypeSection {
+    fn from(value: &FuncType) -> Self {
         let mut section = wasm_encoder::TypeSection::new();
         section.function(
-            value.input.values.into_iter().map(|v| (&v).into()),
-            value.output.values.into_iter().map(|v| (&v).into()),
+            value.input.values.iter().map(|v| v.into()),
+            value.output.values.iter().map(|v| v.into()),
         );
         section
     }
 }
 
-impl From<FuncTypeRef> for wasm_encoder::FunctionSection {
-    fn from(value: FuncTypeRef) -> Self {
+impl From<&FuncTypeRef> for wasm_encoder::FunctionSection {
+    fn from(value: &FuncTypeRef) -> Self {
         let mut section = wasm_encoder::FunctionSection::new();
         section.function(value.type_idx);
         section
     }
 }
 
-impl<T: ExprSink> From<FuncCode<T>> for wasm_encoder::CodeSection {
-    fn from(value: FuncCode<T>) -> Self {
+impl<T: ExprSink> From<&FuncCode<T>> for wasm_encoder::CodeSection {
+    fn from(value: &FuncCode<T>) -> Self {
         let mut function = wasm_encoder::Function::new_with_locals_types(
-            value.locals.into_iter().map(|v| (&v).into()),
+            value.locals.iter().map(|v| v.into()),
         );
         let body = Expr {
-            instrs: value.body.into_iter().collect(),
+            instrs: value.body.iter().collect(),
         };
         encode_expr(&body, &mut function);
 
@@ -97,8 +97,8 @@ impl From<&TableType> for wasm_encoder::TableType {
     }
 }
 
-impl From<Table> for wasm_encoder::TableSection {
-    fn from(value: Table) -> Self {
+impl From<&Table> for wasm_encoder::TableSection {
+    fn from(value: &Table) -> Self {
         let mut section = wasm_encoder::TableSection::new();
         section.table((&value.table_type).into());
         section
@@ -116,8 +116,8 @@ impl From<&MemType> for wasm_encoder::MemoryType {
     }
 }
 
-impl From<Mem> for wasm_encoder::MemorySection {
-    fn from(value: Mem) -> Self {
+impl From<&Mem> for wasm_encoder::MemorySection {
+    fn from(value: &Mem) -> Self {
         let mut section = wasm_encoder::MemorySection::new();
         section.memory((&value.mem_type).into());
         section
@@ -157,8 +157,8 @@ impl From<&GlobalType> for wasm_encoder::GlobalType {
     }
 }
 
-impl From<Global> for wasm_encoder::GlobalSection {
-    fn from(value: Global) -> Self {
+impl From<&Global> for wasm_encoder::GlobalSection {
+    fn from(value: &Global) -> Self {
         let mut section = wasm_encoder::GlobalSection::new();
         section.global(
             (&value.global_type).into(),
@@ -168,16 +168,15 @@ impl From<Global> for wasm_encoder::GlobalSection {
     }
 }
 
-impl<T: ExprSink> From<Elem<T>> for wasm_encoder::ElementSection {
-    fn from(value: Elem<T>) -> Self {
+impl<T: ExprSink> From<&Elem<T>> for wasm_encoder::ElementSection {
+    fn from(value: &Elem<T>) -> Self {
         let mut section = wasm_encoder::ElementSection::new();
         match value.ref_type {
             RefType::FuncRef => {
                 let func_indices: Vec<u32> = value
                     .init
-                    .into_iter()
-                    .map(|expr| expr.into_iter())
-                    .flatten()
+                    .iter()
+                    .flat_map(|expr| expr.iter())
                     .filter_map(|instr| match instr {
                         Instr::RefFunc(func_idx) => Some(func_idx),
                         _ => None,
@@ -201,9 +200,9 @@ impl<T: ExprSink> From<Elem<T>> for wasm_encoder::ElementSection {
             RefType::ExternRef => {
                 let init: Vec<wasm_encoder::ConstExpr> = value
                     .init
-                    .into_iter()
+                    .iter()
                     .map(|expr| {
-                        let instrs = expr.into_iter().collect();
+                        let instrs = expr.iter().collect();
                         (&Expr { instrs }).try_into().unwrap()
                     })
                     .collect(); // TODO: propagate failure
@@ -228,24 +227,24 @@ impl<T: ExprSink> From<Elem<T>> for wasm_encoder::ElementSection {
     }
 }
 
-impl<T: ExprSink> From<Data<T>> for wasm_encoder::DataSection {
-    fn from(value: Data<T>) -> Self {
+impl<T: ExprSink> From<&Data<T>> for wasm_encoder::DataSection {
+    fn from(value: &Data<T>) -> Self {
         let mut section = wasm_encoder::DataSection::new();
-        match value.mode {
-            DataMode::Passive => section.passive(value.init),
+        match &value.mode {
+            DataMode::Passive => section.passive(value.init.clone()),
             DataMode::Active { memory, offset } => {
                 let offset = Expr {
-                    instrs: offset.into_iter().collect(),
+                    instrs: offset.iter().collect(),
                 };
-                section.active(memory, &(&offset).try_into().unwrap(), value.init)
+                section.active(*memory, &(&offset).try_into().unwrap(), value.init.clone())
             } // TODO: propagate failure
         };
         section
     }
 }
 
-impl From<Export> for wasm_encoder::ExportSection {
-    fn from(value: Export) -> Self {
+impl From<&Export> for wasm_encoder::ExportSection {
+    fn from(value: &Export) -> Self {
         let mut section = wasm_encoder::ExportSection::new();
         let (kind, index) = match value.desc {
             ExportDesc::Func(func_idx) => (wasm_encoder::ExportKind::Func, func_idx),
@@ -258,25 +257,25 @@ impl From<Export> for wasm_encoder::ExportSection {
     }
 }
 
-impl From<Import> for wasm_encoder::ImportSection {
-    fn from(value: Import) -> Self {
+impl From<&Import> for wasm_encoder::ImportSection {
+    fn from(value: &Import) -> Self {
         let mut section = wasm_encoder::ImportSection::new();
-        let entity_type = match value.desc {
-            TypeRef::Func(type_idx) => wasm_encoder::EntityType::Function(type_idx),
-            TypeRef::Table(table_type) => wasm_encoder::EntityType::Table((&table_type).into()),
-            TypeRef::Mem(mem_type) => wasm_encoder::EntityType::Memory((&mem_type).into()),
-            TypeRef::Global(global_type) => wasm_encoder::EntityType::Global((&global_type).into()),
+        let entity_type = match &value.desc {
+            TypeRef::Func(type_idx) => wasm_encoder::EntityType::Function(*type_idx),
+            TypeRef::Table(table_type) => wasm_encoder::EntityType::Table(table_type.into()),
+            TypeRef::Mem(mem_type) => wasm_encoder::EntityType::Memory(mem_type.into()),
+            TypeRef::Global(global_type) => wasm_encoder::EntityType::Global(global_type.into()),
         };
         section.import(&value.module, &value.name, entity_type);
         section
     }
 }
 
-impl<'a> From<Custom> for wasm_encoder::CustomSection<'a> {
-    fn from(value: Custom) -> Self {
+impl<'a> From<&Custom> for wasm_encoder::CustomSection<'a> {
+    fn from(value: &Custom) -> Self {
         wasm_encoder::CustomSection {
-            name: Cow::from(value.name),
-            data: Cow::from(value.data),
+            name: value.name.clone().into(),
+            data: value.data.clone().into()
         }
     }
 }
@@ -287,7 +286,7 @@ impl<T: ExprSink + Debug + Clone + PartialEq> From<Module<T>> for wasm_encoder::
 
         // TODO: use groups
         for section in value.into_sections() {
-            match section {
+            match &*section {
                 CoreSection::Type(func_type) => {
                     let section: wasm_encoder::TypeSection = func_type.into();
                     module.section(&section);

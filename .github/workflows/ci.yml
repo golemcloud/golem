@@ -30,7 +30,7 @@ jobs:
         toolchain: stable
         override: true
     - name: Check formatting
-      run: cargo +nightly fmt -- --check
+      run: cargo fmt -- --check
     - name: Clippy
       run: cargo clippy -- -Dwarnings      
     - name: Tests

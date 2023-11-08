@@ -9,7 +9,7 @@ pub mod parser;
 pub mod writer;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ComponentSection<Expr: Debug + Clone + PartialEq> {
+pub enum ComponentSection<Expr: Debug + Clone + PartialEq + 'static> {
     Module(Module<Expr>),
     CoreInstance(Instance),
     CoreType(CoreType),
@@ -25,7 +25,7 @@ pub enum ComponentSection<Expr: Debug + Clone + PartialEq> {
 }
 
 impl<Expr: Debug + Clone + PartialEq> Section<ComponentIndexSpace, ComponentSectionType>
-    for ComponentSection<Expr>
+for ComponentSection<Expr>
 {
     fn index_space(&self) -> ComponentIndexSpace {
         match self {
@@ -609,7 +609,7 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for Custom {
     }
 }
 
-struct ComponentInner<Expr: Debug + Clone + PartialEq> {
+struct ComponentInner<Expr: Debug + Clone + PartialEq + 'static> {
     sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
 }
 
@@ -634,13 +634,13 @@ impl<Expr: Debug + Clone + PartialEq> PartialEq for ComponentInner<Expr> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Component<Expr: Debug + Clone + PartialEq> {
+pub struct Component<Expr: Debug + Clone + PartialEq + 'static> {
     inner: Arc<Mutex<ComponentInner<Expr>>>,
 }
 
 impl<Expr: Debug + Clone + PartialEq>
-    From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>>
-    for Component<Expr>
+From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>>
+for Component<Expr>
 {
     fn from(
         value: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
@@ -660,7 +660,7 @@ impl<Expr: Debug + Clone + PartialEq> PartialEq for Component<Expr> {
 }
 
 impl<Expr: Debug + Clone + PartialEq> Section<ComponentIndexSpace, ComponentSectionType>
-    for Component<Expr>
+for Component<Expr>
 {
     fn index_space(&self) -> ComponentIndexSpace {
         ComponentIndexSpace::Component

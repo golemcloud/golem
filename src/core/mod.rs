@@ -1,7 +1,9 @@
+use std::cell::RefCell;
 use crate::{IndexSpace, Section, SectionType, Sections};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex};
+use std::marker::PhantomData;
+use mappable_rc::Mrc;
 
 #[cfg(feature = "parser")]
 pub mod parser;
@@ -18,6 +20,8 @@ pub type LocalIdx = u32;
 pub type MemIdx = u32;
 pub type TableIdx = u32;
 pub type TypeIdx = u32;
+
+// TODO: Make Data and Custom generic too
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoreSection<Expr> {
@@ -36,8 +40,101 @@ pub enum CoreSection<Expr> {
     Custom(Custom),
 }
 
+impl<Expr> CoreSection<Expr> {
+    pub(crate) fn as_type(&self) -> &FuncType {
+        match self {
+            CoreSection::Type(ty) => ty,
+            _ => panic!("Expected type section"),
+        }
+    }
+
+    pub(crate) fn as_func(&self) -> &FuncTypeRef {
+        match self {
+            CoreSection::Func(func) => func,
+            _ => panic!("Expected func section"),
+        }
+    }
+
+    pub(crate) fn as_code(&self) -> &FuncCode<Expr> {
+        match self {
+            CoreSection::Code(code) => code,
+            _ => panic!("Expected code section"),
+        }
+    }
+
+    pub(crate) fn as_table(&self) -> &Table {
+        match self {
+            CoreSection::Table(table) => table,
+            _ => panic!("Expected table section"),
+        }
+    }
+
+    pub(crate) fn as_mem(&self) -> &Mem {
+        match self {
+            CoreSection::Mem(mem) => mem,
+            _ => panic!("Expected mem section"),
+        }
+    }
+
+    pub(crate) fn as_global(&self) -> &Global {
+        match self {
+            CoreSection::Global(global) => global,
+            _ => panic!("Expected global section"),
+        }
+    }
+
+    pub(crate) fn as_elem(&self) -> &Elem<Expr> {
+        match self {
+            CoreSection::Elem(elem) => elem,
+            _ => panic!("Expected elem section"),
+        }
+    }
+
+    pub(crate) fn as_data(&self) -> &Data<Expr> {
+        match self {
+            CoreSection::Data(data) => data,
+            _ => panic!("Expected data section"),
+        }
+    }
+
+    pub(crate) fn as_data_count(&self) -> &DataCount {
+        match self {
+            CoreSection::DataCount(data_count) => data_count,
+            _ => panic!("Expected data count section"),
+        }
+    }
+
+    pub(crate) fn as_start(&self) -> &Start {
+        match self {
+            CoreSection::Start(start) => start,
+            _ => panic!("Expected start section"),
+        }
+    }
+
+    pub(crate) fn as_export(&self) -> &Export {
+        match self {
+            CoreSection::Export(export) => export,
+            _ => panic!("Expected export section"),
+        }
+    }
+
+    pub(crate) fn as_import(&self) -> &Import {
+        match self {
+            CoreSection::Import(import) => import,
+            _ => panic!("Expected import section"),
+        }
+    }
+
+    pub(crate) fn as_custom(&self) -> &Custom {
+        match self {
+            CoreSection::Custom(custom) => custom,
+            _ => panic!("Expected custom section"),
+        }
+    }
+}
+
 impl<Expr: Debug + Clone + PartialEq> Section<CoreIndexSpace, CoreSectionType>
-    for CoreSection<Expr>
+for CoreSection<Expr>
 {
     fn index_space(&self) -> CoreIndexSpace {
         match self {
@@ -321,10 +418,19 @@ impl<Expr: Debug + Clone + PartialEq> Section<CoreIndexSpace, CoreSectionType> f
 /// type.
 /// /
 #[derive(Debug, Clone, PartialEq)]
-pub struct Func<Expr> {
+pub struct Func<Expr: 'static> {
     pub type_idx: TypeIdx,
-    pub locals: Vec<ValType>,
-    pub body: Expr,
+    code: Mrc<FuncCode<Expr>>,
+}
+
+impl<Expr: 'static> Func<Expr> {
+    pub fn locals(&self) -> Mrc<Vec<ValType>> {
+        Mrc::map(self.code.clone(), |code| &code.locals)
+    }
+
+    pub fn body(&self) -> Mrc<Expr> {
+        Mrc::map(self.code.clone(), |code| &code.body)
+    }
 }
 
 /// The tables component of a module defines a vector of tables described by their table type:
@@ -590,16 +696,18 @@ pub struct Expr {
     pub instrs: Vec<Instr>,
 }
 
-pub trait ExprSource: IntoIterator<Item = Result<Instr, String>> {
+pub trait ExprSource: IntoIterator<Item=Result<Instr, String>> {
     fn unparsed(self) -> Result<Vec<u8>, String>;
 }
 
-pub trait ExprSink: IntoIterator<Item = Instr> {}
+pub trait ExprSink {
+    fn iter(&self) -> Box<dyn Iterator<Item=Instr>>;
+}
 
 pub trait TryFromExprSource {
     fn try_from<S: ExprSource>(value: S) -> Result<Self, String>
-    where
-        Self: Sized;
+        where
+            Self: Sized;
 }
 
 impl TryFromExprSource for Expr {
@@ -943,131 +1051,329 @@ pub enum Instr {
 }
 
 #[derive(Debug, Clone)]
-pub enum ImportOrFunc<Expr> {
-    Import(Import),
+pub enum ImportOrFunc<Expr: 'static> {
+    Import(Mrc<Import>),
     Func(Func<Expr>),
 }
 
-struct ModuleInner<Expr: Debug + Clone + PartialEq> {
-    sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>,
-
-    types: Option<Vec<FuncType>>,
-    funcs: Option<Vec<Func<Expr>>>,
-    tables: Option<Vec<Table>>,
-    mems: Option<Vec<Mem>>,
-    globals: Option<Vec<Global>>,
-    elems: Option<Vec<Elem<Expr>>>,
-    datas: Option<Vec<Data<Expr>>>,
-    start: Option<Start>,
-    imports: Option<Vec<Import>>,
-    exports: Option<Vec<Export>>,
-    customs: Option<Vec<Custom>>,
-
-    type_index: Option<HashMap<u32, CoreSection<Expr>>>,
-    func_index: Option<HashMap<u32, CoreSection<Expr>>>,
-    code_index: Option<HashMap<u32, CoreSection<Expr>>>,
-    table_index: Option<HashMap<u32, CoreSection<Expr>>>,
-    mem_index: Option<HashMap<u32, CoreSection<Expr>>>,
-    global_index: Option<HashMap<u32, CoreSection<Expr>>>,
-    elem_index: Option<HashMap<u32, CoreSection<Expr>>>,
-    data_index: Option<HashMap<u32, CoreSection<Expr>>>,
-    export_index: Option<HashMap<u32, CoreSection<Expr>>>,
-    import_index: Option<HashMap<u32, CoreSection<Expr>>>,
-    custom_index: Option<HashMap<u32, CoreSection<Expr>>>,
+struct SectionCache<T: 'static, IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> {
+    cell: RefCell<Option<Vec<Mrc<T>>>>,
+    section_type: ST,
+    get: fn(&S) -> &T,
+    index_space: PhantomData<IS>,
 }
 
-impl<Expr: Debug + Clone + PartialEq> ModuleInner<Expr> {
-    pub fn new(sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>) -> Self {
+type CoreSectionCache<T, Expr> = SectionCache<T, CoreIndexSpace, CoreSectionType, CoreSection<Expr>>;
+
+impl<T, IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> SectionCache<T, IS, ST, S> {
+    // TODO: helper macro
+    pub fn new(section_type: ST, get: fn(&S) -> &T) -> Self {
         Self {
-            sections,
-            types: None,
-            funcs: None,
-            tables: None,
-            mems: None,
-            globals: None,
-            elems: None,
-            datas: None,
-            start: None,
-            imports: None,
-            exports: None,
-            customs: None,
-            type_index: None,
-            func_index: None,
-            code_index: None,
-            table_index: None,
-            mem_index: None,
-            global_index: None,
-            elem_index: None,
-            data_index: None,
-            export_index: None,
-            import_index: None,
-            custom_index: None,
+            cell: RefCell::new(None),
+            section_type,
+            get,
+            index_space: PhantomData,
         }
     }
 
-    pub fn types(&mut self) -> Vec<FuncType> {
-        self.ensure_types();
-        self.types.clone().unwrap()
+    pub fn count(&self) -> usize {
+        self.cell.borrow().as_ref().map_or(0, |sections| sections.len())
     }
-    pub fn funcs(&mut self) -> Vec<Func<Expr>> {
-        self.ensure_funcs();
-        self.funcs.clone().unwrap()
+
+    pub fn invalidate(&self) {
+        self.cell.replace(None);
     }
-    pub fn tables(&mut self) -> Vec<Table> {
-        self.ensure_tables();
-        self.tables.clone().unwrap()
+
+    pub fn all(&self) -> Vec<Mrc<T>> {
+        self.cell.borrow().as_ref().map_or_else(Vec::new, |sections| sections.clone())
     }
-    pub fn mems(&mut self) -> Vec<Mem> {
-        self.ensure_mems();
-        self.mems.clone().unwrap()
+
+    pub fn populate(&self, sections: &Sections<IS, ST, S>) {
+        let mut cell = self.cell.borrow_mut();
+        match cell.take() {
+            Some(inner) => {
+                *cell = Some(inner);
+            }
+            None => {
+                let inner = sections
+                    .filter_by_section_type(&self.section_type)
+                    .into_iter()
+                    .map(|section| Mrc::map(section, self.get))
+                    .collect();
+                *cell = Some(inner);
+            }
+        }
     }
-    pub fn globals(&mut self) -> Vec<Global> {
-        self.ensure_globals();
-        self.globals.clone().unwrap()
+
+    //     fn ensure_datas(&mut self) {
+    //         if self.datas.is_none() {
+    //             self.datas = Some(
+    //                 self.sections
+    //                     .filter_by_section_type(CoreSectionType::Data)
+    //                     .into_iter()
+    //                     .map(|section| {
+    //                         if let CoreSection::Data(data) = section {
+    //                             data
+    //                         } else {
+    //                             unreachable!()
+    //                         }
+    //                     })
+    //                     .collect(),
+    //             );
+    //         }
+    //     }
+}
+
+
+#[derive(Clone)]
+struct SectionIndex<IS: IndexSpace, ST: SectionType, S: Section<IS, ST> + 'static> {
+    cell: RefCell<Option<HashMap<IS::Index, Mrc<S>>>>,
+    index_space: IS,
+    section_type: PhantomData<ST>,
+}
+
+type CoreSectionIndex<Expr> = SectionIndex<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>;
+
+impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> SectionIndex<IS, ST, S> {
+    pub fn new(index_space: IS) -> Self {
+        Self {
+            cell: RefCell::new(None),
+            index_space,
+            section_type: PhantomData,
+        }
     }
-    pub fn elems(&mut self) -> Vec<Elem<Expr>> {
-        self.ensure_elems();
-        self.elems.clone().unwrap()
+
+    pub fn count(&self) -> usize {
+        self.cell.borrow().as_ref().map_or(0, |sections| sections.len())
     }
-    pub fn datas(&mut self) -> Vec<Data<Expr>> {
-        self.ensure_datas();
-        self.datas.clone().unwrap()
+
+    pub fn get(&self, index: &IS::Index) -> Option<Mrc<S>> {
+        self.cell.borrow().as_ref().and_then(|sections| sections.get(index).cloned())
     }
-    pub fn start(&mut self) -> Option<Start> {
-        self.ensure_start();
-        self.start.clone()
+
+    pub fn invalidate(&self) {
+        self.cell.replace(None);
     }
-    pub fn imports(&mut self) -> Vec<Import> {
-        self.ensure_imports();
-        self.imports.clone().unwrap()
+
+    pub fn populate(&self, sections: &Sections<IS, ST, S>) {
+        let mut cell = self.cell.borrow_mut();
+        match cell.take() {
+            Some(inner) => {
+                *cell = Some(inner);
+            }
+            None => {
+                let inner = sections.indexed(&self.index_space);
+                *cell = Some(inner);
+            }
+        }
     }
-    pub fn exports(&mut self) -> Vec<Export> {
-        self.ensure_exports();
-        self.exports.clone().unwrap()
+}
+
+pub struct Module<Expr: Debug + Clone + PartialEq + 'static> {
+    sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>,
+
+    types: CoreSectionCache<FuncType, Expr>,
+    func_type_refs: CoreSectionCache<FuncTypeRef, Expr>,
+    codes: CoreSectionCache<FuncCode<Expr>, Expr>,
+    tables: CoreSectionCache<Table, Expr>,
+    mems: CoreSectionCache<Mem, Expr>,
+    globals: CoreSectionCache<Global, Expr>,
+    elems: CoreSectionCache<Elem<Expr>, Expr>,
+    datas: CoreSectionCache<Data<Expr>, Expr>,
+    start: CoreSectionCache<Start, Expr>,
+    imports: CoreSectionCache<Import, Expr>,
+    exports: CoreSectionCache<Export, Expr>,
+    customs: CoreSectionCache<Custom, Expr>,
+
+    type_index: CoreSectionIndex<Expr>,
+    func_index: CoreSectionIndex<Expr>,
+    code_index: CoreSectionIndex<Expr>,
+    table_index: CoreSectionIndex<Expr>,
+    mem_index: CoreSectionIndex<Expr>,
+    global_index: CoreSectionIndex<Expr>,
+    elem_index: CoreSectionIndex<Expr>,
+    data_index: CoreSectionIndex<Expr>,
+    export_index: CoreSectionIndex<Expr>,
+}
+
+impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
+    pub fn new(sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>) -> Self {
+        Self {
+            sections,
+            types: SectionCache::new(CoreSectionType::Type, |section| {
+                if let CoreSection::Type(func_type) = section {
+                    func_type
+                } else {
+                    unreachable!()
+                }
+            }),
+            func_type_refs: SectionCache::new(CoreSectionType::Func, |section| {
+                if let CoreSection::Func(func_type_ref) = section {
+                    func_type_ref
+                } else {
+                    unreachable!()
+                }
+            }),
+            codes: SectionCache::new(CoreSectionType::Code, |section| {
+                if let CoreSection::Code(code) = section {
+                    code
+                } else {
+                    unreachable!()
+                }
+            }),
+            tables: SectionCache::new(CoreSectionType::Table, |section| {
+                if let CoreSection::Table(table) = section {
+                    table
+                } else {
+                    unreachable!()
+                }
+            }),
+            mems: SectionCache::new(CoreSectionType::Mem, |section| {
+                if let CoreSection::Mem(mem) = section {
+                    mem
+                } else {
+                    unreachable!()
+                }
+            }),
+            globals: SectionCache::new(CoreSectionType::Global, |section| {
+                if let CoreSection::Global(global) = section {
+                    global
+                } else {
+                    unreachable!()
+                }
+            }),
+            elems: SectionCache::new(CoreSectionType::Elem, |section| {
+                if let CoreSection::Elem(elem) = section {
+                    elem
+                } else {
+                    unreachable!()
+                }
+            }),
+            datas: SectionCache::new(CoreSectionType::Data, |section| {
+                if let CoreSection::Data(data) = section {
+                    data
+                } else {
+                    unreachable!()
+                }
+            }),
+            start: SectionCache::new(CoreSectionType::Start, |section| {
+                if let CoreSection::Start(start) = section {
+                    start
+                } else {
+                    unreachable!()
+                }
+            }),
+            imports: SectionCache::new(CoreSectionType::Import, |section| {
+                if let CoreSection::Import(import) = section {
+                    import
+                } else {
+                    unreachable!()
+                }
+            }),
+            exports: SectionCache::new(CoreSectionType::Export, |section| {
+                if let CoreSection::Export(export) = section {
+                    export
+                } else {
+                    unreachable!()
+                }
+            }),
+            customs: SectionCache::new(CoreSectionType::Custom, |section| {
+                if let CoreSection::Custom(custom) = section {
+                    custom
+                } else {
+                    unreachable!()
+                }
+            }),
+            type_index: SectionIndex::new(CoreIndexSpace::Type),
+            func_index: SectionIndex::new(CoreIndexSpace::Func),
+            code_index: SectionIndex::new(CoreIndexSpace::Code),
+            table_index: SectionIndex::new(CoreIndexSpace::Table),
+            mem_index: SectionIndex::new(CoreIndexSpace::Mem),
+            global_index: SectionIndex::new(CoreIndexSpace::Global),
+            elem_index: SectionIndex::new(CoreIndexSpace::Elem),
+            data_index: SectionIndex::new(CoreIndexSpace::Data),
+            export_index: SectionIndex::new(CoreIndexSpace::Export),
+        }
     }
-    pub fn customs(&mut self) -> Vec<Custom> {
-        self.ensure_customs();
-        self.customs.clone().unwrap()
+
+    pub fn types(&self) -> Vec<Mrc<FuncType>> {
+        self.types.populate(&self.sections);
+        self.types.all()
+    }
+    pub fn func_type_refs(&self) -> Vec<Mrc<FuncTypeRef>> {
+        self.func_type_refs.populate(&self.sections);
+        self.func_type_refs.all()
+    }
+
+    pub fn codes(&self) -> Vec<Mrc<FuncCode<Expr>>> {
+        self.codes.populate(&self.sections);
+        self.codes.all()
+    }
+
+    pub fn funcs(&self) -> Vec<Func<Expr>> {
+        self.func_type_refs()
+            .into_iter()
+            .zip(self.codes().into_iter())
+            .map(|(func_type, code)| Func {
+                type_idx: func_type.type_idx,
+                code,
+            })
+            .collect()
+    }
+
+    pub fn tables(&self) -> Vec<Mrc<Table>> {
+        self.tables.populate(&self.sections);
+        self.tables.all()
+    }
+    pub fn mems(&self) -> Vec<Mrc<Mem>> {
+        self.mems.populate(&self.sections);
+        self.mems.all()
+    }
+    pub fn globals(&self) -> Vec<Mrc<Global>> {
+        self.globals.populate(&self.sections);
+        self.globals.all()
+    }
+    pub fn elems(&self) -> Vec<Mrc<Elem<Expr>>> {
+        self.elems.populate(&self.sections);
+        self.elems.all()
+    }
+    pub fn datas(&self) -> Vec<Mrc<Data<Expr>>> {
+        self.datas.populate(&self.sections);
+        self.datas.all()
+    }
+    pub fn start(&self) -> Option<Mrc<Start>> {
+        self.start.populate(&self.sections);
+        self.start.all().pop()
+    }
+    pub fn imports(&self) -> Vec<Mrc<Import>> {
+        self.imports.populate(&self.sections);
+        self.imports.all()
+    }
+    pub fn exports(&self) -> Vec<Mrc<Export>> {
+        self.exports.populate(&self.sections);
+        self.exports.all()
+    }
+    pub fn customs(&self) -> Vec<Mrc<Custom>> {
+        self.customs.populate(&self.sections);
+        self.customs.all()
     }
 
     pub fn add_data(&mut self, data: Data<Expr>) {
-        self.invalidate();
+        self.datas.invalidate();
         self.sections.add_to_last_group(CoreSection::Data(data));
-        self.sections
-            .map_section_by_section_type(CoreSectionType::DataCount, |section| {
-                if let CoreSection::DataCount(DataCount { count }) = section {
-                    *count += 1;
-                }
-            });
+        self.datas.populate(&self.sections);
+        let count = self.datas.count();
+        self.sections.clear_group(&CoreSectionType::DataCount);
+        self.sections.add_to_last_group(CoreSection::DataCount(DataCount { count: (count + 1) as u32 }));
     }
 
     pub fn add_elem(&mut self, elem: Elem<Expr>) {
-        self.invalidate();
+        self.elems.invalidate();
         self.sections.add_to_last_group(CoreSection::Elem(elem));
     }
 
     pub fn add_export(&mut self, export: Export) {
-        self.invalidate();
+        self.exports.invalidate();
         self.sections.add_to_last_group(CoreSection::Export(export));
     }
 
@@ -1077,587 +1383,199 @@ impl<Expr: Debug + Clone + PartialEq> ModuleInner<Expr> {
         locals: Vec<ValType>,
         body: Expr,
     ) -> FuncIdx {
-        self.ensure_types();
         let existing_type_idx = self.type_idx_of(&func_type);
         let type_idx = match existing_type_idx {
             Some(idx) => idx as TypeIdx,
             None => {
-                let idx = self.types.as_ref().unwrap().len() as TypeIdx;
-                self.sections
-                    .add_to_last_group(CoreSection::Type(func_type));
+                let idx = self.types.count() as TypeIdx;
+                self.types.invalidate();
+                self.sections.add_to_last_group(CoreSection::Type(func_type));
                 idx
             }
         };
         let func_type_ref = FuncTypeRef { type_idx };
         let func_code = FuncCode { locals, body };
+        self.codes.invalidate();
+        self.func_type_refs.invalidate();
         self.sections
             .add_to_last_group(CoreSection::Func(func_type_ref));
         self.sections
             .add_to_last_group(CoreSection::Code(func_code));
-        self.invalidate();
-        self.ensure_funcs();
-        (self.funcs.as_ref().unwrap().len() as u32) - 1 as FuncIdx
+        self.func_type_refs.populate(&self.sections);
+        (self.func_type_refs.count() - 1) as FuncIdx
     }
 
     pub fn add_global(&mut self, global: Global) {
-        self.invalidate();
+        self.globals.invalidate();
         self.sections.add_to_last_group(CoreSection::Global(global));
     }
 
     pub fn add_memory(&mut self, mem: Mem) {
-        self.invalidate();
+        self.mems.invalidate();
         self.sections.add_to_last_group(CoreSection::Mem(mem));
     }
 
     pub fn add_table(&mut self, table: Table) {
-        self.invalidate();
+        self.tables.invalidate();
         self.sections.add_to_last_group(CoreSection::Table(table));
     }
 
     pub fn add_type(&mut self, func_type: FuncType) {
-        self.invalidate();
+        self.types.invalidate();
         self.sections
             .add_to_last_group(CoreSection::Type(func_type));
     }
 
-    pub fn get_code(&mut self, func_idx: FuncIdx) -> Option<FuncCode<Expr>> {
-        self.ensure_code_index();
-        match self.code_index.as_ref().unwrap().get(&func_idx) {
-            Some(CoreSection::Code(code)) => Some(code.clone()),
+    pub fn get_code(&mut self, func_idx: FuncIdx) -> Option<Mrc<FuncCode<Expr>>> {
+        self.code_index.populate(&self.sections);
+        match self.code_index.get(&func_idx) {
+            Some(section) =>
+                match &*section {
+                    CoreSection::Code(_) => Some(Mrc::map(section, |section| section.as_code())),
+                    _ => None,
+                }
+            None => None,
+        }
+    }
+
+    pub fn get_data(&mut self, data_idx: DataIdx) -> Option<Mrc<Data<Expr>>> {
+        self.data_index.populate(&self.sections);
+        match self.data_index.get(&data_idx) {
+            Some(section) =>
+                match &*section {
+                    CoreSection::Data(_) => Some(Mrc::map(section, |section| section.as_data())),
+                    _ => None,
+                }
             _ => None,
         }
     }
 
-    pub fn get_data(&mut self, data_idx: DataIdx) -> Option<Data<Expr>> {
-        self.ensure_data_index();
-        match self.data_index.as_ref().unwrap().get(&data_idx) {
-            Some(CoreSection::Data(data)) => Some(data.clone()),
+    pub fn get_elem(&mut self, elem_idx: ElemIdx) -> Option<Mrc<Elem<Expr>>> {
+        self.elem_index.populate(&self.sections);
+        match self.elem_index.get(&elem_idx) {
+            Some(section) =>
+                match &*section {
+                    CoreSection::Elem(_) => Some(Mrc::map(section, |section| section.as_elem())),
+                    _ => None,
+                }
             _ => None,
         }
     }
 
-    pub fn get_elem(&mut self, elem_idx: ElemIdx) -> Option<Elem<Expr>> {
-        self.ensure_elem_index();
-        match self.elem_index.as_ref().unwrap().get(&elem_idx) {
-            Some(CoreSection::Elem(elem)) => Some(elem.clone()),
-            _ => None,
-        }
-    }
-
-    pub fn get_export(&mut self, export_idx: ExportIdx) -> Option<Export> {
-        self.ensure_export_index();
-        match self.export_index.as_ref().unwrap().get(&export_idx) {
-            Some(CoreSection::Export(export)) => Some(export.clone()),
+    pub fn get_export(&mut self, export_idx: ExportIdx) -> Option<Mrc<Export>> {
+        self.export_index.populate(&self.sections);
+        match self.export_index.get(&export_idx) {
+            Some(section) =>
+                match &*section {
+                    CoreSection::Export(_) => Some(Mrc::map(section, |section| section.as_export())),
+                    _ => None,
+                }
             _ => None,
         }
     }
 
     pub fn get_function(&mut self, func_idx: FuncIdx) -> Option<ImportOrFunc<Expr>> {
-        self.ensure_func_index();
-        match self.func_index.as_ref().unwrap().get(&func_idx) {
-            Some(CoreSection::Func(FuncTypeRef { type_idx })) => {
-                let type_idx = *type_idx;
-                let code = self.get_code(func_idx).unwrap();
-                Some(ImportOrFunc::Func(Func {
-                    type_idx,
-                    locals: code.locals.clone(),
-                    body: code.body.clone(),
-                }))
-            }
-            Some(CoreSection::Import(import)) => Some(ImportOrFunc::Import(import.clone())),
+        self.func_index.populate(&self.sections);
+        match self.func_index.get(&func_idx) {
+            Some(section) =>
+                match &*section {
+                    CoreSection::Func(_) => {
+                        let code = self.get_code(func_idx).unwrap();
+                        let func_type_ref = section.as_func();
+                        let func = Func {
+                            type_idx: func_type_ref.type_idx,
+                            code,
+                        };
+                        Some(ImportOrFunc::Func(func))
+                    }
+                    CoreSection::Import(_) => {
+                        Some(ImportOrFunc::Import(Mrc::map(section, |section| section.as_import())))
+                    }
+                    _ => None,
+                }
             _ => None,
         }
     }
 
-    pub fn get_global(&mut self, global_idx: GlobalIdx) -> Option<Global> {
-        self.ensure_global_index();
-        match self.global_index.as_ref().unwrap().get(&global_idx) {
-            Some(CoreSection::Global(global)) => Some(global.clone()),
+    pub fn get_global(&mut self, global_idx: GlobalIdx) -> Option<Mrc<Global>> {
+        self.global_index.populate(&self.sections);
+        match self.global_index.get(&global_idx) {
+            Some(section) =>
+                match &*section {
+                    CoreSection::Global(_) => Some(Mrc::map(section, |section| section.as_global())),
+                    _ => None,
+                }
             _ => None,
         }
     }
 
-    pub fn get_memory(&mut self, mem_idx: MemIdx) -> Option<Mem> {
-        self.ensure_mem_index();
-        match self.mem_index.as_ref().unwrap().get(&mem_idx) {
-            Some(CoreSection::Mem(mem)) => Some(mem.clone()),
+    pub fn get_memory(&mut self, mem_idx: MemIdx) -> Option<Mrc<Mem>> {
+        self.mem_index.populate(&self.sections);
+        match self.mem_index.get(&mem_idx) {
+            Some(section) =>
+                match &*section {
+                    CoreSection::Mem(_) => Some(Mrc::map(section, |section| section.as_mem())),
+                    _ => None,
+                }
             _ => None,
         }
     }
 
-    pub fn get_table(&mut self, table_idx: TableIdx) -> Option<Table> {
-        self.ensure_table_index();
-        match self.table_index.as_ref().unwrap().get(&table_idx) {
-            Some(CoreSection::Table(table)) => Some(table.clone()),
+    pub fn get_table(&mut self, table_idx: TableIdx) -> Option<Mrc<Table>> {
+        self.table_index.populate(&self.sections);
+        match self.table_index.get(&table_idx) {
+            Some(section) =>
+                match &*section {
+                    CoreSection::Table(_) => Some(Mrc::map(section, |section| section.as_table())),
+                    _ => None,
+                }
             _ => None,
         }
     }
 
     pub fn type_idx_of(&self, func_type: &FuncType) -> Option<TypeIdx> {
+        self.types.populate(&self.sections);
         self.types
-            .as_ref()
-            .unwrap()
-            .iter()
-            .position(|ft| ft == func_type)
+            .all()
+            .into_iter()
+            .position(|ft| *ft == *func_type)
             .map(|idx| idx as TypeIdx)
     }
 
-    fn ensure_code_index(&mut self) {
-        if self.code_index.is_none() {
-            self.code_index = Some(self.sections.indexed(CoreIndexSpace::Code));
-        }
-    }
-
-    fn ensure_customs(&mut self) {
-        if self.customs.is_none() {
-            self.customs = Some(
-                self.sections
-                    .filter_by_section_type(CoreSectionType::Custom)
-                    .into_iter()
-                    .map(|section| {
-                        if let CoreSection::Custom(custom) = section {
-                            custom
-                        } else {
-                            unreachable!()
-                        }
-                    })
-                    .collect(),
-            );
-        }
-    }
-
-    fn ensure_data_index(&mut self) {
-        if self.data_index.is_none() {
-            self.data_index = Some(self.sections.indexed(CoreIndexSpace::Data));
-        }
-    }
-
-    fn ensure_datas(&mut self) {
-        if self.datas.is_none() {
-            self.datas = Some(
-                self.sections
-                    .filter_by_section_type(CoreSectionType::Data)
-                    .into_iter()
-                    .map(|section| {
-                        if let CoreSection::Data(data) = section {
-                            data
-                        } else {
-                            unreachable!()
-                        }
-                    })
-                    .collect(),
-            );
-        }
-    }
-
-    fn ensure_elem_index(&mut self) {
-        if self.elem_index.is_none() {
-            self.elem_index = Some(self.sections.indexed(CoreIndexSpace::Elem));
-        }
-    }
-
-    fn ensure_elems(&mut self) {
-        if self.elems.is_none() {
-            self.elems = Some(
-                self.sections
-                    .filter_by_section_type(CoreSectionType::Elem)
-                    .into_iter()
-                    .map(|section| {
-                        if let CoreSection::Elem(elem) = section {
-                            elem
-                        } else {
-                            unreachable!()
-                        }
-                    })
-                    .collect(),
-            );
-        }
-    }
-
-    fn ensure_export_index(&mut self) {
-        if self.export_index.is_none() {
-            self.export_index = Some(self.sections.indexed(CoreIndexSpace::Export));
-        }
-    }
-
-    fn ensure_exports(&mut self) {
-        if self.exports.is_none() {
-            self.exports = Some(
-                self.sections
-                    .filter_by_section_type(CoreSectionType::Export)
-                    .into_iter()
-                    .map(|section| {
-                        if let CoreSection::Export(export) = section {
-                            export
-                        } else {
-                            unreachable!()
-                        }
-                    })
-                    .collect(),
-            );
-        }
-    }
-
-    fn ensure_func_index(&mut self) {
-        if self.func_index.is_none() {
-            self.func_index = Some(self.sections.indexed(CoreIndexSpace::Func));
-        }
-    }
-
-    fn ensure_funcs(&mut self) {
-        if self.funcs.is_none() {
-            let func_types = self.sections.filter_by_section_type(CoreSectionType::Func);
-            let codes = self.sections.filter_by_section_type(CoreSectionType::Code);
-
-            self.funcs = Some(
-                func_types
-                    .into_iter()
-                    .zip(codes.into_iter())
-                    .map(|(func_type, code)| match (func_type, code) {
-                        (CoreSection::Func(func_type), CoreSection::Code(code)) => Func {
-                            type_idx: func_type.type_idx,
-                            locals: code.locals,
-                            body: code.body,
-                        },
-                        _ => unreachable!(),
-                    })
-                    .collect(),
-            );
-        }
-    }
-
-    fn ensure_global_index(&mut self) {
-        if self.global_index.is_none() {
-            self.global_index = Some(self.sections.indexed(CoreIndexSpace::Global));
-        }
-    }
-
-    fn ensure_globals(&mut self) {
-        if self.globals.is_none() {
-            self.globals = Some(
-                self.sections
-                    .filter_by_section_type(CoreSectionType::Global)
-                    .into_iter()
-                    .map(|section| {
-                        if let CoreSection::Global(global) = section {
-                            global
-                        } else {
-                            unreachable!()
-                        }
-                    })
-                    .collect(),
-            );
-        }
-    }
-
-    fn ensure_imports(&mut self) {
-        if self.imports.is_none() {
-            self.imports = Some(
-                self.sections
-                    .filter_by_section_type(CoreSectionType::Import)
-                    .into_iter()
-                    .map(|section| {
-                        if let CoreSection::Import(import) = section {
-                            import
-                        } else {
-                            unreachable!()
-                        }
-                    })
-                    .collect(),
-            );
-        }
-    }
-
-    fn ensure_mem_index(&mut self) {
-        if self.mem_index.is_none() {
-            self.mem_index = Some(self.sections.indexed(CoreIndexSpace::Mem));
-        }
-    }
-
-    fn ensure_mems(&mut self) {
-        if self.mems.is_none() {
-            self.mems = Some(
-                self.sections
-                    .filter_by_section_type(CoreSectionType::Mem)
-                    .into_iter()
-                    .map(|section| {
-                        if let CoreSection::Mem(mem) = section {
-                            mem
-                        } else {
-                            unreachable!()
-                        }
-                    })
-                    .collect(),
-            );
-        }
-    }
-
-    fn ensure_start(&mut self) {
-        if self.start.is_none() {
-            self.start = self
-                .sections
-                .filter_by_section_type(CoreSectionType::Start)
-                .into_iter()
-                .next()
-                .map(|section| {
-                    if let CoreSection::Start(start) = section {
-                        start
-                    } else {
-                        unreachable!()
-                    }
-                });
-        }
-    }
-
-    fn ensure_table_index(&mut self) {
-        if self.funcs.is_none() {
-            self.table_index = Some(self.sections.indexed(CoreIndexSpace::Table));
-        }
-    }
-
-    fn ensure_tables(&mut self) {
-        if self.tables.is_none() {
-            self.tables = Some(
-                self.sections
-                    .filter_by_section_type(CoreSectionType::Table)
-                    .into_iter()
-                    .map(|section| {
-                        if let CoreSection::Table(table) = section {
-                            table
-                        } else {
-                            unreachable!()
-                        }
-                    })
-                    .collect(),
-            );
-        }
-    }
-
-    fn ensure_types(&mut self) {
-        if self.types.is_none() {
-            self.types = Some(
-                self.sections
-                    .filter_by_section_type(CoreSectionType::Type)
-                    .into_iter()
-                    .map(|section| {
-                        if let CoreSection::Type(func_type) = section {
-                            func_type
-                        } else {
-                            unreachable!()
-                        }
-                    })
-                    .collect(),
-            );
-        }
-    }
-
-    fn invalidate(&mut self) {
-        self.types = None;
-        self.funcs = None;
-        self.tables = None;
-        self.mems = None;
-        self.globals = None;
-        self.elems = None;
-        self.datas = None;
-        self.start = None;
-        self.imports = None;
-        self.exports = None;
-        self.customs = None;
-        self.type_index = None;
-        self.func_index = None;
-        self.code_index = None;
-        self.table_index = None;
-        self.mem_index = None;
-        self.global_index = None;
-        self.elem_index = None;
-        self.data_index = None;
-        self.export_index = None;
-        self.import_index = None;
-        self.custom_index = None;
+    pub fn into_sections(mut self) -> Vec<Mrc<CoreSection<Expr>>> {
+        self.sections.take_all()
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> Debug for ModuleInner<Expr> {
+impl<Expr: Debug + Clone + PartialEq> Debug for Module<Expr> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.sections.fmt(f)
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> PartialEq for ModuleInner<Expr> {
+impl<Expr: Debug + Clone + PartialEq> PartialEq for Module<Expr> {
     fn eq(&self, other: &Self) -> bool {
         self.sections.eq(&other.sections)
     }
 }
 
-// TODO: parametric Expr type
-#[derive(Debug, Clone)]
-pub struct Module<Expr: Debug + Clone + PartialEq> {
-    inner: Arc<Mutex<ModuleInner<Expr>>>,
-}
-
-impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(ModuleInner::new(Sections::new()))),
-        }
-    }
-
-    pub fn from_flat(sections: Vec<CoreSection<Expr>>) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(ModuleInner::new(Sections::from_flat(sections)))),
-        }
-    }
-
-    pub fn from_grouped(groups: Vec<(CoreSectionType, Vec<CoreSection<Expr>>)>) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(ModuleInner::new(Sections::from_grouped(groups)))),
-        }
-    }
-
-    pub fn types(&self) -> Vec<FuncType> {
-        self.inner.lock().unwrap().types()
-    }
-
-    pub fn funcs(&self) -> Vec<Func<Expr>> {
-        self.inner.lock().unwrap().funcs()
-    }
-
-    pub fn tables(&self) -> Vec<Table> {
-        self.inner.lock().unwrap().tables()
-    }
-
-    pub fn mems(&self) -> Vec<Mem> {
-        self.inner.lock().unwrap().mems()
-    }
-
-    pub fn globals(&self) -> Vec<Global> {
-        self.inner.lock().unwrap().globals()
-    }
-
-    pub fn elems(&self) -> Vec<Elem<Expr>> {
-        self.inner.lock().unwrap().elems()
-    }
-
-    pub fn datas(&self) -> Vec<Data<Expr>> {
-        self.inner.lock().unwrap().datas()
-    }
-
-    pub fn start(&self) -> Option<Start> {
-        self.inner.lock().unwrap().start()
-    }
-
-    pub fn imports(&self) -> Vec<Import> {
-        self.inner.lock().unwrap().imports()
-    }
-
-    pub fn exports(&self) -> Vec<Export> {
-        self.inner.lock().unwrap().exports()
-    }
-
-    pub fn customs(&self) -> Vec<Custom> {
-        self.inner.lock().unwrap().customs()
-    }
-
-    pub fn add_data(&self, data: Data<Expr>) {
-        self.inner.lock().unwrap().add_data(data);
-    }
-
-    pub fn add_elem(&self, elem: Elem<Expr>) {
-        self.inner.lock().unwrap().add_elem(elem);
-    }
-
-    pub fn add_export(&self, export: Export) {
-        self.inner.lock().unwrap().add_export(export);
-    }
-
-    pub fn add_function(&self, func_type: FuncType, locals: Vec<ValType>, body: Expr) -> FuncIdx {
-        self.inner
-            .lock()
-            .unwrap()
-            .add_function(func_type, locals, body)
-    }
-
-    pub fn add_global(&self, global: Global) {
-        self.inner.lock().unwrap().add_global(global);
-    }
-
-    pub fn add_memory(&self, mem: Mem) {
-        self.inner.lock().unwrap().add_memory(mem);
-    }
-
-    pub fn add_table(&self, table: Table) {
-        self.inner.lock().unwrap().add_table(table);
-    }
-
-    pub fn add_type(&self, func_type: FuncType) {
-        self.inner.lock().unwrap().add_type(func_type);
-    }
-
-    pub fn get_code(&self, func_idx: FuncIdx) -> Option<FuncCode<Expr>> {
-        self.inner.lock().unwrap().get_code(func_idx)
-    }
-
-    pub fn get_data(&self, data_idx: DataIdx) -> Option<Data<Expr>> {
-        self.inner.lock().unwrap().get_data(data_idx)
-    }
-
-    pub fn get_elem(&self, elem_idx: ElemIdx) -> Option<Elem<Expr>> {
-        self.inner.lock().unwrap().get_elem(elem_idx)
-    }
-
-    pub fn get_export(&self, export_idx: ExportIdx) -> Option<Export> {
-        self.inner.lock().unwrap().get_export(export_idx)
-    }
-
-    pub fn get_function(&self, func_idx: FuncIdx) -> Option<ImportOrFunc<Expr>> {
-        self.inner.lock().unwrap().get_function(func_idx)
-    }
-
-    pub fn get_global(&self, global_idx: GlobalIdx) -> Option<Global> {
-        self.inner.lock().unwrap().get_global(global_idx)
-    }
-
-    pub fn get_memory(&self, mem_idx: MemIdx) -> Option<Mem> {
-        self.inner.lock().unwrap().get_memory(mem_idx)
-    }
-
-    pub fn get_table(&self, table_idx: TableIdx) -> Option<Table> {
-        self.inner.lock().unwrap().get_table(table_idx)
-    }
-
-    pub fn into_sections(self) -> Vec<CoreSection<Expr>> {
-        self.inner.lock().unwrap().sections.take_all()
-    }
-
-    pub fn type_idx_of(&self, func_type: &FuncType) -> Option<TypeIdx> {
-        self.inner.lock().unwrap().type_idx_of(func_type)
-    }
-
-    // TODO: metadata section support
-}
-
-impl<Expr: Debug + Clone + PartialEq>
-    From<Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>> for Module<Expr>
-{
-    fn from(sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(ModuleInner::new(sections))),
-        }
+impl<Expr: Debug + Clone + PartialEq> From<Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>> for Module<Expr> {
+    fn from(value: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>) -> Self {
+        Self::new(value)
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> PartialEq for Module<Expr> {
-    fn eq(&self, other: &Self) -> bool {
-        let inner = self.inner.lock().unwrap();
-        let other_inner = other.inner.lock().unwrap();
-        inner.eq(&other_inner)
+
+impl<Expr: Debug + Clone + PartialEq> Clone for Module<Expr> {
+    fn clone(&self) -> Self {
+        Module::from(self.sections.clone())
     }
 }
+
 
 #[cfg(feature = "component")]
-impl<Expr: Debug + Clone + PartialEq>
-    Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>
-    for Module<Expr>
+impl<Expr: Debug + Clone + PartialEq> Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>
+for Module<Expr>
 {
     fn index_space(&self) -> crate::component::ComponentIndexSpace {
         crate::component::ComponentIndexSpace::Module
