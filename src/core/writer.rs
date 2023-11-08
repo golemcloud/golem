@@ -44,9 +44,8 @@ impl From<&FuncTypeRef> for wasm_encoder::FunctionSection {
 
 impl<T: ExprSink> From<&FuncCode<T>> for wasm_encoder::CodeSection {
     fn from(value: &FuncCode<T>) -> Self {
-        let mut function = wasm_encoder::Function::new_with_locals_types(
-            value.locals.iter().map(|v| v.into()),
-        );
+        let mut function =
+            wasm_encoder::Function::new_with_locals_types(value.locals.iter().map(|v| v.into()));
         let body = Expr {
             instrs: value.body.iter().collect(),
         };
@@ -275,7 +274,7 @@ impl<'a> From<&Custom> for wasm_encoder::CustomSection<'a> {
     fn from(value: &Custom) -> Self {
         wasm_encoder::CustomSection {
             name: value.name.clone().into(),
-            data: value.data.clone().into()
+            data: value.data.clone().into(),
         }
     }
 }
@@ -360,7 +359,7 @@ impl InstructionTarget for wasm_encoder::Function {
 
 fn encode_expr<F: InstructionTarget>(expr: &Expr, target: &mut F) {
     for instr in &expr.instrs {
-        encode_instr(&instr, target);
+        encode_instr(instr, target);
     }
 }
 

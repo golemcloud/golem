@@ -1,7 +1,4 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::Path;
-use std::rc::Rc;
 use wasm_ast::component::Component;
 use wasm_ast::core::{ExprSource, Instr, TryFromExprSource};
 use wasm_metadata::Metadata;
@@ -18,8 +15,7 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>, std::io::Error> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct IgnoredExpr {
-}
+struct IgnoredExpr {}
 
 impl TryFromExprSource for IgnoredExpr {
     fn try_from<S: ExprSource>(_value: S) -> Result<Self, String>
@@ -78,10 +74,12 @@ fn main() {
     let mut depth = 0;
     let mut found_table_manipulation = false;
 
-    let mut features = WasmFeatures::default();
-    features.component_model = true;
-    features.component_model_values = true;
-    features.simd = true;
+    let features = WasmFeatures {
+        component_model: true,
+        component_model_values: true,
+        simd: true,
+        ..WasmFeatures::default()
+    };
 
     let mut validator = Validator::new_with_features(features);
     //let mut current_module_sections: Option<Sections<'_, CoreIndexSpace>> = None;

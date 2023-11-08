@@ -25,7 +25,7 @@ pub enum ComponentSection<Expr: Debug + Clone + PartialEq + 'static> {
 }
 
 impl<Expr: Debug + Clone + PartialEq> Section<ComponentIndexSpace, ComponentSectionType>
-for ComponentSection<Expr>
+    for ComponentSection<Expr>
 {
     fn index_space(&self) -> ComponentIndexSpace {
         match self {
@@ -80,13 +80,13 @@ pub enum ComponentSectionType {
 
 impl SectionType for ComponentSectionType {
     fn allow_grouping(&self) -> bool {
-        match self {
-            ComponentSectionType::Module => false,
-            ComponentSectionType::Component => false,
-            ComponentSectionType::Start => false,
-            ComponentSectionType::Custom => false,
-            _ => true,
-        }
+        !matches!(
+            self,
+            ComponentSectionType::Module
+                | ComponentSectionType::Component
+                | ComponentSectionType::Start
+                | ComponentSectionType::Custom
+        )
     }
 }
 
@@ -387,7 +387,7 @@ pub enum Canon {
     Lift {
         func_idx: FuncIdx,
         opts: Vec<CanonicalOption>,
-        funcion_type: ComponentTypeIdx,
+        function_type: ComponentTypeIdx,
     },
     Lower {
         func_idx: ComponentFuncIdx,
@@ -639,8 +639,8 @@ pub struct Component<Expr: Debug + Clone + PartialEq + 'static> {
 }
 
 impl<Expr: Debug + Clone + PartialEq>
-From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>>
-for Component<Expr>
+    From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>>
+    for Component<Expr>
 {
     fn from(
         value: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
@@ -660,7 +660,7 @@ impl<Expr: Debug + Clone + PartialEq> PartialEq for Component<Expr> {
 }
 
 impl<Expr: Debug + Clone + PartialEq> Section<ComponentIndexSpace, ComponentSectionType>
-for Component<Expr>
+    for Component<Expr>
 {
     fn index_space(&self) -> ComponentIndexSpace {
         ComponentIndexSpace::Component

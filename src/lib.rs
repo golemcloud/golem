@@ -1,8 +1,9 @@
+use mappable_rc::Mrc;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use mappable_rc::Mrc;
 
 #[cfg(feature = "component")]
 pub mod component;
@@ -28,6 +29,12 @@ pub struct Sections<IS: IndexSpace, ST: SectionType, S: Section<IS, ST> + 'stati
     phantom_st: PhantomData<ST>,
 }
 
+impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Default for Sections<IS, ST, S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
     pub fn new() -> Self {
         Self {
@@ -49,8 +56,7 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
         Self {
             sections: groups
                 .into_iter()
-                .map(|(_, sections)| sections)
-                .flatten()
+                .flat_map(|(_, sections)| sections)
                 .map(|s| Mrc::new(s))
                 .collect(),
             phantom_is: PhantomData,
@@ -78,7 +84,7 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
     }
 
     pub fn add_to_last_group(&mut self, section: S) {
-        if self.sections.len() > 0 {
+        if !self.sections.is_empty() {
             let mut i = self.sections.len() - 1;
             while i > 0 {
                 if self.sections[i].section_type() == section.section_type() {
@@ -145,7 +151,7 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
     }
 
     pub fn into_grouped(self) -> Vec<(ST, Vec<Mrc<S>>)> {
-        if self.sections.len() == 0 {
+        if self.sections.is_empty() {
             Vec::new()
         } else {
             let mut grouped = Vec::new();
@@ -168,6 +174,109 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
     }
 
     pub fn take_all(&mut self) -> Vec<Mrc<S>> {
-        std::mem::replace(&mut self.sections, Vec::new())
+        std::mem::take(&mut self.sections)
+    }
+}
+
+struct SectionCache<T: 'static, IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> {
+    cell: RefCell<Option<Vec<Mrc<T>>>>,
+    section_type: ST,
+    get: fn(&S) -> &T,
+    index_space: PhantomData<IS>,
+}
+
+impl<T, IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> SectionCache<T, IS, ST, S> {
+    // TODO: helper macro
+    pub fn new(section_type: ST, get: fn(&S) -> &T) -> Self {
+        Self {
+            cell: RefCell::new(None),
+            section_type,
+            get,
+            index_space: PhantomData,
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        self.cell
+            .borrow()
+            .as_ref()
+            .map_or(0, |sections| sections.len())
+    }
+
+    pub fn invalidate(&self) {
+        self.cell.replace(None);
+    }
+
+    pub fn all(&self) -> Vec<Mrc<T>> {
+        self.cell
+            .borrow()
+            .as_ref()
+            .map_or_else(Vec::new, |sections| sections.clone())
+    }
+
+    pub fn populate(&self, sections: &Sections<IS, ST, S>) {
+        let mut cell = self.cell.borrow_mut();
+        match cell.take() {
+            Some(inner) => {
+                *cell = Some(inner);
+            }
+            None => {
+                let inner = sections
+                    .filter_by_section_type(&self.section_type)
+                    .into_iter()
+                    .map(|section| Mrc::map(section, self.get))
+                    .collect();
+                *cell = Some(inner);
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SectionIndex<IS: IndexSpace, ST: SectionType, S: Section<IS, ST> + 'static> {
+    cell: RefCell<Option<HashMap<IS::Index, Mrc<S>>>>,
+    index_space: IS,
+    section_type: PhantomData<ST>,
+}
+
+impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> SectionIndex<IS, ST, S> {
+    pub fn new(index_space: IS) -> Self {
+        Self {
+            cell: RefCell::new(None),
+            index_space,
+            section_type: PhantomData,
+        }
+    }
+
+    #[allow(unused)]
+    pub fn count(&self) -> usize {
+        self.cell
+            .borrow()
+            .as_ref()
+            .map_or(0, |sections| sections.len())
+    }
+
+    pub fn get(&self, index: &IS::Index) -> Option<Mrc<S>> {
+        self.cell
+            .borrow()
+            .as_ref()
+            .and_then(|sections| sections.get(index).cloned())
+    }
+
+    pub fn invalidate(&self) {
+        self.cell.replace(None);
+    }
+
+    pub fn populate(&self, sections: &Sections<IS, ST, S>) {
+        let mut cell = self.cell.borrow_mut();
+        match cell.take() {
+            Some(inner) => {
+                *cell = Some(inner);
+            }
+            None => {
+                let inner = sections.indexed(&self.index_space);
+                *cell = Some(inner);
+            }
+        }
     }
 }

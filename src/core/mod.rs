@@ -1,9 +1,6 @@
-use std::cell::RefCell;
-use crate::{IndexSpace, Section, SectionType, Sections};
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-use std::marker::PhantomData;
+use crate::{IndexSpace, Section, SectionCache, SectionIndex, SectionType, Sections};
 use mappable_rc::Mrc;
+use std::fmt::{Debug, Formatter};
 
 #[cfg(feature = "parser")]
 pub mod parser;
@@ -40,6 +37,7 @@ pub enum CoreSection<Expr> {
     Custom(Custom),
 }
 
+#[allow(unused)]
 impl<Expr> CoreSection<Expr> {
     pub(crate) fn as_type(&self) -> &FuncType {
         match self {
@@ -134,7 +132,7 @@ impl<Expr> CoreSection<Expr> {
 }
 
 impl<Expr: Debug + Clone + PartialEq> Section<CoreIndexSpace, CoreSectionType>
-for CoreSection<Expr>
+    for CoreSection<Expr>
 {
     fn index_space(&self) -> CoreIndexSpace {
         match self {
@@ -696,18 +694,18 @@ pub struct Expr {
     pub instrs: Vec<Instr>,
 }
 
-pub trait ExprSource: IntoIterator<Item=Result<Instr, String>> {
+pub trait ExprSource: IntoIterator<Item = Result<Instr, String>> {
     fn unparsed(self) -> Result<Vec<u8>, String>;
 }
 
 pub trait ExprSink {
-    fn iter(&self) -> Box<dyn Iterator<Item=Instr>>;
+    fn iter(&self) -> Box<dyn Iterator<Item = Instr>>;
 }
 
 pub trait TryFromExprSource {
     fn try_from<S: ExprSource>(value: S) -> Result<Self, String>
-        where
-            Self: Sized;
+    where
+        Self: Sized;
 }
 
 impl TryFromExprSource for Expr {
@@ -1056,118 +1054,9 @@ pub enum ImportOrFunc<Expr: 'static> {
     Func(Func<Expr>),
 }
 
-struct SectionCache<T: 'static, IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> {
-    cell: RefCell<Option<Vec<Mrc<T>>>>,
-    section_type: ST,
-    get: fn(&S) -> &T,
-    index_space: PhantomData<IS>,
-}
-
-type CoreSectionCache<T, Expr> = SectionCache<T, CoreIndexSpace, CoreSectionType, CoreSection<Expr>>;
-
-impl<T, IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> SectionCache<T, IS, ST, S> {
-    // TODO: helper macro
-    pub fn new(section_type: ST, get: fn(&S) -> &T) -> Self {
-        Self {
-            cell: RefCell::new(None),
-            section_type,
-            get,
-            index_space: PhantomData,
-        }
-    }
-
-    pub fn count(&self) -> usize {
-        self.cell.borrow().as_ref().map_or(0, |sections| sections.len())
-    }
-
-    pub fn invalidate(&self) {
-        self.cell.replace(None);
-    }
-
-    pub fn all(&self) -> Vec<Mrc<T>> {
-        self.cell.borrow().as_ref().map_or_else(Vec::new, |sections| sections.clone())
-    }
-
-    pub fn populate(&self, sections: &Sections<IS, ST, S>) {
-        let mut cell = self.cell.borrow_mut();
-        match cell.take() {
-            Some(inner) => {
-                *cell = Some(inner);
-            }
-            None => {
-                let inner = sections
-                    .filter_by_section_type(&self.section_type)
-                    .into_iter()
-                    .map(|section| Mrc::map(section, self.get))
-                    .collect();
-                *cell = Some(inner);
-            }
-        }
-    }
-
-    //     fn ensure_datas(&mut self) {
-    //         if self.datas.is_none() {
-    //             self.datas = Some(
-    //                 self.sections
-    //                     .filter_by_section_type(CoreSectionType::Data)
-    //                     .into_iter()
-    //                     .map(|section| {
-    //                         if let CoreSection::Data(data) = section {
-    //                             data
-    //                         } else {
-    //                             unreachable!()
-    //                         }
-    //                     })
-    //                     .collect(),
-    //             );
-    //         }
-    //     }
-}
-
-
-#[derive(Clone)]
-struct SectionIndex<IS: IndexSpace, ST: SectionType, S: Section<IS, ST> + 'static> {
-    cell: RefCell<Option<HashMap<IS::Index, Mrc<S>>>>,
-    index_space: IS,
-    section_type: PhantomData<ST>,
-}
-
+type CoreSectionCache<T, Expr> =
+    SectionCache<T, CoreIndexSpace, CoreSectionType, CoreSection<Expr>>;
 type CoreSectionIndex<Expr> = SectionIndex<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>;
-
-impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> SectionIndex<IS, ST, S> {
-    pub fn new(index_space: IS) -> Self {
-        Self {
-            cell: RefCell::new(None),
-            index_space,
-            section_type: PhantomData,
-        }
-    }
-
-    pub fn count(&self) -> usize {
-        self.cell.borrow().as_ref().map_or(0, |sections| sections.len())
-    }
-
-    pub fn get(&self, index: &IS::Index) -> Option<Mrc<S>> {
-        self.cell.borrow().as_ref().and_then(|sections| sections.get(index).cloned())
-    }
-
-    pub fn invalidate(&self) {
-        self.cell.replace(None);
-    }
-
-    pub fn populate(&self, sections: &Sections<IS, ST, S>) {
-        let mut cell = self.cell.borrow_mut();
-        match cell.take() {
-            Some(inner) => {
-                *cell = Some(inner);
-            }
-            None => {
-                let inner = sections.indexed(&self.index_space);
-                *cell = Some(inner);
-            }
-        }
-    }
-}
 
 pub struct Module<Expr: Debug + Clone + PartialEq + 'static> {
     sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>,
@@ -1313,7 +1202,7 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     pub fn funcs(&self) -> Vec<Func<Expr>> {
         self.func_type_refs()
             .into_iter()
-            .zip(self.codes().into_iter())
+            .zip(self.codes())
             .map(|(func_type, code)| Func {
                 type_idx: func_type.type_idx,
                 code,
@@ -1360,20 +1249,26 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
 
     pub fn add_data(&mut self, data: Data<Expr>) {
         self.datas.invalidate();
+        self.data_index.invalidate();
         self.sections.add_to_last_group(CoreSection::Data(data));
         self.datas.populate(&self.sections);
         let count = self.datas.count();
         self.sections.clear_group(&CoreSectionType::DataCount);
-        self.sections.add_to_last_group(CoreSection::DataCount(DataCount { count: (count + 1) as u32 }));
+        self.sections
+            .add_to_last_group(CoreSection::DataCount(DataCount {
+                count: (count + 1) as u32,
+            }));
     }
 
     pub fn add_elem(&mut self, elem: Elem<Expr>) {
         self.elems.invalidate();
+        self.elem_index.invalidate();
         self.sections.add_to_last_group(CoreSection::Elem(elem));
     }
 
     pub fn add_export(&mut self, export: Export) {
         self.exports.invalidate();
+        self.export_index.invalidate();
         self.sections.add_to_last_group(CoreSection::Export(export));
     }
 
@@ -1389,14 +1284,18 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
             None => {
                 let idx = self.types.count() as TypeIdx;
                 self.types.invalidate();
-                self.sections.add_to_last_group(CoreSection::Type(func_type));
+                self.type_index.invalidate();
+                self.sections
+                    .add_to_last_group(CoreSection::Type(func_type));
                 idx
             }
         };
         let func_type_ref = FuncTypeRef { type_idx };
         let func_code = FuncCode { locals, body };
         self.codes.invalidate();
+        self.code_index.invalidate();
         self.func_type_refs.invalidate();
+        self.func_index.invalidate();
         self.sections
             .add_to_last_group(CoreSection::Func(func_type_ref));
         self.sections
@@ -1407,11 +1306,13 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
 
     pub fn add_global(&mut self, global: Global) {
         self.globals.invalidate();
+        self.global_index.invalidate();
         self.sections.add_to_last_group(CoreSection::Global(global));
     }
 
     pub fn add_memory(&mut self, mem: Mem) {
         self.mems.invalidate();
+        self.mem_index.invalidate();
         self.sections.add_to_last_group(CoreSection::Mem(mem));
     }
 
@@ -1422,6 +1323,7 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
 
     pub fn add_type(&mut self, func_type: FuncType) {
         self.types.invalidate();
+        self.type_index.invalidate();
         self.sections
             .add_to_last_group(CoreSection::Type(func_type));
     }
@@ -1429,11 +1331,10 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     pub fn get_code(&mut self, func_idx: FuncIdx) -> Option<Mrc<FuncCode<Expr>>> {
         self.code_index.populate(&self.sections);
         match self.code_index.get(&func_idx) {
-            Some(section) =>
-                match &*section {
-                    CoreSection::Code(_) => Some(Mrc::map(section, |section| section.as_code())),
-                    _ => None,
-                }
+            Some(section) => match &*section {
+                CoreSection::Code(_) => Some(Mrc::map(section, |section| section.as_code())),
+                _ => None,
+            },
             None => None,
         }
     }
@@ -1441,11 +1342,10 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     pub fn get_data(&mut self, data_idx: DataIdx) -> Option<Mrc<Data<Expr>>> {
         self.data_index.populate(&self.sections);
         match self.data_index.get(&data_idx) {
-            Some(section) =>
-                match &*section {
-                    CoreSection::Data(_) => Some(Mrc::map(section, |section| section.as_data())),
-                    _ => None,
-                }
+            Some(section) => match &*section {
+                CoreSection::Data(_) => Some(Mrc::map(section, |section| section.as_data())),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -1453,11 +1353,10 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     pub fn get_elem(&mut self, elem_idx: ElemIdx) -> Option<Mrc<Elem<Expr>>> {
         self.elem_index.populate(&self.sections);
         match self.elem_index.get(&elem_idx) {
-            Some(section) =>
-                match &*section {
-                    CoreSection::Elem(_) => Some(Mrc::map(section, |section| section.as_elem())),
-                    _ => None,
-                }
+            Some(section) => match &*section {
+                CoreSection::Elem(_) => Some(Mrc::map(section, |section| section.as_elem())),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -1465,11 +1364,10 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     pub fn get_export(&mut self, export_idx: ExportIdx) -> Option<Mrc<Export>> {
         self.export_index.populate(&self.sections);
         match self.export_index.get(&export_idx) {
-            Some(section) =>
-                match &*section {
-                    CoreSection::Export(_) => Some(Mrc::map(section, |section| section.as_export())),
-                    _ => None,
-                }
+            Some(section) => match &*section {
+                CoreSection::Export(_) => Some(Mrc::map(section, |section| section.as_export())),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -1477,22 +1375,23 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     pub fn get_function(&mut self, func_idx: FuncIdx) -> Option<ImportOrFunc<Expr>> {
         self.func_index.populate(&self.sections);
         match self.func_index.get(&func_idx) {
-            Some(section) =>
-                match &*section {
-                    CoreSection::Func(_) => {
-                        let code = self.get_code(func_idx).unwrap();
-                        let func_type_ref = section.as_func();
-                        let func = Func {
-                            type_idx: func_type_ref.type_idx,
-                            code,
-                        };
-                        Some(ImportOrFunc::Func(func))
-                    }
-                    CoreSection::Import(_) => {
-                        Some(ImportOrFunc::Import(Mrc::map(section, |section| section.as_import())))
-                    }
-                    _ => None,
+            Some(section) => match &*section {
+                CoreSection::Func(_) => {
+                    let code = self.get_code(func_idx).unwrap();
+                    let func_type_ref = section.as_func();
+                    let func = Func {
+                        type_idx: func_type_ref.type_idx,
+                        code,
+                    };
+                    Some(ImportOrFunc::Func(func))
                 }
+                CoreSection::Import(_) => {
+                    Some(ImportOrFunc::Import(Mrc::map(section, |section| {
+                        section.as_import()
+                    })))
+                }
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -1500,11 +1399,10 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     pub fn get_global(&mut self, global_idx: GlobalIdx) -> Option<Mrc<Global>> {
         self.global_index.populate(&self.sections);
         match self.global_index.get(&global_idx) {
-            Some(section) =>
-                match &*section {
-                    CoreSection::Global(_) => Some(Mrc::map(section, |section| section.as_global())),
-                    _ => None,
-                }
+            Some(section) => match &*section {
+                CoreSection::Global(_) => Some(Mrc::map(section, |section| section.as_global())),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -1512,11 +1410,10 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     pub fn get_memory(&mut self, mem_idx: MemIdx) -> Option<Mrc<Mem>> {
         self.mem_index.populate(&self.sections);
         match self.mem_index.get(&mem_idx) {
-            Some(section) =>
-                match &*section {
-                    CoreSection::Mem(_) => Some(Mrc::map(section, |section| section.as_mem())),
-                    _ => None,
-                }
+            Some(section) => match &*section {
+                CoreSection::Mem(_) => Some(Mrc::map(section, |section| section.as_mem())),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -1524,11 +1421,10 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     pub fn get_table(&mut self, table_idx: TableIdx) -> Option<Mrc<Table>> {
         self.table_index.populate(&self.sections);
         match self.table_index.get(&table_idx) {
-            Some(section) =>
-                match &*section {
-                    CoreSection::Table(_) => Some(Mrc::map(section, |section| section.as_table())),
-                    _ => None,
-                }
+            Some(section) => match &*section {
+                CoreSection::Table(_) => Some(Mrc::map(section, |section| section.as_table())),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -1559,12 +1455,13 @@ impl<Expr: Debug + Clone + PartialEq> PartialEq for Module<Expr> {
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> From<Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>> for Module<Expr> {
+impl<Expr: Debug + Clone + PartialEq>
+    From<Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>> for Module<Expr>
+{
     fn from(value: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>) -> Self {
         Self::new(value)
     }
 }
-
 
 impl<Expr: Debug + Clone + PartialEq> Clone for Module<Expr> {
     fn clone(&self) -> Self {
@@ -1572,10 +1469,10 @@ impl<Expr: Debug + Clone + PartialEq> Clone for Module<Expr> {
     }
 }
 
-
 #[cfg(feature = "component")]
-impl<Expr: Debug + Clone + PartialEq> Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>
-for Module<Expr>
+impl<Expr: Debug + Clone + PartialEq>
+    Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>
+    for Module<Expr>
 {
     fn index_space(&self) -> crate::component::ComponentIndexSpace {
         crate::component::ComponentIndexSpace::Module

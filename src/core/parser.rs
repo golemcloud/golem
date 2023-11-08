@@ -35,7 +35,7 @@ impl TryFrom<&[wasmparser::ValType]> for ResultType {
     fn try_from(value: &[wasmparser::ValType]) -> Result<Self, Self::Error> {
         let values = value
             .iter()
-            .map(|v| v.clone().try_into())
+            .map(|v| (*v).try_into())
             .collect::<Result<Vec<ValType>, Self::Error>>()?;
         Ok(ResultType { values })
     }
@@ -176,7 +176,7 @@ impl TryFrom<wasmparser::MemArg> for MemArg {
 
     fn try_from(value: wasmparser::MemArg) -> Result<Self, Self::Error> {
         if value.offset > (u32::MAX as u64) {
-            return Err("64-bit memories are not supported".to_string());
+            Err("64-bit memories are not supported".to_string())
         } else {
             Ok(MemArg {
                 offset: value.offset as u32,
@@ -447,7 +447,6 @@ impl<'a> TryFrom<OperatorsReader<'a>> for Expr {
                 Operator::BrTable { targets } => {
                     let labels: Vec<LabelIdx> = targets
                         .targets()
-                        .into_iter()
                         .map(|r| {
                             r.map_err(|err| format!("Failed to read brtable labels: {:?}", err))
                         })
@@ -1760,9 +1759,9 @@ impl RefFuncExprSource {
 impl ExprSource for RefFuncExprSource {
     fn unparsed(self) -> Result<Vec<u8>, String> {
         let mut result: Vec<u8> = Vec::new();
-        result.write(&[0xd2u8]).unwrap();
+        result.write_all(&[0xd2u8]).unwrap();
         leb128::write::unsigned(&mut result, self.func_idx as u64).unwrap();
-        result.write(&[0x0bu8]).unwrap();
+        result.write_all(&[0x0bu8]).unwrap();
         Ok(result)
     }
 }

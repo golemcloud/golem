@@ -1,7 +1,7 @@
 use crate::component::*;
 use crate::core::TryFromExprSource;
 use crate::Sections;
-use wasmparser::{Chunk, ComponentStartFunction, Parser, Payload};
+use wasmparser::{Chunk, Parser, Payload};
 
 impl<'a> TryFrom<wasmparser::InstantiationArg<'a>> for InstantiationArg {
     type Error = String;
@@ -27,13 +27,13 @@ impl<'a> TryFrom<wasmparser::Instance<'a>> for Instance {
             wasmparser::Instance::Instantiate { module_index, args } => Ok(Instance::Instantiate {
                 module_idx: module_index,
                 args: args
-                    .into_iter()
+                    .iter()
                     .map(|arg| arg.clone().try_into())
                     .collect::<Result<Vec<_>, String>>()?,
             }),
             wasmparser::Instance::FromExports(exports) => Ok(Instance::FromExports {
                 exports: exports
-                    .into_iter()
+                    .iter()
                     .map(|&export| export.try_into())
                     .collect::<Result<Vec<_>, String>>()?,
             }),
@@ -117,7 +117,7 @@ impl<'a> TryFrom<wasmparser::CoreType<'a>> for CoreType {
     }
 }
 
-impl<'a> TryFrom<wasmparser::ComponentExternalKind> for ComponentExternalKind {
+impl TryFrom<wasmparser::ComponentExternalKind> for ComponentExternalKind {
     type Error = String;
 
     fn try_from(value: wasmparser::ComponentExternalKind) -> Result<Self, Self::Error> {
@@ -252,14 +252,14 @@ impl<'a> TryFrom<wasmparser::ComponentInstance<'a>> for ComponentInstance {
             } => Ok(ComponentInstance::Instantiate {
                 component_idx: component_index,
                 args: args
-                    .into_iter()
+                    .iter()
                     .map(|arg| arg.clone().try_into())
                     .collect::<Result<Vec<_>, String>>()?,
             }),
             wasmparser::ComponentInstance::FromExports(exports) => {
                 Ok(ComponentInstance::FromExports {
                     exports: exports
-                        .into_iter()
+                        .iter()
                         .map(|export| export.clone().try_into())
                         .collect::<Result<Vec<_>, String>>()?,
                 })
@@ -355,13 +355,13 @@ impl<'a> TryFrom<wasmparser::ComponentDefinedType<'a>> for ComponentDefinedType 
             }
             wasmparser::ComponentDefinedType::Record(fields) => Ok(ComponentDefinedType::Record {
                 fields: fields
-                    .into_iter()
+                    .iter()
                     .map(|&(name, typ)| typ.try_into().map(|t| (name.to_string(), t)))
                     .collect::<Result<Vec<_>, String>>()?,
             }),
             wasmparser::ComponentDefinedType::Variant(cases) => Ok(ComponentDefinedType::Variant {
                 cases: cases
-                    .into_iter()
+                    .iter()
                     .map(|case| case.clone().try_into())
                     .collect::<Result<Vec<_>, String>>()?,
             }),
@@ -370,19 +370,19 @@ impl<'a> TryFrom<wasmparser::ComponentDefinedType<'a>> for ComponentDefinedType 
             }),
             wasmparser::ComponentDefinedType::Tuple(types) => Ok(ComponentDefinedType::Tuple {
                 elems: types
-                    .into_iter()
-                    .map(|tpe| tpe.clone().try_into())
+                    .iter()
+                    .map(|tpe| (*tpe).try_into())
                     .collect::<Result<Vec<_>, String>>()?,
             }),
             wasmparser::ComponentDefinedType::Flags(names) => Ok(ComponentDefinedType::Flags {
                 names: names
-                    .into_iter()
+                    .iter()
                     .map(|name| name.to_string())
                     .collect::<Vec<_>>(),
             }),
             wasmparser::ComponentDefinedType::Enum(names) => Ok(ComponentDefinedType::Enum {
                 names: names
-                    .into_iter()
+                    .iter()
                     .map(|name| name.to_string())
                     .collect::<Vec<_>>(),
             }),
@@ -425,7 +425,7 @@ impl<'a> TryFrom<wasmparser::ComponentFuncResult<'a>> for ComponentFuncResult {
             }
             wasmparser::ComponentFuncResult::Named(pairs) => Ok(ComponentFuncResult::Named(
                 pairs
-                    .into_iter()
+                    .iter()
                     .map(|&(name, typ)| typ.try_into().map(|t| (name.to_string(), t)))
                     .collect::<Result<Vec<_>, String>>()?,
             )),
@@ -440,7 +440,7 @@ impl<'a> TryFrom<wasmparser::ComponentFuncType<'a>> for ComponentFuncType {
         Ok(ComponentFuncType {
             params: value
                 .params
-                .into_iter()
+                .iter()
                 .map(|&(name, typ)| typ.try_into().map(|t| (name.to_string(), t)))
                 .collect::<Result<Vec<_>, String>>()?,
             result: value.results.try_into()?,
@@ -532,14 +532,14 @@ impl<'a> TryFrom<wasmparser::ComponentType<'a>> for ComponentType {
             wasmparser::ComponentType::Component(component_type_decls) => {
                 Ok(ComponentType::Component(
                     component_type_decls
-                        .into_iter()
+                        .iter()
                         .map(|component_type_decl| component_type_decl.clone().try_into())
                         .collect::<Result<Vec<_>, String>>()?,
                 ))
             }
             wasmparser::ComponentType::Instance(instancetype_decls) => Ok(ComponentType::Instance(
                 instancetype_decls
-                    .into_iter()
+                    .iter()
                     .map(|instancetype_decl| instancetype_decl.clone().try_into())
                     .collect::<Result<Vec<_>, String>>()?,
             )),
@@ -581,7 +581,7 @@ impl TryFrom<wasmparser::CanonicalFunction> for Canon {
                 options,
             } => Ok(Canon::Lift {
                 func_idx: core_func_index,
-                funcion_type: type_index,
+                function_type: type_index,
                 opts: options
                     .iter()
                     .map(|&opt| opt.try_into())
@@ -613,7 +613,7 @@ impl TryFrom<wasmparser::CanonicalFunction> for Canon {
 impl TryFrom<wasmparser::ComponentStartFunction> for ComponentStart {
     type Error = String;
 
-    fn try_from(value: ComponentStartFunction) -> Result<Self, Self::Error> {
+    fn try_from(value: wasmparser::ComponentStartFunction) -> Result<Self, Self::Error> {
         Ok(ComponentStart {
             func_idx: value.func_index,
             args: value.arguments.to_vec(),
