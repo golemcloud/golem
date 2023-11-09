@@ -1,4 +1,4 @@
-use crate::{IndexSpace, Section, SectionCache, SectionIndex, SectionType, Sections};
+use crate::{metadata, IndexSpace, Section, SectionCache, SectionIndex, SectionType, Sections};
 use mappable_rc::Mrc;
 use std::fmt::{Debug, Formatter};
 
@@ -1444,6 +1444,36 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
 
     pub fn into_grouped(self) -> Vec<(CoreSectionType, Vec<Mrc<CoreSection<Expr>>>)> {
         self.sections.into_grouped()
+    }
+
+    #[cfg(feature = "metadata")]
+    pub fn get_metadata(&self) -> Option<metadata::Metadata> {
+        let mut producers = None;
+        let mut registry_metadata = None;
+        let mut name = None;
+
+        for custom in self.customs() {
+            if custom.name == "producers" {
+                producers = wasm_metadata::Producers::from_bytes(&custom.data, 0).ok();
+            } else if custom.name == "registry-metadata" {
+                registry_metadata =
+                    wasm_metadata::RegistryMetadata::from_bytes(&custom.data, 0).ok();
+            } else if custom.name == "name" {
+                name = wasm_metadata::ModuleNames::from_bytes(&custom.data, 0)
+                    .ok()
+                    .and_then(|n| n.get_name().cloned());
+            }
+        }
+
+        if producers.is_some() || registry_metadata.is_some() || name.is_some() {
+            Some(metadata::Metadata {
+                name,
+                producers: producers.map(|p| p.into()),
+                registry_metadata,
+            })
+        } else {
+            None
+        }
     }
 }
 

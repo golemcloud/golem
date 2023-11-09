@@ -1,7 +1,7 @@
 use crate::core::{Custom, Export, FuncIdx, FuncType, Import, MemIdx, Module, TypeRef, ValType};
-use crate::{IndexSpace, Section, SectionType, Sections};
+use crate::{metadata, IndexSpace, Section, SectionCache, SectionIndex, SectionType, Sections};
+use mappable_rc::Mrc;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "parser")]
 pub mod parser;
@@ -609,33 +609,74 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for Custom {
     }
 }
 
-struct ComponentInner<Expr: Debug + Clone + PartialEq + 'static> {
+type ComponentSectionCache<T, Expr> =
+    SectionCache<T, ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>;
+
+#[allow(unused)]
+type ComponentSectionIndex<Expr> =
+    SectionIndex<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>;
+
+pub struct Component<Expr: Debug + Clone + PartialEq + 'static> {
     sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
+
+    customs: ComponentSectionCache<Custom, Expr>,
 }
 
-impl<Expr: Debug + Clone + PartialEq> ComponentInner<Expr> {
-    fn new(
+impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
+    pub fn new(
         sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
     ) -> Self {
-        Self { sections }
-    }
-}
+        Self {
+            sections,
 
-impl<Expr: Debug + Clone + PartialEq> Debug for ComponentInner<Expr> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.sections.fmt(f)
+            customs: SectionCache::new(ComponentSectionType::Custom, |section| {
+                if let ComponentSection::Custom(custom) = section {
+                    custom
+                } else {
+                    unreachable!()
+                }
+            }),
+        }
     }
-}
 
-impl<Expr: Debug + Clone + PartialEq> PartialEq for ComponentInner<Expr> {
-    fn eq(&self, other: &Self) -> bool {
-        self.sections.eq(&other.sections)
+    pub fn customs(&self) -> Vec<Mrc<Custom>> {
+        self.customs.populate(&self.sections);
+        self.customs.all()
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct Component<Expr: Debug + Clone + PartialEq + 'static> {
-    inner: Arc<Mutex<ComponentInner<Expr>>>,
+    #[cfg(feature = "metadata")]
+    pub fn get_metadata(&self) -> Option<metadata::Metadata> {
+        let mut producers = None;
+        let mut registry_metadata = None;
+        let mut name = None;
+
+        for custom in self.customs() {
+            if custom.name == "producers" {
+                producers = wasm_metadata::Producers::from_bytes(&custom.data, 0).ok();
+            } else if custom.name == "registry-metadata" {
+                registry_metadata =
+                    wasm_metadata::RegistryMetadata::from_bytes(&custom.data, 0).ok();
+            } else if custom.name == "name" {
+                name = wasm_metadata::ModuleNames::from_bytes(&custom.data, 0)
+                    .ok()
+                    .and_then(|n| n.get_name().cloned());
+            } else if custom.name == "component-name" {
+                name = wasm_metadata::ModuleNames::from_bytes(&custom.data, 0)
+                    .ok()
+                    .and_then(|n| n.get_name().cloned());
+            }
+        }
+
+        if producers.is_some() || registry_metadata.is_some() || name.is_some() {
+            Some(metadata::Metadata {
+                name,
+                producers: producers.map(|p| p.into()),
+                registry_metadata,
+            })
+        } else {
+            None
+        }
+    }
 }
 
 impl<Expr: Debug + Clone + PartialEq>
@@ -645,17 +686,25 @@ impl<Expr: Debug + Clone + PartialEq>
     fn from(
         value: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
     ) -> Self {
-        Component {
-            inner: Arc::new(Mutex::new(ComponentInner::new(value))),
-        }
+        Component::new(value)
     }
 }
 
 impl<Expr: Debug + Clone + PartialEq> PartialEq for Component<Expr> {
     fn eq(&self, other: &Self) -> bool {
-        let inner = self.inner.lock().unwrap();
-        let other_inner = other.inner.lock().unwrap();
-        inner.eq(&other_inner)
+        self.sections.eq(&other.sections)
+    }
+}
+
+impl<Expr: Debug + Clone + PartialEq> Debug for Component<Expr> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.sections.fmt(f)
+    }
+}
+
+impl<Expr: Debug + Clone + PartialEq> Clone for Component<Expr> {
+    fn clone(&self) -> Self {
+        Component::new(self.sections.clone())
     }
 }
 

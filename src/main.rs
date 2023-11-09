@@ -1,7 +1,6 @@
 use std::path::Path;
 use wasm_ast::component::Component;
 use wasm_ast::core::{ExprSource, Instr, TryFromExprSource};
-use wasm_metadata::Metadata;
 use wasmparser::{ComponentExternalKind, Parser, Payload, Validator, WasmFeatures};
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>, std::io::Error> {
@@ -64,13 +63,9 @@ impl TryFromExprSource for AnalysedExpr {
 
 fn main() {
     let bytes = read_bytes(Path::new(
-        "/home/vigoo/projects/zivergetech/golem/integration-tests/src/it/wasm/shopping-cart.wasm",
+        "/Users/vigoo/projects/ziverge/golem/integration-tests/src/it/wasm/shopping-cart.wasm",
     ))
     .unwrap();
-    let metadata = Metadata::from_binary(&bytes).unwrap();
-
-    println!("metadata: {:?}", metadata);
-
     let mut depth = 0;
     let mut found_table_manipulation = false;
 
@@ -88,7 +83,7 @@ fn main() {
     let component: Component<IgnoredExpr> =
         wasm_ast::component::Component::try_from((parser, bytes.as_slice())).unwrap();
     println!("component parsed successfully");
-    println!("component: {:?}", component);
+    println!("component metadata {:?}", component.get_metadata());
 
     let parser = Parser::new(0);
     for payload in parser.parse_all(&bytes) {

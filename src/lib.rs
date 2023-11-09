@@ -8,6 +8,8 @@ use std::marker::PhantomData;
 #[cfg(feature = "component")]
 pub mod component;
 pub mod core;
+#[cfg(feature = "metadata")]
+pub mod metadata;
 
 pub trait IndexSpace: Debug + PartialEq + Eq + PartialOrd + Ord {
     type Index: From<u32> + Into<u32> + Copy + Eq + Hash;
