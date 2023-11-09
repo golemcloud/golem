@@ -132,7 +132,7 @@ impl<Expr> CoreSection<Expr> {
 }
 
 impl<Expr: Debug + Clone + PartialEq> Section<CoreIndexSpace, CoreSectionType>
-    for CoreSection<Expr>
+for CoreSection<Expr>
 {
     fn index_space(&self) -> CoreIndexSpace {
         match self {
@@ -694,18 +694,18 @@ pub struct Expr {
     pub instrs: Vec<Instr>,
 }
 
-pub trait ExprSource: IntoIterator<Item = Result<Instr, String>> {
+pub trait ExprSource: IntoIterator<Item=Result<Instr, String>> {
     fn unparsed(self) -> Result<Vec<u8>, String>;
 }
 
 pub trait ExprSink {
-    fn iter(&self) -> Box<dyn Iterator<Item = Instr>>;
+    fn iter(&self) -> Box<dyn Iterator<Item=Instr>>;
 }
 
 pub trait TryFromExprSource {
     fn try_from<S: ExprSource>(value: S) -> Result<Self, String>
-    where
-        Self: Sized;
+        where
+            Self: Sized;
 }
 
 impl TryFromExprSource for Expr {
@@ -1055,7 +1055,7 @@ pub enum ImportOrFunc<Expr: 'static> {
 }
 
 type CoreSectionCache<T, Expr> =
-    SectionCache<T, CoreIndexSpace, CoreSectionType, CoreSection<Expr>>;
+SectionCache<T, CoreIndexSpace, CoreSectionType, CoreSection<Expr>>;
 type CoreSectionIndex<Expr> = SectionIndex<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>;
 
 pub struct Module<Expr: Debug + Clone + PartialEq + 'static> {
@@ -1084,6 +1084,23 @@ pub struct Module<Expr: Debug + Clone + PartialEq + 'static> {
     data_index: CoreSectionIndex<Expr>,
     export_index: CoreSectionIndex<Expr>,
 }
+
+#[cfg(feature = "parser")]
+impl<Expr: Debug + Clone + PartialEq + TryFromExprSource> Module<Expr> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let parser = wasmparser::Parser::new(0);
+        Self::try_from((parser, bytes))
+    }
+}
+
+#[cfg(feature = "writer")]
+impl<Expr: Debug + Clone + PartialEq + ExprSink + 'static> Module<Expr> {
+    pub fn into_bytes(self) -> Vec<u8> {
+        let encoder: wasm_encoder::Module = self.into();
+        encoder.finish()
+    }
+}
+
 
 impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     pub fn new(sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>) -> Self {
@@ -1490,7 +1507,7 @@ impl<Expr: Debug + Clone + PartialEq> PartialEq for Module<Expr> {
 }
 
 impl<Expr: Debug + Clone + PartialEq>
-    From<Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>> for Module<Expr>
+From<Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>> for Module<Expr>
 {
     fn from(value: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>) -> Self {
         Self::new(value)
@@ -1505,8 +1522,8 @@ impl<Expr: Debug + Clone + PartialEq> Clone for Module<Expr> {
 
 #[cfg(feature = "component")]
 impl<Expr: Debug + Clone + PartialEq>
-    Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>
-    for Module<Expr>
+Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>
+for Module<Expr>
 {
     fn index_space(&self) -> crate::component::ComponentIndexSpace {
         crate::component::ComponentIndexSpace::Module

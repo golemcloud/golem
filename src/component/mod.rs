@@ -1,4 +1,4 @@
-use crate::core::{Custom, Export, FuncIdx, FuncType, Import, MemIdx, Module, TypeRef, ValType};
+use crate::core::{Custom, Export, FuncIdx, FuncType, Import, MemIdx, Module, TryFromExprSource, TypeRef, ValType};
 use crate::{metadata, IndexSpace, Section, SectionCache, SectionIndex, SectionType, Sections};
 use mappable_rc::Mrc;
 use std::fmt::{Debug, Formatter};
@@ -24,8 +24,95 @@ pub enum ComponentSection<Expr: Debug + Clone + PartialEq + 'static> {
     Custom(Custom),
 }
 
+#[allow(unused)]
+impl<Expr: Debug + Clone + PartialEq> ComponentSection<Expr> {
+    pub(crate) fn as_module(&self) -> &Module<Expr> {
+        match self {
+            ComponentSection::Module(module) => module,
+            _ => panic!("Expected module section")
+        }
+    }
+
+    pub(crate) fn as_core_instance(&self) -> &Instance {
+        match self {
+            ComponentSection::CoreInstance(instance) => instance,
+            _ => panic!("Expected core instance section")
+        }
+    }
+
+    pub(crate) fn as_core_type(&self) -> &CoreType {
+        match self {
+            ComponentSection::CoreType(core_type) => core_type,
+            _ => panic!("Expected core type section")
+        }
+    }
+
+    pub(crate) fn as_component(&self) -> &Component<Expr> {
+        match self {
+            ComponentSection::Component(component) => component,
+            _ => panic!("Expected component section")
+        }
+    }
+
+    pub(crate) fn as_instance(&self) -> &ComponentInstance {
+        match self {
+            ComponentSection::Instance(component_instance) => component_instance,
+            _ => panic!("Expected component instance section")
+        }
+    }
+
+    pub(crate) fn as_alias(&self) -> &Alias {
+        match self {
+            ComponentSection::Alias(alias) => alias,
+            _ => panic!("Expected alias section")
+        }
+    }
+
+    pub(crate) fn as_type(&self) -> &ComponentType {
+        match self {
+            ComponentSection::Type(component_type) => component_type,
+            _ => panic!("Expected type section")
+        }
+    }
+
+    pub(crate) fn as_canon(&self) -> &Canon {
+        match self {
+            ComponentSection::Canon(canon) => canon,
+            _ => panic!("Expected canon section")
+        }
+    }
+
+    pub(crate) fn as_start(&self) -> &ComponentStart {
+        match self {
+            ComponentSection::Start(start) => start,
+            _ => panic!("Expected start section")
+        }
+    }
+
+    pub(crate) fn as_import(&self) -> &ComponentImport {
+        match self {
+            ComponentSection::Import(import) => import,
+            _ => panic!("Expected import section")
+        }
+    }
+
+    pub(crate) fn as_export(&self) -> &ComponentExport {
+        match self {
+            ComponentSection::Export(export) => export,
+            _ => panic!("Expected export section")
+        }
+    }
+
+    pub(crate) fn as_custom(&self) -> &Custom {
+        match self {
+            ComponentSection::Custom(custom) => custom,
+            _ => panic!("Expected custom section"),
+        }
+    }
+}
+
 impl<Expr: Debug + Clone + PartialEq> Section<ComponentIndexSpace, ComponentSectionType>
-    for ComponentSection<Expr>
+for ComponentSection<Expr>
 {
     fn index_space(&self) -> ComponentIndexSpace {
         match self {
@@ -610,16 +697,24 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for Custom {
 }
 
 type ComponentSectionCache<T, Expr> =
-    SectionCache<T, ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>;
+SectionCache<T, ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>;
 
 #[allow(unused)]
 type ComponentSectionIndex<Expr> =
-    SectionIndex<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>;
+SectionIndex<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>;
 
 pub struct Component<Expr: Debug + Clone + PartialEq + 'static> {
     sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
 
     customs: ComponentSectionCache<Custom, Expr>,
+}
+
+#[cfg(feature = "parser")]
+impl<Expr: Debug + Clone + PartialEq + TryFromExprSource + 'static> Component<Expr> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let parser = wasmparser::Parser::new(0);
+        Self::try_from((parser, bytes))
+    }
 }
 
 impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
@@ -642,6 +737,14 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
     pub fn customs(&self) -> Vec<Mrc<Custom>> {
         self.customs.populate(&self.sections);
         self.customs.all()
+    }
+
+    pub fn into_sections(mut self) -> Vec<Mrc<ComponentSection<Expr>>> {
+        self.sections.take_all()
+    }
+
+    pub fn into_grouped(self) -> Vec<(ComponentSectionType, Vec<Mrc<ComponentSection<Expr>>>)> {
+        self.sections.into_grouped()
     }
 
     #[cfg(feature = "metadata")]
@@ -680,8 +783,8 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
 }
 
 impl<Expr: Debug + Clone + PartialEq>
-    From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>>
-    for Component<Expr>
+From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>>
+for Component<Expr>
 {
     fn from(
         value: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
@@ -709,7 +812,7 @@ impl<Expr: Debug + Clone + PartialEq> Clone for Component<Expr> {
 }
 
 impl<Expr: Debug + Clone + PartialEq> Section<ComponentIndexSpace, ComponentSectionType>
-    for Component<Expr>
+for Component<Expr>
 {
     fn index_space(&self) -> ComponentIndexSpace {
         ComponentIndexSpace::Component

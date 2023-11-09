@@ -322,7 +322,6 @@ impl<T: ExprSink + Debug + Clone + PartialEq> From<Module<T>> for wasm_encoder::
     fn from(value: Module<T>) -> Self {
         let mut module = wasm_encoder::Module::new();
 
-        // TODO: use groups
         for (section_type, sections) in value.into_grouped() {
             match section_type {
                 CoreSectionType::Type => {
