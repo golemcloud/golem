@@ -1441,6 +1441,10 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     pub fn into_sections(mut self) -> Vec<Mrc<CoreSection<Expr>>> {
         self.sections.take_all()
     }
+
+    pub fn into_grouped(self) -> Vec<(CoreSectionType, Vec<Mrc<CoreSection<Expr>>>)> {
+        self.sections.into_grouped()
+    }
 }
 
 impl<Expr: Debug + Clone + PartialEq> Debug for Module<Expr> {

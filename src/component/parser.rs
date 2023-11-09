@@ -202,24 +202,26 @@ impl TryFrom<wasmparser::TypeBounds> for TypeBounds {
     }
 }
 
-impl TryFrom<wasmparser::ComponentTypeRef> for ExternDesc {
+impl TryFrom<wasmparser::ComponentTypeRef> for ComponentTypeRef {
     type Error = String;
 
     fn try_from(value: wasmparser::ComponentTypeRef) -> Result<Self, Self::Error> {
         match value {
-            wasmparser::ComponentTypeRef::Module(module_idx) => Ok(ExternDesc::Module(module_idx)),
-            wasmparser::ComponentTypeRef::Func(func_idx) => Ok(ExternDesc::Func(func_idx)),
+            wasmparser::ComponentTypeRef::Module(module_idx) => {
+                Ok(ComponentTypeRef::Module(module_idx))
+            }
+            wasmparser::ComponentTypeRef::Func(func_idx) => Ok(ComponentTypeRef::Func(func_idx)),
             wasmparser::ComponentTypeRef::Value(component_val_type) => {
-                Ok(ExternDesc::Val(component_val_type.try_into()?))
+                Ok(ComponentTypeRef::Val(component_val_type.try_into()?))
             }
             wasmparser::ComponentTypeRef::Type(type_bounds) => {
-                Ok(ExternDesc::Type(type_bounds.try_into()?))
+                Ok(ComponentTypeRef::Type(type_bounds.try_into()?))
             }
             wasmparser::ComponentTypeRef::Instance(instance_idx) => {
-                Ok(ExternDesc::Instance(instance_idx))
+                Ok(ComponentTypeRef::Instance(instance_idx))
             }
             wasmparser::ComponentTypeRef::Component(component_idx) => {
-                Ok(ExternDesc::Component(component_idx))
+                Ok(ComponentTypeRef::Component(component_idx))
             }
         }
     }

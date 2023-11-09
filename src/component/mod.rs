@@ -246,8 +246,7 @@ pub enum TypeBounds {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExternDesc {
-    // TODO: Rename to ComponentTypeRef
+pub enum ComponentTypeRef {
     Module(ComponentTypeIdx),
     Func(ComponentTypeIdx),
     Val(ComponentValType),
@@ -261,7 +260,7 @@ pub struct ComponentExport {
     pub name: ComponentExternName,
     pub kind: ComponentExternalKind,
     pub idx: u32,
-    pub desc: Option<ExternDesc>,
+    pub desc: Option<ComponentTypeRef>,
 }
 
 impl Section<ComponentIndexSpace, ComponentSectionType> for ComponentExport {
@@ -440,18 +439,18 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for ComponentStart {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentImport {
     name: ComponentExternName,
-    desc: ExternDesc,
+    desc: ComponentTypeRef,
 }
 
 impl Section<ComponentIndexSpace, ComponentSectionType> for ComponentImport {
     fn index_space(&self) -> ComponentIndexSpace {
         match self.desc {
-            ExternDesc::Module(_) => ComponentIndexSpace::Module,
-            ExternDesc::Func(_) => ComponentIndexSpace::Func,
-            ExternDesc::Val(_) => ComponentIndexSpace::Value,
-            ExternDesc::Type(_) => ComponentIndexSpace::Type,
-            ExternDesc::Instance(_) => ComponentIndexSpace::Instance,
-            ExternDesc::Component(_) => ComponentIndexSpace::Component,
+            ComponentTypeRef::Module(_) => ComponentIndexSpace::Module,
+            ComponentTypeRef::Func(_) => ComponentIndexSpace::Func,
+            ComponentTypeRef::Val(_) => ComponentIndexSpace::Value,
+            ComponentTypeRef::Type(_) => ComponentIndexSpace::Type,
+            ComponentTypeRef::Instance(_) => ComponentIndexSpace::Instance,
+            ComponentTypeRef::Component(_) => ComponentIndexSpace::Component,
         }
     }
 
@@ -498,7 +497,8 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for CoreType {
 pub struct VariantCase {
     pub name: String,
     pub typ: Option<ComponentValType>,
-    refines: Option<u32>, // TODO
+    /// The index of the variant case that is refined by this one.
+    pub refines: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -562,7 +562,7 @@ pub enum ComponentTypeDeclaration {
     Import(ComponentImport),
     Export {
         name: ComponentExternName,
-        desc: ExternDesc,
+        desc: ComponentTypeRef,
     },
 }
 
@@ -573,7 +573,7 @@ pub enum InstanceTypeDeclaration {
     Alias(Alias),
     Export {
         name: ComponentExternName,
-        desc: ExternDesc,
+        desc: ComponentTypeRef,
     },
 }
 
