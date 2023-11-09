@@ -714,7 +714,26 @@ type ComponentSectionIndex<Expr> =
 pub struct Component<Expr: Debug + Clone + PartialEq + 'static> {
     sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
 
+    imports: ComponentSectionCache<ComponentImport, Expr>,
+    exports: ComponentSectionCache<ComponentExport, Expr>,
+    core_instances: ComponentSectionCache<Instance, Expr>,
+    instances: ComponentSectionCache<ComponentInstance, Expr>,
+    component_types: ComponentSectionCache<ComponentType, Expr>,
+    core_types: ComponentSectionCache<CoreType, Expr>,
+    canons: ComponentSectionCache<Canon, Expr>,
+    aliases: ComponentSectionCache<Alias, Expr>,
+    components: ComponentSectionCache<Component<Expr>, Expr>,
+    modules: ComponentSectionCache<Module<Expr>, Expr>,
     customs: ComponentSectionCache<Custom, Expr>,
+
+    core_instance_index: ComponentSectionIndex<Expr>,
+    instance_index: ComponentSectionIndex<Expr>,
+    component_type_index: ComponentSectionIndex<Expr>,
+    core_func_index: ComponentSectionIndex<Expr>,
+    component_index: ComponentSectionIndex<Expr>,
+    component_func_index: ComponentSectionIndex<Expr>,
+    value_index: ComponentSectionIndex<Expr>,
+    module_index: ComponentSectionIndex<Expr>,
 }
 
 #[cfg(feature = "parser")]
@@ -740,6 +759,76 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
         Self {
             sections,
 
+            imports: SectionCache::new(ComponentSectionType::Import, |section| {
+                if let ComponentSection::Import(import) = section {
+                    import
+                } else {
+                    unreachable!()
+                }
+            }),
+            exports: SectionCache::new(ComponentSectionType::Export, |section| {
+                if let ComponentSection::Export(export) = section {
+                    export
+                } else {
+                    unreachable!()
+                }
+            }),
+            core_instances: SectionCache::new(ComponentSectionType::CoreInstance, |section| {
+                if let ComponentSection::CoreInstance(core_instance) = section {
+                    core_instance
+                } else {
+                    unreachable!()
+                }
+            }),
+            instances: SectionCache::new(ComponentSectionType::Instance, |section| {
+                if let ComponentSection::Instance(instance) = section {
+                    instance
+                } else {
+                    unreachable!()
+                }
+            }),
+            component_types: SectionCache::new(ComponentSectionType::Type, |section| {
+                if let ComponentSection::Type(component_type) = section {
+                    component_type
+                } else {
+                    unreachable!()
+                }
+            }),
+            core_types: SectionCache::new(ComponentSectionType::CoreType, |section| {
+                if let ComponentSection::CoreType(core_type) = section {
+                    core_type
+                } else {
+                    unreachable!()
+                }
+            }),
+            canons: SectionCache::new(ComponentSectionType::Canon, |section| {
+                if let ComponentSection::Canon(canon) = section {
+                    canon
+                } else {
+                    unreachable!()
+                }
+            }),
+            aliases: SectionCache::new(ComponentSectionType::Alias, |section| {
+                if let ComponentSection::Alias(alias) = section {
+                    alias
+                } else {
+                    unreachable!()
+                }
+            }),
+            components: SectionCache::new(ComponentSectionType::Component, |section| {
+                if let ComponentSection::Component(component) = section {
+                    component
+                } else {
+                    unreachable!()
+                }
+            }),
+            modules: SectionCache::new(ComponentSectionType::Module, |section| {
+                if let ComponentSection::Module(module) = section {
+                    module
+                } else {
+                    unreachable!()
+                }
+            }),
             customs: SectionCache::new(ComponentSectionType::Custom, |section| {
                 if let ComponentSection::Custom(custom) = section {
                     custom
@@ -747,12 +836,177 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
                     unreachable!()
                 }
             }),
+
+            core_instance_index: SectionIndex::new(ComponentIndexSpace::CoreInstance),
+            instance_index: SectionIndex::new(ComponentIndexSpace::Instance),
+            component_type_index: SectionIndex::new(ComponentIndexSpace::Type),
+            core_func_index: SectionIndex::new(ComponentIndexSpace::CoreFunc),
+            component_index: SectionIndex::new(ComponentIndexSpace::Component),
+            component_func_index: SectionIndex::new(ComponentIndexSpace::Func),
+            value_index: SectionIndex::new(ComponentIndexSpace::Value),
+            module_index: SectionIndex::new(ComponentIndexSpace::Module),
         }
+    }
+
+    pub fn imports(&self) -> Vec<Mrc<ComponentImport>> {
+        self.imports.populate(&self.sections);
+        self.imports.all()
+    }
+
+    pub fn exports(&self) -> Vec<Mrc<ComponentExport>> {
+        self.exports.populate(&self.sections);
+        self.exports.all()
+    }
+
+    pub fn core_instances(&self) -> Vec<Mrc<Instance>> {
+        self.core_instances.populate(&self.sections);
+        self.core_instances.all()
+    }
+
+    pub fn instances(&self) -> Vec<Mrc<ComponentInstance>> {
+        self.instances.populate(&self.sections);
+        self.instances.all()
+    }
+
+    pub fn component_types(&self) -> Vec<Mrc<ComponentType>> {
+        self.component_types.populate(&self.sections);
+        self.component_types.all()
+    }
+
+    pub fn core_types(&self) -> Vec<Mrc<CoreType>> {
+        self.core_types.populate(&self.sections);
+        self.core_types.all()
+    }
+
+    pub fn canons(&self) -> Vec<Mrc<Canon>> {
+        self.canons.populate(&self.sections);
+        self.canons.all()
+    }
+
+    pub fn aliases(&self) -> Vec<Mrc<Alias>> {
+        self.aliases.populate(&self.sections);
+        self.aliases.all()
+    }
+
+    pub fn components(&self) -> Vec<Mrc<Component<Expr>>> {
+        self.components.populate(&self.sections);
+        self.components.all()
+    }
+
+    pub fn modules(&self) -> Vec<Mrc<Module<Expr>>> {
+        self.modules.populate(&self.sections);
+        self.modules.all()
     }
 
     pub fn customs(&self) -> Vec<Mrc<Custom>> {
         self.customs.populate(&self.sections);
         self.customs.all()
+    }
+
+    /// Returns the core instance referenced by the given index.
+    pub fn get_core_instance(&self, core_instance_idx: CoreInstanceIdx) -> Option<Mrc<Instance>> {
+        self.core_instance_index.populate(&self.sections);
+        match self.core_instance_index.get(&core_instance_idx) {
+            Some(section) => match &*section {
+                ComponentSection::CoreInstance(_) => {
+                    Some(Mrc::map(section, |section| section.as_core_instance()))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Returns the component instance referenced by the given index.
+    pub fn get_instance(&self, instance_idx: InstanceIdx) -> Option<Mrc<ComponentInstance>> {
+        self.instance_index.populate(&self.sections);
+        match self.instance_index.get(&instance_idx) {
+            Some(section) => match &*section {
+                ComponentSection::Instance(_) => {
+                    Some(Mrc::map(section, |section| section.as_instance()))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Returns the component type referenced by the given index.
+    ///
+    /// It can be one of the following section types:
+    /// - ComponentType
+    /// - Alias
+    /// - ComponentExport
+    /// - ComponentImport
+    pub fn get_component_type(
+        &self,
+        component_type_idx: ComponentTypeIdx,
+    ) -> Option<Mrc<ComponentSection<Expr>>> {
+        self.component_type_index.populate(&self.sections);
+        self.component_type_index.get(&component_type_idx)
+    }
+
+    /// Returns the core function referenced by the given index.
+    ///
+    /// It can be one of the following section types:
+    /// - Canon
+    /// - Alias
+    pub fn get_core_func(&self, core_func_idx: FuncIdx) -> Option<Mrc<ComponentSection<Expr>>> {
+        self.core_func_index.populate(&self.sections);
+        self.core_func_index.get(&core_func_idx)
+    }
+
+    /// Returns the component referenced by the given index.
+    ///
+    /// It can be one of the following section types:
+    /// - Component
+    /// - Alias
+    /// - ComponentExport
+    /// - ComponentImport
+    pub fn get_component(
+        &self,
+        component_idx: ComponentIdx,
+    ) -> Option<Mrc<ComponentSection<Expr>>> {
+        self.component_index.populate(&self.sections);
+        self.component_index.get(&component_idx)
+    }
+
+    /// Returns the component function referenced by the given index.
+    ///
+    /// It can be one of the following section types:
+    /// - Canon
+    /// - Alias
+    /// - ComponentExport
+    /// - ComponentImport
+    pub fn get_component_func(
+        &self,
+        component_func_idx: ComponentFuncIdx,
+    ) -> Option<Mrc<ComponentSection<Expr>>> {
+        self.component_func_index.populate(&self.sections);
+        self.component_func_index.get(&component_func_idx)
+    }
+
+    /// Returns the value referenced by the given index.
+    ///
+    /// It can be one of the following section types:
+    /// - Alias
+    /// - ComponentExport
+    /// - ComponentImport
+    pub fn get_value(&self, value_idx: ValueIdx) -> Option<Mrc<ComponentSection<Expr>>> {
+        self.value_index.populate(&self.sections);
+        self.value_index.get(&value_idx)
+    }
+
+    /// Returns the module referenced by the given index.
+    ///
+    /// It can be one of the following section types:
+    /// - Module
+    /// - Alias
+    /// - ComponentExport
+    /// - ComponentImport
+    pub fn get_module(&self, module_idx: ModuleIdx) -> Option<Mrc<ComponentSection<Expr>>> {
+        self.module_index.populate(&self.sections);
+        self.module_index.get(&module_idx)
     }
 
     pub fn into_sections(mut self) -> Vec<Mrc<ComponentSection<Expr>>> {
