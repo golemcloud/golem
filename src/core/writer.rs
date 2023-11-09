@@ -291,6 +291,17 @@ fn add_to_export_section(section: &mut wasm_encoder::ExportSection, value: &Expo
     section.export(&value.name, kind, index);
 }
 
+impl From<&TypeRef> for wasm_encoder::EntityType {
+    fn from(value: &TypeRef) -> Self {
+        match value {
+            TypeRef::Func(type_idx) => wasm_encoder::EntityType::Function(*type_idx),
+            TypeRef::Table(table_type) => wasm_encoder::EntityType::Table(table_type.into()),
+            TypeRef::Mem(mem_type) => wasm_encoder::EntityType::Memory(mem_type.into()),
+            TypeRef::Global(global_type) => wasm_encoder::EntityType::Global(global_type.into()),
+        }
+    }
+}
+
 impl From<&Import> for wasm_encoder::ImportSection {
     fn from(value: &Import) -> Self {
         let mut section = wasm_encoder::ImportSection::new();
@@ -300,12 +311,7 @@ impl From<&Import> for wasm_encoder::ImportSection {
 }
 
 fn add_to_import_section(section: &mut wasm_encoder::ImportSection, value: &Import) {
-    let entity_type = match &value.desc {
-        TypeRef::Func(type_idx) => wasm_encoder::EntityType::Function(*type_idx),
-        TypeRef::Table(table_type) => wasm_encoder::EntityType::Table(table_type.into()),
-        TypeRef::Mem(mem_type) => wasm_encoder::EntityType::Memory(mem_type.into()),
-        TypeRef::Global(global_type) => wasm_encoder::EntityType::Global(global_type.into()),
-    };
+    let entity_type: wasm_encoder::EntityType = (&value.desc).into();
     section.import(&value.module, &value.name, entity_type);
 }
 

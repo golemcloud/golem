@@ -84,6 +84,7 @@ fn main() {
         wasm_ast::component::Component::try_from((parser, bytes.as_slice())).unwrap();
     println!("component parsed successfully");
     println!("component metadata {:?}", component.get_metadata());
+    // let encoded = component.into_bytes();
 
     let parser = Parser::new(0);
     for payload in parser.parse_all(&bytes) {
