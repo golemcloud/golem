@@ -5,30 +5,87 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
 
+/// The analysis module contains functionality built on top of the WASM AST to analyze components.
+///
+/// Currently the only functionality it provides is gathering a concise representation of all the
+/// exported instances and functions with their signatures.
+///
+/// For this analysis first parse a [component::Component] with [component::Component::from_bytes],
+/// then create an [analysis::AnalysisContext] with [analysis::AnalysisContext::new] and finally call
+/// [analysis::AnalysisContext::get_top_level_exports] on the newly created context.
+///
+/// This module is optional and can be enabled with the `analysis` feature flag. It is enabled by default.
 #[cfg(feature = "analysis")]
 pub mod analysis;
+
+/// The component module contains the AST definition of the [WASM Component Model](https://github.com/WebAssembly/component-model).
+///
+/// This module is optional and can be enabled with the `component` feature flag. It is enabled by default.
+/// When disabled the library can only work with core WASM modules.
 #[cfg(feature = "component")]
 pub mod component;
+
+/// The core module contains the AST definition of a core WebAssembly module.
 pub mod core;
+
+/// The customization module defines a type for customizing various parts of the WASM AST.
+///
+/// There are three parts of the AST defined in the [core] module that can be replaced by user
+/// defined types:
+/// - [core::Expr], the node holding a WASM expression (sequence of instructions)
+/// - [core::Data], the node holding a WASM data segment
+/// - [core::Custom], the node holding a custom section
+///
+/// Replacing these with custom nodes can reduce the memory footprint of the AST if there is no need to
+/// write it back to a WASM binary.
+///
+/// There are three predefined modes, each type can be used in the `Ast` type parameter of both [core::Module] and [component::Component]:
+/// - [DefaultAst] uses the default types for all three nodes
+/// - [IgnoreAll] uses replaces all three nodes with empty structures, loosing all information
+/// - [IgnoreAllButMetadata] replaces all three nodes with empty structures, except those [core::Custom] nodes which are intepreted as metadata.
 mod customization;
+
+/// The metadata module defines data structures for representing various metadata extracted from WASM binaries.
+///
+/// This module is optional and can be enabled with the `metadata` feature flag. It is enabled by default.
 #[cfg(feature = "metadata")]
 pub mod metadata;
 
 pub use customization::*;
 
+/// An index space defines one of the possible indexes various WASM nodes can belong to.
+///
+/// In many cases, espacially in the core WASM AST, each top-level WASM node (such as data, memory, type, etc.) has its own index space.
+/// Indexes to these nodes are represented by unsigned integers, and each index space are independent from each other.
+///
+/// In the component model many top-level AST nodes are mapped to multiple index spaces depending on their contents. For example a [component::ComponentImport] node
+/// can import a module, a function, a value, a type, an instance or a component - each of these defining an entity in a different index space.
 pub trait IndexSpace: Debug + PartialEq + Eq + PartialOrd + Ord {
     type Index: From<u32> + Into<u32> + Copy + Eq + Hash;
 }
 
+/// Section type defines the type of a section in a WASM binary
+///
+/// This is used to group sections by their type (for example to get all the functions in a module) and also to determine
+/// whether a given section type supports grouping.
 pub trait SectionType: Debug + PartialEq + Eq + PartialOrd + Ord {
+    /// If a section type supports grouping, then sections of the same type next to each other will be serialized into a single WASM section
+    /// containing multiple elements when writing out a WASM binary.
+    ///
+    /// Some section types does not support this encoding (such as the [core::Start] or [core::Custom] sections), in these cases they are all
+    /// serialized into their own section.
     fn allow_grouping(&self) -> bool;
 }
 
+/// A section is one top level element of a WASM binary, each having an associated [IndexSpace] and [SectionType].
+///
+/// There are two families of sections, core WASM module sections are defined in the [core] module, while component model sections are defined in the [component] module.
 pub trait Section<IS: IndexSpace, ST: SectionType>: Debug + Clone + PartialEq {
     fn index_space(&self) -> IS;
     fn section_type(&self) -> ST;
 }
 
+/// Internal representation of modules and components as a sequence of sections
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Sections<IS: IndexSpace, ST: SectionType, S: Section<IS, ST> + 'static> {
     sections: Vec<Mrc<S>>,
@@ -186,6 +243,7 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
     }
 }
 
+/// Internal structure holding references to all the items of a given section type in a [Sections] structure.
 struct SectionCache<T: 'static, IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> {
     cell: RefCell<Option<Vec<Mrc<T>>>>,
     section_type: ST,
@@ -240,6 +298,7 @@ impl<T, IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> SectionCache<T, IS,
     }
 }
 
+/// Internal structure holding indexed references to all the items of a [Sections] structure belonging to a given [IndexSpace].
 #[derive(Clone)]
 struct SectionIndex<IS: IndexSpace, ST: SectionType, S: Section<IS, ST> + 'static> {
     cell: RefCell<Option<HashMap<IS::Index, Mrc<S>>>>,

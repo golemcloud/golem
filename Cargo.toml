@@ -38,8 +38,3 @@ analysis = ["component"]
 
 [lib]
 path = "src/lib.rs"
-
-[[bin]]
-name = "wasm-ast-test"
-path = "src/main.rs"
-required-features = ["default"]

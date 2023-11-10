@@ -14,6 +14,9 @@ pub mod parser;
 #[cfg(feature = "writer")]
 pub mod writer;
 
+/// The Component Model section nodes.
+///
+/// See [Section] for more information.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ComponentSection<Ast: AstCustomization + 'static> {
     Module(Module<Ast>),
@@ -175,6 +178,9 @@ impl<Ast: AstCustomization> Section<ComponentIndexSpace, ComponentSectionType>
     }
 }
 
+/// The Component Model section types.
+///
+/// See [SectionType] for more information.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ComponentSectionType {
     Module,
@@ -203,6 +209,9 @@ impl SectionType for ComponentSectionType {
     }
 }
 
+/// The Component Model index spaces.
+///
+/// See [IndexSpace] for more information.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ComponentIndexSpace {
     Func,
@@ -745,10 +754,10 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for Custom {
 type ComponentSectionCache<T, Ast> =
     SectionCache<T, ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>;
 
-#[allow(unused)]
 type ComponentSectionIndex<Ast> =
     SectionIndex<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>;
 
+/// The top level node of the Component Model AST
 pub struct Component<Ast: AstCustomization + 'static> {
     sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>,
 
@@ -782,6 +791,7 @@ where
     Ast::Data: From<Data<Ast::Expr>>,
     Ast::Custom: From<Custom>,
 {
+    /// Parses a Component Model AST from the binary WASM byte array
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         let parser = wasmparser::Parser::new(0);
         Self::try_from((parser, bytes))
@@ -796,6 +806,7 @@ where
     Ast::Data: Into<Data<Ast::Expr>>,
     Ast::Custom: Into<Custom>,
 {
+    /// Serializes a WASM Component into a binary WASM byte array
     pub fn into_bytes(self) -> Result<Vec<u8>, String> {
         let encoder: wasm_encoder::Component = self.try_into()?;
         Ok(encoder.finish())
@@ -803,6 +814,11 @@ where
 }
 
 impl<Ast: AstCustomization> Component<Ast> {
+    /// Creates an empty component
+    pub fn empty() -> Self {
+        Self::new(Sections::new())
+    }
+
     pub(crate) fn new(
         sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>,
     ) -> Self {
@@ -831,56 +847,67 @@ impl<Ast: AstCustomization> Component<Ast> {
         }
     }
 
+    /// Gets all the imports defined in this component
     pub fn imports(&self) -> Vec<Mrc<ComponentImport>> {
         self.imports.populate(&self.sections);
         self.imports.all()
     }
 
+    /// Gets all the exports defined in this component
     pub fn exports(&self) -> Vec<Mrc<ComponentExport>> {
         self.exports.populate(&self.sections);
         self.exports.all()
     }
 
+    /// Gets all the core instances defined in this component
     pub fn core_instances(&self) -> Vec<Mrc<Instance>> {
         self.core_instances.populate(&self.sections);
         self.core_instances.all()
     }
 
+    /// Gets all the component instances defined in this component
     pub fn instances(&self) -> Vec<Mrc<ComponentInstance>> {
         self.instances.populate(&self.sections);
         self.instances.all()
     }
 
+    /// Gets all the component types defined in this component
     pub fn component_types(&self) -> Vec<Mrc<ComponentType>> {
         self.component_types.populate(&self.sections);
         self.component_types.all()
     }
 
+    /// Gets all the core types defined in this component
     pub fn core_types(&self) -> Vec<Mrc<CoreType>> {
         self.core_types.populate(&self.sections);
         self.core_types.all()
     }
 
+    /// Gets all the canonical function definitions of this component
     pub fn canons(&self) -> Vec<Mrc<Canon>> {
         self.canons.populate(&self.sections);
         self.canons.all()
     }
 
+    /// Gets all the aliases defined in this component
     pub fn aliases(&self) -> Vec<Mrc<Alias>> {
         self.aliases.populate(&self.sections);
         self.aliases.all()
     }
 
+    /// Gets all the inner components defined in this component
     pub fn components(&self) -> Vec<Mrc<Component<Ast>>> {
         self.components.populate(&self.sections);
         self.components.all()
     }
 
+    /// Gets all the inner core modules defined in this component
     pub fn modules(&self) -> Vec<Mrc<Module<Ast>>> {
         self.modules.populate(&self.sections);
         self.modules.all()
     }
 
+    /// Gets all the custom sections defined in this component
     pub fn customs(&self) -> Vec<Mrc<Ast::Custom>> {
         self.customs.populate(&self.sections);
         self.customs.all()
@@ -900,6 +927,7 @@ impl<Ast: AstCustomization> Component<Ast> {
         }
     }
 
+    /// Returns the component instance referenced by the given index.
     pub fn get_instance_wrapped(
         &self,
         instance_idx: InstanceIdx,
@@ -996,10 +1024,12 @@ impl<Ast: AstCustomization> Component<Ast> {
         self.module_index.get(&module_idx)
     }
 
+    /// Converts this component into a sequence of component sections.
     pub fn into_sections(mut self) -> Vec<Mrc<ComponentSection<Ast>>> {
         self.sections.take_all()
     }
 
+    /// Converts this component into a sequence of grouped component sections, exactly as it would be in the binary WASM format.
     pub fn into_grouped(self) -> Vec<(ComponentSectionType, Vec<Mrc<ComponentSection<Ast>>>)> {
         self.sections.into_grouped()
     }

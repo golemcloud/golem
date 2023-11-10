@@ -121,6 +121,7 @@ pub struct AnalysisContext<Ast: AstCustomization + 'static> {
 }
 
 impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
+    /// Initializes an analyzer for a given component
     pub fn new(component: Mrc<Component<Ast>>) -> AnalysisContext<Ast> {
         AnalysisContext {
             component_stack: vec![component],
@@ -128,6 +129,8 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
         }
     }
 
+    /// Get all top-level exports from the component with all the type information gathered from
+    /// the component AST.
     pub fn get_top_level_exports(&self) -> AnalysisResult<Vec<AnalysedExport>> {
         let component = self.get_component();
         let mut result = Vec::new();

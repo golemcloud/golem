@@ -21,11 +21,16 @@ pub type MemIdx = u32;
 pub type TableIdx = u32;
 pub type TypeIdx = u32;
 
+/// Trait to be implemented by custom Custom node types in order to provide information
+/// for the metadata feature [Module::get_metadata].
 pub trait RetainsCustomSection {
     fn name(&self) -> &str;
     fn data(&self) -> &[u8];
 }
 
+/// The core section nodes
+///
+/// See [Section] for more information.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoreSection<Ast: AstCustomization> {
     Type(FuncType),
@@ -193,6 +198,9 @@ impl<Ast: AstCustomization> Section<CoreIndexSpace, CoreSectionType> for CoreSec
     }
 }
 
+/// The core section types
+///
+/// See [SectionType] for more information.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CoreSectionType {
     Type,
@@ -230,6 +238,9 @@ impl SectionType for CoreSectionType {
     }
 }
 
+/// The core index space
+///
+/// See [IndexSpace] for more information.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CoreIndexSpace {
     Type,
@@ -1095,6 +1106,9 @@ pub enum ImportOrFunc<Expr: 'static> {
 type CoreSectionCache<T, Ast> = SectionCache<T, CoreIndexSpace, CoreSectionType, CoreSection<Ast>>;
 type CoreSectionIndex<Ast> = SectionIndex<CoreIndexSpace, CoreSectionType, CoreSection<Ast>>;
 
+/// The top-level AST node representing a core WASM module
+///
+/// Some parts of the AST are customizable by the `Ast` type parameter. See [AstCustomization] for more details.
 pub struct Module<Ast: AstCustomization + 'static> {
     sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Ast>>,
 
@@ -1130,6 +1144,7 @@ where
     Ast::Data: From<Data<Ast::Expr>>,
     Ast::Custom: From<Custom>,
 {
+    /// Parses a module from a binary WASM byte array
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         let parser = wasmparser::Parser::new(0);
         Self::try_from((parser, bytes))
@@ -1144,6 +1159,7 @@ where
     Ast::Data: Into<Data<Ast::Expr>>,
     Ast::Custom: Into<Custom>,
 {
+    /// Serializes the module into a binary WASM byte array
     pub fn into_bytes(self) -> Result<Vec<u8>, String> {
         let encoder: wasm_encoder::Module = self.try_into()?;
         Ok(encoder.finish())
@@ -1151,6 +1167,11 @@ where
 }
 
 impl<Ast: AstCustomization> Module<Ast> {
+    /// Creates an empty module
+    pub fn empty() -> Self {
+        Self::new(Sections::new())
+    }
+
     pub(crate) fn new(
         sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Ast>>,
     ) -> Self {
@@ -1180,20 +1201,29 @@ impl<Ast: AstCustomization> Module<Ast> {
         }
     }
 
+    /// Gets all the function types in the module
     pub fn types(&self) -> Vec<Mrc<FuncType>> {
         self.types.populate(&self.sections);
         self.types.all()
     }
+
+    /// Gets all the function type references in the module
+    ///
+    /// A more useful function is [funcs] that combines this and [codes] together.
     pub fn func_type_refs(&self) -> Vec<Mrc<FuncTypeRef>> {
         self.func_type_refs.populate(&self.sections);
         self.func_type_refs.all()
     }
 
+    /// Gets all the function codes in the module.
+    ///
+    /// A more useful function is [funcs] that combines this and [codes] together.
     pub fn codes(&self) -> Vec<Mrc<FuncCode<Ast::Expr>>> {
         self.codes.populate(&self.sections);
         self.codes.all()
     }
 
+    /// Gets all the functions defined in the module
     pub fn funcs(&self) -> Vec<Func<Ast::Expr>> {
         self.func_type_refs()
             .into_iter()
@@ -1205,43 +1235,61 @@ impl<Ast: AstCustomization> Module<Ast> {
             .collect()
     }
 
+    /// Gets all the tables defined in the module
     pub fn tables(&self) -> Vec<Mrc<Table>> {
         self.tables.populate(&self.sections);
         self.tables.all()
     }
+
+    /// Gets all the memories defined in the module
     pub fn mems(&self) -> Vec<Mrc<Mem>> {
         self.mems.populate(&self.sections);
         self.mems.all()
     }
+
+    /// Gets all the globals defined in the module
     pub fn globals(&self) -> Vec<Mrc<Global>> {
         self.globals.populate(&self.sections);
         self.globals.all()
     }
+
+    /// Gets all the elems defined in the module
     pub fn elems(&self) -> Vec<Mrc<Elem<Ast::Expr>>> {
         self.elems.populate(&self.sections);
         self.elems.all()
     }
+
+    /// Gets all the data sections defined in the module
     pub fn datas(&self) -> Vec<Mrc<Ast::Data>> {
         self.datas.populate(&self.sections);
         self.datas.all()
     }
+
+    /// Gets the start section of the module
     pub fn start(&self) -> Option<Mrc<Start>> {
         self.start.populate(&self.sections);
         self.start.all().pop()
     }
+
+    /// Gets all the imports of the module
     pub fn imports(&self) -> Vec<Mrc<Import>> {
         self.imports.populate(&self.sections);
         self.imports.all()
     }
+
+    /// Gets all the exports of the module
     pub fn exports(&self) -> Vec<Mrc<Export>> {
         self.exports.populate(&self.sections);
         self.exports.all()
     }
+
+    /// Gets all the custom sections of the module
     pub fn customs(&self) -> Vec<Mrc<Ast::Custom>> {
         self.customs.populate(&self.sections);
         self.customs.all()
     }
 
+    /// Adds a new data section
     pub fn add_data(&mut self, data: Ast::Data) {
         self.datas.invalidate();
         self.data_index.invalidate();
@@ -1255,18 +1303,21 @@ impl<Ast: AstCustomization> Module<Ast> {
             }));
     }
 
+    /// Adds a new elem
     pub fn add_elem(&mut self, elem: Elem<Ast::Expr>) {
         self.elems.invalidate();
         self.elem_index.invalidate();
         self.sections.add_to_last_group(CoreSection::Elem(elem));
     }
 
+    /// Adds a new export
     pub fn add_export(&mut self, export: Export) {
         self.exports.invalidate();
         self.export_index.invalidate();
         self.sections.add_to_last_group(CoreSection::Export(export));
     }
 
+    /// Adds a new function
     pub fn add_function(
         &mut self,
         func_type: FuncType,
@@ -1299,23 +1350,27 @@ impl<Ast: AstCustomization> Module<Ast> {
         (self.func_type_refs.count() - 1) as FuncIdx
     }
 
+    /// Adds a new global
     pub fn add_global(&mut self, global: Global) {
         self.globals.invalidate();
         self.global_index.invalidate();
         self.sections.add_to_last_group(CoreSection::Global(global));
     }
 
+    /// Adds a new memory
     pub fn add_memory(&mut self, mem: Mem) {
         self.mems.invalidate();
         self.mem_index.invalidate();
         self.sections.add_to_last_group(CoreSection::Mem(mem));
     }
 
+    /// Adds a new table
     pub fn add_table(&mut self, table: Table) {
         self.tables.invalidate();
         self.sections.add_to_last_group(CoreSection::Table(table));
     }
 
+    /// Adds a new function type
     pub fn add_type(&mut self, func_type: FuncType) {
         self.types.invalidate();
         self.type_index.invalidate();
@@ -1323,6 +1378,7 @@ impl<Ast: AstCustomization> Module<Ast> {
             .add_to_last_group(CoreSection::Type(func_type));
     }
 
+    /// Gets a function body by its index
     pub fn get_code(&mut self, func_idx: FuncIdx) -> Option<Mrc<FuncCode<Ast::Expr>>> {
         self.code_index.populate(&self.sections);
         match self.code_index.get(&func_idx) {
@@ -1334,6 +1390,7 @@ impl<Ast: AstCustomization> Module<Ast> {
         }
     }
 
+    /// Gets a data section by its index
     pub fn get_data(&mut self, data_idx: DataIdx) -> Option<Mrc<Ast::Data>> {
         self.data_index.populate(&self.sections);
         match self.data_index.get(&data_idx) {
@@ -1345,6 +1402,7 @@ impl<Ast: AstCustomization> Module<Ast> {
         }
     }
 
+    /// Gets an elem by its index
     pub fn get_elem(&mut self, elem_idx: ElemIdx) -> Option<Mrc<Elem<Ast::Expr>>> {
         self.elem_index.populate(&self.sections);
         match self.elem_index.get(&elem_idx) {
@@ -1356,6 +1414,7 @@ impl<Ast: AstCustomization> Module<Ast> {
         }
     }
 
+    /// Gets an export by its index
     pub fn get_export(&mut self, export_idx: ExportIdx) -> Option<Mrc<Export>> {
         self.export_index.populate(&self.sections);
         match self.export_index.get(&export_idx) {
@@ -1367,6 +1426,9 @@ impl<Ast: AstCustomization> Module<Ast> {
         }
     }
 
+    /// Gets a function by its index
+    ///
+    /// In a core WASM module the function index space holds both defined functions and imported functions.
     pub fn get_function(&mut self, func_idx: FuncIdx) -> Option<ImportOrFunc<Ast::Expr>> {
         self.func_index.populate(&self.sections);
         match self.func_index.get(&func_idx) {
@@ -1391,6 +1453,7 @@ impl<Ast: AstCustomization> Module<Ast> {
         }
     }
 
+    /// Gets a global by its index
     pub fn get_global(&mut self, global_idx: GlobalIdx) -> Option<Mrc<Global>> {
         self.global_index.populate(&self.sections);
         match self.global_index.get(&global_idx) {
@@ -1402,6 +1465,7 @@ impl<Ast: AstCustomization> Module<Ast> {
         }
     }
 
+    /// Gets a memory by its index
     pub fn get_memory(&mut self, mem_idx: MemIdx) -> Option<Mrc<Mem>> {
         self.mem_index.populate(&self.sections);
         match self.mem_index.get(&mem_idx) {
@@ -1413,6 +1477,7 @@ impl<Ast: AstCustomization> Module<Ast> {
         }
     }
 
+    /// Gets a table by its index
     pub fn get_table(&mut self, table_idx: TableIdx) -> Option<Mrc<Table>> {
         self.table_index.populate(&self.sections);
         match self.table_index.get(&table_idx) {
@@ -1424,6 +1489,7 @@ impl<Ast: AstCustomization> Module<Ast> {
         }
     }
 
+    /// Checks whether a given function type is already defined in the module, and returs its type index if so.
     pub fn type_idx_of(&self, func_type: &FuncType) -> Option<TypeIdx> {
         self.types.populate(&self.sections);
         self.types
@@ -1433,10 +1499,12 @@ impl<Ast: AstCustomization> Module<Ast> {
             .map(|idx| idx as TypeIdx)
     }
 
+    /// Converts the module into a sequence of sections
     pub fn into_sections(mut self) -> Vec<Mrc<CoreSection<Ast>>> {
         self.sections.take_all()
     }
 
+    /// Converts the module into a grouped sequence of sections, exactly as it should be written to a binary WASM file
     pub fn into_grouped(self) -> Vec<(CoreSectionType, Vec<Mrc<CoreSection<Ast>>>)> {
         self.sections.into_grouped()
     }
@@ -1447,6 +1515,7 @@ where
     Ast: AstCustomization,
     Ast::Custom: RetainsCustomSection,
 {
+    /// Gets all the metadata supported by the `wasm-metadata` crate defined in this module's custom sections
     #[cfg(feature = "metadata")]
     pub fn get_metadata(&self) -> Option<metadata::Metadata> {
         let mut producers = None;

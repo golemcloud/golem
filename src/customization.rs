@@ -5,6 +5,17 @@ use crate::core::{
 use crate::Section;
 use std::fmt::Debug;
 
+/// A trait for customizing some of the data types used in the WASM AST.
+///
+/// Three types are customizable:
+/// - `Expr`: The type of the expression nodes in the AST, holding sequence of WASM instructions.
+/// - `Data`: The type of the data section in the AST.
+/// - `Custom`: The type of the custom section in the AST.
+///
+/// Use one of the predefined customization types or create your own:
+/// - [DefaultAst] uses the real AST nodes, keeping all parsed information
+/// - [IgnoreAll] ignores all instructions, custom sections and data sections
+/// - [IgnoreAllButMetadata] ignores all instructions, data sections and custom sections except those that hold information parsable by the `wasm-metadata` crate.
 pub trait AstCustomization: Debug + Clone + PartialEq {
     type Expr: Debug + Clone + PartialEq;
     type Data: Debug + Clone + PartialEq + Section<CoreIndexSpace, CoreSectionType>;
@@ -19,6 +30,7 @@ pub trait AstCustomization: Debug + Clone + PartialEq {
         + Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>;
 }
 
+/// The default AST customization, using the real AST nodes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DefaultAst;
 
@@ -91,6 +103,7 @@ impl Section<crate::component::ComponentIndexSpace, crate::component::ComponentS
     }
 }
 
+/// An AST customization that ignores all instructions, custom sections and data sections.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IgnoreAll;
 
@@ -159,6 +172,7 @@ impl Section<crate::component::ComponentIndexSpace, crate::component::ComponentS
     }
 }
 
+/// An AST customization that ignores all instructions, data sections and custom sections except those that hold information parsable by the `wasm-metadata` crate.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IgnoreAllButMetadata;
 
