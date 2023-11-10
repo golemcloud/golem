@@ -53,6 +53,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5443807d6dff69373d433ab9ef5378ad8df50ca6298caf15de6e52e24aaf54d5"
 
 [[package]]
+name = "golem-wasm-ast"
+version = "0.0.0"
+dependencies = [
+ "colored-diff",
+ "leb128",
+ "mappable-rc",
+ "pretty_assertions",
+ "wasm-encoder",
+ "wasm-metadata",
+ "wasmparser",
+ "wasmprinter",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -198,20 +212,6 @@ name = "unicode-ident"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
-
-[[package]]
-name = "wasm-ast"
-version = "0.0.0"
-dependencies = [
- "colored-diff",
- "leb128",
- "mappable-rc",
- "pretty_assertions",
- "wasm-encoder",
- "wasm-metadata",
- "wasmparser",
- "wasmprinter",
-]
 
 [[package]]
 name = "wasm-encoder"

@@ -1,7 +1,7 @@
 use pretty_assertions::assert_eq;
-use wasm_ast::component::Component;
-use wasm_ast::metadata::{Metadata, Producers, ProducersField, VersionedName};
-use wasm_ast::IgnoreAllButMetadata;
+use golem_wasm_ast::component::Component;
+use golem_wasm_ast::metadata::{Metadata, Producers, ProducersField, VersionedName};
+use golem_wasm_ast::IgnoreAllButMetadata;
 
 #[test]
 fn metadata_shopping_cart_component() {

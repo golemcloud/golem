@@ -1,5 +1,5 @@
-use wasm_ast::component::Component;
-use wasm_ast::DefaultAst;
+use golem_wasm_ast::component::Component;
+use golem_wasm_ast::DefaultAst;
 
 #[test]
 fn roundtrip_shopping_cart_component() {
