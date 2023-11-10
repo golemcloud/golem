@@ -51,22 +51,28 @@ fn add_to_function_section(section: &mut wasm_encoder::FunctionSection, value: &
     section.function(value.type_idx);
 }
 
-impl<T: ExprSink> From<&FuncCode<T>> for wasm_encoder::CodeSection {
-    fn from(value: &FuncCode<T>) -> Self {
+impl<T: ExprSink> TryFrom<&FuncCode<T>> for wasm_encoder::CodeSection {
+    type Error = String;
+
+    fn try_from(value: &FuncCode<T>) -> Result<Self, Self::Error> {
         let mut section = wasm_encoder::CodeSection::new();
-        add_to_code_section(&mut section, value);
-        section
+        add_to_code_section(&mut section, value)?;
+        Ok(section)
     }
 }
 
-fn add_to_code_section<T: ExprSink>(section: &mut wasm_encoder::CodeSection, value: &FuncCode<T>) {
+fn add_to_code_section<T: ExprSink>(
+    section: &mut wasm_encoder::CodeSection,
+    value: &FuncCode<T>,
+) -> Result<(), String> {
     let mut function =
         wasm_encoder::Function::new_with_locals_types(value.locals.iter().map(|v| v.into()));
     let body = Expr {
         instrs: value.body.iter().collect(),
     };
-    encode_expr(&body, &mut function);
+    encode_expr(&body, &mut function)?;
     section.function(&function);
+    Ok(())
 }
 
 impl From<&RefType> for wasm_encoder::HeapType {
@@ -176,30 +182,38 @@ impl From<&GlobalType> for wasm_encoder::GlobalType {
     }
 }
 
-impl From<&Global> for wasm_encoder::GlobalSection {
-    fn from(value: &Global) -> Self {
+impl TryFrom<&Global> for wasm_encoder::GlobalSection {
+    type Error = String;
+
+    fn try_from(value: &Global) -> Result<Self, Self::Error> {
         let mut section = wasm_encoder::GlobalSection::new();
-        add_to_global_section(&mut section, value);
-        section
+        add_to_global_section(&mut section, value)?;
+        Ok(section)
     }
 }
 
-fn add_to_global_section(section: &mut wasm_encoder::GlobalSection, value: &Global) {
-    section.global(
-        (&value.global_type).into(),
-        &(&value.init).try_into().unwrap(),
-    ); // TODO: propagate failure
+fn add_to_global_section(
+    section: &mut wasm_encoder::GlobalSection,
+    value: &Global,
+) -> Result<(), String> {
+    section.global((&value.global_type).into(), &(&value.init).try_into()?);
+    Ok(())
 }
 
-impl<T: ExprSink> From<&Elem<T>> for wasm_encoder::ElementSection {
-    fn from(value: &Elem<T>) -> Self {
+impl<T: ExprSink> TryFrom<&Elem<T>> for wasm_encoder::ElementSection {
+    type Error = String;
+
+    fn try_from(value: &Elem<T>) -> Result<Self, Self::Error> {
         let mut section = wasm_encoder::ElementSection::new();
-        add_to_elem_section(&mut section, value);
-        section
+        add_to_elem_section(&mut section, value)?;
+        Ok(section)
     }
 }
 
-fn add_to_elem_section<T: ExprSink>(section: &mut wasm_encoder::ElementSection, value: &Elem<T>) {
+fn add_to_elem_section<T: ExprSink>(
+    section: &mut wasm_encoder::ElementSection,
+    value: &Elem<T>,
+) -> Result<(), String> {
     match value.ref_type {
         RefType::FuncRef => {
             let func_indices: Vec<u32> = value
@@ -220,9 +234,9 @@ fn add_to_elem_section<T: ExprSink>(section: &mut wasm_encoder::ElementSection, 
                     } else {
                         Some(*table_idx)
                     },
-                    &offset.try_into().unwrap(),
+                    &offset.try_into()?,
                     elements,
-                ), // TODO: propagate failure
+                ),
                 ElemMode::Declarative => section.declared(elements),
             };
         }
@@ -232,9 +246,9 @@ fn add_to_elem_section<T: ExprSink>(section: &mut wasm_encoder::ElementSection, 
                 .iter()
                 .map(|expr| {
                     let instrs = expr.iter().collect();
-                    (&Expr { instrs }).try_into().unwrap()
+                    (&Expr { instrs }).try_into()
                 })
-                .collect(); // TODO: propagate failure
+                .collect::<Result<Vec<wasm_encoder::ConstExpr>, String>>()?;
             let elements =
                 wasm_encoder::Elements::Expressions(wasm_encoder::RefType::EXTERNREF, &init);
             match &value.mode {
@@ -245,36 +259,40 @@ fn add_to_elem_section<T: ExprSink>(section: &mut wasm_encoder::ElementSection, 
                     } else {
                         Some(*table_idx)
                     },
-                    &offset.try_into().unwrap(),
+                    &offset.try_into()?,
                     elements,
-                ), // TODO: propagate failure
+                ),
                 ElemMode::Declarative => section.declared(elements),
             };
         }
     };
+    Ok(())
 }
 
-impl<T: Clone + ExprSink> From<&Data<T>> for wasm_encoder::DataSection {
-    fn from(value: &Data<T>) -> Self {
+impl<T: Clone + ExprSink> TryFrom<&Data<T>> for wasm_encoder::DataSection {
+    type Error = String;
+
+    fn try_from(value: &Data<T>) -> Result<Self, Self::Error> {
         let mut section = wasm_encoder::DataSection::new();
-        add_to_data_section(&mut section, value.clone());
-        section
+        add_to_data_section(&mut section, value.clone())?;
+        Ok(section)
     }
 }
 
 fn add_to_data_section<T: Clone + ExprSink>(
     section: &mut wasm_encoder::DataSection,
     value: Data<T>,
-) {
+) -> Result<(), String> {
     match &value.mode {
         DataMode::Passive => section.passive(value.init),
         DataMode::Active { memory, offset } => {
             let offset = Expr {
                 instrs: offset.iter().collect(),
             };
-            section.active(*memory, &(&offset).try_into().unwrap(), value.init)
-        } // TODO: propagate failure
+            section.active(*memory, &(&offset).try_into()?, value.init)
+        }
     };
+    Ok(())
 }
 
 impl From<&Export> for wasm_encoder::ExportSection {
@@ -328,14 +346,16 @@ impl<'a> From<Custom> for wasm_encoder::CustomSection<'a> {
     }
 }
 
-impl<Ast> From<Module<Ast>> for wasm_encoder::Module
+impl<Ast> TryFrom<Module<Ast>> for wasm_encoder::Module
 where
     Ast: AstCustomization,
     Ast::Expr: ExprSink,
     Ast::Data: Into<Data<Ast::Expr>>,
     Ast::Custom: Into<Custom>,
 {
-    fn from(value: Module<Ast>) -> Self {
+    type Error = String;
+
+    fn try_from(value: Module<Ast>) -> Result<Self, Self::Error> {
         let mut module = wasm_encoder::Module::new();
 
         for (section_type, sections) in value.into_grouped() {
@@ -357,7 +377,7 @@ where
                 CoreSectionType::Code => {
                     let mut section = wasm_encoder::CodeSection::new();
                     for code in sections {
-                        add_to_code_section(&mut section, code.as_code());
+                        add_to_code_section(&mut section, code.as_code())?;
                     }
                     module.section(&section);
                 }
@@ -378,14 +398,14 @@ where
                 CoreSectionType::Global => {
                     let mut section = wasm_encoder::GlobalSection::new();
                     for global in sections {
-                        add_to_global_section(&mut section, global.as_global());
+                        add_to_global_section(&mut section, global.as_global())?;
                     }
                     module.section(&section);
                 }
                 CoreSectionType::Elem => {
                     let mut section = wasm_encoder::ElementSection::new();
                     for elem in sections {
-                        add_to_elem_section(&mut section, elem.as_elem());
+                        add_to_elem_section(&mut section, elem.as_elem())?;
                     }
                     module.section(&section);
                 }
@@ -393,7 +413,7 @@ where
                     let mut section = wasm_encoder::DataSection::new();
                     for data in sections {
                         let data: Data<Ast::Expr> = data.as_data().clone().into();
-                        add_to_data_section(&mut section, data);
+                        add_to_data_section(&mut section, data)?;
                     }
                     module.section(&section);
                 }
@@ -432,7 +452,7 @@ where
             }
         }
 
-        module
+        Ok(module)
     }
 }
 
@@ -446,13 +466,14 @@ impl InstructionTarget for wasm_encoder::Function {
     }
 }
 
-fn encode_expr<F: InstructionTarget>(expr: &Expr, target: &mut F) {
+fn encode_expr<F: InstructionTarget>(expr: &Expr, target: &mut F) -> Result<(), String> {
     for instr in &expr.instrs {
-        encode_instr(instr, target);
+        encode_instr(instr, target)?;
     }
+    Ok(())
 }
 
-fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
+fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) -> Result<(), String> {
     match instr {
         Instr::I32Const(value) => target.emit(wasm_encoder::Instruction::I32Const(*value)),
         Instr::I64Const(value) => target.emit(wasm_encoder::Instruction::I64Const(*value)),
@@ -810,8 +831,8 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I64x2LtS)
         }
         Instr::VILt(IShape::I64x2, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI64x2LtU")
-        } // TODO: make these unrepresentable
+            return Err("invalid instruction: VI64x2LtU".to_string());
+        }
         Instr::VIGt(IShape::I8x16, Signedness::Signed) => {
             target.emit(wasm_encoder::Instruction::I8x16GtS)
         }
@@ -834,7 +855,7 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I64x2GtS)
         }
         Instr::VIGt(IShape::I64x2, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI64x2GtU")
+            return Err("invalid instruction: VI64x2GtU".to_string());
         }
         Instr::VILe(IShape::I8x16, Signedness::Signed) => {
             target.emit(wasm_encoder::Instruction::I8x16LeS)
@@ -858,7 +879,7 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I64x2LeS)
         }
         Instr::VILe(IShape::I64x2, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI64x2LeU")
+            return Err("invalid instruction: VI64x2LeU".to_string());
         }
         Instr::VIGe(IShape::I8x16, Signedness::Signed) => {
             target.emit(wasm_encoder::Instruction::I8x16GeS)
@@ -882,7 +903,7 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I64x2GeS)
         }
         Instr::VIGe(IShape::I64x2, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI64x2GeU")
+            return Err("invalid instruction: VI64x2GeU".to_string());
         }
         Instr::VI64x2Lt => target.emit(wasm_encoder::Instruction::I64x2LtS),
         Instr::VI64x2Gt => target.emit(wasm_encoder::Instruction::I64x2GtS),
@@ -1036,10 +1057,10 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I32x4MinU)
         }
         Instr::VIMin(IShape::I64x2, Signedness::Signed) => {
-            panic!("invalid instruction: VI64x2MinS")
+            return Err("invalid instruction: VI64x2MinS".to_string());
         }
         Instr::VIMin(IShape::I64x2, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI64x2MinU")
+            return Err("invalid instruction: VI64x2MinU".to_string());
         }
         Instr::VIMax(IShape::I8x16, Signedness::Signed) => {
             target.emit(wasm_encoder::Instruction::I8x16MaxS)
@@ -1060,10 +1081,10 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I32x4MaxU)
         }
         Instr::VIMax(IShape::I64x2, Signedness::Signed) => {
-            panic!("invalid instruction: VI64x2MaxS")
+            return Err("invalid instruction: VI64x2MaxS".to_string());
         }
         Instr::VIMax(IShape::I64x2, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI64x2MaxU")
+            return Err("invalid instruction: VI64x2MaxU".to_string());
         }
         Instr::VIAddSat(IShape::I8x16, Signedness::Signed) => {
             target.emit(wasm_encoder::Instruction::I8x16AddSatS)
@@ -1078,16 +1099,16 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I16x8AddSatU)
         }
         Instr::VIAddSat(IShape::I32x4, Signedness::Signed) => {
-            panic!("invalid instruction: VI32x4AddSatS")
+            return Err("invalid instruction: VI32x4AddSatS".to_string());
         }
         Instr::VIAddSat(IShape::I32x4, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI32x4AddSatU")
+            return Err("invalid instruction: VI32x4AddSatU".to_string());
         }
         Instr::VIAddSat(IShape::I64x2, Signedness::Signed) => {
-            panic!("invalid instruction: VI64x2AddSatS")
+            return Err("invalid instruction: VI64x2AddSatS".to_string());
         }
         Instr::VIAddSat(IShape::I64x2, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI64x2AddSatU")
+            return Err("invalid instruction: VI64x2AddSatU".to_string());
         }
         Instr::VISubSat(IShape::I8x16, Signedness::Signed) => {
             target.emit(wasm_encoder::Instruction::I8x16SubSatS)
@@ -1102,30 +1123,30 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I16x8SubSatU)
         }
         Instr::VISubSat(IShape::I32x4, Signedness::Signed) => {
-            panic!("invalid instruction: VI32x4SubSatS")
+            return Err("invalid instruction: VI32x4SubSatS".to_string());
         }
         Instr::VISubSat(IShape::I32x4, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI32x4SubSatU")
+            return Err("invalid instruction: VI32x4SubSatU".to_string());
         }
         Instr::VISubSat(IShape::I64x2, Signedness::Signed) => {
-            panic!("invalid instruction: VI64x2SubSatS")
+            return Err("invalid instruction: VI64x2SubSatS".to_string());
         }
         Instr::VISubSat(IShape::I64x2, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI64x2SubSatU")
+            return Err("invalid instruction: VI64x2SubSatU".to_string());
         }
-        Instr::VIMul(IShape::I8x16) => panic!("invalid instruction: VI8x16Mul"),
+        Instr::VIMul(IShape::I8x16) => return Err("invalid instruction: VI8x16Mul".to_string()),
         Instr::VIMul(IShape::I16x8) => target.emit(wasm_encoder::Instruction::I16x8Mul),
         Instr::VIMul(IShape::I32x4) => target.emit(wasm_encoder::Instruction::I32x4Mul),
         Instr::VIMul(IShape::I64x2) => target.emit(wasm_encoder::Instruction::I64x2Mul),
         Instr::VIAvgr(IShape::I8x16) => target.emit(wasm_encoder::Instruction::I8x16AvgrU),
         Instr::VIAvgr(IShape::I16x8) => target.emit(wasm_encoder::Instruction::I16x8AvgrU),
-        Instr::VIAvgr(IShape::I32x4) => panic!("invalid instruction: VI32x4AvgrU"),
-        Instr::VIAvgr(IShape::I64x2) => panic!("invalid instruction: VI64x2AvgrU"),
+        Instr::VIAvgr(IShape::I32x4) => return Err("invalid instruction: VI32x4AvgrU".to_string()),
+        Instr::VIAvgr(IShape::I64x2) => return Err("invalid instruction: VI64x2AvgrU".to_string()),
         Instr::VIExtMul(IShape::I8x16, Half::Low, Signedness::Signed) => {
-            panic!("invalid instruction: VI8x16ExtMulLowI8x16S")
+            return Err("invalid instruction: VI8x16ExtMulLowI8x16S".to_string());
         }
         Instr::VIExtMul(IShape::I8x16, Half::Low, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI8x16ExtMulLowI8x16U")
+            return Err("invalid instruction: VI8x16ExtMulLowI8x16U".to_string());
         }
         Instr::VIExtMul(IShape::I16x8, Half::Low, Signedness::Signed) => {
             target.emit(wasm_encoder::Instruction::I16x8ExtMulLowI8x16S)
@@ -1146,10 +1167,10 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I64x2ExtMulLowI32x4U)
         }
         Instr::VIExtMul(IShape::I8x16, Half::High, Signedness::Signed) => {
-            panic!("invalid instruction: VI8x16ExtMulHighI8x16S")
+            return Err("invalid instruction: VI8x16ExtMulHighI8x16S".to_string());
         }
         Instr::VIExtMul(IShape::I8x16, Half::High, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI8x16ExtMulHighI8x16U")
+            return Err("invalid instruction: VI8x16ExtMulHighI8x16U".to_string());
         }
         Instr::VIExtMul(IShape::I16x8, Half::High, Signedness::Signed) => {
             target.emit(wasm_encoder::Instruction::I16x8ExtMulHighI8x16S)
@@ -1170,10 +1191,10 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I64x2ExtMulHighI32x4U)
         }
         Instr::VIExtAddPairwise(IShape::I8x16, Signedness::Signed) => {
-            panic!("invalid instruction: VI8x16ExtAddPairwiseI8x16S")
+            return Err("invalid instruction: VI8x16ExtAddPairwiseI8x16S".to_string());
         }
         Instr::VIExtAddPairwise(IShape::I8x16, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI8x16ExtAddPairwiseI8x16U")
+            return Err("invalid instruction: VI8x16ExtAddPairwiseI8x16U".to_string());
         }
         Instr::VIExtAddPairwise(IShape::I16x8, Signedness::Signed) => {
             target.emit(wasm_encoder::Instruction::I16x8ExtAddPairwiseI8x16S)
@@ -1188,10 +1209,10 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I32x4ExtAddPairwiseI16x8U)
         }
         Instr::VIExtAddPairwise(IShape::I64x2, Signedness::Signed) => {
-            panic!("invalid instruction: VI64x2ExtAddPairwiseI32x4S")
+            return Err("invalid instruction: VI64x2ExtAddPairwiseI32x4S".to_string());
         }
         Instr::VIExtAddPairwise(IShape::I64x2, Signedness::Unsigned) => {
-            panic!("invalid instruction: VI64x2ExtAddPairwiseI32x4U")
+            return Err("invalid instruction: VI64x2ExtAddPairwiseI32x4U".to_string());
         }
         Instr::VFAdd(FShape::F32x4) => target.emit(wasm_encoder::Instruction::F32x4Add),
         Instr::VFAdd(FShape::F64x2) => target.emit(wasm_encoder::Instruction::F64x2Add),
@@ -1327,16 +1348,16 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I64Load8U(mem_arg.into()))
         }
         Instr::Load8(NumType::F32, Signedness::Signed, _mem_arg) => {
-            panic!("invalid instruction: F32Load8S")
+            return Err("invalid instruction: F32Load8S".to_string());
         }
         Instr::Load8(NumType::F32, Signedness::Unsigned, _mem_arg) => {
-            panic!("invalid instruction: F32Load8U")
+            return Err("invalid instruction: F32Load8U".to_string());
         }
         Instr::Load8(NumType::F64, Signedness::Signed, _mem_arg) => {
-            panic!("invalid instruction: F64Load8S")
+            return Err("invalid instruction: F64Load8S".to_string());
         }
         Instr::Load8(NumType::F64, Signedness::Unsigned, _mem_arg) => {
-            panic!("invalid instruction: F64Load8U")
+            return Err("invalid instruction: F64Load8U".to_string());
         }
         Instr::Load16(NumType::I32, Signedness::Signed, mem_arg) => {
             target.emit(wasm_encoder::Instruction::I32Load16S(mem_arg.into()))
@@ -1351,16 +1372,16 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             target.emit(wasm_encoder::Instruction::I64Load16U(mem_arg.into()))
         }
         Instr::Load16(NumType::F32, Signedness::Signed, _mem_arg) => {
-            panic!("invalid instruction: F32Load16S")
+            return Err("invalid instruction: F32Load16S".to_string());
         }
         Instr::Load16(NumType::F32, Signedness::Unsigned, _mem_arg) => {
-            panic!("invalid instruction: F32Load16U")
+            return Err("invalid instruction: F32Load16U".to_string());
         }
         Instr::Load16(NumType::F64, Signedness::Signed, _mem_arg) => {
-            panic!("invalid instruction: F64Load16S")
+            return Err("invalid instruction: F64Load16S".to_string());
         }
         Instr::Load16(NumType::F64, Signedness::Unsigned, _mem_arg) => {
-            panic!("invalid instruction: F64Load16U")
+            return Err("invalid instruction: F64Load16U".to_string());
         }
         Instr::Load32(Signedness::Signed, mem_arg) => {
             target.emit(wasm_encoder::Instruction::I64Load32S(mem_arg.into()))
@@ -1374,16 +1395,24 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
         Instr::Store8(NumType::I64, mem_arg) => {
             target.emit(wasm_encoder::Instruction::I64Store8(mem_arg.into()))
         }
-        Instr::Store8(NumType::F32, _mem_arg) => panic!("invalid instruction: F32Store8"),
-        Instr::Store8(NumType::F64, _mem_arg) => panic!("invalid instruction: F64Store8"),
+        Instr::Store8(NumType::F32, _mem_arg) => {
+            return Err("invalid instruction: F32Store8".to_string())
+        }
+        Instr::Store8(NumType::F64, _mem_arg) => {
+            return Err("invalid instruction: F64Store8".to_string())
+        }
         Instr::Store16(NumType::I32, mem_arg) => {
             target.emit(wasm_encoder::Instruction::I32Store16(mem_arg.into()))
         }
         Instr::Store16(NumType::I64, mem_arg) => {
             target.emit(wasm_encoder::Instruction::I64Store16(mem_arg.into()))
         }
-        Instr::Store16(NumType::F32, _mem_arg) => panic!("invalid instruction: F32Store16"),
-        Instr::Store16(NumType::F64, _mem_arg) => panic!("invalid instruction: F64Store16"),
+        Instr::Store16(NumType::F32, _mem_arg) => {
+            return Err("invalid instruction: F32Store16".to_string())
+        }
+        Instr::Store16(NumType::F64, _mem_arg) => {
+            return Err("invalid instruction: F64Store16".to_string())
+        }
         Instr::Store32(mem_arg) => {
             target.emit(wasm_encoder::Instruction::I64Store32(mem_arg.into()))
         }
@@ -1488,26 +1517,26 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
         Instr::Block(block_type, instrs) => {
             target.emit(wasm_encoder::Instruction::Block(block_type.into()));
             for instr in instrs {
-                encode_instr(instr, target);
+                encode_instr(instr, target)?;
             }
             target.emit(wasm_encoder::Instruction::End);
         }
         Instr::Loop(block_type, instrs) => {
             target.emit(wasm_encoder::Instruction::Loop(block_type.into()));
             for instr in instrs {
-                encode_instr(instr, target);
+                encode_instr(instr, target)?;
             }
             target.emit(wasm_encoder::Instruction::End);
         }
         Instr::If(block_type, true_instrs, false_instrs) => {
             target.emit(wasm_encoder::Instruction::If(block_type.into()));
             for instr in true_instrs {
-                encode_instr(instr, target);
+                encode_instr(instr, target)?;
             }
             if false_instrs.is_empty() {
                 target.emit(wasm_encoder::Instruction::Else);
                 for instr in false_instrs {
-                    encode_instr(instr, target);
+                    encode_instr(instr, target)?;
                 }
             }
             target.emit(wasm_encoder::Instruction::End);
@@ -1527,4 +1556,5 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) {
             })
         }
     }
+    Ok(())
 }

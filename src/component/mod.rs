@@ -793,9 +793,9 @@ where
     Ast::Data: Into<Data<Ast::Expr>>,
     Ast::Custom: Into<Custom>,
 {
-    pub fn into_bytes(self) -> Vec<u8> {
-        let encoder: wasm_encoder::Component = self.into();
-        encoder.finish()
+    pub fn into_bytes(self) -> Result<Vec<u8>, String> {
+        let encoder: wasm_encoder::Component = self.try_into()?;
+        Ok(encoder.finish())
     }
 }
 

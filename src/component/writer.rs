@@ -52,7 +52,10 @@ fn add_to_core_instance_section(section: &mut wasm_encoder::InstanceSection, val
     }
 }
 
-fn add_to_module_type(module_type: &mut wasm_encoder::ModuleType, value: &Vec<ModuleDeclaration>) {
+fn add_to_module_type(
+    module_type: &mut wasm_encoder::ModuleType,
+    value: &Vec<ModuleDeclaration>,
+) -> Result<(), String> {
     for module_declaration in value {
         match module_declaration {
             ModuleDeclaration::Type { typ } => {
@@ -68,26 +71,36 @@ fn add_to_module_type(module_type: &mut wasm_encoder::ModuleType, value: &Vec<Mo
                 OuterAliasKind::CoreType => {
                     module_type.alias_outer_core_type(target.count, target.index);
                 }
-                OuterAliasKind::CoreModule => panic!("CoreModule outer alias is not supported"),
-                OuterAliasKind::Type => panic!("Type outer alias is not supported"),
-                OuterAliasKind::Component => panic!("Component outer alias is not supported"),
+                OuterAliasKind::CoreModule => {
+                    return Err("CoreModule outer alias is not supported".to_string())
+                }
+                OuterAliasKind::Type => return Err("Type outer alias is not supported".to_string()),
+                OuterAliasKind::Component => {
+                    return Err("Component outer alias is not supported".to_string())
+                }
             },
             ModuleDeclaration::Import { import } => {
                 module_type.import(&import.module, &import.name, (&import.desc).into());
             }
         }
     }
+    Ok(())
 }
 
-impl From<&CoreType> for wasm_encoder::CoreTypeSection {
-    fn from(value: &CoreType) -> Self {
+impl TryFrom<&CoreType> for wasm_encoder::CoreTypeSection {
+    type Error = String;
+
+    fn try_from(value: &CoreType) -> Result<Self, Self::Error> {
         let mut section = wasm_encoder::CoreTypeSection::new();
-        add_to_core_type_section(&mut section, value);
-        section
+        add_to_core_type_section(&mut section, value)?;
+        Ok(section)
     }
 }
 
-fn add_to_core_type_encoder(encoder: wasm_encoder::CoreTypeEncoder, value: &CoreType) {
+fn add_to_core_type_encoder(
+    encoder: wasm_encoder::CoreTypeEncoder,
+    value: &CoreType,
+) -> Result<(), String> {
     match value {
         CoreType::Function(func_type) => {
             encoder.function(
@@ -105,14 +118,18 @@ fn add_to_core_type_encoder(encoder: wasm_encoder::CoreTypeEncoder, value: &Core
         }
         CoreType::Module(module_declarations) => {
             let mut module_type = wasm_encoder::ModuleType::new();
-            add_to_module_type(&mut module_type, module_declarations);
+            add_to_module_type(&mut module_type, module_declarations)?;
             encoder.module(&module_type);
         }
     }
+    Ok(())
 }
 
-fn add_to_core_type_section(section: &mut wasm_encoder::CoreTypeSection, value: &CoreType) {
-    add_to_core_type_encoder(section.ty(), value);
+fn add_to_core_type_section(
+    section: &mut wasm_encoder::CoreTypeSection,
+    value: &CoreType,
+) -> Result<(), String> {
+    add_to_core_type_encoder(section.ty(), value)
 }
 
 impl From<&ComponentExternalKind> for wasm_encoder::ComponentExportKind {
@@ -234,11 +251,13 @@ fn add_to_alias_section(section: &mut wasm_encoder::ComponentAliasSection, value
     section.alias(value.into());
 }
 
-impl From<&ComponentType> for wasm_encoder::ComponentTypeSection {
-    fn from(value: &ComponentType) -> Self {
+impl TryFrom<&ComponentType> for wasm_encoder::ComponentTypeSection {
+    type Error = String;
+
+    fn try_from(value: &ComponentType) -> Result<Self, Self::Error> {
         let mut section = wasm_encoder::ComponentTypeSection::new();
-        add_to_type_section(&mut section, value);
-        section
+        add_to_type_section(&mut section, value)?;
+        Ok(section)
     }
 }
 
@@ -279,13 +298,13 @@ impl From<&ComponentTypeRef> for wasm_encoder::ComponentTypeRef {
 fn add_declaration_to_component_type(
     component_type: &mut wasm_encoder::ComponentType,
     value: &ComponentTypeDeclaration,
-) {
+) -> Result<(), String> {
     match value {
         ComponentTypeDeclaration::Core(core_type) => {
-            add_to_core_type_encoder(component_type.core_type(), core_type);
+            add_to_core_type_encoder(component_type.core_type(), core_type)?;
         }
         ComponentTypeDeclaration::Type(ct) => {
-            add_to_component_type(component_type.ty(), ct);
+            add_to_component_type(component_type.ty(), ct)?;
         }
         ComponentTypeDeclaration::Alias(alias) => {
             component_type.alias(alias.into());
@@ -297,18 +316,19 @@ fn add_declaration_to_component_type(
             component_type.export(name.into(), desc.into());
         }
     }
+    Ok(())
 }
 
 fn add_declaration_to_instance_type(
     instance_type: &mut wasm_encoder::InstanceType,
     value: &InstanceTypeDeclaration,
-) {
+) -> Result<(), String> {
     match value {
         InstanceTypeDeclaration::Core(core_type) => {
-            add_to_core_type_encoder(instance_type.core_type(), core_type);
+            add_to_core_type_encoder(instance_type.core_type(), core_type)?;
         }
         InstanceTypeDeclaration::Type(ct) => {
-            add_to_component_type(instance_type.ty(), ct);
+            add_to_component_type(instance_type.ty(), ct)?;
         }
         InstanceTypeDeclaration::Alias(alias) => {
             instance_type.alias(alias.into());
@@ -317,9 +337,13 @@ fn add_declaration_to_instance_type(
             instance_type.export(name.into(), desc.into());
         }
     }
+    Ok(())
 }
 
-fn add_to_component_type(encoder: wasm_encoder::ComponentTypeEncoder, value: &ComponentType) {
+fn add_to_component_type(
+    encoder: wasm_encoder::ComponentTypeEncoder,
+    value: &ComponentType,
+) -> Result<(), String> {
     match value {
         ComponentType::Defined(component_defined_type) => {
             let defined_type = encoder.defined_type();
@@ -349,14 +373,14 @@ fn add_to_component_type(encoder: wasm_encoder::ComponentTypeEncoder, value: &Co
         ComponentType::Component(component_type_declarations) => {
             let mut component_type = wasm_encoder::ComponentType::new();
             for component_type_declaration in component_type_declarations {
-                add_declaration_to_component_type(&mut component_type, component_type_declaration);
+                add_declaration_to_component_type(&mut component_type, component_type_declaration)?;
             }
             encoder.component(&component_type);
         }
         ComponentType::Instance(instance_type_declarations) => {
             let mut instance_type = wasm_encoder::InstanceType::new();
             for instance_type_declaration in instance_type_declarations {
-                add_declaration_to_instance_type(&mut instance_type, instance_type_declaration);
+                add_declaration_to_instance_type(&mut instance_type, instance_type_declaration)?;
             }
             encoder.instance(&instance_type);
         }
@@ -365,10 +389,14 @@ fn add_to_component_type(encoder: wasm_encoder::ComponentTypeEncoder, value: &Co
             destructor,
         } => encoder.resource(representation.into(), *destructor),
     }
+    Ok(())
 }
 
-fn add_to_type_section(section: &mut wasm_encoder::ComponentTypeSection, value: &ComponentType) {
-    add_to_component_type(section.ty(), value);
+fn add_to_type_section(
+    section: &mut wasm_encoder::ComponentTypeSection,
+    value: &ComponentType,
+) -> Result<(), String> {
+    add_to_component_type(section.ty(), value)
 }
 
 impl From<&PrimitiveValueType> for wasm_encoder::PrimitiveValType {
@@ -543,21 +571,23 @@ fn add_to_component_export_section(
     );
 }
 
-impl<Ast> From<Component<Ast>> for wasm_encoder::Component
+impl<Ast> TryFrom<Component<Ast>> for wasm_encoder::Component
 where
     Ast: AstCustomization,
     Ast::Expr: ExprSink,
     Ast::Data: Into<Data<Ast::Expr>>,
     Ast::Custom: Into<Custom>,
 {
-    fn from(value: Component<Ast>) -> Self {
+    type Error = String;
+
+    fn try_from(value: Component<Ast>) -> Result<Self, Self::Error> {
         let mut component = wasm_encoder::Component::new();
 
         for (section_type, sections) in value.into_grouped() {
             match section_type {
                 ComponentSectionType::Module => {
                     let inner_module = sections.first().unwrap().as_module();
-                    let encoded_module = wasm_encoder::Module::from(inner_module.clone());
+                    let encoded_module = wasm_encoder::Module::try_from(inner_module.clone())?;
                     let nested_module = wasm_encoder::ModuleSection(&encoded_module);
                     component.section(&nested_module);
                 }
@@ -574,13 +604,14 @@ where
                 ComponentSectionType::CoreType => {
                     let mut section = wasm_encoder::CoreTypeSection::new();
                     for core_type in sections {
-                        add_to_core_type_section(&mut section, core_type.as_core_type());
+                        add_to_core_type_section(&mut section, core_type.as_core_type())?;
                     }
                     component.section(&section);
                 }
                 ComponentSectionType::Component => {
                     let inner_component = sections.first().unwrap().as_component();
-                    let encoded_component = wasm_encoder::Component::from(inner_component.clone());
+                    let encoded_component =
+                        wasm_encoder::Component::try_from(inner_component.clone())?;
                     let nested_component = wasm_encoder::NestedComponentSection(&encoded_component);
                     component.section(&nested_component);
                 }
@@ -604,7 +635,7 @@ where
                 ComponentSectionType::Type => {
                     let mut section = wasm_encoder::ComponentTypeSection::new();
                     for typ in sections {
-                        add_to_type_section(&mut section, typ.as_type());
+                        add_to_type_section(&mut section, typ.as_type())?;
                     }
                     component.section(&section);
                 }
@@ -647,6 +678,6 @@ where
             }
         }
 
-        component
+        Ok(component)
     }
 }
