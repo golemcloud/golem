@@ -4,7 +4,7 @@ use std::path::Path;
 use wasm_ast::analysis::AnalysisContext;
 use wasm_ast::component::Component;
 use wasm_ast::core::{ExprSource, Instr, TryFromExprSource};
-use wasmparser::Parser;
+
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>, std::io::Error> {
     use std::fs::File;
