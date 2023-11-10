@@ -2,10 +2,7 @@ use crate::core::{
     Custom, Data, Export, ExprSink, FuncIdx, FuncType, Import, MemIdx, Module,
     RetainsCustomSection, TryFromExprSource, TypeRef, ValType,
 };
-use crate::{
-    metadata, AstCustomization, IndexSpace, Section, SectionCache, SectionIndex, SectionType,
-    Sections,
-};
+use crate::{metadata, AstCustomization, IndexSpace, Section, SectionCache, SectionIndex, SectionType, Sections, new_component_section_cache};
 use mappable_rc::Mrc;
 use std::fmt::{Debug, Formatter};
 
@@ -135,7 +132,7 @@ impl<Ast: AstCustomization> ComponentSection<Ast> {
 }
 
 impl<Ast: AstCustomization> Section<ComponentIndexSpace, ComponentSectionType>
-    for ComponentSection<Ast>
+for ComponentSection<Ast>
 {
     fn index_space(&self) -> ComponentIndexSpace {
         match self {
@@ -740,11 +737,11 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for Custom {
 }
 
 type ComponentSectionCache<T, Ast> =
-    SectionCache<T, ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>;
+SectionCache<T, ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>;
 
 #[allow(unused)]
 type ComponentSectionIndex<Ast> =
-    SectionIndex<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>;
+SectionIndex<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>;
 
 pub struct Component<Ast: AstCustomization + 'static> {
     sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>,
@@ -773,11 +770,11 @@ pub struct Component<Ast: AstCustomization + 'static> {
 
 #[cfg(feature = "parser")]
 impl<Ast> Component<Ast>
-where
-    Ast: AstCustomization,
-    Ast::Expr: TryFromExprSource,
-    Ast::Data: From<Data<Ast::Expr>>,
-    Ast::Custom: From<Custom>,
+    where
+        Ast: AstCustomization,
+        Ast::Expr: TryFromExprSource,
+        Ast::Data: From<Data<Ast::Expr>>,
+        Ast::Custom: From<Custom>,
 {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         let parser = wasmparser::Parser::new(0);
@@ -787,11 +784,11 @@ where
 
 #[cfg(feature = "writer")]
 impl<Ast> Component<Ast>
-where
-    Ast: AstCustomization,
-    Ast::Expr: ExprSink,
-    Ast::Data: Into<Data<Ast::Expr>>,
-    Ast::Custom: Into<Custom>,
+    where
+        Ast: AstCustomization,
+        Ast::Expr: ExprSink,
+        Ast::Data: Into<Data<Ast::Expr>>,
+        Ast::Custom: Into<Custom>,
 {
     pub fn into_bytes(self) -> Vec<u8> {
         let encoder: wasm_encoder::Component = self.into();
@@ -806,84 +803,17 @@ impl<Ast: AstCustomization> Component<Ast> {
         Self {
             sections,
 
-            imports: SectionCache::new(ComponentSectionType::Import, |section| {
-                if let ComponentSection::Import(import) = section {
-                    import
-                } else {
-                    unreachable!()
-                }
-            }),
-            exports: SectionCache::new(ComponentSectionType::Export, |section| {
-                if let ComponentSection::Export(export) = section {
-                    export
-                } else {
-                    unreachable!()
-                }
-            }),
-            core_instances: SectionCache::new(ComponentSectionType::CoreInstance, |section| {
-                if let ComponentSection::CoreInstance(core_instance) = section {
-                    core_instance
-                } else {
-                    unreachable!()
-                }
-            }),
-            instances: SectionCache::new(ComponentSectionType::Instance, |section| {
-                if let ComponentSection::Instance(instance) = section {
-                    instance
-                } else {
-                    unreachable!()
-                }
-            }),
-            component_types: SectionCache::new(ComponentSectionType::Type, |section| {
-                if let ComponentSection::Type(component_type) = section {
-                    component_type
-                } else {
-                    unreachable!()
-                }
-            }),
-            core_types: SectionCache::new(ComponentSectionType::CoreType, |section| {
-                if let ComponentSection::CoreType(core_type) = section {
-                    core_type
-                } else {
-                    unreachable!()
-                }
-            }),
-            canons: SectionCache::new(ComponentSectionType::Canon, |section| {
-                if let ComponentSection::Canon(canon) = section {
-                    canon
-                } else {
-                    unreachable!()
-                }
-            }),
-            aliases: SectionCache::new(ComponentSectionType::Alias, |section| {
-                if let ComponentSection::Alias(alias) = section {
-                    alias
-                } else {
-                    unreachable!()
-                }
-            }),
-            components: SectionCache::new(ComponentSectionType::Component, |section| {
-                if let ComponentSection::Component(component) = section {
-                    component
-                } else {
-                    unreachable!()
-                }
-            }),
-            modules: SectionCache::new(ComponentSectionType::Module, |section| {
-                if let ComponentSection::Module(module) = section {
-                    module
-                } else {
-                    unreachable!()
-                }
-            }),
-            customs: SectionCache::new(ComponentSectionType::Custom, |section| {
-                if let ComponentSection::Custom(custom) = section {
-                    custom
-                } else {
-                    unreachable!()
-                }
-            }),
-
+            imports: new_component_section_cache!(Import),
+            exports: new_component_section_cache!(Export),
+            core_instances: new_component_section_cache!(CoreInstance),
+            instances: new_component_section_cache!(Instance),
+            component_types: new_component_section_cache!(Type),
+            core_types: new_component_section_cache!(CoreType),
+            canons: new_component_section_cache!(Canon),
+            aliases: new_component_section_cache!(Alias),
+            components: new_component_section_cache!(Component),
+            modules: new_component_section_cache!(Module),
+            customs: new_component_section_cache!(Custom),
             core_instance_index: SectionIndex::new(ComponentIndexSpace::CoreInstance),
             instance_index: SectionIndex::new(ComponentIndexSpace::Instance),
             component_type_index: SectionIndex::new(ComponentIndexSpace::Type),
@@ -1070,9 +1000,9 @@ impl<Ast: AstCustomization> Component<Ast> {
 }
 
 impl<Ast> Component<Ast>
-where
-    Ast: AstCustomization,
-    Ast::Custom: RetainsCustomSection,
+    where
+        Ast: AstCustomization,
+        Ast::Custom: RetainsCustomSection,
 {
     #[cfg(feature = "metadata")]
     pub fn get_metadata(&self) -> Option<metadata::Metadata> {
@@ -1110,8 +1040,8 @@ where
 }
 
 impl<Ast: AstCustomization>
-    From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>>
-    for Component<Ast>
+From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>>
+for Component<Ast>
 {
     fn from(
         value: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>,

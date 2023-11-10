@@ -1,7 +1,4 @@
-use crate::{
-    metadata, AstCustomization, IndexSpace, Section, SectionCache, SectionIndex, SectionType,
-    Sections,
-};
+use crate::{metadata, AstCustomization, IndexSpace, Section, SectionCache, SectionIndex, SectionType, Sections, new_core_section_cache};
 use mappable_rc::Mrc;
 use std::fmt::{Debug, Formatter};
 
@@ -1132,90 +1129,18 @@ impl<Ast: AstCustomization> Module<Ast> {
     ) -> Self {
         Self {
             sections,
-            types: SectionCache::new(CoreSectionType::Type, |section| {
-                if let CoreSection::Type(func_type) = section {
-                    func_type
-                } else {
-                    unreachable!()
-                }
-            }),
-            func_type_refs: SectionCache::new(CoreSectionType::Func, |section| {
-                if let CoreSection::Func(func_type_ref) = section {
-                    func_type_ref
-                } else {
-                    unreachable!()
-                }
-            }),
-            codes: SectionCache::new(CoreSectionType::Code, |section| {
-                if let CoreSection::Code(code) = section {
-                    code
-                } else {
-                    unreachable!()
-                }
-            }),
-            tables: SectionCache::new(CoreSectionType::Table, |section| {
-                if let CoreSection::Table(table) = section {
-                    table
-                } else {
-                    unreachable!()
-                }
-            }),
-            mems: SectionCache::new(CoreSectionType::Mem, |section| {
-                if let CoreSection::Mem(mem) = section {
-                    mem
-                } else {
-                    unreachable!()
-                }
-            }),
-            globals: SectionCache::new(CoreSectionType::Global, |section| {
-                if let CoreSection::Global(global) = section {
-                    global
-                } else {
-                    unreachable!()
-                }
-            }),
-            elems: SectionCache::new(CoreSectionType::Elem, |section| {
-                if let CoreSection::Elem(elem) = section {
-                    elem
-                } else {
-                    unreachable!()
-                }
-            }),
-            datas: SectionCache::new(CoreSectionType::Data, |section| {
-                if let CoreSection::Data(data) = section {
-                    data
-                } else {
-                    unreachable!()
-                }
-            }),
-            start: SectionCache::new(CoreSectionType::Start, |section| {
-                if let CoreSection::Start(start) = section {
-                    start
-                } else {
-                    unreachable!()
-                }
-            }),
-            imports: SectionCache::new(CoreSectionType::Import, |section| {
-                if let CoreSection::Import(import) = section {
-                    import
-                } else {
-                    unreachable!()
-                }
-            }),
-            exports: SectionCache::new(CoreSectionType::Export, |section| {
-                if let CoreSection::Export(export) = section {
-                    export
-                } else {
-                    unreachable!()
-                }
-            }),
-            customs: SectionCache::new(CoreSectionType::Custom, |section| {
-                if let CoreSection::Custom(custom) = section {
-                    custom
-                } else {
-                    unreachable!()
-                }
-            }),
+            types: new_core_section_cache!(Type),
+            func_type_refs: new_core_section_cache!(Func),
+            codes: new_core_section_cache!(Code),
+            tables: new_core_section_cache!(Table),
+            mems: new_core_section_cache!(Mem),
+            globals: new_core_section_cache!(Global),
+            elems: new_core_section_cache!(Elem),
+            datas: new_core_section_cache!(Data),
+            start: new_core_section_cache!(Start),
+            imports: new_core_section_cache!(Import),
+            exports: new_core_section_cache!(Export),
+            customs: new_core_section_cache!(Custom),
             type_index: SectionIndex::new(CoreIndexSpace::Type),
             func_index: SectionIndex::new(CoreIndexSpace::Func),
             code_index: SectionIndex::new(CoreIndexSpace::Code),

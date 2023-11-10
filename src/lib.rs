@@ -288,3 +288,30 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> SectionIndex<IS, ST, S
         }
     }
 }
+
+#[macro_export]
+macro_rules! new_core_section_cache {
+    ($tpe:ident) => {
+        $crate::SectionCache::new($crate::core::CoreSectionType::$tpe, |section| {
+                if let $crate::core::CoreSection::$tpe(inner) = section {
+                    inner
+                } else {
+                    unreachable!()
+                }
+            })
+    }
+}
+
+#[cfg(feature = "component")]
+#[macro_export]
+macro_rules! new_component_section_cache {
+    ($tpe:ident) => {
+        $crate::SectionCache::new($crate::component::ComponentSectionType::$tpe, |section| {
+                if let $crate::component::ComponentSection::$tpe(inner) = section {
+                    inner
+                } else {
+                    unreachable!()
+                }
+            })
+    }
+}
