@@ -29,87 +29,104 @@ pub enum ComponentSection<Expr: Debug + Clone + PartialEq + 'static> {
 
 #[allow(unused)]
 impl<Expr: Debug + Clone + PartialEq> ComponentSection<Expr> {
-    pub(crate) fn as_module(&self) -> &Module<Expr> {
+    pub fn as_module(&self) -> &Module<Expr> {
         match self {
             ComponentSection::Module(module) => module,
             _ => panic!("Expected module section"),
         }
     }
 
-    pub(crate) fn as_core_instance(&self) -> &Instance {
+    pub fn as_core_instance(&self) -> &Instance {
         match self {
             ComponentSection::CoreInstance(instance) => instance,
             _ => panic!("Expected core instance section"),
         }
     }
 
-    pub(crate) fn as_core_type(&self) -> &CoreType {
+    pub fn as_core_type(&self) -> &CoreType {
         match self {
             ComponentSection::CoreType(core_type) => core_type,
             _ => panic!("Expected core type section"),
         }
     }
 
-    pub(crate) fn as_component(&self) -> &Component<Expr> {
+    pub fn as_component(&self) -> &Component<Expr> {
         match self {
             ComponentSection::Component(component) => component,
             _ => panic!("Expected component section"),
         }
     }
 
-    pub(crate) fn as_instance(&self) -> &ComponentInstance {
+    pub fn as_instance(&self) -> &ComponentInstance {
         match self {
             ComponentSection::Instance(component_instance) => component_instance,
             _ => panic!("Expected component instance section"),
         }
     }
 
-    pub(crate) fn as_alias(&self) -> &Alias {
+    pub fn as_alias(&self) -> &Alias {
         match self {
             ComponentSection::Alias(alias) => alias,
             _ => panic!("Expected alias section"),
         }
     }
 
-    pub(crate) fn as_type(&self) -> &ComponentType {
+    pub fn as_type(&self) -> &ComponentType {
         match self {
             ComponentSection::Type(component_type) => component_type,
             _ => panic!("Expected type section"),
         }
     }
 
-    pub(crate) fn as_canon(&self) -> &Canon {
+    pub fn as_canon(&self) -> &Canon {
         match self {
             ComponentSection::Canon(canon) => canon,
             _ => panic!("Expected canon section"),
         }
     }
 
-    pub(crate) fn as_start(&self) -> &ComponentStart {
+    pub fn as_start(&self) -> &ComponentStart {
         match self {
             ComponentSection::Start(start) => start,
             _ => panic!("Expected start section"),
         }
     }
 
-    pub(crate) fn as_import(&self) -> &ComponentImport {
+    pub fn as_import(&self) -> &ComponentImport {
         match self {
             ComponentSection::Import(import) => import,
             _ => panic!("Expected import section"),
         }
     }
 
-    pub(crate) fn as_export(&self) -> &ComponentExport {
+    pub fn as_export(&self) -> &ComponentExport {
         match self {
             ComponentSection::Export(export) => export,
             _ => panic!("Expected export section"),
         }
     }
 
-    pub(crate) fn as_custom(&self) -> &Custom {
+    pub fn as_custom(&self) -> &Custom {
         match self {
             ComponentSection::Custom(custom) => custom,
             _ => panic!("Expected custom section"),
+        }
+    }
+
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            ComponentSection::Module(_) => "module",
+            ComponentSection::CoreInstance(_) => "core instance",
+            ComponentSection::CoreType(_) => "core type",
+            ComponentSection::Component(_) => "component",
+            ComponentSection::Instance(_) => "instance",
+            ComponentSection::Alias(_) => "alias",
+            ComponentSection::Type(_) => "type",
+            ComponentSection::Canon(_) => "canonical function",
+            ComponentSection::Start(_) => "start",
+            ComponentSection::Import(_) => "import",
+            ComponentSection::Export(_) => "export",
+            ComponentSection::Custom(_) => "custom",
         }
     }
 }
@@ -202,18 +219,18 @@ impl IndexSpace for ComponentIndexSpace {
     type Index = u32;
 }
 
-type ComponentFuncIdx = u32;
-type ComponentTypeIdx = u32;
-type ModuleIdx = u32;
-type ComponentIdx = u32;
+pub type ComponentFuncIdx = u32;
+pub type ComponentTypeIdx = u32;
+pub type ModuleIdx = u32;
+pub type ComponentIdx = u32;
 
 #[allow(unused)]
-type CoreInstanceIdx = u32;
-type InstanceIdx = u32;
-type ValueIdx = u32;
+pub type CoreInstanceIdx = u32;
+pub type InstanceIdx = u32;
+pub type ValueIdx = u32;
 
 #[allow(unused)]
-type StartIdx = u32;
+pub type StartIdx = u32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstantiationArgRef {
@@ -306,10 +323,25 @@ pub enum ComponentExternName {
     Name(String),
 }
 
+impl ComponentExternName {
+    pub fn as_string(&self) -> String {
+        let str: &str = self.into();
+        str.to_string()
+    }
+}
+
 impl<'a> From<&'a ComponentExternName> for &'a str {
     fn from(value: &'a ComponentExternName) -> Self {
         match value {
             ComponentExternName::Name(name) => name,
+        }
+    }
+}
+
+impl PartialEq<String> for ComponentExternName {
+    fn eq(&self, other: &String) -> bool {
+        match self {
+            ComponentExternName::Name(name) => name == other,
         }
     }
 }
@@ -536,8 +568,8 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for ComponentStart {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentImport {
-    name: ComponentExternName,
-    desc: ComponentTypeRef,
+    pub name: ComponentExternName,
+    pub desc: ComponentTypeRef,
 }
 
 impl Section<ComponentIndexSpace, ComponentSectionType> for ComponentImport {
@@ -917,10 +949,17 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
         }
     }
 
+    pub fn get_instance_wrapped(
+        &self,
+        instance_idx: InstanceIdx,
+    ) -> Option<Mrc<ComponentSection<Expr>>> {
+        self.instance_index.populate(&self.sections);
+        self.instance_index.get(&instance_idx)
+    }
+
     /// Returns the component instance referenced by the given index.
     pub fn get_instance(&self, instance_idx: InstanceIdx) -> Option<Mrc<ComponentInstance>> {
-        self.instance_index.populate(&self.sections);
-        match self.instance_index.get(&instance_idx) {
+        match self.get_instance_wrapped(instance_idx) {
             Some(section) => match &*section {
                 ComponentSection::Instance(_) => {
                     Some(Mrc::map(section, |section| section.as_instance()))

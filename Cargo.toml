@@ -14,11 +14,22 @@ wasm-metadata = { version = "0.10.11", optional = true }
 leb128 = {  version = "0.2.5", optional = true }
 
 [features]
-default = ["parser", "writer", "component", "metadata"]
+default = ["parser", "writer", "component", "metadata", "analysis"]
+
+# Support building up the WASM AST by parsing a binary WASM module or component using the wasmparser library
 parser = ["dep:wasmparser", "dep:leb128"]
+
+# Support writing out a binary WASM module or component using the wasm-encoder library
 writer = ["dep:wasm-encoder"]
+
+# Support for the WASM component model
 component = []
+
+# Support for extracting producer and other metadata from a binary WASM module or component using the wasm-metadata library
 metadata = ["dep:wasm-metadata"]
+
+# Enables some higher level analysis features built on top of the WASM AST
+analysis = ["component"]
 
 [lib]
 path = "src/lib.rs"

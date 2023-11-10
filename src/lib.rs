@@ -5,6 +5,8 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
 
+#[cfg(feature = "analysis")]
+pub mod analysis;
 #[cfg(feature = "component")]
 pub mod component;
 pub mod core;
