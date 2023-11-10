@@ -1,5 +1,6 @@
 use crate::core::{
-    CoreIndexSpace, CoreSectionType, Custom, Data, Expr, ExprSource, TryFromExprSource,
+    CoreIndexSpace, CoreSectionType, Custom, Data, Expr, ExprSource, RetainsCustomSection,
+    TryFromExprSource,
 };
 use crate::Section;
 use std::fmt::Debug;
@@ -97,4 +98,72 @@ impl AstCustomization for IgnoreAll {
     type Expr = IgnoredExpr;
     type Data = IgnoredData;
     type Custom = IgnoredCustom;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MetadataOnlyCustom {
+    Metadata(Custom),
+    Ignored,
+}
+
+impl RetainsCustomSection for MetadataOnlyCustom {
+    fn name(&self) -> &str {
+        match self {
+            MetadataOnlyCustom::Metadata(custom) => custom.name(),
+            MetadataOnlyCustom::Ignored => "ignored",
+        }
+    }
+
+    fn data(&self) -> &[u8] {
+        match self {
+            MetadataOnlyCustom::Metadata(custom) => custom.data(),
+            MetadataOnlyCustom::Ignored => &[],
+        }
+    }
+}
+
+impl From<Custom> for MetadataOnlyCustom {
+    fn from(value: Custom) -> Self {
+        if value.name == "producers"
+            || value.name == "registry-metadata"
+            || value.name == "name"
+            || value.name == "component-name"
+        {
+            MetadataOnlyCustom::Metadata(value)
+        } else {
+            MetadataOnlyCustom::Ignored
+        }
+    }
+}
+
+impl Section<CoreIndexSpace, CoreSectionType> for MetadataOnlyCustom {
+    fn index_space(&self) -> CoreIndexSpace {
+        CoreIndexSpace::Custom
+    }
+
+    fn section_type(&self) -> CoreSectionType {
+        CoreSectionType::Custom
+    }
+}
+
+#[cfg(feature = "component")]
+impl Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>
+    for MetadataOnlyCustom
+{
+    fn index_space(&self) -> crate::component::ComponentIndexSpace {
+        crate::component::ComponentIndexSpace::Custom
+    }
+
+    fn section_type(&self) -> crate::component::ComponentSectionType {
+        crate::component::ComponentSectionType::Custom
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IgnoreAllButMetadata;
+
+impl AstCustomization for IgnoreAllButMetadata {
+    type Expr = IgnoredExpr;
+    type Data = IgnoredData;
+    type Custom = MetadataOnlyCustom;
 }

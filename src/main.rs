@@ -4,7 +4,7 @@ use std::path::Path;
 use wasm_ast::analysis::AnalysisContext;
 use wasm_ast::component::Component;
 use wasm_ast::core::{ExprSource, Instr, TryFromExprSource};
-use wasm_ast::{DefaultAst, IgnoreAll};
+use wasm_ast::{IgnoreAll, IgnoreAllButMetadata};
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>, std::io::Error> {
     use std::fs::File;
@@ -77,7 +77,7 @@ fn main() {
     println!("component parsed successfully");
     println!("component: {component:?}");
 
-    let component: Component<DefaultAst> = Component::from_bytes(&bytes).unwrap();
+    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(&bytes).unwrap();
     println!("component metadata {:?}", component.get_metadata());
 
     let state = AnalysisContext::new(Mrc::new(component));
