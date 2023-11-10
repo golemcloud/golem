@@ -1,6 +1,6 @@
 use crate::core::{
-    Custom, Data, Export, RetainsInstructions, FuncIdx, FuncType, Import, MemIdx, Module,
-    RetainsCustomSection, TryFromExprSource, TypeRef, ValType,
+    Custom, Data, Export, FuncIdx, FuncType, Import, MemIdx, Module, RetainsCustomSection,
+    RetainsInstructions, TryFromExprSource, TypeRef, ValType,
 };
 use crate::{
     metadata, new_component_section_cache, AstCustomization, IndexSpace, Section, SectionCache,

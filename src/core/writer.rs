@@ -243,7 +243,7 @@ fn add_to_elem_section<T: RetainsInstructions>(
                 .init
                 .iter()
                 .map(|expr| {
-                    let instrs = expr.instructions().iter().cloned().collect();
+                    let instrs = expr.instructions().to_vec();
                     (&Expr { instrs }).try_into()
                 })
                 .collect::<Result<Vec<wasm_encoder::ConstExpr>, String>>()?;
@@ -285,7 +285,7 @@ fn add_to_data_section<T: Clone + RetainsInstructions>(
         DataMode::Passive => section.passive(value.init),
         DataMode::Active { memory, offset } => {
             let offset = Expr {
-                instrs: offset.instructions().iter().cloned().collect(),
+                instrs: offset.instructions().to_vec(),
             };
             section.active(*memory, &(&offset).try_into()?, value.init)
         }
