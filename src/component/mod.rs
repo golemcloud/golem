@@ -2,7 +2,10 @@ use crate::core::{
     Custom, Data, Export, ExprSink, FuncIdx, FuncType, Import, MemIdx, Module,
     RetainsCustomSection, TryFromExprSource, TypeRef, ValType,
 };
-use crate::{metadata, AstCustomization, IndexSpace, Section, SectionCache, SectionIndex, SectionType, Sections, new_component_section_cache};
+use crate::{
+    metadata, new_component_section_cache, AstCustomization, IndexSpace, Section, SectionCache,
+    SectionIndex, SectionType, Sections,
+};
 use mappable_rc::Mrc;
 use std::fmt::{Debug, Formatter};
 
@@ -132,7 +135,7 @@ impl<Ast: AstCustomization> ComponentSection<Ast> {
 }
 
 impl<Ast: AstCustomization> Section<ComponentIndexSpace, ComponentSectionType>
-for ComponentSection<Ast>
+    for ComponentSection<Ast>
 {
     fn index_space(&self) -> ComponentIndexSpace {
         match self {
@@ -737,11 +740,11 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for Custom {
 }
 
 type ComponentSectionCache<T, Ast> =
-SectionCache<T, ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>;
+    SectionCache<T, ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>;
 
 #[allow(unused)]
 type ComponentSectionIndex<Ast> =
-SectionIndex<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>;
+    SectionIndex<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>;
 
 pub struct Component<Ast: AstCustomization + 'static> {
     sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>,
@@ -770,11 +773,11 @@ pub struct Component<Ast: AstCustomization + 'static> {
 
 #[cfg(feature = "parser")]
 impl<Ast> Component<Ast>
-    where
-        Ast: AstCustomization,
-        Ast::Expr: TryFromExprSource,
-        Ast::Data: From<Data<Ast::Expr>>,
-        Ast::Custom: From<Custom>,
+where
+    Ast: AstCustomization,
+    Ast::Expr: TryFromExprSource,
+    Ast::Data: From<Data<Ast::Expr>>,
+    Ast::Custom: From<Custom>,
 {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         let parser = wasmparser::Parser::new(0);
@@ -784,11 +787,11 @@ impl<Ast> Component<Ast>
 
 #[cfg(feature = "writer")]
 impl<Ast> Component<Ast>
-    where
-        Ast: AstCustomization,
-        Ast::Expr: ExprSink,
-        Ast::Data: Into<Data<Ast::Expr>>,
-        Ast::Custom: Into<Custom>,
+where
+    Ast: AstCustomization,
+    Ast::Expr: ExprSink,
+    Ast::Data: Into<Data<Ast::Expr>>,
+    Ast::Custom: Into<Custom>,
 {
     pub fn into_bytes(self) -> Vec<u8> {
         let encoder: wasm_encoder::Component = self.into();
@@ -1000,9 +1003,9 @@ impl<Ast: AstCustomization> Component<Ast> {
 }
 
 impl<Ast> Component<Ast>
-    where
-        Ast: AstCustomization,
-        Ast::Custom: RetainsCustomSection,
+where
+    Ast: AstCustomization,
+    Ast::Custom: RetainsCustomSection,
 {
     #[cfg(feature = "metadata")]
     pub fn get_metadata(&self) -> Option<metadata::Metadata> {
@@ -1040,8 +1043,8 @@ impl<Ast> Component<Ast>
 }
 
 impl<Ast: AstCustomization>
-From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>>
-for Component<Ast>
+    From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>>
+    for Component<Ast>
 {
     fn from(
         value: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>,

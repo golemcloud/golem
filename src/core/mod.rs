@@ -1,4 +1,7 @@
-use crate::{metadata, AstCustomization, IndexSpace, Section, SectionCache, SectionIndex, SectionType, Sections, new_core_section_cache};
+use crate::{
+    metadata, new_core_section_cache, AstCustomization, IndexSpace, Section, SectionCache,
+    SectionIndex, SectionType, Sections,
+};
 use mappable_rc::Mrc;
 use std::fmt::{Debug, Formatter};
 
