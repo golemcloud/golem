@@ -85,7 +85,7 @@ fn main() {
 
     // let parser = Parser::new(0);
     let component: Component<IgnoredExpr> = Component::from_bytes(&bytes).unwrap();
-        // wasm_ast::component::Component::try_from((parser, bytes.as_slice())).unwrap();
+    // wasm_ast::component::Component::try_from((parser, bytes.as_slice())).unwrap();
     println!("component parsed successfully");
     println!("component metadata {:?}", component.get_metadata());
 
