@@ -13,6 +13,10 @@ wasm-encoder = { version = "0.36.2", optional = true }
 wasm-metadata = { version = "0.10.11", optional = true }
 leb128 = {  version = "0.2.5", optional = true }
 
+[dev-dependencies]
+colored-diff = "0.2.3"
+wasmprinter = "0.2.72"
+
 [features]
 default = ["parser", "writer", "component", "metadata", "analysis"]
 

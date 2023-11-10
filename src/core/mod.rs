@@ -45,94 +45,112 @@ pub enum CoreSection<Ast: AstCustomization> {
 
 #[allow(unused)]
 impl<Ast: AstCustomization> CoreSection<Ast> {
-    pub(crate) fn as_type(&self) -> &FuncType {
+    pub fn as_type(&self) -> &FuncType {
         match self {
             CoreSection::Type(ty) => ty,
-            _ => panic!("Expected type section"),
+            _ => panic!("Expected type section, got {}", self.type_name()),
         }
     }
 
-    pub(crate) fn as_func(&self) -> &FuncTypeRef {
+    pub fn as_func(&self) -> &FuncTypeRef {
         match self {
             CoreSection::Func(func) => func,
-            _ => panic!("Expected func section"),
+            _ => panic!("Expected func section, got {}", self.type_name()),
         }
     }
 
-    pub(crate) fn as_code(&self) -> &FuncCode<Ast::Expr> {
+    pub fn as_code(&self) -> &FuncCode<Ast::Expr> {
         match self {
             CoreSection::Code(code) => code,
-            _ => panic!("Expected code section"),
+            _ => panic!("Expected code section, got {}", self.type_name()),
         }
     }
 
-    pub(crate) fn as_table(&self) -> &Table {
+    pub fn as_table(&self) -> &Table {
         match self {
             CoreSection::Table(table) => table,
-            _ => panic!("Expected table section"),
+            _ => panic!("Expected table section, got {}", self.type_name()),
         }
     }
 
-    pub(crate) fn as_mem(&self) -> &Mem {
+    pub fn as_mem(&self) -> &Mem {
         match self {
             CoreSection::Mem(mem) => mem,
-            _ => panic!("Expected mem section"),
+            _ => panic!("Expected mem section, got {}", self.type_name()),
         }
     }
 
-    pub(crate) fn as_global(&self) -> &Global {
+    pub fn as_global(&self) -> &Global {
         match self {
             CoreSection::Global(global) => global,
-            _ => panic!("Expected global section"),
+            _ => panic!("Expected global section, got {}", self.type_name()),
         }
     }
 
-    pub(crate) fn as_elem(&self) -> &Elem<Ast::Expr> {
+    pub fn as_elem(&self) -> &Elem<Ast::Expr> {
         match self {
             CoreSection::Elem(elem) => elem,
-            _ => panic!("Expected elem section"),
+            _ => panic!("Expected elem section, got {}", self.type_name()),
         }
     }
 
-    pub(crate) fn as_data(&self) -> &Ast::Data {
+    pub fn as_data(&self) -> &Ast::Data {
         match self {
             CoreSection::Data(data) => data,
-            _ => panic!("Expected data section"),
+            _ => panic!("Expected data section, got {}", self.type_name()),
         }
     }
 
-    pub(crate) fn as_data_count(&self) -> &DataCount {
+    pub fn as_data_count(&self) -> &DataCount {
         match self {
             CoreSection::DataCount(data_count) => data_count,
-            _ => panic!("Expected data count section"),
+            _ => panic!("Expected data count section, got {}", self.type_name()),
         }
     }
 
-    pub(crate) fn as_start(&self) -> &Start {
+    pub fn as_start(&self) -> &Start {
         match self {
             CoreSection::Start(start) => start,
-            _ => panic!("Expected start section"),
+            _ => panic!("Expected start section, got {}", self.type_name()),
         }
     }
 
-    pub(crate) fn as_export(&self) -> &Export {
+    pub fn as_export(&self) -> &Export {
         match self {
             CoreSection::Export(export) => export,
-            _ => panic!("Expected export section"),
+            _ => panic!("Expected export section, got {}", self.type_name()),
         }
     }
 
-    pub(crate) fn as_import(&self) -> &Import {
+    pub fn as_import(&self) -> &Import {
         match self {
             CoreSection::Import(import) => import,
-            _ => panic!("Expected import section"),
+            _ => panic!("Expected import section, got {}", self.type_name()),
         }
     }
 
-    pub(crate) fn as_custom(&self) -> &Ast::Custom {
+    pub fn as_custom(&self) -> &Ast::Custom {
         match self {
             CoreSection::Custom(custom) => custom,
-            _ => panic!("Expected custom section"),
+            _ => panic!("Expected custom section, got {}", self.type_name()),
+        }
+    }
+
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            CoreSection::Type(_) => "type",
+            CoreSection::Func(_) => "func",
+            CoreSection::Code(_) => "code",
+            CoreSection::Table(_) => "table",
+            CoreSection::Mem(_) => "mem",
+            CoreSection::Global(_) => "global",
+            CoreSection::Elem(_) => "elem",
+            CoreSection::Data(_) => "data",
+            CoreSection::DataCount(_) => "data count",
+            CoreSection::Start(_) => "start",
+            CoreSection::Export(_) => "export",
+            CoreSection::Import(_) => "import",
+            CoreSection::Custom(_) => "custom",
         }
     }
 }
@@ -1496,6 +1514,6 @@ impl<Ast: AstCustomization>
     }
 
     fn section_type(&self) -> crate::component::ComponentSectionType {
-        crate::component::ComponentSectionType::Component
+        crate::component::ComponentSectionType::Module
     }
 }

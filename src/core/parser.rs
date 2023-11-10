@@ -460,7 +460,7 @@ impl<'a> TryFrom<OperatorsReader<'a>> for Expr {
                     type_index,
                     table_index,
                     ..
-                } => Some(Instr::CallIndirect(type_index, table_index)),
+                } => Some(Instr::CallIndirect(table_index, type_index)),
                 Operator::ReturnCall { .. } => {
                     return Err("Tail call proposal is not supported".to_string());
                 }

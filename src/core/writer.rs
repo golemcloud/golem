@@ -85,7 +85,7 @@ impl From<&MemArg> for wasm_encoder::MemArg {
     fn from(value: &MemArg) -> Self {
         wasm_encoder::MemArg {
             offset: value.offset as u64,
-            align: 2u32.pow(value.align as u32),
+            align: value.align as u32,
             memory_index: 0, // multi-memory proposal not supported
         }
     }

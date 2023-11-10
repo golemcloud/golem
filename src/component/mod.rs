@@ -35,84 +35,87 @@ impl<Ast: AstCustomization> ComponentSection<Ast> {
     pub fn as_module(&self) -> &Module<Ast> {
         match self {
             ComponentSection::Module(module) => module,
-            _ => panic!("Expected module section"),
+            _ => panic!("Expected module section, got {}", self.type_name()),
         }
     }
 
     pub fn as_core_instance(&self) -> &Instance {
         match self {
             ComponentSection::CoreInstance(instance) => instance,
-            _ => panic!("Expected core instance section"),
+            _ => panic!("Expected core instance section, got {}", self.type_name()),
         }
     }
 
     pub fn as_core_type(&self) -> &CoreType {
         match self {
             ComponentSection::CoreType(core_type) => core_type,
-            _ => panic!("Expected core type section"),
+            _ => panic!("Expected core type section, got {}", self.type_name()),
         }
     }
 
     pub fn as_component(&self) -> &Component<Ast> {
         match self {
             ComponentSection::Component(component) => component,
-            _ => panic!("Expected component section"),
+            _ => panic!("Expected component section, got {}", self.type_name()),
         }
     }
 
     pub fn as_instance(&self) -> &ComponentInstance {
         match self {
             ComponentSection::Instance(component_instance) => component_instance,
-            _ => panic!("Expected component instance section"),
+            _ => panic!(
+                "Expected component instance section, got {}",
+                self.type_name()
+            ),
         }
     }
 
     pub fn as_alias(&self) -> &Alias {
         match self {
             ComponentSection::Alias(alias) => alias,
-            _ => panic!("Expected alias section"),
+            _ => panic!("Expected alias section, got {}", self.type_name()),
         }
     }
 
     pub fn as_type(&self) -> &ComponentType {
         match self {
             ComponentSection::Type(component_type) => component_type,
-            _ => panic!("Expected type section"),
+            _ => panic!("Expected type section, got {}", self.type_name()),
         }
     }
 
     pub fn as_canon(&self) -> &Canon {
         match self {
             ComponentSection::Canon(canon) => canon,
-            _ => panic!("Expected canon section"),
+            _ => panic!("Expected canon section, got {}", self.type_name()),
         }
     }
 
     pub fn as_start(&self) -> &ComponentStart {
         match self {
             ComponentSection::Start(start) => start,
-            _ => panic!("Expected start section"),
+            _ => panic!("Expected start section, got {}", self.type_name()),
         }
     }
 
     pub fn as_import(&self) -> &ComponentImport {
         match self {
             ComponentSection::Import(import) => import,
-            _ => panic!("Expected import section"),
+            _ => panic!("Expected import section, got {}", self.type_name()),
         }
     }
 
     pub fn as_export(&self) -> &ComponentExport {
         match self {
             ComponentSection::Export(export) => export,
-            _ => panic!("Expected export section"),
+            _ => panic!("Expected export section, got {}", self.type_name()),
         }
     }
 
     pub fn as_custom(&self) -> &Ast::Custom {
         match self {
             ComponentSection::Custom(custom) => custom,
-            _ => panic!("Expected custom section"),
+            _ => panic!("Expected custom section, got {}", self.type_name()),
         }
     }
 
