@@ -19,16 +19,17 @@ Then parse a WASM module or component from an array of bytes:
 ```rust
 use mappable_rc::Mrc;
 use std::fmt::Debug;
+use wasm_ast::DefaultAst;
 use wasm_ast::analysis::AnalysisContext;
 use wasm_ast::core::{Expr, Module};
 use wasm_ast::component::Component;
 
 fn main() {
     let module_bytes: Vec<u8> = ...;
-    let module: Module<Expr> = Component::from_bytes(&component_bytes).unwrap();
+    let module: Module<DefaultAst> = Component::from_bytes(&component_bytes).unwrap();
     
     let component_bytes: Vec<u8> = ...;
-    let component: Component<Expr> = Component::from_bytes(&component_bytes).unwrap();
+    let component: Component<DefaultAst> = Component::from_bytes(&component_bytes).unwrap();
 
     println!("component metadata {:?}", component.get_metadata());
 
@@ -39,9 +40,10 @@ fn main() {
 }
 ```
 
-Use the top level `Module` or `Component` structs to query and manipulate parts of the model. It is possible to use a different type than `Expr` to represent the code blocks in the parsed AST to reduce the memory footprint in case the actual code is not required for the analysis. Note that if this custom representation cannot be serialized back to a stream of WASM instructions, the AST will no longer be serializable.
+Use the top level `Module` or `Component` structs to query and manipulate parts of the model. 
+It is possible to use a different type than `Expr`, `Data` and `Custom` to represent the code blocks, data and custom sections in the parsed AST to reduce the memory footprint in case the actual code is not required for the analysis. Note that if this custom representation cannot be serialized back to a stream of WASM instructions, the AST will no longer be serializable.
 
-The following example just ignores the code blocks in the modules:
+The following example just ignores all the code blocks, but keeps the data and custom sections:
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +56,20 @@ impl TryFromExprSource for IgnoredExpr {
     {
         Ok(IgnoredExpr {})
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CustomAst;
+
+impl AstCustomization for CustomAst {
+    type Expr = IgnoredExpr;
+    type Data = Data<IgnoredExpr>;
+    type Custom = Custom;
+}
+
+fn main() {
+    let module_bytes: Vec<u8> = ...;
+    let module: Module<CustomAst> = Component::from_bytes(&component_bytes).unwrap();
 }
 ```
 
