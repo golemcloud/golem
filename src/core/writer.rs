@@ -1,4 +1,5 @@
 use crate::core::*;
+use crate::AstCustomization;
 use std::borrow::Cow;
 
 impl From<&RefType> for wasm_encoder::RefType {
@@ -253,22 +254,25 @@ fn add_to_elem_section<T: ExprSink>(section: &mut wasm_encoder::ElementSection, 
     };
 }
 
-impl<T: ExprSink> From<&Data<T>> for wasm_encoder::DataSection {
+impl<T: Clone + ExprSink> From<&Data<T>> for wasm_encoder::DataSection {
     fn from(value: &Data<T>) -> Self {
         let mut section = wasm_encoder::DataSection::new();
-        add_to_data_section(&mut section, value);
+        add_to_data_section(&mut section, value.clone());
         section
     }
 }
 
-fn add_to_data_section<T: ExprSink>(section: &mut wasm_encoder::DataSection, value: &Data<T>) {
+fn add_to_data_section<T: Clone + ExprSink>(
+    section: &mut wasm_encoder::DataSection,
+    value: Data<T>,
+) {
     match &value.mode {
-        DataMode::Passive => section.passive(value.init.clone()),
+        DataMode::Passive => section.passive(value.init),
         DataMode::Active { memory, offset } => {
             let offset = Expr {
                 instrs: offset.iter().collect(),
             };
-            section.active(*memory, &(&offset).try_into().unwrap(), value.init.clone())
+            section.active(*memory, &(&offset).try_into().unwrap(), value.init)
         } // TODO: propagate failure
     };
 }
@@ -315,17 +319,23 @@ fn add_to_import_section(section: &mut wasm_encoder::ImportSection, value: &Impo
     section.import(&value.module, &value.name, entity_type);
 }
 
-impl<'a> From<&Custom> for wasm_encoder::CustomSection<'a> {
-    fn from(value: &Custom) -> Self {
+impl<'a> From<Custom> for wasm_encoder::CustomSection<'a> {
+    fn from(value: Custom) -> Self {
         wasm_encoder::CustomSection {
-            name: value.name.clone().into(),
-            data: value.data.clone().into(),
+            name: value.name.into(),
+            data: value.data.into(),
         }
     }
 }
 
-impl<T: ExprSink + Debug + Clone + PartialEq> From<Module<T>> for wasm_encoder::Module {
-    fn from(value: Module<T>) -> Self {
+impl<Ast> From<Module<Ast>> for wasm_encoder::Module
+where
+    Ast: AstCustomization,
+    Ast::Expr: ExprSink,
+    Ast::Data: Into<Data<Ast::Expr>>,
+    Ast::Custom: Into<Custom>,
+{
+    fn from(value: Module<Ast>) -> Self {
         let mut module = wasm_encoder::Module::new();
 
         for (section_type, sections) in value.into_grouped() {
@@ -382,7 +392,8 @@ impl<T: ExprSink + Debug + Clone + PartialEq> From<Module<T>> for wasm_encoder::
                 CoreSectionType::Data => {
                     let mut section = wasm_encoder::DataSection::new();
                     for data in sections {
-                        add_to_data_section(&mut section, data.as_data());
+                        let data: Data<Ast::Expr> = data.as_data().clone().into();
+                        add_to_data_section(&mut section, data);
                     }
                     module.section(&section);
                 }
@@ -414,6 +425,7 @@ impl<T: ExprSink + Debug + Clone + PartialEq> From<Module<T>> for wasm_encoder::
                 }
                 CoreSectionType::Custom => {
                     let custom = sections.first().unwrap().as_custom();
+                    let custom: Custom = custom.clone().into();
                     let section: wasm_encoder::CustomSection = custom.into();
                     module.section(&section);
                 }

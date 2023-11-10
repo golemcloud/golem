@@ -1,4 +1,5 @@
 use crate::component::*;
+use crate::AstCustomization;
 use mappable_rc::Mrc;
 use std::cell::RefCell;
 use std::fmt::Debug;
@@ -114,13 +115,13 @@ impl AnalysisFailure {
 pub type AnalysisResult<A> = Result<A, AnalysisFailure>;
 
 #[derive(Debug, Clone)]
-pub struct AnalysisContext<Expr: Debug + Clone + PartialEq + 'static> {
-    component_stack: Vec<Mrc<Component<Expr>>>,
+pub struct AnalysisContext<Ast: AstCustomization + 'static> {
+    component_stack: Vec<Mrc<Component<Ast>>>,
     warnings: RefCell<Vec<AnalysisWarning>>,
 }
 
-impl<Expr: Debug + Clone + PartialEq + 'static> AnalysisContext<Expr> {
-    pub fn new(component: Mrc<Component<Expr>>) -> AnalysisContext<Expr> {
+impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
+    pub fn new(component: Mrc<Component<Ast>>) -> AnalysisContext<Ast> {
         AnalysisContext {
             component_stack: vec![component],
             warnings: RefCell::new(Vec::new()),
@@ -395,11 +396,11 @@ impl<Expr: Debug + Clone + PartialEq + 'static> AnalysisContext<Expr> {
         }
     }
 
-    fn get_component(&self) -> Mrc<Component<Expr>> {
+    fn get_component(&self) -> Mrc<Component<Ast>> {
         self.component_stack.last().unwrap().clone()
     }
 
-    fn get_components_from_stack(&self, count: u32) -> Vec<Mrc<Component<Expr>>> {
+    fn get_components_from_stack(&self, count: u32) -> Vec<Mrc<Component<Ast>>> {
         self.component_stack
             .iter()
             .take(self.component_stack.len() - count as usize)
@@ -407,7 +408,7 @@ impl<Expr: Debug + Clone + PartialEq + 'static> AnalysisContext<Expr> {
             .collect()
     }
 
-    fn push_component(&self, component: Mrc<Component<Expr>>) -> AnalysisContext<Expr> {
+    fn push_component(&self, component: Mrc<Component<Ast>>) -> AnalysisContext<Ast> {
         let mut component_stack = self.component_stack.clone();
         component_stack.push(component);
         self.with_component_stack(component_stack)
@@ -415,8 +416,8 @@ impl<Expr: Debug + Clone + PartialEq + 'static> AnalysisContext<Expr> {
 
     fn with_component_stack(
         &self,
-        component_stack: Vec<Mrc<Component<Expr>>>,
-    ) -> AnalysisContext<Expr> {
+        component_stack: Vec<Mrc<Component<Ast>>>,
+    ) -> AnalysisContext<Ast> {
         AnalysisContext {
             component_stack,
             warnings: self.warnings.clone(),
@@ -427,25 +428,19 @@ impl<Expr: Debug + Clone + PartialEq + 'static> AnalysisContext<Expr> {
         &self,
         description: impl AsRef<str>,
         f: F,
-    ) -> AnalysisResult<(Mrc<ComponentSection<Expr>>, AnalysisContext<Expr>)>
+    ) -> AnalysisResult<(Mrc<ComponentSection<Ast>>, AnalysisContext<Ast>)>
     where
-        F: Fn(&Component<Expr>) -> Option<Mrc<ComponentSection<Expr>>>,
+        F: Fn(&Component<Ast>) -> Option<Mrc<ComponentSection<Ast>>>,
     {
         let component = self.get_component();
-        let tmp = description.as_ref().to_string();
-        let direct_section = AnalysisFailure::fail_on_missing(f(&component), &tmp)?;
-        println!(
-            "get_final_referenced {} direct section is {:?}",
-            tmp, direct_section
-        );
+        let direct_section = AnalysisFailure::fail_on_missing(f(&component), description)?;
         self.follow_redirects(direct_section)
     }
 
     fn follow_redirects(
         &self,
-        section: Mrc<ComponentSection<Expr>>,
-    ) -> AnalysisResult<(Mrc<ComponentSection<Expr>>, AnalysisContext<Expr>)> {
-        println!("Following redirects for {:?}", section);
+        section: Mrc<ComponentSection<Ast>>,
+    ) -> AnalysisResult<(Mrc<ComponentSection<Ast>>, AnalysisContext<Ast>)> {
         let component = self.get_component();
         match &*section {
             ComponentSection::Export(ComponentExport { kind, idx, .. }) => {
@@ -553,7 +548,7 @@ impl<Expr: Debug + Clone + PartialEq + 'static> AnalysisContext<Expr> {
         &self,
         instance: &ComponentInstance,
         name: &String,
-    ) -> AnalysisResult<(Option<Mrc<ComponentExport>>, AnalysisContext<Expr>)> {
+    ) -> AnalysisResult<(Option<Mrc<ComponentExport>>, AnalysisContext<Ast>)> {
         match instance {
             ComponentInstance::Instantiate { component_idx, .. } => {
                 let (component, next_ctx) = self

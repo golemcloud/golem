@@ -1,4 +1,7 @@
-use crate::{metadata, IndexSpace, Section, SectionCache, SectionIndex, SectionType, Sections};
+use crate::{
+    metadata, AstCustomization, IndexSpace, Section, SectionCache, SectionIndex, SectionType,
+    Sections,
+};
 use mappable_rc::Mrc;
 use std::fmt::{Debug, Formatter};
 
@@ -18,27 +21,30 @@ pub type MemIdx = u32;
 pub type TableIdx = u32;
 pub type TypeIdx = u32;
 
-// TODO: Make Data and Custom generic too
+pub trait RetainsCustomSection {
+    fn name(&self) -> &str;
+    fn data(&self) -> &[u8];
+}
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum CoreSection<Expr> {
+pub enum CoreSection<Ast: AstCustomization> {
     Type(FuncType),
     Func(FuncTypeRef),
-    Code(FuncCode<Expr>),
+    Code(FuncCode<Ast::Expr>),
     Table(Table),
     Mem(Mem),
     Global(Global),
-    Elem(Elem<Expr>),
-    Data(Data<Expr>),
+    Elem(Elem<Ast::Expr>),
+    Data(Ast::Data),
     DataCount(DataCount),
     Start(Start),
     Export(Export),
     Import(Import),
-    Custom(Custom),
+    Custom(Ast::Custom),
 }
 
 #[allow(unused)]
-impl<Expr> CoreSection<Expr> {
+impl<Ast: AstCustomization> CoreSection<Ast> {
     pub(crate) fn as_type(&self) -> &FuncType {
         match self {
             CoreSection::Type(ty) => ty,
@@ -53,7 +59,7 @@ impl<Expr> CoreSection<Expr> {
         }
     }
 
-    pub(crate) fn as_code(&self) -> &FuncCode<Expr> {
+    pub(crate) fn as_code(&self) -> &FuncCode<Ast::Expr> {
         match self {
             CoreSection::Code(code) => code,
             _ => panic!("Expected code section"),
@@ -81,14 +87,14 @@ impl<Expr> CoreSection<Expr> {
         }
     }
 
-    pub(crate) fn as_elem(&self) -> &Elem<Expr> {
+    pub(crate) fn as_elem(&self) -> &Elem<Ast::Expr> {
         match self {
             CoreSection::Elem(elem) => elem,
             _ => panic!("Expected elem section"),
         }
     }
 
-    pub(crate) fn as_data(&self) -> &Data<Expr> {
+    pub(crate) fn as_data(&self) -> &Ast::Data {
         match self {
             CoreSection::Data(data) => data,
             _ => panic!("Expected data section"),
@@ -123,7 +129,7 @@ impl<Expr> CoreSection<Expr> {
         }
     }
 
-    pub(crate) fn as_custom(&self) -> &Custom {
+    pub(crate) fn as_custom(&self) -> &Ast::Custom {
         match self {
             CoreSection::Custom(custom) => custom,
             _ => panic!("Expected custom section"),
@@ -131,9 +137,7 @@ impl<Expr> CoreSection<Expr> {
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> Section<CoreIndexSpace, CoreSectionType>
-    for CoreSection<Expr>
-{
+impl<Ast: AstCustomization> Section<CoreIndexSpace, CoreSectionType> for CoreSection<Ast> {
     fn index_space(&self) -> CoreIndexSpace {
         match self {
             CoreSection::Type(inner) => inner.index_space(),
@@ -562,7 +566,7 @@ pub enum DataMode<Expr> {
 /// Data segments are referenced through data indices.
 ///
 #[derive(Debug, Clone, PartialEq)]
-pub struct Data<Expr> {
+pub struct Data<Expr: Clone> {
     init: Vec<u8>,
     mode: DataMode<Expr>,
 }
@@ -677,6 +681,16 @@ impl Section<CoreIndexSpace, CoreSectionType> for Import {
 pub struct Custom {
     pub name: String,
     pub data: Vec<u8>,
+}
+
+impl RetainsCustomSection for Custom {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn data(&self) -> &[u8] {
+        &self.data
+    }
 }
 
 impl Section<CoreIndexSpace, CoreSectionType> for Custom {
@@ -1054,39 +1068,44 @@ pub enum ImportOrFunc<Expr: 'static> {
     Func(Func<Expr>),
 }
 
-type CoreSectionCache<T, Expr> =
-    SectionCache<T, CoreIndexSpace, CoreSectionType, CoreSection<Expr>>;
-type CoreSectionIndex<Expr> = SectionIndex<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>;
+type CoreSectionCache<T, Ast> = SectionCache<T, CoreIndexSpace, CoreSectionType, CoreSection<Ast>>;
+type CoreSectionIndex<Ast> = SectionIndex<CoreIndexSpace, CoreSectionType, CoreSection<Ast>>;
 
-pub struct Module<Expr: Debug + Clone + PartialEq + 'static> {
-    sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>,
+pub struct Module<Ast: AstCustomization + 'static> {
+    sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Ast>>,
 
-    types: CoreSectionCache<FuncType, Expr>,
-    func_type_refs: CoreSectionCache<FuncTypeRef, Expr>,
-    codes: CoreSectionCache<FuncCode<Expr>, Expr>,
-    tables: CoreSectionCache<Table, Expr>,
-    mems: CoreSectionCache<Mem, Expr>,
-    globals: CoreSectionCache<Global, Expr>,
-    elems: CoreSectionCache<Elem<Expr>, Expr>,
-    datas: CoreSectionCache<Data<Expr>, Expr>,
-    start: CoreSectionCache<Start, Expr>,
-    imports: CoreSectionCache<Import, Expr>,
-    exports: CoreSectionCache<Export, Expr>,
-    customs: CoreSectionCache<Custom, Expr>,
+    types: CoreSectionCache<FuncType, Ast>,
+    func_type_refs: CoreSectionCache<FuncTypeRef, Ast>,
+    codes: CoreSectionCache<FuncCode<Ast::Expr>, Ast>,
+    tables: CoreSectionCache<Table, Ast>,
+    mems: CoreSectionCache<Mem, Ast>,
+    globals: CoreSectionCache<Global, Ast>,
+    elems: CoreSectionCache<Elem<Ast::Expr>, Ast>,
+    datas: CoreSectionCache<Ast::Data, Ast>,
+    start: CoreSectionCache<Start, Ast>,
+    imports: CoreSectionCache<Import, Ast>,
+    exports: CoreSectionCache<Export, Ast>,
+    customs: CoreSectionCache<Ast::Custom, Ast>,
 
-    type_index: CoreSectionIndex<Expr>,
-    func_index: CoreSectionIndex<Expr>,
-    code_index: CoreSectionIndex<Expr>,
-    table_index: CoreSectionIndex<Expr>,
-    mem_index: CoreSectionIndex<Expr>,
-    global_index: CoreSectionIndex<Expr>,
-    elem_index: CoreSectionIndex<Expr>,
-    data_index: CoreSectionIndex<Expr>,
-    export_index: CoreSectionIndex<Expr>,
+    type_index: CoreSectionIndex<Ast>,
+    func_index: CoreSectionIndex<Ast>,
+    code_index: CoreSectionIndex<Ast>,
+    table_index: CoreSectionIndex<Ast>,
+    mem_index: CoreSectionIndex<Ast>,
+    global_index: CoreSectionIndex<Ast>,
+    elem_index: CoreSectionIndex<Ast>,
+    data_index: CoreSectionIndex<Ast>,
+    export_index: CoreSectionIndex<Ast>,
 }
 
 #[cfg(feature = "parser")]
-impl<Expr: Debug + Clone + PartialEq + TryFromExprSource> Module<Expr> {
+impl<Ast> Module<Ast>
+where
+    Ast: AstCustomization + 'static,
+    Ast::Expr: TryFromExprSource,
+    Ast::Data: From<Data<Ast::Expr>>,
+    Ast::Custom: From<Custom>,
+{
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         let parser = wasmparser::Parser::new(0);
         Self::try_from((parser, bytes))
@@ -1094,15 +1113,23 @@ impl<Expr: Debug + Clone + PartialEq + TryFromExprSource> Module<Expr> {
 }
 
 #[cfg(feature = "writer")]
-impl<Expr: Debug + Clone + PartialEq + ExprSink + 'static> Module<Expr> {
+impl<Ast> Module<Ast>
+where
+    Ast: AstCustomization + 'static,
+    Ast::Expr: ExprSink,
+    Ast::Data: Into<Data<Ast::Expr>>,
+    Ast::Custom: Into<Custom>,
+{
     pub fn into_bytes(self) -> Vec<u8> {
         let encoder: wasm_encoder::Module = self.into();
         encoder.finish()
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
-    pub fn new(sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>) -> Self {
+impl<Ast: AstCustomization> Module<Ast> {
+    pub(crate) fn new(
+        sections: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Ast>>,
+    ) -> Self {
         Self {
             sections,
             types: SectionCache::new(CoreSectionType::Type, |section| {
@@ -1210,12 +1237,12 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
         self.func_type_refs.all()
     }
 
-    pub fn codes(&self) -> Vec<Mrc<FuncCode<Expr>>> {
+    pub fn codes(&self) -> Vec<Mrc<FuncCode<Ast::Expr>>> {
         self.codes.populate(&self.sections);
         self.codes.all()
     }
 
-    pub fn funcs(&self) -> Vec<Func<Expr>> {
+    pub fn funcs(&self) -> Vec<Func<Ast::Expr>> {
         self.func_type_refs()
             .into_iter()
             .zip(self.codes())
@@ -1238,11 +1265,11 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
         self.globals.populate(&self.sections);
         self.globals.all()
     }
-    pub fn elems(&self) -> Vec<Mrc<Elem<Expr>>> {
+    pub fn elems(&self) -> Vec<Mrc<Elem<Ast::Expr>>> {
         self.elems.populate(&self.sections);
         self.elems.all()
     }
-    pub fn datas(&self) -> Vec<Mrc<Data<Expr>>> {
+    pub fn datas(&self) -> Vec<Mrc<Ast::Data>> {
         self.datas.populate(&self.sections);
         self.datas.all()
     }
@@ -1258,12 +1285,12 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
         self.exports.populate(&self.sections);
         self.exports.all()
     }
-    pub fn customs(&self) -> Vec<Mrc<Custom>> {
+    pub fn customs(&self) -> Vec<Mrc<Ast::Custom>> {
         self.customs.populate(&self.sections);
         self.customs.all()
     }
 
-    pub fn add_data(&mut self, data: Data<Expr>) {
+    pub fn add_data(&mut self, data: Ast::Data) {
         self.datas.invalidate();
         self.data_index.invalidate();
         self.sections.add_to_last_group(CoreSection::Data(data));
@@ -1276,7 +1303,7 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
             }));
     }
 
-    pub fn add_elem(&mut self, elem: Elem<Expr>) {
+    pub fn add_elem(&mut self, elem: Elem<Ast::Expr>) {
         self.elems.invalidate();
         self.elem_index.invalidate();
         self.sections.add_to_last_group(CoreSection::Elem(elem));
@@ -1292,7 +1319,7 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
         &mut self,
         func_type: FuncType,
         locals: Vec<ValType>,
-        body: Expr,
+        body: Ast::Expr,
     ) -> FuncIdx {
         let existing_type_idx = self.type_idx_of(&func_type);
         let type_idx = match existing_type_idx {
@@ -1344,7 +1371,7 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
             .add_to_last_group(CoreSection::Type(func_type));
     }
 
-    pub fn get_code(&mut self, func_idx: FuncIdx) -> Option<Mrc<FuncCode<Expr>>> {
+    pub fn get_code(&mut self, func_idx: FuncIdx) -> Option<Mrc<FuncCode<Ast::Expr>>> {
         self.code_index.populate(&self.sections);
         match self.code_index.get(&func_idx) {
             Some(section) => match &*section {
@@ -1355,7 +1382,7 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
         }
     }
 
-    pub fn get_data(&mut self, data_idx: DataIdx) -> Option<Mrc<Data<Expr>>> {
+    pub fn get_data(&mut self, data_idx: DataIdx) -> Option<Mrc<Ast::Data>> {
         self.data_index.populate(&self.sections);
         match self.data_index.get(&data_idx) {
             Some(section) => match &*section {
@@ -1366,7 +1393,7 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
         }
     }
 
-    pub fn get_elem(&mut self, elem_idx: ElemIdx) -> Option<Mrc<Elem<Expr>>> {
+    pub fn get_elem(&mut self, elem_idx: ElemIdx) -> Option<Mrc<Elem<Ast::Expr>>> {
         self.elem_index.populate(&self.sections);
         match self.elem_index.get(&elem_idx) {
             Some(section) => match &*section {
@@ -1388,7 +1415,7 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
         }
     }
 
-    pub fn get_function(&mut self, func_idx: FuncIdx) -> Option<ImportOrFunc<Expr>> {
+    pub fn get_function(&mut self, func_idx: FuncIdx) -> Option<ImportOrFunc<Ast::Expr>> {
         self.func_index.populate(&self.sections);
         match self.func_index.get(&func_idx) {
             Some(section) => match &*section {
@@ -1454,14 +1481,20 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
             .map(|idx| idx as TypeIdx)
     }
 
-    pub fn into_sections(mut self) -> Vec<Mrc<CoreSection<Expr>>> {
+    pub fn into_sections(mut self) -> Vec<Mrc<CoreSection<Ast>>> {
         self.sections.take_all()
     }
 
-    pub fn into_grouped(self) -> Vec<(CoreSectionType, Vec<Mrc<CoreSection<Expr>>>)> {
+    pub fn into_grouped(self) -> Vec<(CoreSectionType, Vec<Mrc<CoreSection<Ast>>>)> {
         self.sections.into_grouped()
     }
+}
 
+impl<Ast> Module<Ast>
+where
+    Ast: AstCustomization,
+    Ast::Custom: RetainsCustomSection,
+{
     #[cfg(feature = "metadata")]
     pub fn get_metadata(&self) -> Option<metadata::Metadata> {
         let mut producers = None;
@@ -1469,13 +1502,13 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
         let mut name = None;
 
         for custom in self.customs() {
-            if custom.name == "producers" {
-                producers = wasm_metadata::Producers::from_bytes(&custom.data, 0).ok();
-            } else if custom.name == "registry-metadata" {
+            if custom.name() == "producers" {
+                producers = wasm_metadata::Producers::from_bytes(custom.data(), 0).ok();
+            } else if custom.name() == "registry-metadata" {
                 registry_metadata =
-                    wasm_metadata::RegistryMetadata::from_bytes(&custom.data, 0).ok();
-            } else if custom.name == "name" {
-                name = wasm_metadata::ModuleNames::from_bytes(&custom.data, 0)
+                    wasm_metadata::RegistryMetadata::from_bytes(custom.data(), 0).ok();
+            } else if custom.name() == "name" {
+                name = wasm_metadata::ModuleNames::from_bytes(custom.data(), 0)
                     .ok()
                     .and_then(|n| n.get_name().cloned());
             }
@@ -1493,36 +1526,36 @@ impl<Expr: Debug + Clone + PartialEq> Module<Expr> {
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> Debug for Module<Expr> {
+impl<Ast: AstCustomization> Debug for Module<Ast> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.sections.fmt(f)
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> PartialEq for Module<Expr> {
+impl<Ast: AstCustomization> PartialEq for Module<Ast> {
     fn eq(&self, other: &Self) -> bool {
         self.sections.eq(&other.sections)
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq>
-    From<Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>> for Module<Expr>
+impl<Ast: AstCustomization> From<Sections<CoreIndexSpace, CoreSectionType, CoreSection<Ast>>>
+    for Module<Ast>
 {
-    fn from(value: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Expr>>) -> Self {
+    fn from(value: Sections<CoreIndexSpace, CoreSectionType, CoreSection<Ast>>) -> Self {
         Self::new(value)
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> Clone for Module<Expr> {
+impl<Ast: AstCustomization> Clone for Module<Ast> {
     fn clone(&self) -> Self {
         Module::from(self.sections.clone())
     }
 }
 
 #[cfg(feature = "component")]
-impl<Expr: Debug + Clone + PartialEq>
+impl<Ast: AstCustomization>
     Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>
-    for Module<Expr>
+    for Module<Ast>
 {
     fn index_space(&self) -> crate::component::ComponentIndexSpace {
         crate::component::ComponentIndexSpace::Module

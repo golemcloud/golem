@@ -543,8 +543,14 @@ fn add_to_component_export_section(
     );
 }
 
-impl<T: ExprSink + Debug + Clone + PartialEq> From<Component<T>> for wasm_encoder::Component {
-    fn from(value: Component<T>) -> Self {
+impl<Ast> From<Component<Ast>> for wasm_encoder::Component
+where
+    Ast: AstCustomization,
+    Ast::Expr: ExprSink,
+    Ast::Data: Into<Data<Ast::Expr>>,
+    Ast::Custom: Into<Custom>,
+{
+    fn from(value: Component<Ast>) -> Self {
         let mut component = wasm_encoder::Component::new();
 
         for (section_type, sections) in value.into_grouped() {
@@ -634,6 +640,7 @@ impl<T: ExprSink + Debug + Clone + PartialEq> From<Component<T>> for wasm_encode
                 }
                 ComponentSectionType::Custom => {
                     let custom = sections.first().unwrap().as_custom();
+                    let custom: Custom = custom.clone().into();
                     let section: wasm_encoder::CustomSection = custom.into();
                     component.section(&section);
                 }

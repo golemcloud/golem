@@ -1,4 +1,5 @@
 use crate::core::*;
+use crate::AstCustomization;
 use std::io::Write;
 use wasmparser::{BinaryReader, Operator, OperatorsReader, Parser, Payload};
 
@@ -1584,8 +1585,12 @@ impl<'a> TryFrom<OperatorsReader<'a>> for Expr {
     }
 }
 
-impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])>
-    for Sections<CoreIndexSpace, CoreSectionType, CoreSection<T>>
+impl<Ast> TryFrom<(Parser, &[u8])> for Sections<CoreIndexSpace, CoreSectionType, CoreSection<Ast>>
+where
+    Ast: AstCustomization,
+    Ast::Expr: TryFromExprSource,
+    Ast::Data: From<Data<Ast::Expr>>,
+    Ast::Custom: From<Custom>,
 {
     type Error = String;
 
@@ -1655,7 +1660,8 @@ impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])>
                 Payload::DataSection(reader) => {
                     for data in reader {
                         let data = data.map_err(|e| format!("Error parsing core module data section: {:?}", e))?;
-                        sections.push(CoreSection::Data(data.try_into()?))
+                        let data: Data<Ast::Expr> = data.try_into()?;
+                        sections.push(CoreSection::Data(data.into()));
                     }
                 }
                 Payload::CodeSectionStart { .. } => {
@@ -1668,7 +1674,7 @@ impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])>
                     sections.push(CoreSection::Custom(Custom {
                         name: reader.name().to_string(),
                         data: reader.data().to_vec(),
-                    }))
+                    }.into()))
                 }
                 Payload::End(_) => {}
                 Payload::InstanceSection(_) =>
@@ -1701,12 +1707,18 @@ impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])>
     }
 }
 
-impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])> for Module<T> {
+impl<Ast> TryFrom<(Parser, &[u8])> for Module<Ast>
+where
+    Ast: AstCustomization,
+    Ast::Expr: TryFromExprSource,
+    Ast::Data: From<Data<Ast::Expr>>,
+    Ast::Custom: From<Custom>,
+{
     type Error = String;
 
     fn try_from(value: (Parser, &[u8])) -> Result<Self, Self::Error> {
         let sections =
-            Sections::<CoreIndexSpace, CoreSectionType, CoreSection<T>>::try_from(value)?;
+            Sections::<CoreIndexSpace, CoreSectionType, CoreSection<Ast>>::try_from(value)?;
         Ok(sections.into())
     }
 }

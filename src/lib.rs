@@ -10,8 +10,11 @@ pub mod analysis;
 #[cfg(feature = "component")]
 pub mod component;
 pub mod core;
+mod customization;
 #[cfg(feature = "metadata")]
 pub mod metadata;
+
+pub use customization::*;
 
 pub trait IndexSpace: Debug + PartialEq + Eq + PartialOrd + Ord {
     type Index: From<u32> + Into<u32> + Copy + Eq + Hash;
@@ -27,7 +30,7 @@ pub trait Section<IS: IndexSpace, ST: SectionType>: Debug + Clone + PartialEq {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Sections<IS: IndexSpace, ST: SectionType, S: Section<IS, ST> + 'static> {
+pub(crate) struct Sections<IS: IndexSpace, ST: SectionType, S: Section<IS, ST> + 'static> {
     sections: Vec<Mrc<S>>,
     phantom_is: PhantomData<IS>,
     phantom_st: PhantomData<ST>,
@@ -39,6 +42,7 @@ impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Default for Sections<I
     }
 }
 
+#[allow(unused)]
 impl<IS: IndexSpace, ST: SectionType, S: Section<IS, ST>> Sections<IS, ST, S> {
     pub fn new() -> Self {
         Self {

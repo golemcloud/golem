@@ -1,8 +1,11 @@
 use crate::core::{
-    Custom, Export, ExprSink, FuncIdx, FuncType, Import, MemIdx, Module, TryFromExprSource,
-    TypeRef, ValType,
+    Custom, Data, Export, ExprSink, FuncIdx, FuncType, Import, MemIdx, Module,
+    RetainsCustomSection, TryFromExprSource, TypeRef, ValType,
 };
-use crate::{metadata, IndexSpace, Section, SectionCache, SectionIndex, SectionType, Sections};
+use crate::{
+    metadata, AstCustomization, IndexSpace, Section, SectionCache, SectionIndex, SectionType,
+    Sections,
+};
 use mappable_rc::Mrc;
 use std::fmt::{Debug, Formatter};
 
@@ -12,11 +15,11 @@ pub mod parser;
 pub mod writer;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ComponentSection<Expr: Debug + Clone + PartialEq + 'static> {
-    Module(Module<Expr>),
+pub enum ComponentSection<Ast: AstCustomization + 'static> {
+    Module(Module<Ast>),
     CoreInstance(Instance),
     CoreType(CoreType),
-    Component(Component<Expr>),
+    Component(Component<Ast>),
     Instance(ComponentInstance),
     Alias(Alias),
     Type(ComponentType),
@@ -24,12 +27,12 @@ pub enum ComponentSection<Expr: Debug + Clone + PartialEq + 'static> {
     Start(ComponentStart),
     Import(ComponentImport),
     Export(ComponentExport),
-    Custom(Custom),
+    Custom(Ast::Custom),
 }
 
 #[allow(unused)]
-impl<Expr: Debug + Clone + PartialEq> ComponentSection<Expr> {
-    pub fn as_module(&self) -> &Module<Expr> {
+impl<Ast: AstCustomization> ComponentSection<Ast> {
+    pub fn as_module(&self) -> &Module<Ast> {
         match self {
             ComponentSection::Module(module) => module,
             _ => panic!("Expected module section"),
@@ -50,7 +53,7 @@ impl<Expr: Debug + Clone + PartialEq> ComponentSection<Expr> {
         }
     }
 
-    pub fn as_component(&self) -> &Component<Expr> {
+    pub fn as_component(&self) -> &Component<Ast> {
         match self {
             ComponentSection::Component(component) => component,
             _ => panic!("Expected component section"),
@@ -106,7 +109,7 @@ impl<Expr: Debug + Clone + PartialEq> ComponentSection<Expr> {
         }
     }
 
-    pub fn as_custom(&self) -> &Custom {
+    pub fn as_custom(&self) -> &Ast::Custom {
         match self {
             ComponentSection::Custom(custom) => custom,
             _ => panic!("Expected custom section"),
@@ -131,8 +134,8 @@ impl<Expr: Debug + Clone + PartialEq> ComponentSection<Expr> {
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> Section<ComponentIndexSpace, ComponentSectionType>
-    for ComponentSection<Expr>
+impl<Ast: AstCustomization> Section<ComponentIndexSpace, ComponentSectionType>
+    for ComponentSection<Ast>
 {
     fn index_space(&self) -> ComponentIndexSpace {
         match self {
@@ -736,40 +739,46 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for Custom {
     }
 }
 
-type ComponentSectionCache<T, Expr> =
-    SectionCache<T, ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>;
+type ComponentSectionCache<T, Ast> =
+    SectionCache<T, ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>;
 
 #[allow(unused)]
-type ComponentSectionIndex<Expr> =
-    SectionIndex<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>;
+type ComponentSectionIndex<Ast> =
+    SectionIndex<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>;
 
-pub struct Component<Expr: Debug + Clone + PartialEq + 'static> {
-    sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
+pub struct Component<Ast: AstCustomization + 'static> {
+    sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>,
 
-    imports: ComponentSectionCache<ComponentImport, Expr>,
-    exports: ComponentSectionCache<ComponentExport, Expr>,
-    core_instances: ComponentSectionCache<Instance, Expr>,
-    instances: ComponentSectionCache<ComponentInstance, Expr>,
-    component_types: ComponentSectionCache<ComponentType, Expr>,
-    core_types: ComponentSectionCache<CoreType, Expr>,
-    canons: ComponentSectionCache<Canon, Expr>,
-    aliases: ComponentSectionCache<Alias, Expr>,
-    components: ComponentSectionCache<Component<Expr>, Expr>,
-    modules: ComponentSectionCache<Module<Expr>, Expr>,
-    customs: ComponentSectionCache<Custom, Expr>,
+    imports: ComponentSectionCache<ComponentImport, Ast>,
+    exports: ComponentSectionCache<ComponentExport, Ast>,
+    core_instances: ComponentSectionCache<Instance, Ast>,
+    instances: ComponentSectionCache<ComponentInstance, Ast>,
+    component_types: ComponentSectionCache<ComponentType, Ast>,
+    core_types: ComponentSectionCache<CoreType, Ast>,
+    canons: ComponentSectionCache<Canon, Ast>,
+    aliases: ComponentSectionCache<Alias, Ast>,
+    components: ComponentSectionCache<Component<Ast>, Ast>,
+    modules: ComponentSectionCache<Module<Ast>, Ast>,
+    customs: ComponentSectionCache<Ast::Custom, Ast>,
 
-    core_instance_index: ComponentSectionIndex<Expr>,
-    instance_index: ComponentSectionIndex<Expr>,
-    component_type_index: ComponentSectionIndex<Expr>,
-    core_func_index: ComponentSectionIndex<Expr>,
-    component_index: ComponentSectionIndex<Expr>,
-    component_func_index: ComponentSectionIndex<Expr>,
-    value_index: ComponentSectionIndex<Expr>,
-    module_index: ComponentSectionIndex<Expr>,
+    core_instance_index: ComponentSectionIndex<Ast>,
+    instance_index: ComponentSectionIndex<Ast>,
+    component_type_index: ComponentSectionIndex<Ast>,
+    core_func_index: ComponentSectionIndex<Ast>,
+    component_index: ComponentSectionIndex<Ast>,
+    component_func_index: ComponentSectionIndex<Ast>,
+    value_index: ComponentSectionIndex<Ast>,
+    module_index: ComponentSectionIndex<Ast>,
 }
 
 #[cfg(feature = "parser")]
-impl<Expr: Debug + Clone + PartialEq + TryFromExprSource + 'static> Component<Expr> {
+impl<Ast> Component<Ast>
+where
+    Ast: AstCustomization,
+    Ast::Expr: TryFromExprSource,
+    Ast::Data: From<Data<Ast::Expr>>,
+    Ast::Custom: From<Custom>,
+{
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         let parser = wasmparser::Parser::new(0);
         Self::try_from((parser, bytes))
@@ -777,16 +786,22 @@ impl<Expr: Debug + Clone + PartialEq + TryFromExprSource + 'static> Component<Ex
 }
 
 #[cfg(feature = "writer")]
-impl<Expr: Debug + Clone + PartialEq + ExprSink + 'static> Component<Expr> {
+impl<Ast> Component<Ast>
+where
+    Ast: AstCustomization,
+    Ast::Expr: ExprSink,
+    Ast::Data: Into<Data<Ast::Expr>>,
+    Ast::Custom: Into<Custom>,
+{
     pub fn into_bytes(self) -> Vec<u8> {
         let encoder: wasm_encoder::Component = self.into();
         encoder.finish()
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
-    pub fn new(
-        sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
+impl<Ast: AstCustomization> Component<Ast> {
+    pub(crate) fn new(
+        sections: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>,
     ) -> Self {
         Self {
             sections,
@@ -920,17 +935,17 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
         self.aliases.all()
     }
 
-    pub fn components(&self) -> Vec<Mrc<Component<Expr>>> {
+    pub fn components(&self) -> Vec<Mrc<Component<Ast>>> {
         self.components.populate(&self.sections);
         self.components.all()
     }
 
-    pub fn modules(&self) -> Vec<Mrc<Module<Expr>>> {
+    pub fn modules(&self) -> Vec<Mrc<Module<Ast>>> {
         self.modules.populate(&self.sections);
         self.modules.all()
     }
 
-    pub fn customs(&self) -> Vec<Mrc<Custom>> {
+    pub fn customs(&self) -> Vec<Mrc<Ast::Custom>> {
         self.customs.populate(&self.sections);
         self.customs.all()
     }
@@ -952,7 +967,7 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
     pub fn get_instance_wrapped(
         &self,
         instance_idx: InstanceIdx,
-    ) -> Option<Mrc<ComponentSection<Expr>>> {
+    ) -> Option<Mrc<ComponentSection<Ast>>> {
         self.instance_index.populate(&self.sections);
         self.instance_index.get(&instance_idx)
     }
@@ -980,7 +995,7 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
     pub fn get_component_type(
         &self,
         component_type_idx: ComponentTypeIdx,
-    ) -> Option<Mrc<ComponentSection<Expr>>> {
+    ) -> Option<Mrc<ComponentSection<Ast>>> {
         self.component_type_index.populate(&self.sections);
         self.component_type_index.get(&component_type_idx)
     }
@@ -990,7 +1005,7 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
     /// It can be one of the following section types:
     /// - Canon
     /// - Alias
-    pub fn get_core_func(&self, core_func_idx: FuncIdx) -> Option<Mrc<ComponentSection<Expr>>> {
+    pub fn get_core_func(&self, core_func_idx: FuncIdx) -> Option<Mrc<ComponentSection<Ast>>> {
         self.core_func_index.populate(&self.sections);
         self.core_func_index.get(&core_func_idx)
     }
@@ -1002,10 +1017,7 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
     /// - Alias
     /// - ComponentExport
     /// - ComponentImport
-    pub fn get_component(
-        &self,
-        component_idx: ComponentIdx,
-    ) -> Option<Mrc<ComponentSection<Expr>>> {
+    pub fn get_component(&self, component_idx: ComponentIdx) -> Option<Mrc<ComponentSection<Ast>>> {
         self.component_index.populate(&self.sections);
         self.component_index.get(&component_idx)
     }
@@ -1020,7 +1032,7 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
     pub fn get_component_func(
         &self,
         component_func_idx: ComponentFuncIdx,
-    ) -> Option<Mrc<ComponentSection<Expr>>> {
+    ) -> Option<Mrc<ComponentSection<Ast>>> {
         self.component_func_index.populate(&self.sections);
         self.component_func_index.get(&component_func_idx)
     }
@@ -1031,7 +1043,7 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
     /// - Alias
     /// - ComponentExport
     /// - ComponentImport
-    pub fn get_value(&self, value_idx: ValueIdx) -> Option<Mrc<ComponentSection<Expr>>> {
+    pub fn get_value(&self, value_idx: ValueIdx) -> Option<Mrc<ComponentSection<Ast>>> {
         self.value_index.populate(&self.sections);
         self.value_index.get(&value_idx)
     }
@@ -1043,19 +1055,25 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
     /// - Alias
     /// - ComponentExport
     /// - ComponentImport
-    pub fn get_module(&self, module_idx: ModuleIdx) -> Option<Mrc<ComponentSection<Expr>>> {
+    pub fn get_module(&self, module_idx: ModuleIdx) -> Option<Mrc<ComponentSection<Ast>>> {
         self.module_index.populate(&self.sections);
         self.module_index.get(&module_idx)
     }
 
-    pub fn into_sections(mut self) -> Vec<Mrc<ComponentSection<Expr>>> {
+    pub fn into_sections(mut self) -> Vec<Mrc<ComponentSection<Ast>>> {
         self.sections.take_all()
     }
 
-    pub fn into_grouped(self) -> Vec<(ComponentSectionType, Vec<Mrc<ComponentSection<Expr>>>)> {
+    pub fn into_grouped(self) -> Vec<(ComponentSectionType, Vec<Mrc<ComponentSection<Ast>>>)> {
         self.sections.into_grouped()
     }
+}
 
+impl<Ast> Component<Ast>
+where
+    Ast: AstCustomization,
+    Ast::Custom: RetainsCustomSection,
+{
     #[cfg(feature = "metadata")]
     pub fn get_metadata(&self) -> Option<metadata::Metadata> {
         let mut producers = None;
@@ -1063,17 +1081,17 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
         let mut name = None;
 
         for custom in self.customs() {
-            if custom.name == "producers" {
-                producers = wasm_metadata::Producers::from_bytes(&custom.data, 0).ok();
-            } else if custom.name == "registry-metadata" {
+            if custom.name() == "producers" {
+                producers = wasm_metadata::Producers::from_bytes(custom.data(), 0).ok();
+            } else if custom.name() == "registry-metadata" {
                 registry_metadata =
-                    wasm_metadata::RegistryMetadata::from_bytes(&custom.data, 0).ok();
-            } else if custom.name == "name" {
-                name = wasm_metadata::ModuleNames::from_bytes(&custom.data, 0)
+                    wasm_metadata::RegistryMetadata::from_bytes(custom.data(), 0).ok();
+            } else if custom.name() == "name" {
+                name = wasm_metadata::ModuleNames::from_bytes(custom.data(), 0)
                     .ok()
                     .and_then(|n| n.get_name().cloned());
-            } else if custom.name == "component-name" {
-                name = wasm_metadata::ModuleNames::from_bytes(&custom.data, 0)
+            } else if custom.name() == "component-name" {
+                name = wasm_metadata::ModuleNames::from_bytes(custom.data(), 0)
                     .ok()
                     .and_then(|n| n.get_name().cloned());
             }
@@ -1091,38 +1109,36 @@ impl<Expr: Debug + Clone + PartialEq + 'static> Component<Expr> {
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq>
-    From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>>
-    for Component<Expr>
+impl<Ast: AstCustomization>
+    From<Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>>
+    for Component<Ast>
 {
     fn from(
-        value: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Expr>>,
+        value: Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>,
     ) -> Self {
         Component::new(value)
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> PartialEq for Component<Expr> {
+impl<Ast: AstCustomization> PartialEq for Component<Ast> {
     fn eq(&self, other: &Self) -> bool {
         self.sections.eq(&other.sections)
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> Debug for Component<Expr> {
+impl<Ast: AstCustomization> Debug for Component<Ast> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.sections.fmt(f)
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> Clone for Component<Expr> {
+impl<Ast: AstCustomization> Clone for Component<Ast> {
     fn clone(&self) -> Self {
         Component::new(self.sections.clone())
     }
 }
 
-impl<Expr: Debug + Clone + PartialEq> Section<ComponentIndexSpace, ComponentSectionType>
-    for Component<Expr>
-{
+impl<Ast: AstCustomization> Section<ComponentIndexSpace, ComponentSectionType> for Component<Ast> {
     fn index_space(&self) -> ComponentIndexSpace {
         ComponentIndexSpace::Component
     }

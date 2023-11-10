@@ -1,5 +1,5 @@
 use crate::component::*;
-use crate::core::TryFromExprSource;
+use crate::core::{Data, TryFromExprSource};
 use crate::Sections;
 use wasmparser::{Chunk, Parser, Payload};
 
@@ -624,8 +624,13 @@ impl TryFrom<wasmparser::ComponentStartFunction> for ComponentStart {
     }
 }
 
-impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])>
-    for Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<T>>
+impl<Ast> TryFrom<(Parser, &[u8])>
+    for Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>
+where
+    Ast: AstCustomization,
+    Ast::Expr: TryFromExprSource,
+    Ast::Data: From<Data<Ast::Expr>>,
+    Ast::Custom: From<Custom>,
 {
     type Error = String;
 
@@ -643,70 +648,73 @@ impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])>
                     payload
                 }
                 Chunk::NeedMoreData { .. } => {
-                    return Err("Unexpected end of component binary".to_string())
+                    return Err("Unexpected end of component binary".to_string());
                 }
             };
             match payload {
                 Payload::Version { .. } => {}
                 Payload::TypeSection(_) => {
-                    return Err("Unexpected core type section in component".to_string())
+                    return Err("Unexpected core type section in component".to_string());
                 }
 
                 Payload::ImportSection(_) => {
-                    return Err("Unexpected core import section in component".to_string())
+                    return Err("Unexpected core import section in component".to_string());
                 }
 
                 Payload::FunctionSection(_) => {
-                    return Err("Unexpected core function section in component".to_string())
+                    return Err("Unexpected core function section in component".to_string());
                 }
 
                 Payload::TableSection(_) => {
-                    return Err("Unexpected core table section in component".to_string())
+                    return Err("Unexpected core table section in component".to_string());
                 }
 
                 Payload::MemorySection(_) => {
-                    return Err("Unexpected core memory section in component".to_string())
+                    return Err("Unexpected core memory section in component".to_string());
                 }
 
                 Payload::TagSection(_) => {
-                    return Err("Unexpected core tag section in component".to_string())
+                    return Err("Unexpected core tag section in component".to_string());
                 }
                 Payload::GlobalSection(_) => {
-                    return Err("Unexpected core global section in component".to_string())
+                    return Err("Unexpected core global section in component".to_string());
                 }
 
                 Payload::ExportSection(_) => {
-                    return Err("Unexpected core export section in component".to_string())
+                    return Err("Unexpected core export section in component".to_string());
                 }
 
                 Payload::StartSection { .. } => {
-                    return Err("Unexpected core start section in component".to_string())
+                    return Err("Unexpected core start section in component".to_string());
                 }
 
                 Payload::ElementSection(_) => {
-                    return Err("Unexpected core element section in component".to_string())
+                    return Err("Unexpected core element section in component".to_string());
                 }
 
                 Payload::DataCountSection { .. } => {
-                    return Err("Unexpected core data count section in component".to_string())
+                    return Err("Unexpected core data count section in component".to_string());
                 }
 
                 Payload::DataSection(_) => {
-                    return Err("Unexpected core data section in component".to_string())
+                    return Err("Unexpected core data section in component".to_string());
                 }
 
                 Payload::CodeSectionStart { .. } => {
-                    return Err("Unexpected core code section in component".to_string())
+                    return Err("Unexpected core code section in component".to_string());
                 }
 
                 Payload::CodeSectionEntry(_) => {
-                    return Err("Unexpected core code section in component".to_string())
+                    return Err("Unexpected core code section in component".to_string());
                 }
 
-                Payload::CustomSection(reader) => sections.push(ComponentSection::Custom(Custom {
-                    name: reader.name().to_string(),
-                    data: reader.data().to_vec(),
-                })),
+                Payload::CustomSection(reader) => sections.push(ComponentSection::Custom(
+                    Custom {
+                        name: reader.name().to_string(),
+                        data: reader.data().to_vec(),
+                    }
+                    .into(),
+                )),
                 Payload::End(_) => {
                     break;
                 }
@@ -727,12 +735,12 @@ impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])>
                     }
                 }
                 Payload::ModuleSection { parser, range } => {
-                    let module: Module<T> = (parser, &data[range.start..range.end]).try_into()?;
+                    let module: Module<Ast> = (parser, &data[range.start..range.end]).try_into()?;
                     remaining = &remaining[(range.end - range.start)..];
                     sections.push(ComponentSection::Module(module))
                 }
                 Payload::ComponentSection { parser, range } => {
-                    let component: Component<T> =
+                    let component: Component<Ast> =
                         (parser, &data[range.start..range.end]).try_into()?;
                     remaining = &remaining[(range.end - range.start)..];
                     sections.push(ComponentSection::Component(component))
@@ -789,7 +797,7 @@ impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])>
                     }
                 }
                 Payload::UnknownSection { .. } => {
-                    return Err("Unexpected unknown section in component".to_string())
+                    return Err("Unexpected unknown section in component".to_string());
                 }
             }
         }
@@ -801,12 +809,18 @@ impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])>
     }
 }
 
-impl<T: TryFromExprSource + Debug + Clone + PartialEq> TryFrom<(Parser, &[u8])> for Component<T> {
+impl<Ast> TryFrom<(Parser, &[u8])> for Component<Ast>
+where
+    Ast: AstCustomization,
+    Ast::Expr: TryFromExprSource,
+    Ast::Data: From<Data<Ast::Expr>>,
+    Ast::Custom: From<Custom>,
+{
     type Error = String;
 
     fn try_from(value: (Parser, &[u8])) -> Result<Self, Self::Error> {
         let sections =
-            Sections::<ComponentIndexSpace, ComponentSectionType, ComponentSection<T>>::try_from(
+            Sections::<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>::try_from(
                 value,
             )?;
         Ok(sections.into())
