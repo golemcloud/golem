@@ -83,9 +83,9 @@ fn main() {
     // let mut validator = Validator::new_with_features(features);
     //let mut current_module_sections: Option<Sections<'_, CoreIndexSpace>> = None;
 
-    let parser = Parser::new(0);
-    let component: Component<IgnoredExpr> =
-        wasm_ast::component::Component::try_from((parser, bytes.as_slice())).unwrap();
+    // let parser = Parser::new(0);
+    let component: Component<IgnoredExpr> = Component::from_bytes(&bytes).unwrap();
+        // wasm_ast::component::Component::try_from((parser, bytes.as_slice())).unwrap();
     println!("component parsed successfully");
     println!("component metadata {:?}", component.get_metadata());
 
