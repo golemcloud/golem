@@ -1,5 +1,5 @@
 use crate::component::*;
-use crate::core::{ExportDesc, ExprSink};
+use crate::core::{ExportDesc, RetainsInstructions};
 
 impl From<&InstantiationArgRef> for wasm_encoder::ModuleArg {
     fn from(value: &InstantiationArgRef) -> Self {
@@ -574,7 +574,7 @@ fn add_to_component_export_section(
 impl<Ast> TryFrom<Component<Ast>> for wasm_encoder::Component
 where
     Ast: AstCustomization,
-    Ast::Expr: ExprSink,
+    Ast::Expr: RetainsInstructions,
     Ast::Data: Into<Data<Ast::Expr>>,
     Ast::Custom: Into<Custom>,
 {

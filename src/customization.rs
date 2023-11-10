@@ -13,10 +13,10 @@ pub trait AstCustomization: Debug + Clone + PartialEq {
     type Custom: Debug + Clone + PartialEq + Section<CoreIndexSpace, CoreSectionType>;
     #[cfg(feature = "component")]
     type Custom: Debug
-        + Clone
-        + PartialEq
-        + Section<CoreIndexSpace, CoreSectionType>
-        + Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>;
+    + Clone
+    + PartialEq
+    + Section<CoreIndexSpace, CoreSectionType>
+    + Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,8 +33,8 @@ pub struct IgnoredExpr;
 
 impl TryFromExprSource for IgnoredExpr {
     fn try_from<S: ExprSource>(_value: S) -> Result<Self, String>
-    where
-        Self: Sized,
+        where
+            Self: Sized,
     {
         Ok(IgnoredExpr)
     }
@@ -80,7 +80,7 @@ impl Section<CoreIndexSpace, CoreSectionType> for IgnoredCustom {
 
 #[cfg(feature = "component")]
 impl Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>
-    for IgnoredCustom
+for IgnoredCustom
 {
     fn index_space(&self) -> crate::component::ComponentIndexSpace {
         crate::component::ComponentIndexSpace::Custom
@@ -148,7 +148,7 @@ impl Section<CoreIndexSpace, CoreSectionType> for MetadataOnlyCustom {
 
 #[cfg(feature = "component")]
 impl Section<crate::component::ComponentIndexSpace, crate::component::ComponentSectionType>
-    for MetadataOnlyCustom
+for MetadataOnlyCustom
 {
     fn index_space(&self) -> crate::component::ComponentIndexSpace {
         crate::component::ComponentIndexSpace::Custom

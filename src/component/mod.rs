@@ -1,5 +1,5 @@
 use crate::core::{
-    Custom, Data, Export, ExprSink, FuncIdx, FuncType, Import, MemIdx, Module,
+    Custom, Data, Export, RetainsInstructions, FuncIdx, FuncType, Import, MemIdx, Module,
     RetainsCustomSection, TryFromExprSource, TypeRef, ValType,
 };
 use crate::{
@@ -789,7 +789,7 @@ where
 impl<Ast> Component<Ast>
 where
     Ast: AstCustomization,
-    Ast::Expr: ExprSink,
+    Ast::Expr: RetainsInstructions,
     Ast::Data: Into<Data<Ast::Expr>>,
     Ast::Custom: Into<Custom>,
 {

@@ -712,8 +712,8 @@ pub trait ExprSource: IntoIterator<Item = Result<Instr, String>> {
     fn unparsed(self) -> Result<Vec<u8>, String>;
 }
 
-pub trait ExprSink {
-    fn iter(&self) -> Box<dyn Iterator<Item = Instr>>;
+pub trait RetainsInstructions {
+    fn instructions(&self) -> &[Instr];
 }
 
 pub trait TryFromExprSource {
@@ -726,6 +726,12 @@ impl TryFromExprSource for Expr {
     fn try_from<S: ExprSource>(value: S) -> Result<Self, String> {
         let instrs = value.into_iter().collect::<Result<Vec<Instr>, String>>()?;
         Ok(Self { instrs })
+    }
+}
+
+impl RetainsInstructions for Expr {
+    fn instructions(&self) -> &[Instr] {
+        &self.instrs
     }
 }
 
@@ -1116,7 +1122,7 @@ where
 impl<Ast> Module<Ast>
 where
     Ast: AstCustomization + 'static,
-    Ast::Expr: ExprSink,
+    Ast::Expr: RetainsInstructions,
     Ast::Data: Into<Data<Ast::Expr>>,
     Ast::Custom: Into<Custom>,
 {

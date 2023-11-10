@@ -51,7 +51,7 @@ fn add_to_function_section(section: &mut wasm_encoder::FunctionSection, value: &
     section.function(value.type_idx);
 }
 
-impl<T: ExprSink> TryFrom<&FuncCode<T>> for wasm_encoder::CodeSection {
+impl<T: RetainsInstructions> TryFrom<&FuncCode<T>> for wasm_encoder::CodeSection {
     type Error = String;
 
     fn try_from(value: &FuncCode<T>) -> Result<Self, Self::Error> {
@@ -61,16 +61,13 @@ impl<T: ExprSink> TryFrom<&FuncCode<T>> for wasm_encoder::CodeSection {
     }
 }
 
-fn add_to_code_section<T: ExprSink>(
+fn add_to_code_section<T: RetainsInstructions>(
     section: &mut wasm_encoder::CodeSection,
     value: &FuncCode<T>,
 ) -> Result<(), String> {
     let mut function =
         wasm_encoder::Function::new_with_locals_types(value.locals.iter().map(|v| v.into()));
-    let body = Expr {
-        instrs: value.body.iter().collect(),
-    };
-    encode_expr(&body, &mut function)?;
+    encode_instructions(value.body.instructions(), &mut function)?;
     section.function(&function);
     Ok(())
 }
@@ -200,7 +197,7 @@ fn add_to_global_section(
     Ok(())
 }
 
-impl<T: ExprSink> TryFrom<&Elem<T>> for wasm_encoder::ElementSection {
+impl<T: RetainsInstructions> TryFrom<&Elem<T>> for wasm_encoder::ElementSection {
     type Error = String;
 
     fn try_from(value: &Elem<T>) -> Result<Self, Self::Error> {
@@ -210,7 +207,7 @@ impl<T: ExprSink> TryFrom<&Elem<T>> for wasm_encoder::ElementSection {
     }
 }
 
-fn add_to_elem_section<T: ExprSink>(
+fn add_to_elem_section<T: RetainsInstructions>(
     section: &mut wasm_encoder::ElementSection,
     value: &Elem<T>,
 ) -> Result<(), String> {
@@ -219,11 +216,12 @@ fn add_to_elem_section<T: ExprSink>(
             let func_indices: Vec<u32> = value
                 .init
                 .iter()
-                .flat_map(|expr| expr.iter())
+                .flat_map(|expr| expr.instructions())
                 .filter_map(|instr| match instr {
                     Instr::RefFunc(func_idx) => Some(func_idx),
                     _ => None,
                 })
+                .cloned()
                 .collect();
             let elements = wasm_encoder::Elements::Functions(&func_indices);
             match &value.mode {
@@ -245,7 +243,7 @@ fn add_to_elem_section<T: ExprSink>(
                 .init
                 .iter()
                 .map(|expr| {
-                    let instrs = expr.iter().collect();
+                    let instrs = expr.instructions().iter().cloned().collect();
                     (&Expr { instrs }).try_into()
                 })
                 .collect::<Result<Vec<wasm_encoder::ConstExpr>, String>>()?;
@@ -269,7 +267,7 @@ fn add_to_elem_section<T: ExprSink>(
     Ok(())
 }
 
-impl<T: Clone + ExprSink> TryFrom<&Data<T>> for wasm_encoder::DataSection {
+impl<T: Clone + RetainsInstructions> TryFrom<&Data<T>> for wasm_encoder::DataSection {
     type Error = String;
 
     fn try_from(value: &Data<T>) -> Result<Self, Self::Error> {
@@ -279,7 +277,7 @@ impl<T: Clone + ExprSink> TryFrom<&Data<T>> for wasm_encoder::DataSection {
     }
 }
 
-fn add_to_data_section<T: Clone + ExprSink>(
+fn add_to_data_section<T: Clone + RetainsInstructions>(
     section: &mut wasm_encoder::DataSection,
     value: Data<T>,
 ) -> Result<(), String> {
@@ -287,7 +285,7 @@ fn add_to_data_section<T: Clone + ExprSink>(
         DataMode::Passive => section.passive(value.init),
         DataMode::Active { memory, offset } => {
             let offset = Expr {
-                instrs: offset.iter().collect(),
+                instrs: offset.instructions().iter().cloned().collect(),
             };
             section.active(*memory, &(&offset).try_into()?, value.init)
         }
@@ -349,7 +347,7 @@ impl<'a> From<Custom> for wasm_encoder::CustomSection<'a> {
 impl<Ast> TryFrom<Module<Ast>> for wasm_encoder::Module
 where
     Ast: AstCustomization,
-    Ast::Expr: ExprSink,
+    Ast::Expr: RetainsInstructions,
     Ast::Data: Into<Data<Ast::Expr>>,
     Ast::Custom: Into<Custom>,
 {
@@ -466,8 +464,11 @@ impl InstructionTarget for wasm_encoder::Function {
     }
 }
 
-fn encode_expr<F: InstructionTarget>(expr: &Expr, target: &mut F) -> Result<(), String> {
-    for instr in &expr.instrs {
+fn encode_instructions<F: InstructionTarget>(
+    instrs: &[Instr],
+    target: &mut F,
+) -> Result<(), String> {
+    for instr in instrs {
         encode_instr(instr, target)?;
     }
     Ok(())
