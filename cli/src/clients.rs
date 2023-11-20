@@ -3,6 +3,7 @@ use golem_client::model::{TokenSecret, UnsafeToken};
 use crate::model::{AccountId, ProjectAction};
 
 pub mod account;
+pub mod gateway;
 pub mod grant;
 pub mod login;
 pub mod policy;

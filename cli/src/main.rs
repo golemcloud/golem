@@ -29,6 +29,7 @@ use crate::clients::project_grant::ProjectGrantClientLive;
 use crate::clients::template::TemplateClientLive;
 use crate::clients::token::TokenClientLive;
 use crate::clients::worker::WorkerClientLive;
+use crate::gateway::{GatewayHandler, GatewayHandlerLive, GatewaySubcommand};
 use crate::policy::{ProjectPolicyHandler, ProjectPolicyHandlerLive, ProjectPolicySubcommand};
 use crate::project::{ProjectHandler, ProjectHandlerLive, ProjectSubcommand};
 use crate::project_grant::{ProjectGrantHandler, ProjectGrantHandlerLive};
@@ -40,6 +41,7 @@ mod account;
 mod auth;
 pub mod clients;
 mod examples;
+mod gateway;
 pub mod model;
 mod policy;
 mod project;
@@ -134,6 +136,11 @@ enum Command {
         #[arg(short, long)]
         language: Option<GuestLanguage>,
     },
+    #[command()]
+    Gateway {
+        #[command(subcommand)]
+        subcommand: GatewaySubcommand,
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -186,7 +193,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>> {
     let url_str =
         std::env::var("GOLEM_BASE_URL").unwrap_or("https://release.api.golem.cloud/".to_string());
+    let gateway_url_str = std::env::var("GOLEM_GATEWAY_BASE_URL").unwrap_or(url_str.clone());
     let url = Url::parse(&url_str).unwrap();
+    let gateway_url = Url::parse(&gateway_url_str).unwrap();
     let home = dirs::home_dir().unwrap();
     let allow_insecure_str = std::env::var("GOLEM_ALLOW_INSECURE").unwrap_or("false".to_string());
     let allow_insecure = allow_insecure_str != "false";
@@ -279,6 +288,11 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         client: worker_client,
         templates: &template_srv,
     };
+    let gateway_srv = GatewayHandlerLive {
+        base_url: gateway_url.clone(),
+        allow_insecure,
+        projects: &project_client,
+    };
 
     let auth = auth_srv
         .authenticate(
@@ -324,6 +338,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         Command::ListExamples { min_tier, language } => {
             examples::process_list_examples(min_tier, language)
         }
+        Command::Gateway { subcommand } => gateway_srv.handle(cmd.format, &auth, subcommand).await,
     };
 
     match res {
