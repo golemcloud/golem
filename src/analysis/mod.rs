@@ -121,8 +121,12 @@ pub struct AnalysisContext<Ast: AstCustomization + 'static> {
 }
 
 impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
+    pub fn new(component: Component<Ast>) -> AnalysisContext<Ast> {
+        AnalysisContext::from_rc(Mrc::new(component))
+    }
+
     /// Initializes an analyzer for a given component
-    pub fn new(component: Mrc<Component<Ast>>) -> AnalysisContext<Ast> {
+    pub fn from_rc(component: Mrc<Component<Ast>>) -> AnalysisContext<Ast> {
         AnalysisContext {
             component_stack: vec![component],
             warnings: RefCell::new(Vec::new()),

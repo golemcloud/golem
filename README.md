@@ -1,4 +1,13 @@
 # golem-wasm-ast
+<p>
+    <a href="https://crates.io/crates/golem-wasm-ast">
+        <img src="https://img.shields.io/crates/v/golem-wasm-ast.svg" alt="Crate"/>
+    </a>
+    <a href="https://docs.rs/golem-wasm-ast/latest/">
+        <img src="https://docs.rs/golem-wasm-ast/badge.svg" alt="Docs"/>
+    </a>
+</p>
+
 Higher level WASM library for Rust
 
 This library defines an in-memory, mutable representation of WebAssembly modules and [components](https://github.com/WebAssembly/component-model). It uses  
@@ -17,7 +26,6 @@ $ cargo add golem-wasm-ast
 Then parse a WASM module or component from an array of bytes:
 
 ```rust
-use mappable_rc::Mrc;
 use std::fmt::Debug;
 use golem_wasm_ast::DefaultAst;
 use golem_wasm_ast::analysis::AnalysisContext;
@@ -33,7 +41,7 @@ fn main() {
 
     println!("component metadata {:?}", component.get_metadata());
 
-    let state = AnalysisContext::new(Mrc::new(component));
+    let state = AnalysisContext::new(component);
     let analysed_exports = state.get_top_level_exports().unwrap();
     println!("analysed exports: {:?}", analysed_exports);
 
