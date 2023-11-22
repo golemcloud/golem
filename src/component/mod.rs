@@ -1073,6 +1073,24 @@ where
             None
         }
     }
+
+    /// Collects all the producers sections from this component and its subsections
+    #[cfg(feature = "metadata")]
+    pub fn get_all_producers(&self) -> Vec<metadata::Producers> {
+        let mut result = Vec::new();
+        if let Some(producers) = self.get_metadata().and_then(|m| m.producers) {
+            result.push(producers);
+        }
+        for module in self.modules() {
+            if let Some(producers) = module.get_metadata().and_then(|m| m.producers) {
+                result.push(producers);
+            }
+        }
+        for component in self.components() {
+            result.append(&mut component.get_all_producers());
+        }
+        result
+    }
 }
 
 impl<Ast: AstCustomization>
