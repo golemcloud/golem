@@ -1,4 +1,13 @@
 # golem-wasm-ast
+<p>
+    <a href="https://crates.io/crates/golem-wasm-ast">
+        <img src="https://img.shields.io/crates/v/golem-wasm-ast.svg" alt="Crate"/>
+    </a>
+    <a href="https://docs.rs/golem-wasm-ast/latest/">
+        <img src="https://docs.rs/golem-wasm-ast/badge.svg" alt="Docs"/>
+    </a>
+</p>
+
 Higher level WASM library for Rust
 
 This library defines an in-memory, mutable representation of WebAssembly modules and [components](https://github.com/WebAssembly/component-model). It uses  
