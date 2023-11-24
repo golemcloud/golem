@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::io::Read;
 
 use async_trait::async_trait;
 use golem_client::model::{
@@ -9,7 +9,7 @@ use tokio::fs::File;
 use tracing::info;
 
 use crate::clients::CloudAuthentication;
-use crate::model::{GolemError, TemplateName};
+use crate::model::{GolemError, PathBufOrStdin, TemplateName};
 use crate::{ProjectId, RawTemplateId};
 
 #[async_trait]
@@ -24,13 +24,13 @@ pub trait TemplateClient {
         &self,
         project_id: Option<ProjectId>,
         name: TemplateName,
-        file: PathBuf,
+        file: PathBufOrStdin,
         auth: &CloudAuthentication,
     ) -> Result<TemplateView, GolemError>;
     async fn update(
         &self,
         id: RawTemplateId,
-        file: PathBuf,
+        file: PathBufOrStdin,
         auth: &CloudAuthentication,
     ) -> Result<TemplateView, GolemError>;
 }
@@ -197,27 +197,39 @@ impl<C: golem_client::template::Template + Sync + Send> TemplateClient for Templ
         &self,
         project_id: Option<ProjectId>,
         name: TemplateName,
-        path: PathBuf,
+        path: PathBufOrStdin,
         auth: &CloudAuthentication,
     ) -> Result<TemplateView, GolemError> {
         info!("Adding template {name:?} from {path:?}");
 
-        let file = File::open(path)
-            .await
-            .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
         let template_name = golem_client::model::TemplateName { value: name.0 };
+        let query = TemplateQuery {
+            project_id: project_id.map(|ProjectId(id)| id),
+            component_name: template_name,
+        };
 
-        let template = self
-            .client
-            .upload_template(
-                TemplateQuery {
-                    project_id: project_id.map(|ProjectId(id)| id),
-                    component_name: template_name,
-                },
-                file,
-                &auth.header(),
-            )
-            .await?;
+        let template = match path {
+            PathBufOrStdin::Path(path) => {
+                let file = File::open(path)
+                    .await
+                    .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
+
+                self.client
+                    .upload_template(query, file, &auth.header())
+                    .await?
+            }
+            PathBufOrStdin::Stdin => {
+                let mut bytes = Vec::new();
+
+                let _ = std::io::stdin()
+                    .read_to_end(&mut bytes) // TODO: steaming request from stdin
+                    .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
+
+                self.client
+                    .upload_template(query, bytes, &auth.header())
+                    .await?
+            }
+        };
 
         Ok((&template).into())
     }
@@ -225,19 +237,32 @@ impl<C: golem_client::template::Template + Sync + Send> TemplateClient for Templ
     async fn update(
         &self,
         id: RawTemplateId,
-        path: PathBuf,
+        path: PathBufOrStdin,
         auth: &CloudAuthentication,
     ) -> Result<TemplateView, GolemError> {
         info!("Updating template {id:?} from {path:?}");
 
-        let file = File::open(path)
-            .await
-            .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
+        let template = match path {
+            PathBufOrStdin::Path(path) => {
+                let file = File::open(path)
+                    .await
+                    .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
+                self.client
+                    .update_template(&id.0.to_string(), file, &auth.header())
+                    .await?
+            }
+            PathBufOrStdin::Stdin => {
+                let mut bytes = Vec::new();
 
-        let template = self
-            .client
-            .update_template(&id.0.to_string(), file, &auth.header())
-            .await?;
+                let _ = std::io::stdin()
+                    .read_to_end(&mut bytes) // TODO: steaming request from stdin
+                    .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
+
+                self.client
+                    .update_template(&id.0.to_string(), bytes, &auth.header())
+                    .await?
+            }
+        };
 
         Ok((&template).into())
     }

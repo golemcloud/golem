@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use async_trait::async_trait;
 use clap::Subcommand;
 use indoc::formatdoc;
@@ -10,7 +8,8 @@ use crate::clients::project::ProjectClient;
 use crate::clients::template::{TemplateClient, TemplateView};
 use crate::clients::CloudAuthentication;
 use crate::model::{
-    GolemError, GolemResult, ProjectId, ProjectRef, RawTemplateId, TemplateIdOrName, TemplateName,
+    GolemError, GolemResult, PathBufOrStdin, ProjectId, ProjectRef, RawTemplateId,
+    TemplateIdOrName, TemplateName,
 };
 
 #[derive(Subcommand, Debug)]
@@ -25,7 +24,7 @@ pub enum TemplateSubcommand {
         template_name: TemplateName,
 
         #[arg(value_name = "template-file", value_hint = clap::ValueHint::FilePath)]
-        template_file: PathBuf, // TODO: validate exists
+        template_file: PathBufOrStdin, // TODO: validate exists
     },
 
     #[command()]
@@ -34,7 +33,7 @@ pub enum TemplateSubcommand {
         template_id_or_name: TemplateIdOrName,
 
         #[arg(value_name = "template-file", value_hint = clap::ValueHint::FilePath)]
-        template_file: PathBuf, // TODO: validate exists
+        template_file: PathBufOrStdin, // TODO: validate exists
     },
 
     #[command()]
