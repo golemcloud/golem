@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::builder::{StringValueParser, TypedValueParser};
@@ -16,10 +17,13 @@ use golem_client::template::TemplateError;
 use golem_client::token::TokenError;
 use golem_client::worker::WorkerError;
 use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
+use golem_gateway_client::apis::ResponseContent;
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use uuid::Uuid;
+
+use crate::clients::gateway::errors::ResponseContentErrorMapper;
 
 pub enum GolemResult {
     Ok(Box<dyn PrintRes>),
@@ -71,6 +75,39 @@ impl From<AccountError> for GolemError {
             AccountError::Status500 { error } => {
                 GolemError(format!("Internal server error: {error}"))
             }
+        }
+    }
+}
+
+impl From<reqwest::Error> for GolemError {
+    fn from(error: reqwest::Error) -> Self {
+        GolemError(format!("Unexpected reqwest error: {error}"))
+    }
+}
+
+impl<T: ResponseContentErrorMapper> From<golem_gateway_client::apis::Error<T>> for GolemError {
+    fn from(value: golem_gateway_client::apis::Error<T>) -> Self {
+        match value {
+            golem_gateway_client::apis::Error::Reqwest(error) => GolemError::from(error),
+            golem_gateway_client::apis::Error::Serde(error) => {
+                GolemError(format!("Unexpected serde error: {error}"))
+            }
+            golem_gateway_client::apis::Error::Io(error) => {
+                GolemError(format!("Unexpected io error: {error}"))
+            }
+            golem_gateway_client::apis::Error::ResponseError(ResponseContent {
+                status,
+                content,
+                entity,
+            }) => match entity {
+                None => GolemError(format!(
+                    "Response error. Status: {status}, content: {content}"
+                )),
+                Some(e) => {
+                    let entity_str = ResponseContentErrorMapper::map(e);
+                    GolemError(format!("Response error. Status: {status}, content: {content}, entity: {entity_str}"))
+                }
+            },
         }
     }
 }
@@ -708,6 +745,24 @@ impl ExampleDescription {
             language: example.language.clone(),
             description: example.description.clone(),
             tier: example.language.tier(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum PathBufOrStdin {
+    Path(PathBuf),
+    Stdin,
+}
+
+impl FromStr for PathBufOrStdin {
+    type Err = core::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == "-" {
+            Ok(PathBufOrStdin::Stdin)
+        } else {
+            Ok(PathBufOrStdin::Path(PathBuf::from_str(s)?))
         }
     }
 }

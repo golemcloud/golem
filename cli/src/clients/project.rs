@@ -31,6 +31,17 @@ pub trait ProjectClient {
         project_ref: ProjectRef,
         auth: &CloudAuthentication,
     ) -> Result<Option<ProjectId>, GolemError>;
+
+    async fn resolve_id_or_default(
+        &self,
+        project_ref: ProjectRef,
+        auth: &CloudAuthentication,
+    ) -> Result<ProjectId, GolemError> {
+        match self.resolve_id(project_ref, auth).await? {
+            None => Ok(ProjectId(self.find_default(auth).await?.project_id)),
+            Some(project_id) => Ok(project_id),
+        }
+    }
 }
 
 pub struct ProjectClientLive<C: golem_client::project::Project + Send + Sync> {
