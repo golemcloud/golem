@@ -1,10 +1,9 @@
 use async_trait::async_trait;
 use clap::builder::ValueParser;
 use clap::Subcommand;
-use golem_client::model::InvokeParameters;
+use golem_client::models::InvokeParameters;
 
 use crate::clients::worker::WorkerClient;
-use crate::clients::CloudAuthentication;
 use crate::model::{
     GolemError, GolemResult, InvocationKey, JsonValueParser, TemplateIdOrName, WorkerName,
 };
@@ -114,11 +113,7 @@ pub enum WorkerSubcommand {
 
 #[async_trait]
 pub trait WorkerHandler {
-    async fn handle(
-        &self,
-        auth: &CloudAuthentication,
-        subcommand: WorkerSubcommand,
-    ) -> Result<GolemResult, GolemError>;
+    async fn handle(&self, subcommand: WorkerSubcommand) -> Result<GolemResult, GolemError>;
 }
 
 pub struct WorkerHandlerLive<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> {
@@ -130,11 +125,7 @@ pub struct WorkerHandlerLive<'r, C: WorkerClient + Send + Sync, R: TemplateHandl
 impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> WorkerHandler
     for WorkerHandlerLive<'r, C, R>
 {
-    async fn handle(
-        &self,
-        auth: &CloudAuthentication,
-        subcommand: WorkerSubcommand,
-    ) -> Result<GolemResult, GolemError> {
+    async fn handle(&self, subcommand: WorkerSubcommand) -> Result<GolemResult, GolemError> {
         match subcommand {
             WorkerSubcommand::Add {
                 template_id_or_name,
@@ -142,11 +133,11 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 env,
                 args,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name, auth).await?;
+                let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
                 let inst = self
                     .client
-                    .new_worker(worker_name, template_id, args, env, auth)
+                    .new_worker(worker_name, template_id, args, env)
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(inst)))
@@ -155,11 +146,11 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 template_id_or_name,
                 worker_name,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name, auth).await?;
+                let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
                 let key = self
                     .client
-                    .get_invocation_key(&worker_name, &template_id, auth)
+                    .get_invocation_key(&worker_name, &template_id)
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(key)))
@@ -172,12 +163,12 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 parameters,
                 use_stdio,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name, auth).await?;
+                let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
                 let invocation_key = match invocation_key {
                     None => {
                         self.client
-                            .get_invocation_key(&worker_name, &template_id, auth)
+                            .get_invocation_key(&worker_name, &template_id)
                             .await?
                     }
                     Some(key) => key,
@@ -189,14 +180,17 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                         worker_name,
                         template_id,
                         function,
-                        InvokeParameters { params: parameters },
+                        InvokeParameters {
+                            params: Some(parameters),
+                        },
                         invocation_key,
                         use_stdio,
-                        auth,
                     )
                     .await?;
 
-                Ok(GolemResult::Json(res.result))
+                Ok(GolemResult::Json(
+                    res.result.unwrap_or(serde_json::Value::Null),
+                ))
             }
             WorkerSubcommand::Invoke {
                 template_id_or_name,
@@ -204,15 +198,16 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 function,
                 parameters,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name, auth).await?;
+                let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
                 self.client
                     .invoke(
                         worker_name,
                         template_id,
                         function,
-                        InvokeParameters { params: parameters },
-                        auth,
+                        InvokeParameters {
+                            params: Some(parameters),
+                        },
                     )
                     .await?;
 
@@ -222,9 +217,9 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 template_id_or_name,
                 worker_name,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name, auth).await?;
+                let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
-                self.client.connect(worker_name, template_id, auth).await?;
+                self.client.connect(worker_name, template_id).await?;
 
                 Err(GolemError("connect should never complete".to_string()))
             }
@@ -232,11 +227,9 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 template_id_or_name,
                 worker_name,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name, auth).await?;
+                let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
-                self.client
-                    .interrupt(worker_name, template_id, auth)
-                    .await?;
+                self.client.interrupt(worker_name, template_id).await?;
 
                 Ok(GolemResult::Str("Interrupted".to_string()))
             }
@@ -244,10 +237,10 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 template_id_or_name,
                 worker_name,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name, auth).await?;
+                let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
                 self.client
-                    .simulated_crash(worker_name, template_id, auth)
+                    .simulated_crash(worker_name, template_id)
                     .await?;
 
                 Ok(GolemResult::Str("Done".to_string()))
@@ -256,9 +249,9 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 template_id_or_name,
                 worker_name,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name, auth).await?;
+                let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
-                self.client.delete(worker_name, template_id, auth).await?;
+                self.client.delete(worker_name, template_id).await?;
 
                 Ok(GolemResult::Str("Deleted".to_string()))
             }
@@ -266,12 +259,9 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 template_id_or_name,
                 worker_name,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name, auth).await?;
+                let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
-                let mata = self
-                    .client
-                    .get_metadata(worker_name, template_id, auth)
-                    .await?;
+                let mata = self.client.get_metadata(worker_name, template_id).await?;
 
                 Ok(GolemResult::Ok(Box::new(mata)))
             }

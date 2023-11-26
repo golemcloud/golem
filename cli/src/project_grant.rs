@@ -2,7 +2,6 @@ use async_trait::async_trait;
 
 use crate::clients::project::ProjectClient;
 use crate::clients::project_grant::ProjectGrantClient;
-use crate::clients::CloudAuthentication;
 use crate::model::{
     AccountId, GolemError, GolemResult, ProjectAction, ProjectId, ProjectPolicyId, ProjectRef,
 };
@@ -11,7 +10,6 @@ use crate::model::{
 pub trait ProjectGrantHandler {
     async fn handle(
         &self,
-        auth: &CloudAuthentication,
         project_ref: ProjectRef,
         recipient_account_id: AccountId,
         project_policy_id: Option<ProjectPolicyId>,
@@ -33,14 +31,13 @@ impl<'p, C: ProjectGrantClient + Send + Sync, P: ProjectClient + Sync + Send> Pr
 {
     async fn handle(
         &self,
-        auth: &CloudAuthentication,
         project_ref: ProjectRef,
         recipient_account_id: AccountId,
         project_policy_id: Option<ProjectPolicyId>,
         project_actions: Option<Vec<ProjectAction>>,
     ) -> Result<GolemResult, GolemError> {
-        let project_id = match self.project.resolve_id(project_ref, auth).await? {
-            None => ProjectId(self.project.find_default(auth).await?.project_id),
+        let project_id = match self.project.resolve_id(project_ref).await? {
+            None => ProjectId(self.project.find_default().await?.project_id),
             Some(id) => id,
         };
         match project_policy_id {
@@ -49,7 +46,7 @@ impl<'p, C: ProjectGrantClient + Send + Sync, P: ProjectClient + Sync + Send> Pr
 
                 let grant = self
                     .client
-                    .create_actions(project_id, recipient_account_id, actions, auth)
+                    .create_actions(project_id, recipient_account_id, actions)
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(grant)))
@@ -57,7 +54,7 @@ impl<'p, C: ProjectGrantClient + Send + Sync, P: ProjectClient + Sync + Send> Pr
             Some(policy_id) => {
                 let grant = self
                     .client
-                    .create(project_id, recipient_account_id, policy_id, auth)
+                    .create(project_id, recipient_account_id, policy_id)
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(grant)))

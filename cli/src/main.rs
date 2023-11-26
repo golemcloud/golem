@@ -5,12 +5,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{Level, Verbosity};
-use golem_client::grant::GrantLive;
-use golem_client::project::ProjectLive;
-use golem_client::project_grant::ProjectGrantLive;
-use golem_client::project_policy::ProjectPolicyLive;
-use golem_client::template::TemplateLive;
-use golem_client::worker::WorkerLive;
+use golem_client::apis::configuration::Configuration;
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
 use model::*;
 use reqwest::Url;
@@ -206,82 +201,94 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         default_conf_dir.display()
     );
 
+    let mut builder = reqwest::Client::builder();
+    if allow_insecure {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    let client = builder.connection_verbose(true).build()?;
+
+    let mut base_url_string = url.to_string();
+
+    if base_url_string.pop() != Some('/') {
+        base_url_string = url.to_string();
+    }
+
+    let login_configuration = Configuration {
+        base_path: base_url_string.clone(),
+        user_agent: None,
+        client: client.clone(),
+        basic_auth: None,
+        oauth_access_token: None,
+        bearer_access_token: None,
+        api_key: None,
+    };
+
     let login = LoginClientLive {
-        login: golem_client::login::LoginLive {
-            base_url: url.clone(),
-            allow_insecure,
-        },
+        configuration: login_configuration,
     };
     let auth_srv = AuthLive { login };
+
+    let auth = auth_srv
+        .authenticate(
+            cmd.auth_token,
+            cmd.config_directory.clone().unwrap_or(default_conf_dir),
+        )
+        .await?;
+
+    let configuration = Configuration {
+        base_path: base_url_string,
+        user_agent: None,
+        client,
+        basic_auth: None,
+        oauth_access_token: None,
+        bearer_access_token: Some(auth.0.secret.value.to_string()),
+        api_key: None,
+    };
+
     let account_client = AccountClientLive {
-        account: golem_client::account::AccountLive {
-            base_url: url.clone(),
-            allow_insecure,
-        },
+        configuration: configuration.clone(),
     };
     let grant_client = GrantClientLive {
-        client: GrantLive {
-            base_url: url.clone(),
-            allow_insecure,
-        },
+        configuration: configuration.clone(),
     };
     let acc_srv = AccountHandlerLive {
         client: account_client,
         grant: grant_client,
     };
     let token_client = TokenClientLive {
-        client: golem_client::token::TokenLive {
-            base_url: url.clone(),
-            allow_insecure,
-        },
+        configuration: configuration.clone(),
     };
     let token_srv = TokenHandlerLive {
         client: token_client,
     };
     let project_client = ProjectClientLive {
-        client: ProjectLive {
-            base_url: url.clone(),
-            allow_insecure,
-        },
+        configuration: configuration.clone(),
     };
     let project_srv = ProjectHandlerLive {
         client: &project_client,
     };
     let template_client = TemplateClientLive {
-        client: TemplateLive {
-            base_url: url.clone(),
-            allow_insecure,
-        },
+        configuration: configuration.clone(),
     };
     let template_srv = TemplateHandlerLive {
         client: template_client,
         projects: &project_client,
     };
     let project_policy_client = ProjectPolicyClientLive {
-        client: ProjectPolicyLive {
-            base_url: url.clone(),
-            allow_insecure,
-        },
+        configuration: configuration.clone(),
     };
     let project_policy_srv = ProjectPolicyHandlerLive {
         client: project_policy_client,
     };
     let project_grant_client = ProjectGrantClientLive {
-        client: ProjectGrantLive {
-            base_url: url.clone(),
-            allow_insecure,
-        },
+        configuration: configuration.clone(),
     };
     let project_grant_srv = ProjectGrantHandlerLive {
         client: project_grant_client,
         project: &project_client,
     };
     let worker_client = WorkerClientLive {
-        client: WorkerLive {
-            base_url: url.clone(),
-            allow_insecure,
-        },
-        base_url: url.clone(),
+        configuration: configuration.clone(),
         allow_insecure,
     };
     let worker_srv = WorkerHandlerLive {
@@ -294,16 +301,9 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         projects: &project_client,
     };
 
-    let auth = auth_srv
-        .authenticate(
-            cmd.auth_token,
-            cmd.config_directory.clone().unwrap_or(default_conf_dir),
-        )
-        .await?;
-
     let res = match cmd.command {
-        Command::Template { subcommand } => template_srv.handle(&auth, subcommand).await,
-        Command::Worker { subcommand } => worker_srv.handle(&auth, subcommand).await,
+        Command::Template { subcommand } => template_srv.handle(subcommand).await,
+        Command::Worker { subcommand } => worker_srv.handle(subcommand).await,
         Command::Account {
             account_id,
             subcommand,
@@ -321,7 +321,6 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         } => {
             project_grant_srv
                 .handle(
-                    &auth,
                     project_ref,
                     recipient_account_id,
                     project_policy_id,
@@ -329,7 +328,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
                 )
                 .await
         }
-        Command::ProjectPolicy { subcommand } => project_policy_srv.handle(&auth, subcommand).await,
+        Command::ProjectPolicy { subcommand } => project_policy_srv.handle(subcommand).await,
         Command::New {
             example,
             package_name,

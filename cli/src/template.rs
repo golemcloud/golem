@@ -6,7 +6,6 @@ use uuid::Uuid;
 
 use crate::clients::project::ProjectClient;
 use crate::clients::template::{TemplateClient, TemplateView};
-use crate::clients::CloudAuthentication;
 use crate::model::{
     GolemError, GolemResult, PathBufOrStdin, ProjectId, ProjectRef, RawTemplateId,
     TemplateIdOrName, TemplateName,
@@ -48,17 +47,9 @@ pub enum TemplateSubcommand {
 
 #[async_trait]
 pub trait TemplateHandler {
-    async fn handle(
-        &self,
-        token: &CloudAuthentication,
-        subcommand: TemplateSubcommand,
-    ) -> Result<GolemResult, GolemError>;
+    async fn handle(&self, subcommand: TemplateSubcommand) -> Result<GolemResult, GolemError>;
 
-    async fn resolve_id(
-        &self,
-        reference: TemplateIdOrName,
-        auth: &CloudAuthentication,
-    ) -> Result<RawTemplateId, GolemError>;
+    async fn resolve_id(&self, reference: TemplateIdOrName) -> Result<RawTemplateId, GolemError>;
 }
 
 pub struct TemplateHandlerLive<'p, C: TemplateClient + Send + Sync, P: ProjectClient + Sync + Send>
@@ -71,21 +62,17 @@ pub struct TemplateHandlerLive<'p, C: TemplateClient + Send + Sync, P: ProjectCl
 impl<'p, C: TemplateClient + Send + Sync, P: ProjectClient + Sync + Send> TemplateHandler
     for TemplateHandlerLive<'p, C, P>
 {
-    async fn handle(
-        &self,
-        auth: &CloudAuthentication,
-        subcommand: TemplateSubcommand,
-    ) -> Result<GolemResult, GolemError> {
+    async fn handle(&self, subcommand: TemplateSubcommand) -> Result<GolemResult, GolemError> {
         match subcommand {
             TemplateSubcommand::Add {
                 project_ref,
                 template_name,
                 template_file,
             } => {
-                let project_id = self.projects.resolve_id(project_ref, auth).await?;
+                let project_id = self.projects.resolve_id(project_ref).await?;
                 let template = self
                     .client
-                    .add(project_id, template_name, template_file, auth)
+                    .add(project_id, template_name, template_file)
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(template)))
@@ -94,8 +81,8 @@ impl<'p, C: TemplateClient + Send + Sync, P: ProjectClient + Sync + Send> Templa
                 template_id_or_name,
                 template_file,
             } => {
-                let id = self.resolve_id(template_id_or_name, auth).await?;
-                let template = self.client.update(id, template_file, auth).await?;
+                let id = self.resolve_id(template_id_or_name).await?;
+                let template = self.client.update(id, template_file).await?;
 
                 Ok(GolemResult::Ok(Box::new(template)))
             }
@@ -103,26 +90,22 @@ impl<'p, C: TemplateClient + Send + Sync, P: ProjectClient + Sync + Send> Templa
                 project_ref,
                 template_name,
             } => {
-                let project_id = self.projects.resolve_id(project_ref, auth).await?;
-                let templates = self.client.find(project_id, template_name, auth).await?;
+                let project_id = self.projects.resolve_id(project_ref).await?;
+                let templates = self.client.find(project_id, template_name).await?;
 
                 Ok(GolemResult::Ok(Box::new(templates)))
             }
         }
     }
 
-    async fn resolve_id(
-        &self,
-        reference: TemplateIdOrName,
-        auth: &CloudAuthentication,
-    ) -> Result<RawTemplateId, GolemError> {
+    async fn resolve_id(&self, reference: TemplateIdOrName) -> Result<RawTemplateId, GolemError> {
         match reference {
             TemplateIdOrName::Id(id) => Ok(id),
             TemplateIdOrName::Name(name, project_ref) => {
-                let project_id = self.projects.resolve_id(project_ref, auth).await?;
+                let project_id = self.projects.resolve_id(project_ref).await?;
                 let templates = self
                     .client
-                    .find(project_id.clone(), Some(name.clone()), auth)
+                    .find(project_id.clone(), Some(name.clone()))
                     .await?;
                 let templates: Vec<TemplateView> = templates
                     .into_iter()

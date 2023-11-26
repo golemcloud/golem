@@ -7,23 +7,11 @@ use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Command, Error, FromArgMatches};
 use derive_more::{Display, FromStr, Into};
-use golem_client::account::AccountError;
-use golem_client::grant::GrantError;
-use golem_client::login::LoginError;
-use golem_client::project::ProjectError;
-use golem_client::project_grant::ProjectGrantError;
-use golem_client::project_policy::ProjectPolicyError;
-use golem_client::template::TemplateError;
-use golem_client::token::TokenError;
-use golem_client::worker::WorkerError;
 use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
-use golem_gateway_client::apis::ResponseContent;
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use uuid::Uuid;
-
-use crate::clients::gateway::errors::ResponseContentErrorMapper;
 
 pub enum GolemResult {
     Ok(Box<dyn PrintRes>),
@@ -56,36 +44,15 @@ where
 #[derive(Clone, PartialEq, Eq)]
 pub struct GolemError(pub String);
 
-impl From<AccountError> for GolemError {
-    fn from(value: AccountError) -> Self {
-        match value {
-            AccountError::RequestFailure(err) => {
-                GolemError(format!("Unexpected request failure: {err}"))
-            }
-            AccountError::InvalidHeaderValue(err) => {
-                GolemError(format!("Unexpected invalid header value: {err}"))
-            }
-            AccountError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
-            AccountError::Status401 { message } => GolemError(format!("Unauthorized: {message}")),
-            AccountError::Status404 { message } => GolemError(format!("Not found: {message}")),
-            AccountError::Status400 { errors } => {
-                let msg = errors.join(", ");
-                GolemError(format!("Invalid API call: {msg}"))
-            }
-            AccountError::Status500 { error } => {
-                GolemError(format!("Internal server error: {error}"))
-            }
-        }
-    }
-}
-
 impl From<reqwest::Error> for GolemError {
     fn from(error: reqwest::Error) -> Self {
         GolemError(format!("Unexpected reqwest error: {error}"))
     }
 }
 
-impl<T: ResponseContentErrorMapper> From<golem_gateway_client::apis::Error<T>> for GolemError {
+impl<T: crate::clients::gateway::errors::ResponseContentErrorMapper>
+    From<golem_gateway_client::apis::Error<T>> for GolemError
+{
     fn from(value: golem_gateway_client::apis::Error<T>) -> Self {
         match value {
             golem_gateway_client::apis::Error::Reqwest(error) => GolemError::from(error),
@@ -95,7 +62,39 @@ impl<T: ResponseContentErrorMapper> From<golem_gateway_client::apis::Error<T>> f
             golem_gateway_client::apis::Error::Io(error) => {
                 GolemError(format!("Unexpected io error: {error}"))
             }
-            golem_gateway_client::apis::Error::ResponseError(ResponseContent {
+            golem_gateway_client::apis::Error::ResponseError(
+                golem_gateway_client::apis::ResponseContent {
+                    status,
+                    content,
+                    entity,
+                },
+            ) => match entity {
+                None => GolemError(format!(
+                    "Response error. Status: {status}, content: {content}"
+                )),
+                Some(e) => {
+                    let entity_str =
+                        crate::clients::gateway::errors::ResponseContentErrorMapper::map(e);
+                    GolemError(format!("Response error. Status: {status}, content: {content}, entity: {entity_str}"))
+                }
+            },
+        }
+    }
+}
+
+impl<T: crate::clients::errors::ResponseContentErrorMapper> From<golem_client::apis::Error<T>>
+    for GolemError
+{
+    fn from(value: golem_client::apis::Error<T>) -> Self {
+        match value {
+            golem_client::apis::Error::Reqwest(error) => GolemError::from(error),
+            golem_client::apis::Error::Serde(error) => {
+                GolemError(format!("Unexpected serde error: {error}"))
+            }
+            golem_client::apis::Error::Io(error) => {
+                GolemError(format!("Unexpected io error: {error}"))
+            }
+            golem_client::apis::Error::ResponseError(golem_client::apis::ResponseContent {
                 status,
                 content,
                 entity,
@@ -104,221 +103,10 @@ impl<T: ResponseContentErrorMapper> From<golem_gateway_client::apis::Error<T>> f
                     "Response error. Status: {status}, content: {content}"
                 )),
                 Some(e) => {
-                    let entity_str = ResponseContentErrorMapper::map(e);
+                    let entity_str = crate::clients::errors::ResponseContentErrorMapper::map(e);
                     GolemError(format!("Response error. Status: {status}, content: {content}, entity: {entity_str}"))
                 }
             },
-        }
-    }
-}
-
-impl From<TokenError> for GolemError {
-    fn from(value: TokenError) -> Self {
-        match value {
-            TokenError::RequestFailure(err) => {
-                GolemError(format!("Unexpected request failure: {err}"))
-            }
-            TokenError::InvalidHeaderValue(err) => {
-                GolemError(format!("Unexpected invalid header value: {err}"))
-            }
-            TokenError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
-            TokenError::Status401 { message } => GolemError(format!("Unauthorized: {message}")),
-            TokenError::Status404 { message } => GolemError(format!("Not found: {message}")),
-            TokenError::Status400 { errors } => {
-                let msg = errors.join(", ");
-                GolemError(format!("Invalid API call: {msg}"))
-            }
-            TokenError::Status500 { error } => {
-                GolemError(format!("Internal server error: {error}"))
-            }
-        }
-    }
-}
-
-impl From<TemplateError> for GolemError {
-    fn from(value: TemplateError) -> Self {
-        match value {
-            TemplateError::RequestFailure(err) => {
-                GolemError(format!("Unexpected request failure: {err}"))
-            }
-            TemplateError::InvalidHeaderValue(err) => {
-                GolemError(format!("Unexpected invalid header value: {err}"))
-            }
-            TemplateError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
-            TemplateError::Status401 { error } => GolemError(format!("Unauthorized: {error}")),
-            TemplateError::Status504 => GolemError("Gateway Timeout".to_string()),
-            TemplateError::Status404 { message } => GolemError(message),
-            TemplateError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
-            TemplateError::Status400 { errors } => {
-                let msg = errors.join(", ");
-                GolemError(format!("Invalid API call: {msg}"))
-            }
-            TemplateError::Status500 { error } => {
-                GolemError(format!("Internal server error: {error}"))
-            }
-            TemplateError::Status409 { component_id } => {
-                GolemError(format!("{component_id} already exists"))
-            }
-        }
-    }
-}
-
-impl From<LoginError> for GolemError {
-    fn from(value: LoginError) -> Self {
-        match value {
-            LoginError::RequestFailure(err) => {
-                GolemError(format!("Unexpected request failure: {err}"))
-            }
-            LoginError::InvalidHeaderValue(err) => {
-                GolemError(format!("Unexpected invalid header value: {err}"))
-            }
-            LoginError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
-            LoginError::Status400 { errors } => {
-                let joined = errors.join(", ");
-                GolemError(format!("Invalid request: {joined}"))
-            }
-            LoginError::Status500 { error } => {
-                GolemError(format!("Internal server error on Login: {error}"))
-            }
-            LoginError::Status401 { error } => {
-                GolemError(format!("External service call error on Login: {error}"))
-            }
-            _ => GolemError("Unexpected error on Login".to_string()),
-        }
-    }
-}
-
-impl From<ProjectError> for GolemError {
-    fn from(value: ProjectError) -> Self {
-        match value {
-            ProjectError::RequestFailure(err) => {
-                GolemError(format!("Unexpected request failure: {err}"))
-            }
-            ProjectError::InvalidHeaderValue(err) => {
-                GolemError(format!("Unexpected invalid header value: {err}"))
-            }
-            ProjectError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
-            ProjectError::Status404 { message } => GolemError(format!("Not found: {message}")),
-            ProjectError::Status400 { errors } => {
-                let msg = errors.join(", ");
-                GolemError(format!("Invalid API call: {msg}"))
-            }
-            ProjectError::Status401 { message } => GolemError(format!("Unauthorized: {message}")),
-            ProjectError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
-            ProjectError::Status500 { error } => {
-                GolemError(format!("Internal server error: {error}"))
-            }
-        }
-    }
-}
-
-impl From<GrantError> for GolemError {
-    fn from(value: GrantError) -> Self {
-        match value {
-            GrantError::RequestFailure(err) => {
-                GolemError(format!("Unexpected request failure: {err}"))
-            }
-            GrantError::InvalidHeaderValue(err) => {
-                GolemError(format!("Unexpected invalid header value: {err}"))
-            }
-            GrantError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
-            GrantError::Status401 { message } => GolemError(format!("Unauthorized: {message}")),
-            GrantError::Status404 { message } => GolemError(format!("Not found: {message}")),
-            GrantError::Status400 { errors } => {
-                let msg = errors.join(", ");
-                GolemError(format!("Invalid API call: {msg}"))
-            }
-            GrantError::Status500 { error } => {
-                GolemError(format!("Internal server error: {error}"))
-            }
-        }
-    }
-}
-
-impl From<ProjectPolicyError> for GolemError {
-    fn from(value: ProjectPolicyError) -> Self {
-        match value {
-            ProjectPolicyError::RequestFailure(err) => {
-                GolemError(format!("Unexpected request failure: {err}"))
-            }
-            ProjectPolicyError::InvalidHeaderValue(err) => {
-                GolemError(format!("Unexpected invalid header value: {err}"))
-            }
-            ProjectPolicyError::UnexpectedStatus(sc) => {
-                GolemError(format!("Unexpected status: {sc}"))
-            }
-            ProjectPolicyError::Status404 { message } => {
-                GolemError(format!("Not found: {message}"))
-            }
-            ProjectPolicyError::Status400 { errors } => {
-                let msg = errors.join(", ");
-                GolemError(format!("Invalid API call: {msg}"))
-            }
-            ProjectPolicyError::Status401 { message } => {
-                GolemError(format!("Unauthorized: {message}"))
-            }
-            ProjectPolicyError::Status403 { error } => {
-                GolemError(format!("Limit Exceeded: {error}"))
-            }
-            ProjectPolicyError::Status500 { error } => {
-                GolemError(format!("Internal server error: {error}"))
-            }
-        }
-    }
-}
-
-impl From<ProjectGrantError> for GolemError {
-    fn from(value: ProjectGrantError) -> Self {
-        match value {
-            ProjectGrantError::RequestFailure(err) => {
-                GolemError(format!("Unexpected request failure: {err}"))
-            }
-            ProjectGrantError::InvalidHeaderValue(err) => {
-                GolemError(format!("Unexpected invalid header value: {err}"))
-            }
-            ProjectGrantError::UnexpectedStatus(sc) => {
-                GolemError(format!("Unexpected status: {sc}"))
-            }
-            ProjectGrantError::Status404 { message } => GolemError(format!("Not found: {message}")),
-            ProjectGrantError::Status400 { errors } => {
-                let msg = errors.join(", ");
-                GolemError(format!("Invalid API call: {msg}"))
-            }
-            ProjectGrantError::Status401 { message } => {
-                GolemError(format!("Unauthorized: {message}"))
-            }
-            ProjectGrantError::Status403 { error } => {
-                GolemError(format!("Limit Exceeded: {error}"))
-            }
-            ProjectGrantError::Status500 { error } => {
-                GolemError(format!("Internal server error: {error}"))
-            }
-        }
-    }
-}
-
-impl From<WorkerError> for GolemError {
-    fn from(value: WorkerError) -> Self {
-        match value {
-            WorkerError::RequestFailure(err) => {
-                GolemError(format!("Unexpected request failure: {err}"))
-            }
-            WorkerError::InvalidHeaderValue(err) => {
-                GolemError(format!("Unexpected invalid header value: {err}"))
-            }
-            WorkerError::UnexpectedStatus(sc) => GolemError(format!("Unexpected status: {sc}")),
-            WorkerError::Status504 => GolemError("Gateway timeout".to_string()),
-            WorkerError::Status404 { error } => GolemError(format!("Not found: {error}")),
-            WorkerError::Status403 { error } => GolemError(format!("Limit Exceeded: {error}")),
-            WorkerError::Status400 { errors } => {
-                let msg = errors.join(", ");
-                GolemError(format!("Invalid API call: {msg}"))
-            }
-            WorkerError::Status401 { error } => GolemError(format!("Unauthorized: {error}")),
-            WorkerError::Status500 { golem_error } => {
-                GolemError(format!("Internal server error: {golem_error:?}"))
-            }
-            WorkerError::Status409 { error } => GolemError(error),
         }
     }
 }

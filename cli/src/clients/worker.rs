@@ -3,8 +3,18 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
-use golem_client::model::{
-    InvokeParameters, InvokeResult, VersionedWorkerId, WorkerCreationRequest, WorkerMetadata,
+use golem_client::apis::configuration::Configuration;
+use golem_client::apis::worker_api::{
+    v2_templates_template_id_workers_post, v2_templates_template_id_workers_worker_name_delete,
+    v2_templates_template_id_workers_worker_name_get,
+    v2_templates_template_id_workers_worker_name_interrupt_post,
+    v2_templates_template_id_workers_worker_name_invoke_and_await_post,
+    v2_templates_template_id_workers_worker_name_invoke_post,
+    v2_templates_template_id_workers_worker_name_key_post,
+};
+use golem_client::models::{
+    CallingConvention, InvokeParameters, InvokeResult, VersionedWorkerId, WorkerCreationRequest,
+    WorkerMetadata,
 };
 use native_tls::TlsConnector;
 use reqwest::Url;
@@ -15,7 +25,6 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
 use tracing::{debug, info};
 
-use crate::clients::CloudAuthentication;
 use crate::model::{GolemError, InvocationKey, RawTemplateId};
 use crate::WorkerName;
 
@@ -27,13 +36,11 @@ pub trait WorkerClient {
         template_id: RawTemplateId,
         args: Vec<String>,
         env: Vec<(String, String)>,
-        auth: &CloudAuthentication,
     ) -> Result<VersionedWorkerId, GolemError>;
     async fn get_invocation_key(
         &self,
         name: &WorkerName,
         template_id: &RawTemplateId,
-        auth: &CloudAuthentication,
     ) -> Result<InvocationKey, GolemError>;
 
     async fn invoke_and_await(
@@ -44,7 +51,6 @@ pub trait WorkerClient {
         parameters: InvokeParameters,
         invocation_key: InvocationKey,
         use_stdio: bool,
-        auth: &CloudAuthentication,
     ) -> Result<InvokeResult, GolemError>;
 
     async fn invoke(
@@ -53,86 +59,70 @@ pub trait WorkerClient {
         template_id: RawTemplateId,
         function: String,
         parameters: InvokeParameters,
-        auth: &CloudAuthentication,
     ) -> Result<(), GolemError>;
 
     async fn interrupt(
         &self,
         name: WorkerName,
         template_id: RawTemplateId,
-        auth: &CloudAuthentication,
     ) -> Result<(), GolemError>;
     async fn simulated_crash(
         &self,
         name: WorkerName,
         template_id: RawTemplateId,
-        auth: &CloudAuthentication,
     ) -> Result<(), GolemError>;
-    async fn delete(
-        &self,
-        name: WorkerName,
-        template_id: RawTemplateId,
-        auth: &CloudAuthentication,
-    ) -> Result<(), GolemError>;
+    async fn delete(&self, name: WorkerName, template_id: RawTemplateId) -> Result<(), GolemError>;
     async fn get_metadata(
         &self,
         name: WorkerName,
         template_id: RawTemplateId,
-        auth: &CloudAuthentication,
     ) -> Result<WorkerMetadata, GolemError>;
-    async fn connect(
-        &self,
-        name: WorkerName,
-        template_id: RawTemplateId,
-        auth: &CloudAuthentication,
-    ) -> Result<(), GolemError>;
+    async fn connect(&self, name: WorkerName, template_id: RawTemplateId)
+        -> Result<(), GolemError>;
 }
 
 #[derive(Clone)]
-pub struct WorkerClientLive<C: golem_client::worker::Worker + Send + Sync> {
-    pub client: C,
-    pub base_url: Url,
+pub struct WorkerClientLive {
+    pub configuration: Configuration,
     pub allow_insecure: bool,
 }
 
 #[async_trait]
-impl<C: golem_client::worker::Worker + Send + Sync> WorkerClient for WorkerClientLive<C> {
+impl WorkerClient for WorkerClientLive {
     async fn new_worker(
         &self,
         name: WorkerName,
         template_id: RawTemplateId,
         args: Vec<String>,
         env: Vec<(String, String)>,
-        auth: &CloudAuthentication,
     ) -> Result<VersionedWorkerId, GolemError> {
         info!("Creating worker {name} of {}", template_id.0);
 
-        Ok(self
-            .client
-            .launch_new_worker(
-                &template_id.0.to_string(),
-                WorkerCreationRequest {
-                    name: name.0,
-                    args,
-                    env,
-                },
-                &auth.header(),
-            )
-            .await?)
+        Ok(v2_templates_template_id_workers_post(
+            &self.configuration,
+            &template_id.0.to_string(),
+            WorkerCreationRequest {
+                name: name.0,
+                args,
+                env: env.into_iter().collect(),
+            },
+        )
+        .await?)
     }
 
     async fn get_invocation_key(
         &self,
         name: &WorkerName,
         template_id: &RawTemplateId,
-        auth: &CloudAuthentication,
     ) -> Result<InvocationKey, GolemError> {
         info!("Getting invocation key for {}/{}", template_id.0, name.0);
 
-        let key = self
-            .client
-            .get_invocation_key(&template_id.0.to_string(), &name.0, &auth.header())
-            .await?;
+        let key = v2_templates_template_id_workers_worker_name_key_post(
+            &self.configuration,
+            &template_id.0.to_string(),
+            &name.0,
+        )
+        .await?;
 
         Ok(key_api_to_cli(key))
     }
@@ -145,27 +135,30 @@ impl<C: golem_client::worker::Worker + Send + Sync> WorkerClient for WorkerClien
         parameters: InvokeParameters,
         invocation_key: InvocationKey,
         use_stdio: bool,
-        auth: &CloudAuthentication,
     ) -> Result<InvokeResult, GolemError> {
         info!(
             "Invoke and await for function {function} in {}/{}",
             template_id.0, name.0
         );
 
-        let calling_convention = if use_stdio { "stdio" } else { "component" };
+        let calling_convention = if use_stdio {
+            CallingConvention::Stdio
+        } else {
+            CallingConvention::Component
+        };
 
-        Ok(self
-            .client
-            .invoke_and_await_function(
+        Ok(
+            v2_templates_template_id_workers_worker_name_invoke_and_await_post(
+                &self.configuration,
                 &template_id.0.to_string(),
                 &name.0,
                 &invocation_key.0,
                 &function,
-                Some(calling_convention),
                 parameters,
-                &auth.header(),
+                Some(calling_convention),
             )
-            .await?)
+            .await?,
+        )
     }
 
     async fn invoke(
@@ -174,95 +167,87 @@ impl<C: golem_client::worker::Worker + Send + Sync> WorkerClient for WorkerClien
         template_id: RawTemplateId,
         function: String,
         parameters: InvokeParameters,
-        auth: &CloudAuthentication,
     ) -> Result<(), GolemError> {
         info!("Invoke function {function} in {}/{}", template_id.0, name.0);
 
-        Ok(self
-            .client
-            .invoke_function(
-                &template_id.0.to_string(),
-                &name.0,
-                &function,
-                parameters,
-                &auth.header(),
-            )
-            .await?)
+        let _ = v2_templates_template_id_workers_worker_name_invoke_post(
+            &self.configuration,
+            &template_id.0.to_string(),
+            &name.0,
+            &function,
+            parameters,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn interrupt(
         &self,
         name: WorkerName,
         template_id: RawTemplateId,
-        auth: &CloudAuthentication,
     ) -> Result<(), GolemError> {
         info!("Interrupting {}/{}", template_id.0, name.0);
 
-        Ok(self
-            .client
-            .interrupt_worker(
-                &template_id.0.to_string(),
-                &name.0,
-                Some(false),
-                &auth.header(),
-            )
-            .await?)
+        let _ = v2_templates_template_id_workers_worker_name_interrupt_post(
+            &self.configuration,
+            &template_id.0.to_string(),
+            &name.0,
+            Some(false),
+        )
+        .await?;
+        Ok(())
     }
 
     async fn simulated_crash(
         &self,
         name: WorkerName,
         template_id: RawTemplateId,
-        auth: &CloudAuthentication,
     ) -> Result<(), GolemError> {
         info!("Simulating crash of {}/{}", template_id.0, name.0);
 
-        Ok(self
-            .client
-            .interrupt_worker(
-                &template_id.0.to_string(),
-                &name.0,
-                Some(true),
-                &auth.header(),
-            )
-            .await?)
+        let _ = v2_templates_template_id_workers_worker_name_interrupt_post(
+            &self.configuration,
+            &template_id.0.to_string(),
+            &name.0,
+            Some(true),
+        )
+        .await?;
+        Ok(())
     }
 
-    async fn delete(
-        &self,
-        name: WorkerName,
-        template_id: RawTemplateId,
-        auth: &CloudAuthentication,
-    ) -> Result<(), GolemError> {
+    async fn delete(&self, name: WorkerName, template_id: RawTemplateId) -> Result<(), GolemError> {
         info!("Deleting worker {}/{}", template_id.0, name.0);
 
-        Ok(self
-            .client
-            .delete_worker(&template_id.0.to_string(), &name.0, &auth.header())
-            .await?)
+        let _ = v2_templates_template_id_workers_worker_name_delete(
+            &self.configuration,
+            &template_id.0.to_string(),
+            &name.0,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn get_metadata(
         &self,
         name: WorkerName,
         template_id: RawTemplateId,
-        auth: &CloudAuthentication,
     ) -> Result<WorkerMetadata, GolemError> {
         info!("Getting worker {}/{} metadata", template_id.0, name.0);
 
-        Ok(self
-            .client
-            .get_worker_metadata(&template_id.0.to_string(), &name.0, &auth.header())
-            .await?)
+        Ok(v2_templates_template_id_workers_worker_name_get(
+            &self.configuration,
+            &template_id.0.to_string(),
+            &name.0,
+        )
+        .await?)
     }
 
     async fn connect(
         &self,
         name: WorkerName,
         template_id: RawTemplateId,
-        auth: &CloudAuthentication,
     ) -> Result<(), GolemError> {
-        let mut url = self.base_url.clone();
+        let mut url = Url::parse(&self.configuration.base_path).unwrap();
 
         let ws_schema = if url.scheme() == "http" { "ws" } else { "wss" };
 
@@ -281,7 +266,15 @@ impl<C: golem_client::worker::Worker + Send + Sync> WorkerClient for WorkerClien
             .into_client_request()
             .map_err(|e| GolemError(format!("Can't create request: {e}")))?;
         let headers = request.headers_mut();
-        headers.insert("Authorization", auth.header().parse().unwrap());
+        headers.insert(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                self.configuration.bearer_access_token.as_ref().unwrap()
+            )
+            .parse()
+            .unwrap(),
+        );
 
         let connector = if self.allow_insecure {
             Some(Connector::NativeTls(
@@ -390,7 +383,7 @@ pub enum InstanceEndpointError {
     },
     Golem {
         #[serde(rename = "golemError")]
-        golem_error: golem_client::model::GolemError,
+        golem_error: golem_client::models::GolemError,
     },
     GatewayTimeout {},
     NotFound {
@@ -429,6 +422,6 @@ impl Display for InstanceEndpointError {
     }
 }
 
-fn key_api_to_cli(key: golem_client::model::InvocationKey) -> InvocationKey {
+fn key_api_to_cli(key: golem_client::models::InvocationKey) -> InvocationKey {
     InvocationKey(key.value)
 }

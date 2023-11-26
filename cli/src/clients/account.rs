@@ -1,79 +1,52 @@
 use async_trait::async_trait;
-use golem_client::model::{Account, AccountData, Plan};
+use golem_client::apis::account_api::{
+    v2_accounts_account_id_delete, v2_accounts_account_id_get, v2_accounts_account_id_plan_get,
+    v2_accounts_account_id_put, v2_accounts_post,
+};
+use golem_client::apis::configuration::Configuration;
+use golem_client::models::{Account, AccountData, Plan};
 use tracing::info;
 
-use crate::clients::CloudAuthentication;
 use crate::model::{AccountId, GolemError};
 
 #[async_trait]
 pub trait AccountClient {
-    async fn get(&self, id: &AccountId, auth: &CloudAuthentication) -> Result<Account, GolemError>;
-    async fn get_plan(
-        &self,
-        id: &AccountId,
-        auth: &CloudAuthentication,
-    ) -> Result<Plan, GolemError>;
-    async fn put(
-        &self,
-        id: &AccountId,
-        data: AccountData,
-        auth: &CloudAuthentication,
-    ) -> Result<Account, GolemError>;
-    async fn post(
-        &self,
-        data: AccountData,
-        auth: &CloudAuthentication,
-    ) -> Result<Account, GolemError>;
-    async fn delete(&self, id: &AccountId, auth: &CloudAuthentication) -> Result<(), GolemError>;
+    async fn get(&self, id: &AccountId) -> Result<Account, GolemError>;
+    async fn get_plan(&self, id: &AccountId) -> Result<Plan, GolemError>;
+    async fn put(&self, id: &AccountId, data: AccountData) -> Result<Account, GolemError>;
+    async fn post(&self, data: AccountData) -> Result<Account, GolemError>;
+    async fn delete(&self, id: &AccountId) -> Result<(), GolemError>;
 }
 
-pub struct AccountClientLive<A: golem_client::account::Account + Send + Sync> {
-    pub account: A,
+pub struct AccountClientLive {
+    pub configuration: Configuration,
 }
 
 #[async_trait]
-impl<A: golem_client::account::Account + Send + Sync> AccountClient for AccountClientLive<A> {
-    async fn get(&self, id: &AccountId, auth: &CloudAuthentication) -> Result<Account, GolemError> {
+impl AccountClient for AccountClientLive {
+    async fn get(&self, id: &AccountId) -> Result<Account, GolemError> {
         info!("Getting account {id}");
-        Ok(self.account.get_account(&id.id, &auth.header()).await?)
+        Ok(v2_accounts_account_id_get(&self.configuration, &id.id).await?)
     }
 
-    async fn get_plan(
-        &self,
-        id: &AccountId,
-        auth: &CloudAuthentication,
-    ) -> Result<Plan, GolemError> {
+    async fn get_plan(&self, id: &AccountId) -> Result<Plan, GolemError> {
         info!("Getting account plan of {id}.");
-        Ok(self
-            .account
-            .get_account_plan(&id.id, &auth.header())
-            .await?)
+        Ok(v2_accounts_account_id_plan_get(&self.configuration, &id.id).await?)
     }
 
-    async fn put(
-        &self,
-        id: &AccountId,
-        data: AccountData,
-        auth: &CloudAuthentication,
-    ) -> Result<Account, GolemError> {
+    async fn put(&self, id: &AccountId, data: AccountData) -> Result<Account, GolemError> {
         info!("Updating account {id}.");
-        Ok(self
-            .account
-            .put_account(&id.id, data, &auth.header())
-            .await?)
+        Ok(v2_accounts_account_id_put(&self.configuration, &id.id, data).await?)
     }
 
-    async fn post(
-        &self,
-        data: AccountData,
-        auth: &CloudAuthentication,
-    ) -> Result<Account, GolemError> {
+    async fn post(&self, data: AccountData) -> Result<Account, GolemError> {
         info!("Creating account.");
-        Ok(self.account.post_account(data, &auth.header()).await?)
+        Ok(v2_accounts_post(&self.configuration, data).await?)
     }
 
-    async fn delete(&self, id: &AccountId, auth: &CloudAuthentication) -> Result<(), GolemError> {
+    async fn delete(&self, id: &AccountId) -> Result<(), GolemError> {
         info!("Deleting account {id}.");
-        Ok(self.account.delete_account(&id.id, &auth.header()).await?)
+        let _ = v2_accounts_account_id_delete(&self.configuration, &id.id).await?;
+        Ok(())
     }
 }

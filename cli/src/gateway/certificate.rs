@@ -8,7 +8,6 @@ use golem_gateway_client::models::CertificateRequest;
 
 use crate::clients::gateway::certificate::CertificateClient;
 use crate::clients::project::ProjectClient;
-use crate::clients::CloudAuthentication;
 use crate::model::{GolemError, GolemResult, PathBufOrStdin, ProjectRef};
 
 #[derive(Subcommand, Debug)]
@@ -46,11 +45,7 @@ pub enum CertificateSubcommand {
 
 #[async_trait]
 pub trait CertificateHandler {
-    async fn handle(
-        &self,
-        auth: &CloudAuthentication,
-        command: CertificateSubcommand,
-    ) -> Result<GolemResult, GolemError>;
+    async fn handle(&self, command: CertificateSubcommand) -> Result<GolemResult, GolemError>;
 }
 
 pub struct CertificateHandlerLive<
@@ -89,20 +84,13 @@ fn read_path_or_stdin_as_string(path_or_stdin: PathBufOrStdin) -> Result<String,
 impl<'p, C: CertificateClient + Sync + Send, P: ProjectClient + Sync + Send> CertificateHandler
     for CertificateHandlerLive<'p, C, P>
 {
-    async fn handle(
-        &self,
-        auth: &CloudAuthentication,
-        command: CertificateSubcommand,
-    ) -> Result<GolemResult, GolemError> {
+    async fn handle(&self, command: CertificateSubcommand) -> Result<GolemResult, GolemError> {
         match command {
             CertificateSubcommand::Get {
                 project_ref,
                 certificate_id,
             } => {
-                let project_id = self
-                    .projects
-                    .resolve_id_or_default(project_ref, auth)
-                    .await?;
+                let project_id = self.projects.resolve_id_or_default(project_ref).await?;
 
                 let res = self
                     .client
@@ -117,10 +105,7 @@ impl<'p, C: CertificateClient + Sync + Send, P: ProjectClient + Sync + Send> Cer
                 certificate_body,
                 certificate_private_key,
             } => {
-                let project_id = self
-                    .projects
-                    .resolve_id_or_default(project_ref, auth)
-                    .await?;
+                let project_id = self.projects.resolve_id_or_default(project_ref).await?;
 
                 let request = CertificateRequest {
                     project_id: project_id.0,
@@ -137,10 +122,7 @@ impl<'p, C: CertificateClient + Sync + Send, P: ProjectClient + Sync + Send> Cer
                 project_ref,
                 certificate_id,
             } => {
-                let project_id = self
-                    .projects
-                    .resolve_id_or_default(project_ref, auth)
-                    .await?;
+                let project_id = self.projects.resolve_id_or_default(project_ref).await?;
                 let res = self.client.delete(project_id, &certificate_id).await?;
                 Ok(GolemResult::Ok(Box::new(res)))
             }

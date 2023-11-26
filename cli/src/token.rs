@@ -59,15 +59,15 @@ impl<C: TokenClient + Send + Sync> TokenHandler for TokenHandlerLive<C> {
         let account_id = account_id.unwrap_or(auth.account_id());
         match subcommand {
             TokenSubcommand::List {} => {
-                let token = self.client.get_all(&account_id, auth).await?;
+                let token = self.client.get_all(&account_id).await?;
                 Ok(GolemResult::Ok(Box::new(token)))
             }
             TokenSubcommand::Add { expires_at } => {
-                let token = self.client.post(&account_id, expires_at, auth).await?;
+                let token = self.client.post(&account_id, expires_at).await?;
                 Ok(GolemResult::Ok(Box::new(token)))
             }
             TokenSubcommand::Delete { token_id } => {
-                self.client.delete(&account_id, token_id, auth).await?;
+                self.client.delete(&account_id, token_id).await?;
                 Ok(GolemResult::Str("Deleted".to_string()))
             }
         }

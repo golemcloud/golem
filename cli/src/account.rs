@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use clap::Subcommand;
-use golem_client::model::AccountData;
+use golem_client::models::AccountData;
 
 use crate::clients::account::AccountClient;
 use crate::clients::grant::GrantClient;
@@ -90,18 +90,18 @@ impl<C: AccountClient + Sync + Send, G: GrantClient + Sync + Send> AccountHandle
 
         match subcommand {
             AccountSubcommand::Get {} => {
-                let account = self.client.get(&account_id, auth).await?;
+                let account = self.client.get(&account_id).await?;
                 Ok(GolemResult::Ok(Box::new(account)))
             }
             AccountSubcommand::Update {
                 account_name,
                 account_email,
             } => {
-                let existing = self.client.get(&account_id, auth).await?;
+                let existing = self.client.get(&account_id).await?;
                 let name = account_name.unwrap_or(existing.name);
                 let email = account_email.unwrap_or(existing.email);
                 let updated = AccountData { name, email };
-                let account = self.client.put(&account_id, updated, auth).await?;
+                let account = self.client.put(&account_id, updated).await?;
                 Ok(GolemResult::Ok(Box::new(account)))
             }
             AccountSubcommand::Add {
@@ -113,27 +113,27 @@ impl<C: AccountClient + Sync + Send, G: GrantClient + Sync + Send> AccountHandle
                     email: account_email,
                 };
 
-                let account = self.client.post(data, auth).await?;
+                let account = self.client.post(data).await?;
 
                 Ok(GolemResult::Ok(Box::new(account)))
             }
             AccountSubcommand::Delete {} => {
-                self.client.delete(&account_id, auth).await?;
+                self.client.delete(&account_id).await?;
                 Ok(GolemResult::Str("Deleted".to_string()))
             }
             AccountSubcommand::Grant { subcommand } => match subcommand {
                 GrantSubcommand::Get {} => {
-                    let roles = self.grant.get_all(account_id, auth).await?;
+                    let roles = self.grant.get_all(account_id).await?;
 
                     Ok(GolemResult::Ok(Box::new(roles)))
                 }
                 GrantSubcommand::Add { role } => {
-                    self.grant.put(account_id, role, auth).await?;
+                    self.grant.put(account_id, role).await?;
 
                     Ok(GolemResult::Ok(Box::new("RoleGranted".to_string())))
                 }
                 GrantSubcommand::Delete { role } => {
-                    self.grant.put(account_id, role, auth).await?;
+                    self.grant.put(account_id, role).await?;
 
                     Ok(GolemResult::Ok(Box::new("RoleRemoved".to_string())))
                 }

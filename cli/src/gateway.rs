@@ -138,15 +138,13 @@ impl<'p, P: ProjectClient + Sync + Send> GatewayHandler for GatewayHandlerLive<'
 
         match subcommand {
             GatewaySubcommand::Certificate { subcommand } => {
-                certificate_srv.handle(auth, subcommand).await
+                certificate_srv.handle(subcommand).await
             }
             GatewaySubcommand::Definition { subcommand } => {
-                definition_srv.handle(format, auth, subcommand).await
+                definition_srv.handle(format, subcommand).await
             }
-            GatewaySubcommand::Deployment { subcommand } => {
-                deployment_srv.handle(auth, subcommand).await
-            }
-            GatewaySubcommand::Domain { subcommand } => domain_srv.handle(auth, subcommand).await,
+            GatewaySubcommand::Deployment { subcommand } => deployment_srv.handle(subcommand).await,
+            GatewaySubcommand::Domain { subcommand } => domain_srv.handle(subcommand).await,
             GatewaySubcommand::Healthcheck {} => healthcheck_srv.handle().await,
         }
     }

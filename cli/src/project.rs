@@ -3,7 +3,7 @@ use clap::Subcommand;
 
 use crate::clients::project::ProjectClient;
 use crate::clients::CloudAuthentication;
-use crate::model::{GolemError, GolemResult};
+use crate::model::{AccountId, GolemError, GolemResult};
 
 #[derive(Subcommand, Debug)]
 #[command()]
@@ -54,18 +54,24 @@ impl<'c, C: ProjectClient + Send + Sync> ProjectHandler for ProjectHandlerLive<'
             } => {
                 let project = self
                     .client
-                    .create(project_name, project_description, auth)
+                    .create(
+                        AccountId {
+                            id: auth.0.data.account_id.clone(),
+                        },
+                        project_name,
+                        project_description,
+                    )
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(project)))
             }
             ProjectSubcommand::List { project_name } => {
-                let projects = self.client.find(project_name, auth).await?;
+                let projects = self.client.find(project_name).await?;
 
                 Ok(GolemResult::Ok(Box::new(projects)))
             }
             ProjectSubcommand::GetDefault {} => {
-                let project = self.client.find_default(auth).await?;
+                let project = self.client.find_default().await?;
 
                 Ok(GolemResult::Ok(Box::new(project)))
             }

@@ -8,7 +8,6 @@ use golem_gateway_client::models::ApiDefinition;
 
 use crate::clients::gateway::definition::DefinitionClient;
 use crate::clients::project::ProjectClient;
-use crate::clients::CloudAuthentication;
 use crate::model::{Format, GolemError, GolemResult, PathBufOrStdin, ProjectRef};
 
 #[derive(Subcommand, Debug)]
@@ -40,7 +39,6 @@ pub trait DefinitionHandler {
     async fn handle(
         &self,
         format: Format,
-        auth: &CloudAuthentication,
         command: DefinitionSubcommand,
     ) -> Result<GolemResult, GolemError>;
 }
@@ -82,7 +80,6 @@ impl<'p, C: DefinitionClient + Sync + Send, P: ProjectClient + Sync + Send> Defi
     async fn handle(
         &self,
         format: Format,
-        auth: &CloudAuthentication,
         command: DefinitionSubcommand,
     ) -> Result<GolemResult, GolemError> {
         match command {
@@ -90,10 +87,7 @@ impl<'p, C: DefinitionClient + Sync + Send, P: ProjectClient + Sync + Send> Defi
                 project_ref,
                 definition_id,
             } => {
-                let project_id = self
-                    .projects
-                    .resolve_id_or_default(project_ref, auth)
-                    .await?;
+                let project_id = self.projects.resolve_id_or_default(project_ref).await?;
 
                 let res = self
                     .client
@@ -124,10 +118,7 @@ impl<'p, C: DefinitionClient + Sync + Send, P: ProjectClient + Sync + Send> Defi
                 project_ref,
                 definition_id,
             } => {
-                let project_id = self
-                    .projects
-                    .resolve_id_or_default(project_ref, auth)
-                    .await?;
+                let project_id = self.projects.resolve_id_or_default(project_ref).await?;
                 let res = self.client.delete(project_id, &definition_id).await?;
                 Ok(GolemResult::Ok(Box::new(res)))
             }

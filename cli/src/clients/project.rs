@@ -1,112 +1,86 @@
 use async_trait::async_trait;
-use golem_client::model::{Project, ProjectDataRequest};
+use golem_client::apis::configuration::Configuration;
+use golem_client::apis::project_api::{
+    v2_projects_default_get, v2_projects_get, v2_projects_post, v2_projects_project_id_delete,
+};
+use golem_client::models::{Project, ProjectDataRequest};
 use indoc::formatdoc;
 use tracing::info;
 
-use crate::clients::CloudAuthentication;
-use crate::model::{GolemError, ProjectId, ProjectRef};
+use crate::model::{AccountId, GolemError, ProjectId, ProjectRef};
 
 #[async_trait]
 pub trait ProjectClient {
     async fn create(
         &self,
+        owner_account_id: AccountId,
         name: String,
         description: Option<String>,
-        auth: &CloudAuthentication,
     ) -> Result<Project, GolemError>;
-    async fn find(
-        &self,
-        name: Option<String>,
-        auth: &CloudAuthentication,
-    ) -> Result<Vec<Project>, GolemError>;
-    async fn find_default(&self, auth: &CloudAuthentication) -> Result<Project, GolemError>;
-    async fn delete(
-        &self,
-        project_id: ProjectId,
-        auth: &CloudAuthentication,
-    ) -> Result<(), GolemError>;
+    async fn find(&self, name: Option<String>) -> Result<Vec<Project>, GolemError>;
+    async fn find_default(&self) -> Result<Project, GolemError>;
+    async fn delete(&self, project_id: ProjectId) -> Result<(), GolemError>;
 
-    async fn resolve_id(
-        &self,
-        project_ref: ProjectRef,
-        auth: &CloudAuthentication,
-    ) -> Result<Option<ProjectId>, GolemError>;
+    async fn resolve_id(&self, project_ref: ProjectRef) -> Result<Option<ProjectId>, GolemError>;
 
     async fn resolve_id_or_default(
         &self,
         project_ref: ProjectRef,
-        auth: &CloudAuthentication,
     ) -> Result<ProjectId, GolemError> {
-        match self.resolve_id(project_ref, auth).await? {
-            None => Ok(ProjectId(self.find_default(auth).await?.project_id)),
+        match self.resolve_id(project_ref).await? {
+            None => Ok(ProjectId(self.find_default().await?.project_id)),
             Some(project_id) => Ok(project_id),
         }
     }
 }
 
-pub struct ProjectClientLive<C: golem_client::project::Project + Send + Sync> {
-    pub client: C,
+pub struct ProjectClientLive {
+    pub configuration: Configuration,
 }
 
 #[async_trait]
-impl<C: golem_client::project::Project + Send + Sync> ProjectClient for ProjectClientLive<C> {
+impl ProjectClient for ProjectClientLive {
     async fn create(
         &self,
+        owner_account_id: AccountId,
         name: String,
         description: Option<String>,
-        auth: &CloudAuthentication,
     ) -> Result<Project, GolemError> {
         info!("Create new project {name}.");
 
         let request = ProjectDataRequest {
             name,
-            owner_account_id: auth.account_id().id,
+            owner_account_id: owner_account_id.id,
             description: description.unwrap_or("".to_string()),
         };
-        Ok(self.client.post_project(request, &auth.header()).await?)
+        Ok(v2_projects_post(&self.configuration, request).await?)
     }
 
-    async fn find(
-        &self,
-        name: Option<String>,
-        auth: &CloudAuthentication,
-    ) -> Result<Vec<Project>, GolemError> {
+    async fn find(&self, name: Option<String>) -> Result<Vec<Project>, GolemError> {
         info!("Listing projects.");
 
-        Ok(self
-            .client
-            .get_projects(name.as_deref(), &auth.header())
-            .await?)
+        Ok(v2_projects_get(&self.configuration, name.as_deref()).await?)
     }
 
-    async fn find_default(&self, auth: &CloudAuthentication) -> Result<Project, GolemError> {
+    async fn find_default(&self) -> Result<Project, GolemError> {
         info!("Getting default project.");
 
-        Ok(self.client.get_default_project(&auth.header()).await?)
+        Ok(v2_projects_default_get(&self.configuration).await?)
     }
 
-    async fn delete(
-        &self,
-        project_id: ProjectId,
-        auth: &CloudAuthentication,
-    ) -> Result<(), GolemError> {
+    async fn delete(&self, project_id: ProjectId) -> Result<(), GolemError> {
         info!("Deleting project {project_id:?}");
 
-        Ok(self
-            .client
-            .delete_project(&project_id.0.to_string(), &auth.header())
-            .await?)
+        let _ = v2_projects_project_id_delete(&self.configuration, &project_id.0.to_string());
+
+        Ok(())
     }
 
-    async fn resolve_id(
-        &self,
-        project_ref: ProjectRef,
-        auth: &CloudAuthentication,
-    ) -> Result<Option<ProjectId>, GolemError> {
+    async fn resolve_id(&self, project_ref: ProjectRef) -> Result<Option<ProjectId>, GolemError> {
         match project_ref {
             ProjectRef::Id(id) => Ok(Some(id)),
             ProjectRef::Name(name) => {
-                let projects = self.find(Some(name.clone()), auth).await?;
+                let projects = self.find(Some(name.clone())).await?;
 
                 if projects.len() > 1 {
                     let projects: Vec<String> =

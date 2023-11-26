@@ -1,9 +1,11 @@
 use async_trait::async_trait;
-use golem_client::login::Login;
-use golem_client::model::{OAuth2Data, Token, TokenSecret, UnsafeToken};
+use golem_client::apis::configuration::Configuration;
+use golem_client::apis::login_api::{
+    login_oauth2_device_complete_post, login_oauth2_device_start_post, v2_login_token_get,
+};
+use golem_client::models::{OAuth2Data, Token, TokenSecret, UnsafeToken};
 use tracing::info;
 
-use crate::clients::token_header;
 use crate::model::GolemError;
 
 #[async_trait]
@@ -15,27 +17,26 @@ pub trait LoginClient {
     async fn complete_oauth2(&self, session: String) -> Result<UnsafeToken, GolemError>;
 }
 
-pub struct LoginClientLive<L: Login + Send + Sync> {
-    pub login: L,
+pub struct LoginClientLive {
+    pub configuration: Configuration,
 }
 
 #[async_trait]
-impl<L: Login + Send + Sync> LoginClient for LoginClientLive<L> {
+impl LoginClient for LoginClientLive {
     async fn token_details(&self, manual_token: TokenSecret) -> Result<Token, GolemError> {
         info!("Getting token info");
-        Ok(self
-            .login
-            .current_token(&token_header(&manual_token))
-            .await?)
+        let mut config = self.configuration.clone();
+        config.bearer_access_token = Some(manual_token.value.to_string());
+        Ok(v2_login_token_get(&config).await?)
     }
 
     async fn start_oauth2(&self) -> Result<OAuth2Data, GolemError> {
         info!("Start OAuth2 workflow");
-        Ok(self.login.start_o_auth2().await?)
+        Ok(login_oauth2_device_start_post(&self.configuration).await?)
     }
 
     async fn complete_oauth2(&self, session: String) -> Result<UnsafeToken, GolemError> {
         info!("Complete OAuth2 workflow");
-        Ok(self.login.complete_o_auth2(session).await?)
+        Ok(login_oauth2_device_complete_post(&self.configuration, &session).await?)
     }
 }

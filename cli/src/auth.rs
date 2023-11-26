@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_client::model::{OAuth2Data, Token, TokenSecret, UnsafeToken};
+use golem_client::models::{OAuth2Data, Token, TokenSecret, UnsafeToken};
 use indoc::printdoc;
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -54,13 +54,13 @@ impl<L: LoginClient + Send + Sync> AuthLive<L> {
 
         match parsed {
             Ok(conf) => Some(CloudAuthentication(UnsafeToken {
-                data: Token {
+                data: Box::new(Token {
                     id: conf.data.id,
                     account_id: conf.data.account_id,
-                    created_at: conf.data.created_at,
-                    expires_at: conf.data.expires_at,
-                },
-                secret: TokenSecret { value: conf.secret },
+                    created_at: conf.data.created_at.to_string(),
+                    expires_at: conf.data.expires_at.to_string(),
+                }),
+                secret: Box::new(TokenSecret { value: conf.secret }),
             })),
             Err(err) => {
                 info!("Parsing failed: {err}"); // TODO configure
@@ -97,8 +97,8 @@ impl<L: LoginClient + Send + Sync> AuthLive<L> {
             data: CloudAuthenticationConfigData {
                 id: token.data.id,
                 account_id: token.data.account_id.clone(),
-                created_at: token.data.created_at,
-                expires_at: token.data.expires_at,
+                created_at: token.data.created_at.parse().unwrap(),
+                expires_at: token.data.expires_at.parse().unwrap(),
             },
             secret: token.secret.value,
         };
@@ -132,8 +132,9 @@ impl<L: LoginClient + Send + Sync> AuthLive<L> {
 fn inform_user(data: &OAuth2Data) {
     let box_url_line = String::from_utf8(vec![b'-'; data.url.len() + 2]).unwrap();
     let box_code_line = String::from_utf8(vec![b'-'; data.user_code.len() + 2]).unwrap();
-    let expires_in = data.expires.signed_duration_since(Utc::now()).num_minutes();
-    let expires_at = data.expires.format("%T");
+    let expires: DateTime<Utc> = data.expires.parse().unwrap();
+    let expires_in = expires.signed_duration_since(Utc::now()).num_minutes();
+    let expires_at = expires.format("%T");
     let url = &data.url;
     let user_code = &data.user_code;
 
@@ -173,7 +174,10 @@ impl<L: LoginClient + Send + Sync> Auth for AuthLive<L> {
             };
             let data = self.login.token_details(secret.clone()).await?;
 
-            Ok(CloudAuthentication(UnsafeToken { data, secret }))
+            Ok(CloudAuthentication(UnsafeToken {
+                data: Box::new(data),
+                secret: Box::new(secret),
+            }))
         } else {
             self.config_authentication(config_dir).await
         }
