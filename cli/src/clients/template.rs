@@ -284,7 +284,7 @@ impl TemplateClient for TemplateClientLive {
             Ok((&template).into())
         } else {
             Err(GolemError(format!(
-                "Templates list request failed with status {status} and content {content}"
+                "Templates add request failed with status {status} and content {content}"
             )))
         }
     }
@@ -330,6 +330,8 @@ impl TemplateClient for TemplateClientLive {
             }
         };
 
+        request = request.header(reqwest::header::CONTENT_TYPE, "application/octet-stream");
+
         let resp = self.configuration.client.execute(request.build()?).await?;
 
         let status = resp.status();
@@ -341,7 +343,7 @@ impl TemplateClient for TemplateClientLive {
             Ok((&template).into())
         } else {
             Err(GolemError(format!(
-                "Templates list request failed with status {status} and content {content}"
+                "Templates update request failed with status {status} and content {content}"
             )))
         }
     }
@@ -373,6 +375,7 @@ struct TemplateMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type")]
 enum Export {
     Instance(ExportInstance),
     Function(ExportFunction),
@@ -404,6 +407,7 @@ struct FunctionResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type")]
 enum Type {
     Variant(TypeVariant),
     Result(TypeResult),
