@@ -204,7 +204,7 @@ impl TemplateClient for TemplateClientLive {
 
         if status.is_success() {
             let templates: Vec<Template> = serde_json::from_str(&content)
-                .map_err(|err| GolemError(format!("Failed to parse response as json: {err:?}")))?;
+                .map_err(|err| GolemError(format!("Failed to parse response as json: {err:?}, content: {content}")))?;
             let views = templates.iter().map(|c| c.into()).collect();
             Ok(views)
         } else {
@@ -253,7 +253,7 @@ impl TemplateClient for TemplateClientLive {
                     .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
 
                 form = form.part(
-                    "field1",
+                    "template",
                     reqwest::multipart::Part::stream(file).mime_str("application/octet-stream")?,
                 );
             }
@@ -265,7 +265,7 @@ impl TemplateClient for TemplateClientLive {
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
                 form = form.part(
-                    "field1",
+                    "template",
                     reqwest::multipart::Part::stream(bytes).mime_str("application/octet-stream")?,
                 );
             }
@@ -280,7 +280,7 @@ impl TemplateClient for TemplateClientLive {
 
         if status.is_success() {
             let template: Template = serde_json::from_str(&content)
-                .map_err(|err| GolemError(format!("Failed to parse response as json: {err:?}")))?;
+                .map_err(|err| GolemError(format!("Failed to parse response as json: {err:?}, content: {content}")))?;
             Ok((&template).into())
         } else {
             Err(GolemError(format!(
@@ -337,7 +337,7 @@ impl TemplateClient for TemplateClientLive {
 
         if status.is_success() {
             let template: Template = serde_json::from_str(&content)
-                .map_err(|err| GolemError(format!("Failed to parse response as json: {err:?}")))?;
+                .map_err(|err| GolemError(format!("Failed to parse response as json: {err:?}, content: {content}")))?;
             Ok((&template).into())
         } else {
             Err(GolemError(format!(
