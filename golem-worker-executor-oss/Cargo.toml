@@ -13,8 +13,8 @@ name = "worker-executor-oss"
 path = "src/server.rs"
 
 [dependencies]
-golem-common = { path = "../golem-common" }
-golem-worker-executor-base = { path = "../golem-worker-executor-base" }
+golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "0.0.0" }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

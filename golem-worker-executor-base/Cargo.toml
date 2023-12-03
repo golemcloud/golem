@@ -13,7 +13,7 @@ path = "src/lib.rs"
 mocks = []
 
 [dependencies]
-golem-common = { path = "../golem-common" }
+golem-common = { path = "../golem-common", version = "0.0.0" }
 
 anyhow = { workspace = true }
 async-mutex = "1.4.0"
