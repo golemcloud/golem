@@ -34,6 +34,10 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check formatting
         run: cargo fmt -- --check
       - name: Clippy
@@ -64,8 +68,10 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - name: Install cargo-publish-all
-        run: cargo install cargo-publish-all
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Publish crate
