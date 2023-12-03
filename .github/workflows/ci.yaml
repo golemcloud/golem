@@ -82,6 +82,6 @@ jobs:
           sed -i "s/0.0.0/$VERSION/g" golem-common/Cargo.toml
           sed -i "s/0.0.0/$VERSION/g" golem-worker-executor-base/Cargo.toml
           sed -i "s/0.0.0/$VERSION/g" golem-worker-executor-oss/Cargo.toml
-          cd golem-common && cargo publish --all-features --allow-dirty
-          cd ../golem-worker-executor-base && cargo publish --all-features --allow-dirty
-          cd ../golem-worker-executor-oss && cargo publish --all-features --allow-dirty
+          cargo publish -p golem-common --all-features --allow-dirty
+          cargo publish -p golem-worker-executor-base --all-features --allow-dirty
+          cargo publish -p golem-worker-executor-oss --all-features --allow-dirty
