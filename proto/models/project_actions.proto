@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package golem;
+
+import public "models/project_action.proto";
+
+message ProjectActions {
+  repeated ProjectAction actions = 1;
+}

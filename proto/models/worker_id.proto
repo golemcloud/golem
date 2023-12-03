@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+import public "models/template_id.proto";
+
+package golem;
+
+message WorkerId {
+  TemplateId template_id = 1;
+  string name = 2;
+}

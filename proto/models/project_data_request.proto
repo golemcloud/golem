@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+import public "models/account_id.proto";
+
+package golem;
+
+
+message ProjectDataRequest {
+  string name = 1;
+  AccountId owner_account_id = 2;
+  string description = 3;
+}

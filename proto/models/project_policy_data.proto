@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package golem;
+
+import public "models/project_actions.proto";
+
+message ProjectPolicyData {
+  string name = 1;
+  ProjectActions actions = 2;
+}

@@ -1,0 +1,20 @@
+[package]
+name = "golem-it-write-stdout"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+opt-level = 's'
+
+[dependencies]
+cargo-component-bindings = { git = "https://github.com/bytecodealliance/cargo-component", rev = "e57d1d1405ed2d76f1f3d8647480dea700379ff8" }
+
+[package.metadata.component.target]
+path = "wit"
+
+[package.metadata.component.dependencies]

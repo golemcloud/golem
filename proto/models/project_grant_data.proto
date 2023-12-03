@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+import public "models/account_id.proto";
+import public "models/project_id.proto";
+import public "models/project_policy_id.proto";
+
+package golem;
+
+
+message ProjectGrantData {
+  AccountId grantee_account_id = 1;
+  ProjectId grantor_project_id = 2;
+  ProjectPolicyId project_policy_id = 3;
+}

@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem;
+
+message ErrorBody {
+  string error = 1;
+}
+
+message ErrorsBody {
+  repeated string errors = 1;
+}

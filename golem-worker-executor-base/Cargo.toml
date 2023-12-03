@@ -1,0 +1,66 @@
+[package]
+name = "golem-worker-executor-base"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+description = "Golem Worker Executor base implementation"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+mocks = []
+
+[dependencies]
+golem-common = { path = "../golem-common" }
+
+anyhow = { workspace = true }
+async-mutex = "1.4.0"
+async-stream = { version = "0.3", optional = true }
+async-trait = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-s3 = {workspace = true }
+bincode = { workspace = true }
+bitflags = "2.4.1"
+bytes = { workspace = true }
+chrono = { workspace = true }
+dashmap = "5.5.0"
+figment = { workspace = true }
+fred = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+http = { workspace = true }
+http-body = "1.0.0-rc.2"
+humantime-serde = { workspace = true }
+hyper = { workspace = true }
+io-extras = "0.18.0"
+iso8601-timestamp = "0.2.11"
+lazy_static = { workspace = true }
+log = "0.4.17"
+prometheus = { workspace = true }
+prost = { workspace = true }
+ringbuf = "0.3.3"
+rustix = "0.38.25"
+rustls = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3.8.1"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tonic-reflection = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+value-bag = "1.4.2"
+warp = { workspace = true }
+wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "134dddc8de5f9011aa7e4cf30cb8e9f9fa484e87", features = ["component-model"] }
+wasmtime-runtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "134dddc8de5f9011aa7e4cf30cb8e9f9fa484e87" }
+windows-sys = "0.52.0"
+
+[dev-dependencies]
+fred = { workspace = true, features = ["metrics", "serde-json", "partial-tracing", "mocks"] }

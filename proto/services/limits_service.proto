@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package golem.cloudservices.limitsservice;
+
+import public "models/account_id.proto";
+import public "models/empty.proto";
+import public "models/batch_update_resource_limits.proto";
+import public "models/limits_error.proto";
+import public "models/resource_limits.proto";
+import public "models/token_secret.proto";
+
+service LimitsService {
+  rpc GetLimits (GetLimitsRequest) returns (GetLimitsResponse);
+  rpc BatchUpdateLimits (BatchUpdateLimitsRequest) returns (BatchUpdateLimitsResponse);
+}
+
+message GetLimitsRequest {
+  AccountId accountId = 1;
+  TokenSecret tokenSecret = 2;
+}
+
+message GetLimitsResponse {
+  oneof result {
+    ResourceLimits success = 1;
+    LimitsError error = 2;
+  }
+}
+
+message BatchUpdateLimitsRequest {
+  BatchUpdateResourceLimits batchUpdateResourceLimits = 1;
+  TokenSecret tokenSecret = 2;
+}
+
+message BatchUpdateLimitsResponse {
+  oneof result {
+    Empty success = 1;
+    LimitsError error = 2;
+  }
+}
+

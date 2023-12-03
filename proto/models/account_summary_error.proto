@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package golem;
+
+import public "models/error_body.proto";
+
+message AccountSummaryError {
+  oneof error {
+    ErrorBody unauthorized = 1;
+    ErrorBody internal_error = 2;
+  }
+}
+

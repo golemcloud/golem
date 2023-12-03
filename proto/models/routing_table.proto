@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+import public "models/routing_table_entry.proto";
+
+package golem;
+
+message RoutingTable {
+  uint32 number_of_shards = 1;
+  repeated RoutingTableEntry shard_assignments = 2;
+}

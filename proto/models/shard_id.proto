@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package golem;
+
+
+message ShardId {
+  int64 value = 1;
+}

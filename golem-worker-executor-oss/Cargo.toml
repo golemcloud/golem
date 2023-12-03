@@ -1,0 +1,39 @@
+[package]
+name = "golem-worker-executor-oss"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+description = "Golem worker executor service"
+
+[lib]
+
+[[bin]]
+name = "worker-executor-oss"
+path = "src/server.rs"
+
+[dependencies]
+golem-common = { path = "../golem-common" }
+golem-worker-executor-base = { path = "../golem-worker-executor-base" }
+
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+cap-std = "2.0.0"
+console-subscriber = { workspace = true }
+figment = { workspace = true }
+humantime-serde = { workspace = true }
+prometheus = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3.5.0"
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tonic-reflection = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "134dddc8de5f9011aa7e4cf30cb8e9f9fa484e87", features = ["component-model"] }
+wasmtime-runtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "134dddc8de5f9011aa7e4cf30cb8e9f9fa484e87" }
+wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "134dddc8de5f9011aa7e4cf30cb8e9f9fa484e87", features = ["preview2", "tokio"] }
+wasmtime-wasi-http = { git = "https://github.com/bytecodealliance/wasmtime", rev = "134dddc8de5f9011aa7e4cf30cb8e9f9fa484e87" }

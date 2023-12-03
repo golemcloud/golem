@@ -1,0 +1,8 @@
+### Rust template
+debug/
+target/
+**/*.rs.bk
+*.pdb
+.idea/
+
+
