@@ -8,9 +8,7 @@ mod common;
 async fn write_stdout() {
     let mut executor = common::start().await.unwrap();
 
-    let template_id = executor.store_template(Path::new(
-        "../test-templates/write-stdout.wasm",
-    ));
+    let template_id = executor.store_template(Path::new("../test-templates/write-stdout.wasm"));
     let worker_id = executor.start_worker(&template_id, "write-stdout-1").await;
     println!("Worker started with id: {}", worker_id);
 

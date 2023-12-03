@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use golem_common::model::{PromiseId, TemplateId, WorkerId};
-use uuid::Uuid;
 use golem_worker_executor_base::workerctx::WorkerCtx;
+use uuid::Uuid;
 
 use crate::context::Context;
 use crate::preview2::golem::api::host;

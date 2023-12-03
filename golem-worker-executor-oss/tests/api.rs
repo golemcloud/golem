@@ -7,9 +7,7 @@ mod common;
 async fn shopping_cart_example() {
     let mut executor = common::start().await.unwrap();
 
-    let template_id = executor.store_template(Path::new(
-        "../test-templates/shopping-cart.wasm",
-    ));
+    let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
     let worker_id = executor.start_worker(&template_id, "shopping-cart-1").await;
     println!("Worker started with id: {}", worker_id);
 

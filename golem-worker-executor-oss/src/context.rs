@@ -9,16 +9,6 @@ use golem_common::model::{
     WorkerStatus,
 };
 use golem_common::proto::golem::Val;
-use tempfile::TempDir;
-use tokio::runtime::Handle;
-use tonic::codegen::Bytes;
-use tracing::debug;
-use wasmtime::component::{Instance, Linker};
-use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
-use wasmtime_wasi::preview2::{
-    stderr, DirPerms, FilePerms, I32Exit, IsATTY, Table, WasiCtx, WasiCtxBuilder, WasiView,
-};
-use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 use golem_worker_executor_base::error::{is_interrupt, GolemError};
 use golem_worker_executor_base::host::managed_stdio::ManagedStandardIo;
 use golem_worker_executor_base::model::{
@@ -37,6 +27,16 @@ use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
     PublicWorkerIo, StatusManagement, WorkerCtx,
 };
+use tempfile::TempDir;
+use tokio::runtime::Handle;
+use tonic::codegen::Bytes;
+use tracing::debug;
+use wasmtime::component::{Instance, Linker};
+use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
+use wasmtime_wasi::preview2::{
+    stderr, DirPerms, FilePerms, I32Exit, IsATTY, Table, WasiCtx, WasiCtxBuilder, WasiView,
+};
+use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
 use crate::host::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::services::config::AdditionalGolemConfig;

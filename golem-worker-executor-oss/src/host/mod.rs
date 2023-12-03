@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
+use golem_worker_executor_base::host::managed_stdio::{ManagedStandardIo, ManagedStreamStatus};
+use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tonic::codegen::Bytes;
 use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, Stderr, StreamState};
-use golem_worker_executor_base::host::managed_stdio::{ManagedStandardIo, ManagedStreamStatus};
-use golem_worker_executor_base::services::worker_event::WorkerEventService;
 
 pub mod blobstore;
 pub mod golem;

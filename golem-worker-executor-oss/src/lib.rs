@@ -6,11 +6,6 @@ pub mod services;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use prometheus::Registry;
-use tokio::runtime::Handle;
-use tracing::info;
-use wasmtime::component::Linker;
-use wasmtime::Engine;
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
@@ -24,6 +19,11 @@ use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::All;
 use golem_worker_executor_base::Bootstrap;
+use prometheus::Registry;
+use tokio::runtime::Handle;
+use tracing::info;
+use wasmtime::component::Linker;
+use wasmtime::Engine;
 
 use crate::context::{create_linker, Context};
 use crate::services::config::AdditionalGolemConfig;

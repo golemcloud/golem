@@ -13,14 +13,14 @@ use golem_common::proto::golem::workerexecutor::{
 use golem_common::proto::golem::{
     log_event, val, CallingConvention, LogEvent, StdOutLog, Val, ValList, ValRecord,
 };
+use golem_worker_executor_base::services::golem_config::GolemConfig;
+use golem_worker_executor_oss::run;
+use golem_worker_executor_oss::services::config::AdditionalGolemConfig;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use uuid::Uuid;
-use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_oss::run;
-use golem_worker_executor_oss::services::config::AdditionalGolemConfig;
 
 pub struct TestWorkerExecutor {
     pub client: WorkerExecutorClient<Channel>,

@@ -29,7 +29,9 @@ impl AdditionalGolemConfig {
 
 #[cfg(test)]
 mod tests {
-    use golem_worker_executor_base::services::golem_config::{GolemConfig, ShardManagerServiceConfig};
+    use golem_worker_executor_base::services::golem_config::{
+        GolemConfig, ShardManagerServiceConfig,
+    };
 
     use crate::services::config::AdditionalGolemConfig;
 
