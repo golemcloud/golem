@@ -20,15 +20,29 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{HasAll, HasInvocationKeyService};
 use crate::workerctx::WorkerCtx;
 
+/// Worker is one active wasmtime instance representing a Golem worker with its corresponding
+/// worker context. The worker struct itself is responsible for creating/reactivating/interrupting
+/// the worker, but the actual worker invocation is implemented in separate functions in the
+/// 'invocation' module.
 pub struct Worker<Ctx: WorkerCtx> {
+    /// Metadata associated with the worker
     pub metadata: WorkerMetadata,
+
+    /// The active wasmtime instance
     pub instance: wasmtime::component::Instance,
+
+    /// The active wasmtime store holding the worker context
     pub store: Mutex<Store<Ctx>>,
+
+    /// The public part of the worker context
     pub public_state: Ctx::PublicState,
+
+    /// The current execution status of the worker
     pub execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Creates a new worker
     pub async fn new<T>(
         this: &T,
         worker_id: WorkerId,
