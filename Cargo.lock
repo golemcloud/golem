@@ -1713,7 +1713,6 @@ dependencies = [
  "prometheus",
  "prost 0.12.3",
  "ringbuf",
- "rustix 0.38.26",
  "rustls",
  "serde",
  "serde_json",

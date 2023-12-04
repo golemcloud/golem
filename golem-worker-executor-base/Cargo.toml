@@ -20,7 +20,7 @@ async-mutex = "1.4.0"
 async-stream = { version = "0.3", optional = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
-aws-sdk-s3 = {workspace = true }
+aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
 bitflags = "2.4.1"
 bytes = { workspace = true }
@@ -41,7 +41,6 @@ log = "0.4.17"
 prometheus = { workspace = true }
 prost = { workspace = true }
 ringbuf = "0.3.3"
-rustix = "0.38.25"
 rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
