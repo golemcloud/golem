@@ -1,0 +1,83 @@
+import { Card, Callout, Steps } from "nextra/components"
+
+# API Gateway
+
+Golem's API Gateway makes it easy for you to build WASM based microservices by translating incoming requests into invocations of worker functions and constructing responses based on the return values of those functions.
+
+## Create your first API
+
+The API Gateway allows you to define an **API**. An API consists of a set **routes** and a set of **deployments**.
+
+Let's create our first API.
+
+{/* prettier-ignore */}
+<Steps>
+    ### Go to the [management console](https://console.golem.cloud/)
+    ### Select a project
+      - Click on `Projects` in the top navigation bar
+      ![All Projects](/images/projects-link.png)
+      - Select a project where you have uploaded at least one worker template
+    ### Click on `APIs` in the top navigation bar
+      ![Project APIs](/images/project-apis-link.png)
+    ### Click the `Create New` button in the top right
+      ![Create New API](/images/create-new-api.png)
+    ### Create the API 
+    Specify an **API name** and **version**
+</Steps>
+
+Now that we have an API we're ready to create some routes!
+
+## Routes
+
+Creating a new API will take you to the overview page of that API, which shows an overview of the routes and deployments associated with the API. To view all the routes associated with the API click the `View All` button under routes.
+
+Right now this doesn't include any routes. Let's click the `Add New` button to create our first route.
+
+Every route consists of <ins>four parts</ins>:
+
+### 1. HTTP Endpoint
+
+The HTTP Endpoint defines what incoming requests the route handles and consists of a `method` (e.g. GET, POST) and a `path`. The path may also capture path and query variables, indicated by curly braces, that will be available in the worker binding.
+
+For example, a path `users/{user-id}?{active}` would match on the request `users/123?active=true`
+
+- `user-id` would be captured as `123`
+- `active` would be captured as `true`
+
+### 2. Worker Binding
+
+The worker binding describes which worker function the route should invoke. This includes the worker template to use, the identifier of the specific worker associated that that template to use, and the function to invoke.
+
+The `worker-id` can take a expression to dynamically create a worker based on information contained in the request.
+
+For example, if you had a path `users/{user-id}/todos`, you could create a new worker for each user by setting the `worker-id` to `todos-${request.path.user-id}`.
+
+See the [expression language](/docs/console/api-gateway/expression-language) page for more details.
+
+<Callout type="info">
+  If you invoke a function on a worker that does not exist yet the worker will be created and then
+  the function will be invoked on the worker. So it is easy to create a new worker based on
+  information contained in the request.
+</Callout>
+
+### 3. Parameters
+
+The parameters describe how information from the request will be used to construct the parameters to the worker function. These can be constants, path or query variables captured above, headers, body fields, or even the entire body.
+
+### 4. Response
+
+The response describes how the value returned by the worker function should be translated back into an HTTP response. The default is a successful response with a 200 status code and the function return value in the body, but you can customize the status code, body, and headers using the [expression language](/docs/console/api-gateway/expression-language).
+
+## Deployments
+
+So far we have just described our API. We haven't deployed it anywhere where it can serve live traffic.
+
+To view all of our deployments go back to the overview and then click on `View All` under deployments. This will show us all of our current deployments.
+
+When we are ready we can deploy our API by clicking `New Deployment`. We then need to specify a domain and subdomain.
+
+By default, our API will be deployed to a subdomain of `api.golem.cloud`. This makes it incredibly easy to stand up a web service for rapid development, but eventually you will probably want to shift to using a custom domain name that reflects the product or service you are offering.
+
+To do this click on “Configure Custom Domain” after `New Deployment` and follow the instructions there. After specifying your custom domain you will be provided with a set of custom name servers that you will need to add to your domain registrar (e.g. GoDaddy) and Golem will then be able to confirm they have been successfully configured.
+
+With this you're ready to go! Try hitting the endpoints you have defined with requests and see the responses you get back powered by your WASM workers.

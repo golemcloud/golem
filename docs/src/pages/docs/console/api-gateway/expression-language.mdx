@@ -1,0 +1,77 @@
+import { Callout } from "nextra/components"
+
+# Expression Language
+
+To make route definitions as flexible as possible Golem provides a powerful expression language that allows you to capture information as variables and perform conditional logic.
+
+Here is an overview of the syntax you can use for capturing variables in your HTTP endpoint definition and accessing them later:
+
+| Type               | Path Definition            | Access Method                      |
+| ------------------ | -------------------------- | ---------------------------------- |
+| Path Parameters    | `users/{user-id}`          | `${request.path.user-id}`          |
+| Query Parameters   | `users/{user-id}?{active}` | `${request.query.active}`          |
+| Request Body       | N/A                        | `${request.body}`                  |
+| Request Body Field | N/A                        | `${request.body.<FIELD_NAME>}`     |
+| Request Headers    | N/A                        | `${request.headers.<HEADER_NAME>}` |
+
+<Callout type="info">
+Code is always indicated by `${…}`. Any text that is not wrapped this way is interpreted as a string.
+</Callout>
+
+You can also use conditional logic. For example, you might want to have a different worker handle the request depending on one of the parameters.
+
+You can do this with `${if condition then x else y}` syntax or `${if condition1 then x elseif condition2 then y else z}` if you have more than three branches.
+
+In addition to equality comparison operators (`≤`, `<`, `>=`, and `>`) are currently supported in conditions.
+
+<Callout type="info">
+  The user interface of the [management console](/docs/console) has extensive help to make it easy
+  for you to write these expressions and make sure that they are correct and well typed as you do
+  so.
+</Callout>
+
+## Input Expressions
+
+Input expressions are used for capturing information from the request and making it available to the worker function. They are available in the `request` object.
+
+Input expressions can be used to define the worker-id, and the function parameters of the selected worker function.
+
+### Path Parameters
+
+Define a parameter in your path by wrapping it in curly brackets `{ }`
+
+| Path Definition    | Usage                     |
+| ------------------ | ------------------------- |
+| `/users/{user-id}` | `${request.path.user-id}` |
+
+---
+
+### Query Parameters
+
+Define a query parameter after the `?` in your Path Definition. They are available under path parameters.
+
+| Path Definition             | Usage                    |
+| --------------------------- | ------------------------ |
+| `/users/{user-id}?{active}` | `${request.path.active}` |
+
+---
+
+### Request Body
+
+Use values included in the request body. You can select nested values and construct compound values.
+
+| Description                          | Usage                        |
+| ------------------------------------ | ---------------------------- |
+| Entire Request Body                  | `${request.body}`            |
+| Specific Field in Request Body       | `${request.body.FIELD_NAME}` |
+| Specific index in Request Body Array | `${request.body[INDEX]}`     |
+
+## Response Expressions
+
+Worker functions always return a Tuple of values. You can refer to the entire return tuple, or access an individual value by index.
+
+| Description                         | Usage                                  |
+| ----------------------------------- | -------------------------------------- |
+| Entire Worker Function Response     | `${worker.response}`                   |
+| Specific index in worker response   | `${worker.response[INDEX]}`            |
+| Nest Worker Response in JSON Object | `{ "response": "${worker.response}" }` |
