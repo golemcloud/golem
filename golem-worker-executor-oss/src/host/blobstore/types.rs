@@ -7,17 +7,23 @@ use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, StreamResult, S
 
 use crate::context::Context;
 use crate::preview2::wasi::blobstore::types::{
-    Error, Host, HostIncomingValue, HostOutgoingValue, IncomingValue, IncomingValueAsyncBody, IncomingValueSyncBody,
-    OutputStream as OutgoingValueBodyAsync,
+    Error, Host, HostIncomingValue, HostOutgoingValue, IncomingValue, IncomingValueAsyncBody,
+    IncomingValueSyncBody, OutputStream as OutgoingValueBodyAsync,
 };
 
 #[async_trait]
 impl HostIncomingValue for Context {
-    async fn incoming_value_consume_sync(&mut self, _self_: Resource<IncomingValue>) -> anyhow::Result<Result<IncomingValueSyncBody, Error>> {
+    async fn incoming_value_consume_sync(
+        &mut self,
+        _self_: Resource<IncomingValue>,
+    ) -> anyhow::Result<Result<IncomingValueSyncBody, Error>> {
         todo!()
     }
 
-    async fn incoming_value_consume_async(&mut self, _self_: Resource<IncomingValue>) -> anyhow::Result<Result<Resource<IncomingValueAsyncBody>, Error>> {
+    async fn incoming_value_consume_async(
+        &mut self,
+        _self_: Resource<IncomingValue>,
+    ) -> anyhow::Result<Result<Resource<IncomingValueAsyncBody>, Error>> {
         todo!()
     }
 
@@ -32,31 +38,30 @@ impl HostIncomingValue for Context {
 
 #[async_trait]
 impl HostOutgoingValue for Context {
-    async fn new_outgoing_value(&mut self, _self_: Resource<OutgoingValueEntry>) -> anyhow::Result<Resource<OutgoingValueEntry>> {
+    async fn new_outgoing_value(
+        &mut self,
+        _self_: Resource<OutgoingValueEntry>,
+    ) -> anyhow::Result<Resource<OutgoingValueEntry>> {
         let outgoing_value = self.table_mut().push(OutgoingValueEntry::new())?;
         Ok(outgoing_value)
     }
 
-    async fn outgoing_value_write_body(&mut self, self_: Resource<OutgoingValueEntry>) -> anyhow::Result<Result<Resource<OutgoingValueBodyAsync>, ()>> {
-        let body = self
-            .table()
-            .get::<OutgoingValueEntry>(&self_)?
-            .body
-            .clone();
-        let output_stream: Box<dyn HostOutputStream> = Box::new(OutgoingValueBodyAsyncEntry::new(body));
-        let outgoing_value_async_body = self
-            .table_mut()
-            .push(output_stream)?;
+    async fn outgoing_value_write_body(
+        &mut self,
+        self_: Resource<OutgoingValueEntry>,
+    ) -> anyhow::Result<Result<Resource<OutgoingValueBodyAsync>, ()>> {
+        let body = self.table().get::<OutgoingValueEntry>(&self_)?.body.clone();
+        let output_stream: Box<dyn HostOutputStream> =
+            Box::new(OutgoingValueBodyAsyncEntry::new(body));
+        let outgoing_value_async_body = self.table_mut().push(output_stream)?;
         Ok(Ok(outgoing_value_async_body))
     }
 
     fn drop(&mut self, rep: Resource<OutgoingValueEntry>) -> anyhow::Result<()> {
-        self.table_mut()
-            .delete::<OutgoingValueEntry>(rep)?;
+        self.table_mut().delete::<OutgoingValueEntry>(rep)?;
         Ok(())
     }
 }
-
 
 #[async_trait]
 impl Host for Context {}

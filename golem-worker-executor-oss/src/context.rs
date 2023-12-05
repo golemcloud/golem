@@ -307,7 +307,7 @@ impl ExternalOperations<Self> for Context {
     async fn prepare_instance(
         _worker_id: &VersionedWorkerId,
         _instance: &Instance,
-        _store: &mut (impl AsContextMut<Data=Self> + Send),
+        _store: &mut (impl AsContextMut<Data = Self> + Send),
     ) -> Result<(), GolemError> {
         Ok(())
     }
@@ -357,7 +357,8 @@ impl WorkerCtx for Context {
         let stdio =
             ManagedStandardIo::new(worker_id.worker_id.clone(), invocation_key_service.clone());
         let stdin = ManagedStdIn::from_standard_io(runtime.clone(), stdio.clone());
-        let stdout = ManagedStdOut::from_standard_io(runtime.clone(), stdio.clone(), event_service.clone());
+        let stdout =
+            ManagedStdOut::from_standard_io(runtime.clone(), stdio.clone(), event_service.clone());
         let stderr = ManagedStdErr::from_stderr(runtime.clone(), stderr(), event_service.clone());
 
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(

@@ -10,7 +10,11 @@ use crate::preview2::wasi::keyvalue::readwrite::{
 
 #[async_trait]
 impl Host for Context {
-    async fn get(&mut self, bucket: Resource<Bucket>, key: Key) -> anyhow::Result<Result<Resource<IncomingValue>, Resource<Error>>> {
+    async fn get(
+        &mut self,
+        bucket: Resource<Bucket>,
+        key: Key,
+    ) -> anyhow::Result<Result<Resource<IncomingValue>, Resource<Error>>> {
         let account_id = self.account_id().clone();
         let bucket = self.table().get::<BucketEntry>(&bucket)?.name.clone();
         let result = self
@@ -19,9 +23,7 @@ impl Host for Context {
             .await;
         match result {
             Ok(Some(value)) => {
-                let incoming_value = self
-                    .table_mut()
-                    .push(IncomingValueEntry::new(value))?;
+                let incoming_value = self.table_mut().push(IncomingValueEntry::new(value))?;
                 Ok(Ok(incoming_value))
             }
             Ok(None) => {
@@ -31,15 +33,18 @@ impl Host for Context {
                 Ok(Err(error))
             }
             Err(e) => {
-                let error = self
-                    .table_mut()
-                    .push(ErrorEntry::new(format!("{:?}", e)))?;
+                let error = self.table_mut().push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }
     }
 
-    async fn set(&mut self, bucket: Resource<Bucket>, key: Key, outgoing_value: Resource<OutgoingValue>) -> anyhow::Result<Result<(), Resource<Error>>> {
+    async fn set(
+        &mut self,
+        bucket: Resource<Bucket>,
+        key: Key,
+        outgoing_value: Resource<OutgoingValue>,
+    ) -> anyhow::Result<Result<(), Resource<Error>>> {
         let account_id = self.account_id().clone();
         let bucket = self.table().get::<BucketEntry>(&bucket)?.name.clone();
         let outgoing_value = self
@@ -61,15 +66,17 @@ impl Host for Context {
         match result {
             Ok(()) => Ok(Ok(())),
             Err(e) => {
-                let error = self
-                    .table_mut()
-                    .push(ErrorEntry::new(format!("{:?}", e)))?;
+                let error = self.table_mut().push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }
     }
 
-    async fn delete(&mut self, bucket: Resource<Bucket>, key: Key) -> anyhow::Result<Result<(), Resource<Error>>> {
+    async fn delete(
+        &mut self,
+        bucket: Resource<Bucket>,
+        key: Key,
+    ) -> anyhow::Result<Result<(), Resource<Error>>> {
         let account_id = self.account_id().clone();
         let bucket = self.table().get::<BucketEntry>(&bucket)?.name.clone();
         let result = self
@@ -79,15 +86,17 @@ impl Host for Context {
         match result {
             Ok(()) => Ok(Ok(())),
             Err(e) => {
-                let error = self
-                    .table_mut()
-                    .push(ErrorEntry::new(format!("{:?}", e)))?;
+                let error = self.table_mut().push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }
     }
 
-    async fn exists(&mut self, bucket: Resource<Bucket>, key: Key) -> anyhow::Result<Result<bool, Resource<Error>>> {
+    async fn exists(
+        &mut self,
+        bucket: Resource<Bucket>,
+        key: Key,
+    ) -> anyhow::Result<Result<bool, Resource<Error>>> {
         let account_id = self.account_id().clone();
         let bucket = self.table().get::<BucketEntry>(&bucket)?.name.clone();
         let result = self
@@ -97,9 +106,7 @@ impl Host for Context {
         match result {
             Ok(exists) => Ok(Ok(exists)),
             Err(e) => {
-                let error = self
-                    .table_mut()
-                    .push(ErrorEntry::new(format!("{:?}", e)))?;
+                let error = self.table_mut().push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }

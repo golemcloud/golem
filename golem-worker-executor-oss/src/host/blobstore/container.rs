@@ -2,15 +2,20 @@ use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::context::Context;
-use crate::host::blobstore::types::{ContainerEntry, IncomingValueEntry, OutgoingValueEntry, StreamObjectNamesEntry};
+use crate::host::blobstore::types::{
+    ContainerEntry, IncomingValueEntry, OutgoingValueEntry, StreamObjectNamesEntry,
+};
 use crate::preview2::wasi::blobstore::container::{
-    Container, ContainerMetadata, Error, Host, HostContainer, HostStreamObjectNames, IncomingValue, ObjectMetadata, ObjectName,
-    OutgoingValue, StreamObjectNames,
+    Container, ContainerMetadata, Error, Host, HostContainer, HostStreamObjectNames, IncomingValue,
+    ObjectMetadata, ObjectName, OutgoingValue, StreamObjectNames,
 };
 
 #[async_trait]
 impl HostContainer for Context {
-    async fn name(&mut self, container: Resource<Container>) -> anyhow::Result<Result<String, Error>> {
+    async fn name(
+        &mut self,
+        container: Resource<Container>,
+    ) -> anyhow::Result<Result<String, Error>> {
         let name = self
             .table()
             .get::<Container>(&container)
@@ -18,7 +23,10 @@ impl HostContainer for Context {
         Ok(Ok(name))
     }
 
-    async fn info(&mut self, self_: Resource<ContainerEntry>) -> anyhow::Result<Result<ContainerMetadata, Error>> {
+    async fn info(
+        &mut self,
+        self_: Resource<ContainerEntry>,
+    ) -> anyhow::Result<Result<ContainerMetadata, Error>> {
         let info = self
             .table()
             .get::<ContainerEntry>(&self_)
@@ -29,7 +37,13 @@ impl HostContainer for Context {
         Ok(Ok(info))
     }
 
-    async fn get_data(&mut self, self_: Resource<ContainerEntry>, name: ObjectName, start: u64, end: u64) -> anyhow::Result<Result<Resource<IncomingValue>, Error>> {
+    async fn get_data(
+        &mut self,
+        self_: Resource<ContainerEntry>,
+        name: ObjectName,
+        start: u64,
+        end: u64,
+    ) -> anyhow::Result<Result<Resource<IncomingValue>, Error>> {
         let account_id = self.account_id().clone();
         let container_name = self
             .table()
@@ -55,7 +69,12 @@ impl HostContainer for Context {
         }
     }
 
-    async fn write_data(&mut self, self_: Resource<ContainerEntry>, name: ObjectName, data: Resource<OutgoingValue>) -> anyhow::Result<Result<(), Error>> {
+    async fn write_data(
+        &mut self,
+        self_: Resource<ContainerEntry>,
+        name: ObjectName,
+        data: Resource<OutgoingValue>,
+    ) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.account_id().clone();
         let container_name = self
             .table()
@@ -80,7 +99,10 @@ impl HostContainer for Context {
         }
     }
 
-    async fn list_objects(&mut self, self_: Resource<ContainerEntry>) -> anyhow::Result<Result<Resource<StreamObjectNames>, Error>> {
+    async fn list_objects(
+        &mut self,
+        self_: Resource<ContainerEntry>,
+    ) -> anyhow::Result<Result<Resource<StreamObjectNames>, Error>> {
         let account_id = self.account_id().clone();
         let container_name = self
             .table()
@@ -101,7 +123,11 @@ impl HostContainer for Context {
         }
     }
 
-    async fn delete_object(&mut self, self_: Resource<ContainerEntry>, name: ObjectName) -> anyhow::Result<Result<(), Error>> {
+    async fn delete_object(
+        &mut self,
+        self_: Resource<ContainerEntry>,
+        name: ObjectName,
+    ) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.account_id().clone();
         let container_name = self
             .table()
@@ -117,7 +143,11 @@ impl HostContainer for Context {
         }
     }
 
-    async fn delete_objects(&mut self, self_: Resource<ContainerEntry>, names: Vec<ObjectName>) -> anyhow::Result<Result<(), Error>> {
+    async fn delete_objects(
+        &mut self,
+        self_: Resource<ContainerEntry>,
+        names: Vec<ObjectName>,
+    ) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.account_id().clone();
         let container_name = self
             .table()
@@ -133,7 +163,11 @@ impl HostContainer for Context {
         }
     }
 
-    async fn has_object(&mut self, self_: Resource<ContainerEntry>, name: ObjectName) -> anyhow::Result<Result<bool, Error>> {
+    async fn has_object(
+        &mut self,
+        self_: Resource<ContainerEntry>,
+        name: ObjectName,
+    ) -> anyhow::Result<Result<bool, Error>> {
         let account_id = self.account_id().clone();
         let container_name = self
             .table()
@@ -149,7 +183,11 @@ impl HostContainer for Context {
         }
     }
 
-    async fn object_info(&mut self, self_: Resource<ContainerEntry>, name: ObjectName) -> anyhow::Result<Result<ObjectMetadata, Error>> {
+    async fn object_info(
+        &mut self,
+        self_: Resource<ContainerEntry>,
+        name: ObjectName,
+    ) -> anyhow::Result<Result<ObjectMetadata, Error>> {
         let account_id = self.account_id().clone();
         let container_name = self
             .table()
@@ -173,7 +211,10 @@ impl HostContainer for Context {
         }
     }
 
-    async fn clear(&mut self, self_: Resource<ContainerEntry>) -> anyhow::Result<Result<(), Error>> {
+    async fn clear(
+        &mut self,
+        self_: Resource<ContainerEntry>,
+    ) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.account_id().clone();
         let container_name = self
             .table()
@@ -193,7 +234,11 @@ impl HostContainer for Context {
 
 #[async_trait]
 impl HostStreamObjectNames for Context {
-    async fn read_stream_object_names(&mut self, self_: Resource<StreamObjectNames>, len: u64) -> anyhow::Result<Result<(Vec<ObjectName>, bool), Error>> {
+    async fn read_stream_object_names(
+        &mut self,
+        self_: Resource<StreamObjectNames>,
+        len: u64,
+    ) -> anyhow::Result<Result<(Vec<ObjectName>, bool), Error>> {
         let names = self
             .table()
             .get::<StreamObjectNamesEntry>(&self_)
@@ -210,7 +255,11 @@ impl HostStreamObjectNames for Context {
         Ok(Ok((result, false)))
     }
 
-    async fn skip_stream_object_names(&mut self, self_: Resource<StreamObjectNames>, num: u64) -> anyhow::Result<Result<(u64, bool), Error>> {
+    async fn skip_stream_object_names(
+        &mut self,
+        self_: Resource<StreamObjectNames>,
+        num: u64,
+    ) -> anyhow::Result<Result<(u64, bool), Error>> {
         let names = self
             .table()
             .get::<StreamObjectNamesEntry>(&self_)

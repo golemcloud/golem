@@ -11,7 +11,11 @@ use crate::preview2::wasi::keyvalue::batch::{
 
 #[async_trait]
 impl Host for Context {
-    async fn get_many(&mut self, bucket: Resource<Bucket>, keys: Keys) -> anyhow::Result<Result<Vec<Resource<IncomingValue>>, Resource<Error>>> {
+    async fn get_many(
+        &mut self,
+        bucket: Resource<Bucket>,
+        keys: Keys,
+    ) -> anyhow::Result<Result<Vec<Resource<IncomingValue>>, Resource<Error>>> {
         let account_id = self.account_id().clone();
         let bucket = self.table().get::<BucketEntry>(&bucket)?.name.clone();
         let result = self
@@ -23,10 +27,7 @@ impl Host for Context {
             Ok(Some(values)) => {
                 let incoming_values = values
                     .into_iter()
-                    .map(|value| {
-                        self.table_mut()
-                            .push(IncomingValueEntry::new(value))
-                    })
+                    .map(|value| self.table_mut().push(IncomingValueEntry::new(value)))
                     .collect::<Result<Vec<Resource<IncomingValue>>, _>>()?;
                 Ok(Ok(incoming_values))
             }
@@ -37,9 +38,7 @@ impl Host for Context {
                 Ok(Err(error))
             }
             Err(e) => {
-                let error = self
-                    .table_mut()
-                    .push(ErrorEntry::new(format!("{:?}", e)))?;
+                let error = self.table_mut().push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }
@@ -55,7 +54,11 @@ impl Host for Context {
         Ok(keys)
     }
 
-    async fn set_many(&mut self, bucket: Resource<Bucket>, key_values: Vec<(Key, Resource<OutgoingValue>)>) -> anyhow::Result<Result<(), Resource<Error>>> {
+    async fn set_many(
+        &mut self,
+        bucket: Resource<Bucket>,
+        key_values: Vec<(Key, Resource<OutgoingValue>)>,
+    ) -> anyhow::Result<Result<(), Resource<Error>>> {
         let account_id = self.account_id().clone();
         let bucket = self.table().get::<BucketEntry>(&bucket)?.name.clone();
         let key_values = key_values
@@ -78,15 +81,17 @@ impl Host for Context {
         match result {
             Ok(()) => Ok(Ok(())),
             Err(e) => {
-                let error = self
-                    .table_mut()
-                    .push(ErrorEntry::new(format!("{:?}", e)))?;
+                let error = self.table_mut().push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }
     }
 
-    async fn delete_many(&mut self, bucket: Resource<Bucket>, keys: Keys) -> anyhow::Result<Result<(), Resource<Error>>> {
+    async fn delete_many(
+        &mut self,
+        bucket: Resource<Bucket>,
+        keys: Keys,
+    ) -> anyhow::Result<Result<(), Resource<Error>>> {
         let account_id = self.account_id().clone();
         let bucket = self.table().get::<BucketEntry>(&bucket)?.name.clone();
         let result = self
@@ -96,9 +101,7 @@ impl Host for Context {
         match result {
             Ok(()) => Ok(Ok(())),
             Err(e) => {
-                let error = self
-                    .table_mut()
-                    .push(ErrorEntry::new(format!("{:?}", e)))?;
+                let error = self.table_mut().push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }

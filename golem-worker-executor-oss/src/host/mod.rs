@@ -1,4 +1,4 @@
-use std::sync::{Arc};
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -8,7 +8,10 @@ use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tonic::codegen::Bytes;
-use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, Stderr, StdinStream, StdoutStream, StreamError, StreamResult, Subscribe};
+use wasmtime_wasi::preview2::{
+    HostInputStream, HostOutputStream, Stderr, StdinStream, StdoutStream, StreamError,
+    StreamResult, Subscribe,
+};
 
 pub mod blobstore;
 pub mod golem;
@@ -73,14 +76,12 @@ impl ManagedStdOut {
     ) -> Self {
         Self {
             runtime,
-            state: Arc::new(Mutex::new(
-                ManagedStdOutState {
-                    io,
-                    current_handle: None,
-                    event_service,
-                    last_error: None,
-                }
-            )),
+            state: Arc::new(Mutex::new(ManagedStdOutState {
+                io,
+                current_handle: None,
+                event_service,
+                last_error: None,
+            })),
         }
     }
 }
@@ -135,10 +136,11 @@ impl StdoutStream for ManagedStdErr {
 impl Subscribe for ManagedStdIn {
     async fn ready(&mut self) {
         match self.state.lock().await.current_handle.take() {
-            Some(handle) =>
+            Some(handle) => {
                 if let Err(err) = handle.await {
                     self.state.lock().await.last_error = Some(anyhow!(err));
-                },
+                }
+            }
             None => self.state.lock().await.last_error = None,
         }
     }
@@ -154,7 +156,9 @@ impl HostInputStream for ManagedStdIn {
         let mut to_read = None;
         let result = match state.result.take() {
             Some(rx) => {
-                let (data, status) = self.runtime.block_on(rx)
+                let (data, status) = self
+                    .runtime
+                    .block_on(rx)
                     .map_err(|err| StreamError::Trap(anyhow!(err)))?;
                 // Result of the previous async read
                 let remaining = size as i64 - data.len() as i64;
@@ -203,10 +207,11 @@ impl Subscribe for ManagedStdOut {
     async fn ready(&mut self) {
         let mut state = self.state.lock().await;
         match state.current_handle.take() {
-            Some(handle) =>
+            Some(handle) => {
                 if let Err(err) = handle.await {
                     state.last_error = Some(anyhow!(err));
-                },
+                }
+            }
             None => state.last_error = None,
         }
     }
@@ -257,10 +262,18 @@ impl HostOutputStream for ManagedStdErr {
     }
 
     fn flush(&mut self) -> StreamResult<()> {
-        self.runtime.block_on(self.state.lock()).stderr.stream().flush()
+        self.runtime
+            .block_on(self.state.lock())
+            .stderr
+            .stream()
+            .flush()
     }
 
     fn check_write(&mut self) -> StreamResult<usize> {
-        self.runtime.block_on(self.state.lock()).stderr.stream().check_write()
+        self.runtime
+            .block_on(self.state.lock())
+            .stderr
+            .stream()
+            .check_write()
     }
 }

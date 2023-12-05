@@ -2,11 +2,19 @@ use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::context::Context;
-use crate::preview2::wasi::keyvalue::cache::{Error, FutureExistsResult, FutureGetOrSetResult, FutureGetResult, FutureResult, GetOrSetEntry, Host, HostFutureExistsResult, HostFutureGetOrSetResult, HostFutureGetResult, HostFutureResult, HostVacancy, IncomingValue, Key, OutgoingValue, Pollable, Vacancy};
+use crate::preview2::wasi::keyvalue::cache::{
+    Error, FutureExistsResult, FutureGetOrSetResult, FutureGetResult, FutureResult, GetOrSetEntry,
+    Host, HostFutureExistsResult, HostFutureGetOrSetResult, HostFutureGetResult, HostFutureResult,
+    HostVacancy, IncomingValue, Key, OutgoingValue, Pollable, Vacancy,
+};
 
 #[async_trait]
 impl HostVacancy for Context {
-    async fn vacancy_fill(&mut self, _self_: Resource<Vacancy>, _ttl_ms: Option<u32>) -> anyhow::Result<Resource<OutgoingValue>> {
+    async fn vacancy_fill(
+        &mut self,
+        _self_: Resource<Vacancy>,
+        _ttl_ms: Option<u32>,
+    ) -> anyhow::Result<Resource<OutgoingValue>> {
         unimplemented!("vacancy_fill")
     }
 
@@ -17,11 +25,17 @@ impl HostVacancy for Context {
 
 #[async_trait]
 impl HostFutureGetOrSetResult for Context {
-    async fn future_get_or_set_result_get(&mut self, _self_: Resource<FutureGetOrSetResult>) -> anyhow::Result<Option<Result<GetOrSetEntry, Resource<Error>>>> {
+    async fn future_get_or_set_result_get(
+        &mut self,
+        _self_: Resource<FutureGetOrSetResult>,
+    ) -> anyhow::Result<Option<Result<GetOrSetEntry, Resource<Error>>>> {
         unimplemented!("future_get_or_set_result_get")
     }
 
-    async fn listen_to_future_get_or_set_result(&mut self, _self_: Resource<FutureGetOrSetResult>) -> anyhow::Result<Resource<Pollable>> {
+    async fn listen_to_future_get_or_set_result(
+        &mut self,
+        _self_: Resource<FutureGetOrSetResult>,
+    ) -> anyhow::Result<Resource<Pollable>> {
         unimplemented!("listen_to_future_get_or_set_result")
     }
 
@@ -32,11 +46,17 @@ impl HostFutureGetOrSetResult for Context {
 
 #[async_trait]
 impl HostFutureResult for Context {
-    async fn future_result_get(&mut self, _self_: Resource<FutureResult>) -> anyhow::Result<Option<Result<(), Resource<Error>>>> {
+    async fn future_result_get(
+        &mut self,
+        _self_: Resource<FutureResult>,
+    ) -> anyhow::Result<Option<Result<(), Resource<Error>>>> {
         unimplemented!("future_result_get")
     }
 
-    async fn listen_to_future_result(&mut self, _self_: Resource<FutureResult>) -> anyhow::Result<Resource<Pollable>> {
+    async fn listen_to_future_result(
+        &mut self,
+        _self_: Resource<FutureResult>,
+    ) -> anyhow::Result<Resource<Pollable>> {
         unimplemented!("listen_to_future_result")
     }
 
@@ -47,11 +67,17 @@ impl HostFutureResult for Context {
 
 #[async_trait]
 impl HostFutureExistsResult for Context {
-    async fn future_exists_result_get(&mut self, _self_: Resource<FutureExistsResult>) -> anyhow::Result<Option<Result<bool, Resource<Error>>>> {
+    async fn future_exists_result_get(
+        &mut self,
+        _self_: Resource<FutureExistsResult>,
+    ) -> anyhow::Result<Option<Result<bool, Resource<Error>>>> {
         unimplemented!("future_exists_result_get")
     }
 
-    async fn listen_to_future_exists_result(&mut self, _self_: Resource<FutureExistsResult>) -> anyhow::Result<Resource<Pollable>> {
+    async fn listen_to_future_exists_result(
+        &mut self,
+        _self_: Resource<FutureExistsResult>,
+    ) -> anyhow::Result<Resource<Pollable>> {
         unimplemented!("listen_to_future_exists_result")
     }
 
@@ -62,11 +88,17 @@ impl HostFutureExistsResult for Context {
 
 #[async_trait]
 impl HostFutureGetResult for Context {
-    async fn future_get_result_get(&mut self, _self_: Resource<FutureGetResult>) -> anyhow::Result<Option<Result<Option<Resource<IncomingValue>>, Resource<Error>>>> {
+    async fn future_get_result_get(
+        &mut self,
+        _self_: Resource<FutureGetResult>,
+    ) -> anyhow::Result<Option<Result<Option<Resource<IncomingValue>>, Resource<Error>>>> {
         unimplemented!("future_get_result_get")
     }
 
-    async fn listen_to_future_get_result(&mut self, _self_: Resource<FutureGetResult>) -> anyhow::Result<Resource<Pollable>> {
+    async fn listen_to_future_get_result(
+        &mut self,
+        _self_: Resource<FutureGetResult>,
+    ) -> anyhow::Result<Resource<Pollable>> {
         unimplemented!("listen_to_future_get_result")
     }
 
@@ -85,7 +117,12 @@ impl Host for Context {
         unimplemented!("exists")
     }
 
-    async fn set(&mut self, _k: Key, _v: Resource<OutgoingValue>, _ttl_ms: Option<u32>) -> anyhow::Result<Resource<FutureResult>> {
+    async fn set(
+        &mut self,
+        _k: Key,
+        _v: Resource<OutgoingValue>,
+        _ttl_ms: Option<u32>,
+    ) -> anyhow::Result<Resource<FutureResult>> {
         unimplemented!("set")
     }
 

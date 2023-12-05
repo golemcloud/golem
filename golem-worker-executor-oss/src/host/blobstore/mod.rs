@@ -12,7 +12,10 @@ pub mod types;
 
 #[async_trait]
 impl Host for Context {
-    async fn create_container(&mut self, name: ContainerName) -> anyhow::Result<Result<Resource<Container>, Error>> {
+    async fn create_container(
+        &mut self,
+        name: ContainerName,
+    ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let account_id = self.account_id().clone();
         let result = self
             .blob_store_service()
@@ -30,7 +33,10 @@ impl Host for Context {
         }
     }
 
-    async fn get_container(&mut self, name: ContainerName) -> anyhow::Result<Result<Resource<Container>, Error>> {
+    async fn get_container(
+        &mut self,
+        name: ContainerName,
+    ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let account_id = self.account_id().clone();
         let result = self
             .blob_store_service()
