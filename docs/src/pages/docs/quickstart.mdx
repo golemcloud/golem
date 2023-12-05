@@ -34,17 +34,17 @@ To get started quickly, you can use Golem CLI to create a template from an examp
 golem-cli new --example rust-shopping-cart --template-name shopping_cart
 ```
 
-This will generate a new `shopping-cart` directory in the current directory with the example for your template.
+This will generate a new `shopping_cart` directory in the current directory with the example for your template.
 
 To **build** the newly created template you need some development tools installed. These are collected for each supported **guest language** on the [Building Templates](/docs/building-templates) page. For the above example, please read the [Rust](/docs/building-templates/tier-2/rust) specific instructions to set up `cargo-component`.
 
-Once you have that, navigate to the `shopping-cart`, and run:
+Once you have that, navigate to the `shopping_cart`, and run:
 
 ```bash filename="Terminal" copy
 cargo component build --release
 ```
 
-This will write the resulting template to `shopping-cart/target/wasm32-wasi/release/lib.wasm`.
+This will write the resulting template to `shopping_cart/target/wasm32-wasi/release/shopping_cart.wasm`.
 
 <Callout>
   The `golem-cli new` command prints out the necessary steps to build your template exactly as you
@@ -54,10 +54,10 @@ This will write the resulting template to `shopping-cart/target/wasm32-wasi/rele
 
 ### Uploading Your Template
 
-To upload your template to Golem Cloud, you can use the `template add` command. Navigate to `shopping-cart/target/wasm32-wasi/release` and then do:
+To upload your template to Golem Cloud, you can use the `template add` command. Navigate to `shopping_cart/target/wasm32-wasi/release` and then do:
 
 ```bash filename="Terminal" copy
-golem-cli template add --template-name shopping-cart lib.wasm
+golem-cli template add --template-name shopping-cart shopping_cart.wasm
 ```
 
 Uploading a template to Golem Cloud does not actually execute the template. Instead, it only makes it available for execution to Golem Cloud.
