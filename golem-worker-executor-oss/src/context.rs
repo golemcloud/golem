@@ -34,7 +34,7 @@ use tracing::debug;
 use wasmtime::component::{Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::preview2::{
-    stderr, DirPerms, FilePerms, I32Exit, IsATTY, Table, WasiCtx, WasiCtxBuilder, WasiView,
+    stderr, DirPerms, FilePerms, I32Exit, Table, WasiCtx, WasiCtxBuilder, WasiView,
 };
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
@@ -307,7 +307,7 @@ impl ExternalOperations<Self> for Context {
     async fn prepare_instance(
         _worker_id: &VersionedWorkerId,
         _instance: &Instance,
-        _store: &mut (impl AsContextMut<Data = Self> + Send),
+        _store: &mut (impl AsContextMut<Data=Self> + Send),
     ) -> Result<(), GolemError> {
         Ok(())
     }
@@ -371,9 +371,9 @@ impl WorkerCtx for Context {
         let wasi = WasiCtxBuilder::new()
             .args(&worker_config.args)
             .envs(&worker_config.env)
-            .stdin(stdin, IsATTY::No)
-            .stdout(stdout, IsATTY::No)
-            .stderr(stderr, IsATTY::No)
+            .stdin(stdin)
+            .stdout(stdout)
+            .stderr(stderr)
             .preopened_dir(
                 root_dir
                     .try_clone()
@@ -383,8 +383,8 @@ impl WorkerCtx for Context {
                 "/",
             )
             .preopened_dir(root_dir, DirPerms::all(), FilePerms::all(), ".")
-            .build(&mut table)?;
-        let wasi_http = WasiHttpCtx::new();
+            .build();
+        let wasi_http = WasiHttpCtx;
 
         Ok(Context {
             active_workers,
@@ -470,12 +470,12 @@ impl WasiView for Context {
 }
 
 impl WasiHttpView for Context {
-    fn http_ctx(&self) -> &WasiHttpCtx {
-        &self.wasi_http
+    fn ctx(&mut self) -> &mut WasiHttpCtx {
+        &mut self.wasi_http
     }
 
-    fn http_ctx_mut(&mut self) -> &mut WasiHttpCtx {
-        &mut self.wasi_http
+    fn table(&mut self) -> &mut Table {
+        &mut self.table
     }
 }
 
@@ -504,12 +504,12 @@ pub fn create_linker(engine: &Engine) -> wasmtime::Result<Linker<Context>> {
     wasmtime_wasi::preview2::bindings::cli::terminal_stdin::add_to_linker(&mut linker, |x| x)?;
     wasmtime_wasi::preview2::bindings::cli::terminal_stdout::add_to_linker(&mut linker, |x| x)?;
     wasmtime_wasi::preview2::bindings::clocks::monotonic_clock::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::clocks::timezone::add_to_linker(&mut linker, |x| x)?;
     wasmtime_wasi::preview2::bindings::clocks::wall_clock::add_to_linker(&mut linker, |x| x)?;
     wasmtime_wasi::preview2::bindings::filesystem::preopens::add_to_linker(&mut linker, |x| x)?;
     wasmtime_wasi::preview2::bindings::filesystem::types::add_to_linker(&mut linker, |x| x)?;
+    wasmtime_wasi::preview2::bindings::io::error::add_to_linker(&mut linker, |x| x)?;
+    wasmtime_wasi::preview2::bindings::io::poll::add_to_linker(&mut linker, |x| x)?;
     wasmtime_wasi::preview2::bindings::io::streams::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::poll::poll::add_to_linker(&mut linker, |x| x)?;
     wasmtime_wasi::preview2::bindings::random::random::add_to_linker(&mut linker, |x| x)?;
     wasmtime_wasi::preview2::bindings::random::insecure::add_to_linker(&mut linker, |x| x)?;
     wasmtime_wasi::preview2::bindings::random::insecure_seed::add_to_linker(&mut linker, |x| x)?;
@@ -524,8 +524,8 @@ pub fn create_linker(engine: &Engine) -> wasmtime::Result<Linker<Context>> {
         |x| x,
     )?;
 
-    wasmtime_wasi_http::wasi::http::outgoing_handler::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi_http::wasi::http::types::add_to_linker(&mut linker, |x| x)?;
+    wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker(&mut linker, |x| x)?;
+    wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker(&mut linker, |x| x)?;
 
     crate::preview2::wasi::blobstore::blobstore::add_to_linker(&mut linker, |x| x)?;
     crate::preview2::wasi::blobstore::container::add_to_linker(&mut linker, |x| x)?;

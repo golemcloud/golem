@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use tonic::codegen::Bytes;
-use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, StreamState, TableStreamExt};
+use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, StreamResult, Subscribe};
 
 use crate::context::Context;
 use crate::preview2::wasi::keyvalue::types::{
@@ -146,14 +146,23 @@ impl OutgoingValueBodyAsyncEntry {
 }
 
 #[async_trait]
+impl Subscribe for OutgoingValueBodyAsyncEntry {
+    async fn ready(&mut self) {}
+}
+
+#[async_trait]
 impl HostOutputStream for OutgoingValueBodyAsyncEntry {
-    fn write(&mut self, bytes: Bytes) -> Result<(usize, StreamState), anyhow::Error> {
+    fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
         self.body.write().unwrap().extend_from_slice(&bytes);
-        Ok((bytes.len(), StreamState::Open))
+        Ok(())
     }
 
-    async fn ready(&mut self) -> Result<(), anyhow::Error> {
+    fn flush(&mut self) -> StreamResult<()> {
         Ok(())
+    }
+
+    fn check_write(&mut self) -> StreamResult<usize> {
+        Ok(usize::MAX)
     }
 }
 
@@ -180,17 +189,18 @@ impl IncomingValueAsyncBodyEntry {
 }
 
 #[async_trait]
+impl Subscribe for IncomingValueAsyncBodyEntry {
+    async fn ready(&mut self) {}
+}
+
+#[async_trait]
 impl HostInputStream for IncomingValueAsyncBodyEntry {
-    fn read(&mut self, size: usize) -> Result<(Bytes, StreamState), anyhow::Error> {
+    fn read(&mut self, size: usize) -> StreamResult<Bytes> {
         let mut buf = vec![0u8; size];
         let mut body = self.body.write().unwrap();
         let size = std::cmp::min(size, body.len());
         buf[..size].copy_from_slice(&body[..size]);
         body.drain(..size);
-        Ok((buf.into(), StreamState::Open))
-    }
-
-    async fn ready(&mut self) -> Result<(), anyhow::Error> {
-        Ok(())
+        Ok(buf.into())
     }
 }

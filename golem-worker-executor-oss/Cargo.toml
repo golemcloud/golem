@@ -33,7 +33,7 @@ tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
-wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "134dddc8de5f9011aa7e4cf30cb8e9f9fa484e87", features = ["component-model"] }
-wasmtime-runtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "134dddc8de5f9011aa7e4cf30cb8e9f9fa484e87" }
-wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "134dddc8de5f9011aa7e4cf30cb8e9f9fa484e87", features = ["preview2", "tokio"] }
-wasmtime-wasi-http = { git = "https://github.com/bytecodealliance/wasmtime", rev = "134dddc8de5f9011aa7e4cf30cb8e9f9fa484e87" }
+wasmtime = { version = "=15.0.0", features = ["component-model"] }
+wasmtime-runtime = { version = "=15.0.0" }
+wasmtime-wasi = { version = "=15.0.0", features = ["preview2", "tokio"] }
+wasmtime-wasi-http = { version = "=15.0.0" }

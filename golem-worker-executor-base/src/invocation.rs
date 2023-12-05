@@ -352,7 +352,7 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
         result
     };
 
-    let current_fuel_level = store.fuel_remaining().unwrap_or(0);
+    let current_fuel_level = store.get_fuel().unwrap_or(0);
     let consumed_fuel_for_call = store
         .data_mut()
         .return_fuel(current_fuel_level as i64)
