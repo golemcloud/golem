@@ -55,6 +55,8 @@ impl Display for InterruptKind {
 
 impl Error for InterruptKind {}
 
+/// Worker-specific configuration. These values are used to initialize the worker and they can
+/// be different for each worker.
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
     pub args: Vec<String>,
@@ -80,10 +82,13 @@ impl WorkerConfig {
     }
 }
 
+/// Information about the available resources for the worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CurrentResourceLimits {
+    /// The available fuel to borrow
     #[serde(rename = "availableFuel")]
     pub fuel: i64,
+    /// The maximum amount of memory that can be used by the worker
     #[serde(rename = "maxMemoryPerInstance")]
     pub max_memory: usize,
 }

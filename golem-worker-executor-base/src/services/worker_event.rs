@@ -26,6 +26,7 @@ pub enum WorkerEvent {
     Close,
 }
 
+/// Per-worker event stream
 pub trait WorkerEventService {
     fn emit_event(&self, event: WorkerEvent);
 

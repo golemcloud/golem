@@ -6,6 +6,7 @@ use tokio::task::JoinHandle;
 use warp::hyper::Body;
 use warp::Filter;
 
+/// The worker executor's HTTP interface provides Prometheus metrics and a healthcheck endpoint
 pub struct HttpServerImpl {
     #[allow(dead_code)]
     handle: JoinHandle<()>,

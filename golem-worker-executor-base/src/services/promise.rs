@@ -20,6 +20,7 @@ use crate::error::GolemError;
 use crate::metrics::promises::record_promise_created;
 use crate::services::golem_config::PromisesConfig;
 
+/// Service implementing creation, completion and polling of promises
 #[async_trait]
 pub trait PromiseService {
     async fn create(&self, worker_id: &WorkerId, oplog_idx: i32) -> PromiseId;

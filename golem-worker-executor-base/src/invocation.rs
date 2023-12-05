@@ -15,6 +15,14 @@ use crate::workerctx::{FuelManagement, WorkerCtx};
 /// Returns true if the function invocation was finished, false if it was interrupted or scheduled for retry.
 ///
 /// The WorkerDetails reference is hold until the invocation finishes
+///
+/// Arguments:
+/// - `full_function_name`: the name of the function to invoke, including the interface name if applicable
+/// - `function_input`: the input parameters for the function
+/// - `store`: reference to the wasmtime instance's store
+/// - `instance`: reference to the wasmtime instance
+/// - `calling_convention`: the calling convention to use
+/// - `was_live_before`: whether the worker was live before the invocation, or this invocation is part of a recovery
 pub async fn invoke_worker<Ctx: WorkerCtx>(
     full_function_name: String,
     function_input: Vec<golem::Val>,

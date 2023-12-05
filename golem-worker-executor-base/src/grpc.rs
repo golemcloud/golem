@@ -94,10 +94,12 @@ pub fn is_grpc_retriable<E>(error: &GrpcError<E>) -> bool {
     }
 }
 
+/// This is the implementation of the Worker Executor gRPC API
 pub struct WorkerExecutorImpl<
     Ctx: WorkerCtx,
     Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static,
 > {
+    /// Reference to all the initialized services
     services: Svcs,
     ctx: PhantomData<Ctx>,
 }

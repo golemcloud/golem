@@ -7,6 +7,7 @@ use crate::error::GolemError;
 use crate::metrics::sharding::*;
 use crate::model::ShardAssignmentCheck;
 
+/// Service for assigning shards to worker executors
 pub trait ShardService {
     fn assign_shards(&self, shard_ids: &HashSet<ShardId>);
     fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError>;

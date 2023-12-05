@@ -20,15 +20,41 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{HasAll, HasInvocationKeyService};
 use crate::workerctx::WorkerCtx;
 
+/// Worker is one active wasmtime instance representing a Golem worker with its corresponding
+/// worker context. The worker struct itself is responsible for creating/reactivating/interrupting
+/// the worker, but the actual worker invocation is implemented in separate functions in the
+/// 'invocation' module.
 pub struct Worker<Ctx: WorkerCtx> {
+    /// Metadata associated with the worker
     pub metadata: WorkerMetadata,
+
+    /// The active wasmtime instance
     pub instance: wasmtime::component::Instance,
+
+    /// The active wasmtime store holding the worker context
     pub store: Mutex<Store<Ctx>>,
+
+    /// The public part of the worker context
     pub public_state: Ctx::PublicState,
+
+    /// The current execution status of the worker
     pub execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Creates a new worker.
+    ///
+    /// This involves downloading the template (WASM), creating the worker context and the wasmtime instance.
+    ///
+    /// Arguments:
+    /// - `this` - the caller object having reference to all services
+    /// - `worker_id` - the worker id (consisting of a template id and a worker name)
+    /// - `worker_args` - the command line arguments to be associated with the worker
+    /// - `worker_env` - the environment variables to be associated with the worker
+    /// - `template_version` - the version of the template to be used (if None, the latest version is used)
+    /// - `account_id` - the account id of the user who initiated the creation of the worker
+    /// - `pending_worker` - the pending worker object which is already published during the worker initializes. This allows clients
+    ///                      to connect to the worker's event stream during it initializes.
     pub async fn new<T>(
         this: &T,
         worker_id: WorkerId,
@@ -239,6 +265,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(worker_details)
     }
 
+    /// Gets an already active worker or creates a new one and returns the pending worker object
+    ///
+    /// The pending worker object holds a reference to the event service of the worker that is getting
+    /// created, allowing the caller to connect to the worker's event stream even before it is fully
+    /// initialized.
     pub async fn get_or_create_pending<T>(
         this: &T,
         worker_id: WorkerId,
@@ -289,6 +320,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .lookup_key(&self.metadata.worker_id.worker_id, invocation_key)
     }
 
+    /// Marks the worker as interrupting - this should eventually make the worker interrupted.
+    /// There are several interruption modes but not all of them are supported by all worker
+    /// executor implementations.
+    ///
+    /// - `Interrupt` means that the worker should be interrupted as soon as possible, and it should
+    ///    remain interrupted.
+    /// - `Restart` is a simulated crash, the worker gets automatically restarted after it got interrupted,
+    ///    but only if the worker context supports recovering workers.
+    /// - `Suspend` means that the worker should be moved out of memory and stay in suspended state,
+    ///    automatically resumed when the worker is needed again. This only works if the worker context
+    ///    supports recovering workers.
     pub fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
@@ -328,6 +370,7 @@ impl<Ctx: WorkerCtx> Debug for Worker<Ctx> {
     }
 }
 
+/// Handle to a worker's event service during it is getting initialized
 #[derive(Clone)]
 pub struct PendingWorker {
     pub event_service: Arc<dyn WorkerEventService + Send + Sync>,

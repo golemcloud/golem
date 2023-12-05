@@ -5,6 +5,7 @@ use wasmtime::component::*;
 
 use crate::error::GolemError;
 
+/// Converts a Golem protobuf Val to a wasmtime Val based on the available type information.
 pub fn decode_param(param: &golem::Val, param_type: &Type) -> Result<Val, GolemError> {
     match param_type {
         Type::Bool => {
@@ -296,6 +297,7 @@ pub fn decode_param(param: &golem::Val, param_type: &Type) -> Result<Val, GolemE
     }
 }
 
+/// Converts a wasmtime Val to a Golem protobuf Val
 pub fn encode_output(value: &Val) -> Result<golem::Val, GolemError> {
     match value {
         Val::Bool(bool) => Ok(golem::Val {
@@ -487,6 +489,7 @@ pub struct WasmEnum {
     ty: wasmtime::component::types::Variant,
     discriminant: u32,
 }
+
 #[allow(unused)]
 pub struct WasmFlags {
     ty: wasmtime::component::types::Flags,

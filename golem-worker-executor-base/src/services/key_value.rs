@@ -9,6 +9,7 @@ use golem_common::redis::RedisPool;
 
 use crate::services::golem_config::KeyValueServiceConfig;
 
+/// Service implementing a persistent key-value store
 #[async_trait]
 pub trait KeyValueService {
     async fn delete(
