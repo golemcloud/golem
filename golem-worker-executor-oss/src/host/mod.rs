@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::sync::{Arc};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_worker_executor_base::host::managed_stdio::{ManagedStandardIo, ManagedStreamStatus};
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use tokio::runtime::Handle;
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tonic::codegen::Bytes;
 use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, Stderr, StdinStream, StdoutStream, StreamError, StreamResult, Subscribe};
@@ -13,23 +14,39 @@ pub mod blobstore;
 pub mod golem;
 pub mod keyvalue;
 
+#[derive(Clone)]
 pub struct ManagedStdIn {
-    io: ManagedStandardIo,
     runtime: Handle,
+    state: Arc<Mutex<ManagedStdInState>>,
+}
+
+struct ManagedStdInState {
+    io: ManagedStandardIo,
     current_handle: Option<JoinHandle<Result<(), anyhow::Error>>>,
     result: Option<tokio::sync::oneshot::Receiver<(Vec<u8>, ManagedStreamStatus)>>,
     last_error: Option<anyhow::Error>,
 }
 
+#[derive(Clone)]
 pub struct ManagedStdOut {
-    io: ManagedStandardIo,
     runtime: Handle,
+    state: Arc<Mutex<ManagedStdOutState>>,
+}
+
+struct ManagedStdOutState {
+    io: ManagedStandardIo,
     current_handle: Option<JoinHandle<anyhow::Result<()>>>,
     event_service: Arc<dyn WorkerEventService + Send + Sync>,
     last_error: Option<anyhow::Error>,
 }
 
+#[derive(Clone)]
 pub struct ManagedStdErr {
+    runtime: Handle,
+    state: Arc<Mutex<ManagedStdErrState>>,
+}
+
+struct ManagedStdErrState {
     stderr: Stderr,
     event_service: Arc<dyn WorkerEventService + Send + Sync>,
 }
@@ -37,11 +54,13 @@ pub struct ManagedStdErr {
 impl ManagedStdIn {
     pub fn from_standard_io(runtime: Handle, io: ManagedStandardIo) -> Self {
         Self {
-            io,
             runtime,
-            current_handle: None,
-            result: None,
-            last_error: None,
+            state: Arc::new(Mutex::new(ManagedStdInState {
+                io,
+                current_handle: None,
+                result: None,
+                last_error: None,
+            })),
         }
     }
 }
@@ -53,30 +72,38 @@ impl ManagedStdOut {
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
     ) -> Self {
         Self {
-            io,
             runtime,
-            current_handle: None,
-            event_service,
-            last_error: None,
+            state: Arc::new(Mutex::new(
+                ManagedStdOutState {
+                    io,
+                    current_handle: None,
+                    event_service,
+                    last_error: None,
+                }
+            )),
         }
     }
 }
 
 impl ManagedStdErr {
     pub fn from_stderr(
+        runtime: Handle,
         stderr: Stderr,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
     ) -> Self {
         Self {
-            stderr,
-            event_service,
+            runtime,
+            state: Arc::new(Mutex::new(ManagedStdErrState {
+                stderr,
+                event_service,
+            })),
         }
     }
 }
 
 impl StdinStream for ManagedStdIn {
     fn stream(&self) -> Box<dyn HostInputStream> {
-        Box::new(self)
+        Box::new(self.clone())
     }
 
     fn isatty(&self) -> bool {
@@ -86,7 +113,7 @@ impl StdinStream for ManagedStdIn {
 
 impl StdoutStream for ManagedStdOut {
     fn stream(&self) -> Box<dyn HostOutputStream> {
-        Box::new(self)
+        Box::new(self.clone())
     }
 
     fn isatty(&self) -> bool {
@@ -96,7 +123,7 @@ impl StdoutStream for ManagedStdOut {
 
 impl StdoutStream for ManagedStdErr {
     fn stream(&self) -> Box<dyn HostOutputStream> {
-        Box::new(self)
+        Box::new(self.clone())
     }
 
     fn isatty(&self) -> bool {
@@ -107,12 +134,12 @@ impl StdoutStream for ManagedStdErr {
 #[async_trait]
 impl Subscribe for ManagedStdIn {
     async fn ready(&mut self) {
-        match self.current_handle.take() {
+        match self.state.lock().await.current_handle.take() {
             Some(handle) =>
                 if let Err(err) = handle.await {
-                    self.last_error = Some(anyhow!(err));
+                    self.state.lock().await.last_error = Some(anyhow!(err));
                 },
-            None => self.last_error = None,
+            None => self.state.lock().await.last_error = None,
         }
     }
 }
@@ -120,13 +147,15 @@ impl Subscribe for ManagedStdIn {
 #[async_trait]
 impl HostInputStream for ManagedStdIn {
     fn read(&mut self, size: usize) -> StreamResult<Bytes> {
-        if let Some(err) = self.last_error.take() {
+        let mut state = self.runtime.block_on(self.state.lock());
+        if let Some(err) = state.last_error.take() {
             return Err(StreamError::LastOperationFailed(err));
         }
         let mut to_read = None;
-        let result = match self.result.take() {
+        let result = match state.result.take() {
             Some(rx) => {
-                let (data, status) = self.runtime.block_on(rx)?;
+                let (data, status) = self.runtime.block_on(rx)
+                    .map_err(|err| StreamError::Trap(anyhow!(err)))?;
                 // Result of the previous async read
                 let remaining = size as i64 - data.len() as i64;
                 if remaining > 0 {
@@ -141,7 +170,7 @@ impl HostInputStream for ManagedStdIn {
                 }
             }
             None => {
-                if self.current_handle.is_some() {
+                if state.current_handle.is_some() {
                     // There is a read or skip already in progress, so we just return 0 bytes
                     Bytes::new()
                 } else {
@@ -152,9 +181,9 @@ impl HostInputStream for ManagedStdIn {
             }
         };
         if let Some(to_read) = to_read {
-            let mut io_clone = self.io.clone();
+            let mut io_clone = state.io.clone();
             let (tx, rx) = tokio::sync::oneshot::channel();
-            self.result = Some(rx);
+            state.result = Some(rx);
             let handle = self.runtime.spawn(async move {
                 let mut buf = vec![0u8; to_read];
                 let (read, status) = io_clone.read(&mut buf).await?;
@@ -162,7 +191,7 @@ impl HostInputStream for ManagedStdIn {
                     .map_err(|_| anyhow!("Failed to set read result"))?;
                 Ok(())
             });
-            self.current_handle = Some(handle);
+            state.current_handle = Some(handle);
         }
 
         Ok(result)
@@ -172,12 +201,13 @@ impl HostInputStream for ManagedStdIn {
 #[async_trait]
 impl Subscribe for ManagedStdOut {
     async fn ready(&mut self) {
-        match self.current_handle.take() {
+        let mut state = self.state.lock().await;
+        match state.current_handle.take() {
             Some(handle) =>
                 if let Err(err) = handle.await {
-                    self.last_error = Some(anyhow!(err));
+                    state.last_error = Some(anyhow!(err));
                 },
-            None => self.last_error = None,
+            None => state.last_error = None,
         }
     }
 }
@@ -185,17 +215,18 @@ impl Subscribe for ManagedStdOut {
 #[async_trait]
 impl HostOutputStream for ManagedStdOut {
     fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
-        if let Some(err) = self.last_error.take() {
+        let mut state = self.runtime.block_on(self.state.lock());
+        if let Some(err) = state.last_error.take() {
             return Err(StreamError::LastOperationFailed(err));
         }
-        let mut io_clone = self.io.clone();
+        let mut io_clone = state.io.clone();
 
-        self.event_service.emit_stdout(bytes.clone().to_vec());
+        state.event_service.emit_stdout(bytes.clone().to_vec());
 
         let handle = self
             .runtime
             .spawn(async move { io_clone.write(&bytes).await });
-        self.current_handle = Some(handle);
+        state.current_handle = Some(handle);
 
         Ok(())
     }
@@ -212,23 +243,24 @@ impl HostOutputStream for ManagedStdOut {
 #[async_trait]
 impl Subscribe for ManagedStdErr {
     async fn ready(&mut self) {
-        self.stderr.stream().ready().await
+        self.state.lock().await.stderr.stream().ready().await
     }
 }
 
 #[async_trait]
 impl HostOutputStream for ManagedStdErr {
     fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
-        let result = self.stderr.stream().write(bytes.clone());
-        self.event_service.emit_stderr(bytes.to_vec());
+        let state = self.runtime.block_on(self.state.lock());
+        let result = state.stderr.stream().write(bytes.clone());
+        state.event_service.emit_stderr(bytes.to_vec());
         result
     }
 
     fn flush(&mut self) -> StreamResult<()> {
-        self.stderr.stream().flush()
+        self.runtime.block_on(self.state.lock()).stderr.stream().flush()
     }
 
     fn check_write(&mut self) -> StreamResult<usize> {
-        self.stderr.stream().check_write()
+        self.runtime.block_on(self.state.lock()).stderr.stream().check_write()
     }
 }

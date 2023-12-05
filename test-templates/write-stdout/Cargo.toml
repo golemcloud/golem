@@ -12,7 +12,7 @@ lto = true
 opt-level = 's'
 
 [dependencies]
-cargo-component-bindings = { git = "https://github.com/bytecodealliance/cargo-component", rev = "e57d1d1405ed2d76f1f3d8647480dea700379ff8" }
+cargo-component-bindings = { version = "0.5.0" }
 
 [package.metadata.component.target]
 path = "wit"

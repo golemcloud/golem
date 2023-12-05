@@ -13,26 +13,26 @@ use crate::preview2::wasi::blobstore::types::{
 
 #[async_trait]
 impl HostIncomingValue for Context {
-    async fn incoming_value_consume_sync(&mut self, self_: Resource<IncomingValue>) -> anyhow::Result<Result<IncomingValueSyncBody, Error>> {
+    async fn incoming_value_consume_sync(&mut self, _self_: Resource<IncomingValue>) -> anyhow::Result<Result<IncomingValueSyncBody, Error>> {
         todo!()
     }
 
-    async fn incoming_value_consume_async(&mut self, self_: Resource<IncomingValue>) -> anyhow::Result<Result<Resource<IncomingValueAsyncBody>, Error>> {
+    async fn incoming_value_consume_async(&mut self, _self_: Resource<IncomingValue>) -> anyhow::Result<Result<Resource<IncomingValueAsyncBody>, Error>> {
         todo!()
     }
 
-    async fn size(&mut self, self_: Resource<IncomingValue>) -> anyhow::Result<u64> {
+    async fn size(&mut self, _self_: Resource<IncomingValue>) -> anyhow::Result<u64> {
         todo!()
     }
 
-    fn drop(&mut self, rep: Resource<IncomingValue>) -> anyhow::Result<()> {
+    fn drop(&mut self, _rep: Resource<IncomingValue>) -> anyhow::Result<()> {
         todo!()
     }
 }
 
 #[async_trait]
 impl HostOutgoingValue for Context {
-    async fn new_outgoing_value(&mut self, self_: Resource<OutgoingValueEntry>) -> anyhow::Result<Resource<OutgoingValueEntry>> {
+    async fn new_outgoing_value(&mut self, _self_: Resource<OutgoingValueEntry>) -> anyhow::Result<Resource<OutgoingValueEntry>> {
         let outgoing_value = self.table_mut().push(OutgoingValueEntry::new())?;
         Ok(outgoing_value)
     }
@@ -178,6 +178,7 @@ impl HostOutputStream for OutgoingValueBodyAsyncEntry {
 }
 
 pub struct IncomingValueEntry {
+    #[allow(unused)]
     body: Arc<RwLock<Vec<u8>>>,
 }
 
@@ -191,10 +192,12 @@ impl IncomingValueEntry {
 }
 
 struct IncomingValueAsyncBodyEntry {
+    #[allow(unused)]
     body: Arc<RwLock<Vec<u8>>>,
 }
 
 impl IncomingValueAsyncBodyEntry {
+    #[allow(unused)]
     pub fn new(body: Arc<RwLock<Vec<u8>>>) -> IncomingValueAsyncBodyEntry {
         IncomingValueAsyncBodyEntry { body }
     }

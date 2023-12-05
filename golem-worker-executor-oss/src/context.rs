@@ -357,9 +357,8 @@ impl WorkerCtx for Context {
         let stdio =
             ManagedStandardIo::new(worker_id.worker_id.clone(), invocation_key_service.clone());
         let stdin = ManagedStdIn::from_standard_io(runtime.clone(), stdio.clone());
-        let stdout =
-            ManagedStdOut::from_standard_io(runtime.clone(), stdio.clone(), event_service.clone());
-        let stderr = ManagedStdErr::from_stderr(stderr(), event_service.clone());
+        let stdout = ManagedStdOut::from_standard_io(runtime.clone(), stdio.clone(), event_service.clone());
+        let stderr = ManagedStdErr::from_stderr(runtime.clone(), stderr(), event_service.clone());
 
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -367,7 +366,7 @@ impl WorkerCtx for Context {
         let root_dir = cap_std::fs::Dir::open_ambient_dir(temp_dir.path(), ambient_authority())
             .map_err(|e| GolemError::runtime(format!("Failed to open temporary directory: {e}")))?;
 
-        let mut table = Table::new();
+        let table = Table::new();
         let wasi = WasiCtxBuilder::new()
             .args(&worker_config.args)
             .envs(&worker_config.env)

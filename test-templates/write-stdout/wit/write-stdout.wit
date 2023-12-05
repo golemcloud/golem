@@ -1,5 +1,5 @@
-package golem:it
+package golem:it;
 
 world write-stdout {
-  export run: func()
+  export run: func();
 }

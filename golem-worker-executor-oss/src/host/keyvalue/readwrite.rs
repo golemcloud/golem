@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use wasmtime::component::Resource;
 
 use crate::context::Context;
 use crate::host::keyvalue::error::ErrorEntry;
@@ -9,13 +10,9 @@ use crate::preview2::wasi::keyvalue::readwrite::{
 
 #[async_trait]
 impl Host for Context {
-    async fn get(
-        &mut self,
-        bucket: Bucket,
-        key: Key,
-    ) -> anyhow::Result<Result<IncomingValue, Error>> {
+    async fn get(&mut self, bucket: Resource<Bucket>, key: Key) -> anyhow::Result<Result<Resource<IncomingValue>, Resource<Error>>> {
         let account_id = self.account_id().clone();
-        let bucket = self.table().get::<BucketEntry>(bucket)?.name.clone();
+        let bucket = self.table().get::<BucketEntry>(&bucket)?.name.clone();
         let result = self
             .key_value_service()
             .get(account_id.clone(), bucket.clone(), key.clone())
@@ -24,35 +21,30 @@ impl Host for Context {
             Ok(Some(value)) => {
                 let incoming_value = self
                     .table_mut()
-                    .push(Box::new(IncomingValueEntry::new(value)))?;
+                    .push(IncomingValueEntry::new(value))?;
                 Ok(Ok(incoming_value))
             }
             Ok(None) => {
                 let error = self
                     .table_mut()
-                    .push(Box::new(ErrorEntry::new("Key not found".to_string())))?;
+                    .push(ErrorEntry::new("Key not found".to_string()))?;
                 Ok(Err(error))
             }
             Err(e) => {
                 let error = self
                     .table_mut()
-                    .push(Box::new(ErrorEntry::new(format!("{:?}", e))))?;
+                    .push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }
     }
 
-    async fn set(
-        &mut self,
-        bucket: Bucket,
-        key: Key,
-        outgoing_value: OutgoingValue,
-    ) -> anyhow::Result<Result<(), Error>> {
+    async fn set(&mut self, bucket: Resource<Bucket>, key: Key, outgoing_value: Resource<OutgoingValue>) -> anyhow::Result<Result<(), Resource<Error>>> {
         let account_id = self.account_id().clone();
-        let bucket = self.table().get::<BucketEntry>(bucket)?.name.clone();
+        let bucket = self.table().get::<BucketEntry>(&bucket)?.name.clone();
         let outgoing_value = self
             .table()
-            .get::<OutgoingValueEntry>(outgoing_value)?
+            .get::<OutgoingValueEntry>(&outgoing_value)?
             .body
             .read()
             .unwrap()
@@ -71,15 +63,15 @@ impl Host for Context {
             Err(e) => {
                 let error = self
                     .table_mut()
-                    .push(Box::new(ErrorEntry::new(format!("{:?}", e))))?;
+                    .push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }
     }
 
-    async fn delete(&mut self, bucket: Bucket, key: Key) -> anyhow::Result<Result<(), Error>> {
+    async fn delete(&mut self, bucket: Resource<Bucket>, key: Key) -> anyhow::Result<Result<(), Resource<Error>>> {
         let account_id = self.account_id().clone();
-        let bucket = self.table().get::<BucketEntry>(bucket)?.name.clone();
+        let bucket = self.table().get::<BucketEntry>(&bucket)?.name.clone();
         let result = self
             .key_value_service()
             .delete(account_id.clone(), bucket.clone(), key.clone())
@@ -89,15 +81,15 @@ impl Host for Context {
             Err(e) => {
                 let error = self
                     .table_mut()
-                    .push(Box::new(ErrorEntry::new(format!("{:?}", e))))?;
+                    .push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }
     }
 
-    async fn exists(&mut self, bucket: Bucket, key: Key) -> anyhow::Result<Result<bool, Error>> {
+    async fn exists(&mut self, bucket: Resource<Bucket>, key: Key) -> anyhow::Result<Result<bool, Resource<Error>>> {
         let account_id = self.account_id().clone();
-        let bucket = self.table().get::<BucketEntry>(bucket)?.name.clone();
+        let bucket = self.table().get::<BucketEntry>(&bucket)?.name.clone();
         let result = self
             .key_value_service()
             .exists(account_id.clone(), bucket.clone(), key.clone())
@@ -107,7 +99,7 @@ impl Host for Context {
             Err(e) => {
                 let error = self
                     .table_mut()
-                    .push(Box::new(ErrorEntry::new(format!("{:?}", e))))?;
+                    .push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }
