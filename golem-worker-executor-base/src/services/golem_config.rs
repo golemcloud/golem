@@ -8,6 +8,7 @@ use http::Uri;
 use serde::Deserialize;
 use url::Url;
 
+/// The shared global Golem configuration
 #[derive(Clone, Debug, Deserialize)]
 pub struct GolemConfig {
     pub limits: Limits,

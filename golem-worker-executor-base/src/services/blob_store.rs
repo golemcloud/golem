@@ -10,6 +10,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::services::golem_config::{BlobStoreServiceConfig, BlobStoreServiceS3Config};
 
+/// Interface for storing blobs in a persistent storage.
 #[async_trait]
 pub trait BlobStoreService {
     async fn clear(&self, account_id: AccountId, container_name: String) -> anyhow::Result<()>;

@@ -11,6 +11,7 @@ use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 
+/// Service for activating workers in the background
 #[async_trait]
 pub trait WorkerActivator {
     /// Makes sure an already existing worker is active in a background task. Returns immediately

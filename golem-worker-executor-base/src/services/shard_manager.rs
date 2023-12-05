@@ -10,6 +10,7 @@ use golem_common::retries::with_retries;
 use crate::error::GolemError;
 use crate::services::golem_config::{ShardManagerServiceConfig, ShardManagerServiceGrpcConfig};
 
+/// Service providing access to the shard manager service
 #[async_trait]
 pub trait ShardManagerService {
     async fn register(&self, host: String, port: u16) -> Result<ShardAssignment, GolemError>;

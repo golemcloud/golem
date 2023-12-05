@@ -19,6 +19,7 @@ use crate::services::golem_config::{
 };
 use crate::Engine;
 
+/// Service for storing compiled native binaries of WebAssembly components
 #[async_trait]
 pub trait CompiledTemplateService {
     async fn get(

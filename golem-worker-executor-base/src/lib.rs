@@ -40,10 +40,17 @@ use crate::services::worker_activator::{LazyWorkerActivator, WorkerActivator};
 use crate::services::{blob_store, key_value, promise, shard_manager, template, All};
 use crate::workerctx::WorkerCtx;
 
+/// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
+/// of its services.
+/// With a valid `Bootstrap` implementation the service can be started with the `run` method.
 #[async_trait]
 pub trait Bootstrap<Ctx: WorkerCtx> {
+    /// Allows customizing the `ActiveWorkers` service.
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;
 
+    /// Allows customizing the `All` service.
+    /// This is the place to initialize additional services and store them in `All`'s `extra_deps`
+    /// field.
     async fn create_services(
         &self,
         active_workers: Arc<ActiveWorkers<Ctx>>,
@@ -62,6 +69,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     ) -> anyhow::Result<All<Ctx>>;
 
+    /// Can be overridden to custommize the wasmtime configuration
     fn create_wasmtime_config(&self) -> Config {
         let mut config = Config::default();
 
@@ -74,8 +82,11 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         config
     }
 
+    /// This method is responsible for linking all the host function implementations the worker
+    /// executor supports.
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Ctx>>;
 
+    /// Runs the worker executor
     async fn run(
         &self,
         golem_config: GolemConfig,

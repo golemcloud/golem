@@ -13,6 +13,7 @@ use crate::metrics::invocation_keys::{
     record_confirmed_invocation_keys_count, record_pending_invocation_keys_count,
 };
 
+/// Service responsible for generating and looking up invocation keys
 #[async_trait]
 pub trait InvocationKeyService {
     fn generate_key(&self, worker_id: &WorkerId) -> InvocationKey;
