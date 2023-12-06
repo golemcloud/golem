@@ -114,40 +114,38 @@ impl Subscribe for ManagedStdIn {
 impl HostInputStream for ManagedStdIn {
     fn read(&mut self, size: usize) -> StreamResult<Bytes> {
         if self.state.incoming.is_empty() && self.state.remainder_rx.is_empty() {
-            let _ = self
+            self
                 .state
                 .demand
                 .send(size)
                 .map_err(|err| StreamError::Trap(anyhow!(err)))?;
             Ok(Bytes::new())
+        } else if self.state.remainder_rx.is_empty() {
+            match self.state.incoming.recv() {
+                Ok(Ok(bytes)) => {
+                    if bytes.len() > size {
+                        let (bytes1, bytes2) = bytes.split_at(size);
+                        let _ = self.state.remainder_tx.send(Bytes::copy_from_slice(bytes2));
+                        Ok(Bytes::from(bytes1.to_vec()))
+                    } else {
+                        Ok(bytes)
+                    }
+                }
+                Ok(Err(err)) => Err(err),
+                Err(err) => Err(StreamError::Trap(anyhow!(err))),
+            }
         } else {
-            if self.state.remainder_rx.is_empty() {
-                match self.state.incoming.recv() {
-                    Ok(Ok(bytes)) => {
-                        if bytes.len() > size {
-                            let (bytes1, bytes2) = bytes.split_at(size);
-                            let _ = self.state.remainder_tx.send(Bytes::copy_from_slice(bytes2));
-                            Ok(Bytes::from(bytes1.to_vec()))
-                        } else {
-                            Ok(bytes)
-                        }
+            match self.state.remainder_rx.recv() {
+                Ok(bytes) => {
+                    if bytes.len() > size {
+                        let (bytes1, bytes2) = bytes.split_at(size);
+                        let _ = self.state.remainder_tx.send(Bytes::copy_from_slice(bytes2));
+                        Ok(Bytes::from(bytes1.to_vec()))
+                    } else {
+                        Ok(bytes)
                     }
-                    Ok(Err(err)) => Err(err),
-                    Err(err) => Err(StreamError::Trap(anyhow!(err))),
                 }
-            } else {
-                match self.state.remainder_rx.recv() {
-                    Ok(bytes) => {
-                        if bytes.len() > size {
-                            let (bytes1, bytes2) = bytes.split_at(size);
-                            let _ = self.state.remainder_tx.send(Bytes::copy_from_slice(bytes2));
-                            Ok(Bytes::from(bytes1.to_vec()))
-                        } else {
-                            Ok(bytes)
-                        }
-                    }
-                    Err(err) => Err(StreamError::Trap(anyhow!(err))),
-                }
+                Err(err) => Err(StreamError::Trap(anyhow!(err))),
             }
         }
     }
@@ -180,7 +178,7 @@ impl ManagedStdOut {
                 let bytes: Bytes = outgoing_rx.recv_async().await.unwrap();
                 let _ = io_clone.write(&bytes).await;
                 event_service.emit_stdout(bytes.to_vec());
-                let _ = consumed_clone.notify_one();
+                consumed_clone.notify_one();
             }
         });
 
