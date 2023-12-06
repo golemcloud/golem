@@ -116,7 +116,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 this.config(),
                 WorkerConfig::new(worker_metadata.worker_id.clone(), worker_args, worker_env),
                 execution_status.clone(),
-                this.runtime().clone(),
             )
             .await?;
 
@@ -125,7 +124,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let mut store = Store::new(&this.engine(), context);
             store.set_epoch_deadline(1);
             store.epoch_deadline_callback(|mut store| {
-                let current_level = store.fuel_remaining().unwrap_or(0);
+                let current_level = store.get_fuel().unwrap_or(0);
                 if store.data().is_out_of_fuel(current_level as i64) {
                     debug!("ran out of fuel, borrowing more");
                     store.data_mut().borrow_fuel_sync();
@@ -137,7 +136,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             });
 
-            store.add_fuel(i64::MAX as u64)?;
+            store.set_fuel(i64::MAX as u64)?;
             store.data_mut().borrow_fuel().await?; // Borrowing fuel for initialization and also to make sure account is in cache
 
             store.limiter_async(|ctx| ctx.resource_limiter());

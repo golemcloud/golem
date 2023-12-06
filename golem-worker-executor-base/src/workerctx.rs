@@ -8,7 +8,6 @@ use golem_common::model::{
     WorkerStatus,
 };
 use golem_common::proto::golem::Val;
-use tokio::runtime::Handle;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use crate::error::GolemError;
@@ -60,7 +59,6 @@ pub trait WorkerCtx:
     /// - `config`: The shared worker configuration
     /// - `worker_config`: Configuration for this specific worker
     /// - `execution_status`: Lock created to store the execution status
-    /// - `runtime`: The tokio runtime
     async fn create(
         worker_id: VersionedWorkerId,
         account_id: AccountId,
@@ -75,7 +73,6 @@ pub trait WorkerCtx:
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
-        runtime: Handle,
     ) -> Result<Self, GolemError>;
 
     /// Get the public part of the worker context

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use wasmtime::component::Resource;
 
 use crate::context::Context;
 use crate::host::blobstore::types::ContainerEntry;
@@ -14,7 +15,7 @@ impl Host for Context {
     async fn create_container(
         &mut self,
         name: ContainerName,
-    ) -> anyhow::Result<Result<Container, Error>> {
+    ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let account_id = self.account_id().clone();
         let result = self
             .blob_store_service()
@@ -25,7 +26,7 @@ impl Host for Context {
             Ok(created_at) => {
                 let container = self
                     .table_mut()
-                    .push(Box::new(ContainerEntry::new(name, created_at)))?;
+                    .push(ContainerEntry::new(name, created_at))?;
                 Ok(Ok(container))
             }
             Err(e) => Ok(Err(format!("{:?}", e))),
@@ -35,7 +36,7 @@ impl Host for Context {
     async fn get_container(
         &mut self,
         name: ContainerName,
-    ) -> anyhow::Result<Result<Container, Error>> {
+    ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let account_id = self.account_id().clone();
         let result = self
             .blob_store_service()
@@ -46,7 +47,7 @@ impl Host for Context {
             Ok(Some(created_at)) => {
                 let container = self
                     .table_mut()
-                    .push(Box::new(ContainerEntry::new(name, created_at)))?;
+                    .push(ContainerEntry::new(name, created_at))?;
                 Ok(Ok(container))
             }
             Ok(None) => Ok(Err("Container not found".to_string())),

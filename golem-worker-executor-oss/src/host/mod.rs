@@ -1,61 +1,269 @@
 use std::sync::Arc;
+use std::time::Duration;
 
-use anyhow::{anyhow, Error};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_worker_executor_base::host::managed_stdio::{ManagedStandardIo, ManagedStreamStatus};
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tonic::codegen::Bytes;
-use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, Stderr, StreamState};
+use wasmtime_wasi::preview2::{
+    HostInputStream, HostOutputStream, Stderr, StdinStream, StdoutStream, StreamError,
+    StreamResult, Subscribe,
+};
 
 pub mod blobstore;
 pub mod golem;
 pub mod keyvalue;
 
+#[derive(Clone)]
 pub struct ManagedStdIn {
-    io: ManagedStandardIo,
-    runtime: Handle,
-    current_handle: Option<JoinHandle<Result<(), anyhow::Error>>>,
-    result: Option<tokio::sync::oneshot::Receiver<(Vec<u8>, ManagedStreamStatus)>>,
+    state: Arc<ManagedStdInState>,
 }
 
-pub struct ManagedStdOut {
-    io: ManagedStandardIo,
-    runtime: Handle,
-    current_handle: Option<JoinHandle<anyhow::Result<()>>>,
-    event_service: Arc<dyn WorkerEventService + Send + Sync>,
-}
-
-pub struct ManagedStdErr {
-    stderr: Stderr,
-    event_service: Arc<dyn WorkerEventService + Send + Sync>,
+struct ManagedStdInState {
+    incoming: flume::Receiver<Result<Bytes, StreamError>>,
+    demand: flume::Sender<usize>,
+    remainder_rx: flume::Receiver<Bytes>,
+    remainder_tx: flume::Sender<Bytes>,
+    handle: JoinHandle<()>,
 }
 
 impl ManagedStdIn {
-    pub fn from_standard_io(runtime: Handle, io: ManagedStandardIo) -> Self {
+    pub async fn from_standard_io(io: ManagedStandardIo) -> Self {
+        let (demand_tx, demand_rx) = flume::unbounded();
+        let (incoming_tx, incoming_rx) = flume::unbounded();
+        let (remainder_tx, remainder_rx) = flume::unbounded();
+
+        let mut io_clone = io.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                let mut demand = match demand_rx.recv_async().await {
+                    Ok(demand) => demand,
+                    Err(err) => {
+                        let _ = incoming_tx.send(Err(StreamError::Trap(anyhow!(err))));
+                        break;
+                    }
+                };
+
+                while demand > 0 {
+                    let mut buf = vec![0u8; demand];
+                    match io_clone.read(&mut buf).await {
+                        Ok((read, status)) => {
+                            let _ = incoming_tx
+                                .send_async(Ok(Bytes::from(buf[0..(read as usize)].to_vec())))
+                                .await;
+                            if status == ManagedStreamStatus::Ended {
+                                let _ = incoming_tx.send_async(Err(StreamError::Closed)).await;
+                                break;
+                            } else {
+                                let read = read as usize;
+                                if read < demand {
+                                    demand -= read;
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            let _ = incoming_tx
+                                .send_async(Err(StreamError::Trap(anyhow!(err))))
+                                .await;
+                            break;
+                        }
+                    }
+                }
+            }
+        });
         Self {
-            io,
-            runtime,
-            current_handle: None,
-            result: None,
+            state: Arc::new(ManagedStdInState {
+                incoming: incoming_rx,
+                demand: demand_tx,
+                remainder_rx,
+                remainder_tx,
+                handle,
+            }),
         }
     }
+}
+
+impl Drop for ManagedStdIn {
+    fn drop(&mut self) {
+        self.state.handle.abort();
+    }
+}
+
+impl StdinStream for ManagedStdIn {
+    fn stream(&self) -> Box<dyn HostInputStream> {
+        Box::new(self.clone())
+    }
+
+    fn isatty(&self) -> bool {
+        false
+    }
+}
+
+#[async_trait]
+impl Subscribe for ManagedStdIn {
+    async fn ready(&mut self) {
+        while self.state.incoming.is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+
+#[async_trait]
+impl HostInputStream for ManagedStdIn {
+    fn read(&mut self, size: usize) -> StreamResult<Bytes> {
+        if self.state.incoming.is_empty() && self.state.remainder_rx.is_empty() {
+            self.state
+                .demand
+                .send(size)
+                .map_err(|err| StreamError::Trap(anyhow!(err)))?;
+            Ok(Bytes::new())
+        } else if self.state.remainder_rx.is_empty() {
+            match self.state.incoming.recv() {
+                Ok(Ok(bytes)) => {
+                    if bytes.len() > size {
+                        let (bytes1, bytes2) = bytes.split_at(size);
+                        let _ = self.state.remainder_tx.send(Bytes::copy_from_slice(bytes2));
+                        Ok(Bytes::from(bytes1.to_vec()))
+                    } else {
+                        Ok(bytes)
+                    }
+                }
+                Ok(Err(err)) => Err(err),
+                Err(err) => Err(StreamError::Trap(anyhow!(err))),
+            }
+        } else {
+            match self.state.remainder_rx.recv() {
+                Ok(bytes) => {
+                    if bytes.len() > size {
+                        let (bytes1, bytes2) = bytes.split_at(size);
+                        let _ = self.state.remainder_tx.send(Bytes::copy_from_slice(bytes2));
+                        Ok(Bytes::from(bytes1.to_vec()))
+                    } else {
+                        Ok(bytes)
+                    }
+                }
+                Err(err) => Err(StreamError::Trap(anyhow!(err))),
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ManagedStdOut {
+    state: Arc<ManagedStdOutState>,
+}
+
+struct ManagedStdOutState {
+    outgoing: flume::Sender<Bytes>,
+    consumed: Arc<tokio::sync::Notify>,
+    handle: JoinHandle<()>,
 }
 
 impl ManagedStdOut {
     pub fn from_standard_io(
-        runtime: Handle,
         io: ManagedStandardIo,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
     ) -> Self {
+        let consumed = Arc::new(tokio::sync::Notify::new());
+        consumed.notify_one();
+        let (outgoing_tx, outgoing_rx) = flume::unbounded();
+
+        let mut io_clone = io.clone();
+        let consumed_clone = consumed.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                let bytes: Bytes = outgoing_rx.recv_async().await.unwrap();
+                let _ = io_clone.write(&bytes).await;
+                event_service.emit_stdout(bytes.to_vec());
+                consumed_clone.notify_one();
+            }
+        });
+
         Self {
-            io,
-            runtime,
-            current_handle: None,
-            event_service,
+            state: Arc::new(ManagedStdOutState {
+                outgoing: outgoing_tx,
+                consumed,
+                handle,
+            }),
         }
     }
+}
+
+impl Drop for ManagedStdOut {
+    fn drop(&mut self) {
+        self.state.handle.abort();
+    }
+}
+
+impl StdoutStream for ManagedStdOut {
+    fn stream(&self) -> Box<dyn HostOutputStream> {
+        Box::new(self.clone())
+    }
+
+    fn isatty(&self) -> bool {
+        false
+    }
+}
+
+#[async_trait]
+impl Subscribe for ManagedStdOut {
+    async fn ready(&mut self) {
+        if !self.state.outgoing.is_empty() {
+            self.state.consumed.notified().await;
+        }
+    }
+}
+
+#[async_trait]
+impl HostOutputStream for ManagedStdOut {
+    fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
+        self.state.outgoing.send(bytes).unwrap();
+        Ok(())
+    }
+
+    fn flush(&mut self) -> StreamResult<()> {
+        Ok(())
+    }
+
+    fn check_write(&mut self) -> StreamResult<usize> {
+        Ok(usize::MAX)
+    }
+}
+
+#[async_trait]
+impl Subscribe for ManagedStdErr {
+    async fn ready(&mut self) {
+        self.state.stderr.stream().ready().await
+    }
+}
+
+#[async_trait]
+impl HostOutputStream for ManagedStdErr {
+    fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
+        let result = self.state.stderr.stream().write(bytes.clone());
+        self.state.event_service.emit_stderr(bytes.to_vec());
+        result
+    }
+
+    fn flush(&mut self) -> StreamResult<()> {
+        self.state.stderr.stream().flush()
+    }
+
+    fn check_write(&mut self) -> StreamResult<usize> {
+        self.state.stderr.stream().check_write()
+    }
+}
+
+#[derive(Clone)]
+pub struct ManagedStdErr {
+    state: Arc<crate::host::ManagedStdErrState>,
+}
+
+struct ManagedStdErrState {
+    stderr: Stderr,
+    event_service: Arc<dyn WorkerEventService + Send + Sync>,
 }
 
 impl ManagedStdErr {
@@ -64,110 +272,20 @@ impl ManagedStdErr {
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
     ) -> Self {
         Self {
-            stderr,
-            event_service,
+            state: Arc::new(ManagedStdErrState {
+                stderr,
+                event_service,
+            }),
         }
     }
 }
 
-fn convert_status(value: ManagedStreamStatus) -> StreamState {
-    match value {
-        ManagedStreamStatus::Open => StreamState::Open,
-        ManagedStreamStatus::Ended => StreamState::Closed,
-    }
-}
-
-#[async_trait]
-impl HostInputStream for ManagedStdIn {
-    fn read(&mut self, size: usize) -> Result<(Bytes, StreamState), anyhow::Error> {
-        let mut to_read = None;
-        let result = match self.result.take() {
-            Some(rx) => {
-                let (data, status) = self.runtime.block_on(rx)?;
-                // Result of the previous async read
-                let remaining = size as i64 - data.len() as i64;
-                if remaining > 0 {
-                    // Spawn a new async read to get more
-                    to_read = Some(remaining as usize);
-                }
-                // Returning with the previously read chunk
-                (Bytes::from(data), convert_status(status))
-            }
-            None => {
-                if self.current_handle.is_some() {
-                    // There is a read or skip already in progress, so we just return 0 bytes
-                    (Bytes::new(), StreamState::Open)
-                } else {
-                    // We need to initiate a new async read
-                    to_read = Some(size);
-                    (Bytes::new(), StreamState::Open)
-                }
-            }
-        };
-        if let Some(to_read) = to_read {
-            let mut io_clone = self.io.clone();
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            self.result = Some(rx);
-            let handle = self.runtime.spawn(async move {
-                let mut buf = vec![0u8; to_read];
-                let (read, status) = io_clone.read(&mut buf).await?;
-                tx.send((buf[0..(read as usize)].to_vec(), status))
-                    .map_err(|_| anyhow!("Failed to set read result"))?;
-                Ok(())
-            });
-            self.current_handle = Some(handle);
-        }
-
-        Ok(result)
+impl StdoutStream for ManagedStdErr {
+    fn stream(&self) -> Box<dyn HostOutputStream> {
+        Box::new(self.clone())
     }
 
-    fn skip(&mut self, nelem: usize) -> Result<(usize, StreamState), anyhow::Error> {
-        // TODO: implementation that does not allocate nelem bytes
-        let (bytes, state) = self.read(nelem)?;
-        Ok((bytes.len(), state))
-    }
-
-    async fn ready(&mut self) -> Result<(), anyhow::Error> {
-        match self.current_handle.take() {
-            Some(handle) => handle.await?,
-            None => Ok(()),
-        }
-    }
-}
-
-#[async_trait]
-impl HostOutputStream for ManagedStdOut {
-    fn write(&mut self, bytes: Bytes) -> Result<(usize, StreamState), anyhow::Error> {
-        let mut io_clone = self.io.clone();
-        let n = bytes.len();
-
-        self.event_service.emit_stdout(bytes.clone().to_vec());
-
-        let handle = self
-            .runtime
-            .spawn(async move { io_clone.write(&bytes).await });
-        self.current_handle = Some(handle);
-
-        Ok((n, StreamState::Open))
-    }
-
-    async fn ready(&mut self) -> anyhow::Result<()> {
-        match self.current_handle.take() {
-            Some(handle) => handle.await?,
-            None => Ok(()),
-        }
-    }
-}
-
-#[async_trait]
-impl HostOutputStream for ManagedStdErr {
-    fn write(&mut self, bytes: Bytes) -> Result<(usize, StreamState), Error> {
-        let result = self.stderr.write(bytes.clone());
-        self.event_service.emit_stderr(bytes.to_vec());
-        result
-    }
-
-    async fn ready(&mut self) -> Result<(), Error> {
-        self.stderr.ready().await
+    fn isatty(&self) -> bool {
+        false
     }
 }
