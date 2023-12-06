@@ -253,9 +253,10 @@ impl WorkerClient for WorkerClientLive {
 
         url.set_scheme(ws_schema)
             .map_err(|_| GolemError("Can't set schema.".to_string()))?;
+
         url.path_segments_mut()
             .map_err(|_| GolemError("Can't get path.".to_string()))?
-            .push("v1")
+            .push("v2")
             .push("templates")
             .push(&template_id.0.to_string())
             .push("workers")
@@ -345,12 +346,19 @@ impl WorkerClient for WorkerClientLive {
 
             match msg {
                 None => {}
-                Some(msg) => match msg {
-                    InstanceConnectMessage::Message { message } => {
+                Some(msg) => match msg.event {
+                    WorkerEvent::Stdout(StdOutLog { message }) => {
                         print!("{message}")
                     }
-                    InstanceConnectMessage::Error { error } => {
-                        eprintln!("Connection error: {error}")
+                    WorkerEvent::Stderr(StdErrLog { message }) => {
+                        eprint!("{message}")
+                    }
+                    WorkerEvent::Log(Log {
+                        level,
+                        context,
+                        message,
+                    }) => {
+                        println!("[{level}] [{context}] {message}")
                     }
                 },
             }
@@ -365,9 +373,32 @@ impl WorkerClient for WorkerClientLive {
 }
 
 #[derive(Deserialize, Debug)]
-enum InstanceConnectMessage {
-    Message { message: String },
-    Error { error: InstanceEndpointError },
+struct InstanceConnectMessage {
+    pub event: WorkerEvent,
+}
+
+#[derive(Deserialize, Debug)]
+enum WorkerEvent {
+    Stdout(StdOutLog),
+    Stderr(StdErrLog),
+    Log(Log),
+}
+
+#[derive(Deserialize, Debug)]
+struct StdOutLog {
+    message: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct StdErrLog {
+    message: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct Log {
+    pub level: i32,
+    pub context: String,
+    pub message: String,
 }
 
 #[derive(Deserialize, Debug)]
