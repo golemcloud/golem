@@ -116,7 +116,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 this.config(),
                 WorkerConfig::new(worker_metadata.worker_id.clone(), worker_args, worker_env),
                 execution_status.clone(),
-                this.runtime().clone(),
             )
             .await?;
 

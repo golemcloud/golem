@@ -28,7 +28,6 @@ use golem_worker_executor_base::workerctx::{
     PublicWorkerIo, StatusManagement, WorkerCtx,
 };
 use tempfile::TempDir;
-use tokio::runtime::Handle;
 use tonic::codegen::Bytes;
 use tracing::debug;
 use wasmtime::component::{Instance, Linker};
@@ -352,14 +351,12 @@ impl WorkerCtx for Context {
         _config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
-        runtime: Handle,
     ) -> Result<Self, GolemError> {
         let stdio =
             ManagedStandardIo::new(worker_id.worker_id.clone(), invocation_key_service.clone());
-        let stdin = ManagedStdIn::from_standard_io(runtime.clone(), stdio.clone());
-        let stdout =
-            ManagedStdOut::from_standard_io(runtime.clone(), stdio.clone(), event_service.clone());
-        let stderr = ManagedStdErr::from_stderr(runtime.clone(), stderr(), event_service.clone());
+        let stdin = ManagedStdIn::from_standard_io(stdio.clone()).await;
+        let stdout = ManagedStdOut::from_standard_io(stdio.clone(), event_service.clone());
+        let stderr = ManagedStdErr::from_stderr(stderr(), event_service.clone());
 
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
