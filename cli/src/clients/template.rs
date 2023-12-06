@@ -203,8 +203,11 @@ impl TemplateClient for TemplateClientLive {
         let content = templates_resp.text().await?;
 
         if status.is_success() {
-            let templates: Vec<Template> = serde_json::from_str(&content)
-                .map_err(|err| GolemError(format!("Failed to parse response as json: {err:?}, content: {content}")))?;
+            let templates: Vec<Template> = serde_json::from_str(&content).map_err(|err| {
+                GolemError(format!(
+                    "Failed to parse response as json: {err:?}, content: {content}"
+                ))
+            })?;
             let views = templates.iter().map(|c| c.into()).collect();
             Ok(views)
         } else {
@@ -279,8 +282,11 @@ impl TemplateClient for TemplateClientLive {
         let content = resp.text().await?;
 
         if status.is_success() {
-            let template: Template = serde_json::from_str(&content)
-                .map_err(|err| GolemError(format!("Failed to parse response as json: {err:?}, content: {content}")))?;
+            let template: Template = serde_json::from_str(&content).map_err(|err| {
+                GolemError(format!(
+                    "Failed to parse response as json: {err:?}, content: {content}"
+                ))
+            })?;
             Ok((&template).into())
         } else {
             Err(GolemError(format!(
@@ -338,8 +344,11 @@ impl TemplateClient for TemplateClientLive {
         let content = resp.text().await?;
 
         if status.is_success() {
-            let template: Template = serde_json::from_str(&content)
-                .map_err(|err| GolemError(format!("Failed to parse response as json: {err:?}, content: {content}")))?;
+            let template: Template = serde_json::from_str(&content).map_err(|err| {
+                GolemError(format!(
+                    "Failed to parse response as json: {err:?}, content: {content}"
+                ))
+            })?;
             Ok((&template).into())
         } else {
             Err(GolemError(format!(

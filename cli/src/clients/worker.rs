@@ -351,7 +351,7 @@ impl WorkerClient for WorkerClientLive {
                         print!("{message}")
                     }
                     WorkerEvent::Stderr(StdErrLog { message }) => {
-                        eprint!("{message}")
+                        print!("{message}")
                     }
                     WorkerEvent::Log(Log {
                         level,
