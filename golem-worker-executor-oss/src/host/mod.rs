@@ -114,8 +114,7 @@ impl Subscribe for ManagedStdIn {
 impl HostInputStream for ManagedStdIn {
     fn read(&mut self, size: usize) -> StreamResult<Bytes> {
         if self.state.incoming.is_empty() && self.state.remainder_rx.is_empty() {
-            self
-                .state
+            self.state
                 .demand
                 .send(size)
                 .map_err(|err| StreamError::Trap(anyhow!(err)))?;
