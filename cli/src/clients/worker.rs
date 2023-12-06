@@ -357,9 +357,13 @@ impl WorkerClient for WorkerClientLive {
                         level,
                         context,
                         message,
-                    }) => {
-                        println!("[{level}] [{context}] {message}")
-                    }
+                    }) => match level {
+                        0 => tracing::trace!(message, context = context),
+                        1 => tracing::debug!(message, context = context),
+                        2 => tracing::info!(message, context = context),
+                        3 => tracing::warn!(message, context = context),
+                        _ => tracing::error!(message, context = context),
+                    },
                 },
             }
         });
