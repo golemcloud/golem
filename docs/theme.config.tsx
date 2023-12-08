@@ -26,7 +26,7 @@ const config: DocsThemeConfig = {
     toggleButton: true,
   },
   project: {
-    link: "https://github.com/golemcloud/",
+    link: "https://github.com/golemcloud/docs",
   },
   chat: {
     link: "https://discord.gg/UjXeH8uG4x",
@@ -46,6 +46,16 @@ const config: DocsThemeConfig = {
       }
     }
   },
+  head: (
+    <>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <meta property="og:title" content="Golem Cloud" />
+      <meta
+        property="og:description"
+        content="Learn how to build, deploy, and manage applications on Golem Cloud."
+      />
+    </>
+  ),
 }
 
 export default config
