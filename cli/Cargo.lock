@@ -618,9 +618,9 @@ dependencies = [
 
 [[package]]
 name = "golem-examples"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ab3a16e005368b37e0c9dc61628fa69ab15aa260c1e6861e581b22c81003494"
+checksum = "210cad06b4e379d86a671952fda6ad59f34cf660b8da6e7d0d988e4901db30a8"
 dependencies = [
  "Inflector",
  "derive_more",
