@@ -553,9 +553,9 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for Canon {
         match self {
             Canon::Lift { .. } => ComponentIndexSpace::Func,
             Canon::Lower { .. } => ComponentIndexSpace::CoreFunc,
-            Canon::ResourceNew { .. } => ComponentIndexSpace::Func,
-            Canon::ResourceDrop { .. } => ComponentIndexSpace::Func,
-            Canon::ResourceRep { .. } => ComponentIndexSpace::Func,
+            Canon::ResourceNew { .. } => ComponentIndexSpace::CoreFunc,
+            Canon::ResourceDrop { .. } => ComponentIndexSpace::CoreFunc,
+            Canon::ResourceRep { .. } => ComponentIndexSpace::CoreFunc,
         }
     }
 
