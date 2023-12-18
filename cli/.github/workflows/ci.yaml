@@ -37,11 +37,11 @@ jobs:
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: stable
           override: false
           components: rustfmt, clippy
       - name: Check formatting
-        run: cargo +nightly fmt -- --check
+        run: cargo fmt -- --check
       - name: Clippy
         run: cargo clippy -- -Dwarnings
       - name: Tests

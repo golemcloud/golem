@@ -4,7 +4,6 @@ use golem_gateway_client::models::{ApiDeployment, ApiSite};
 
 use crate::clients::gateway::deployment::DeploymentClient;
 use crate::clients::project::ProjectClient;
-use crate::clients::CloudAuthentication;
 use crate::model::{GolemError, GolemResult, ProjectRef};
 
 #[derive(Subcommand, Debug)]
@@ -41,11 +40,7 @@ pub enum DeploymentSubcommand {
 
 #[async_trait]
 pub trait DeploymentHandler {
-    async fn handle(
-        &self,
-        auth: &CloudAuthentication,
-        command: DeploymentSubcommand,
-    ) -> Result<GolemResult, GolemError>;
+    async fn handle(&self, command: DeploymentSubcommand) -> Result<GolemResult, GolemError>;
 }
 
 pub struct DeploymentHandlerLive<
@@ -61,20 +56,13 @@ pub struct DeploymentHandlerLive<
 impl<'p, C: DeploymentClient + Sync + Send, P: ProjectClient + Sync + Send> DeploymentHandler
     for DeploymentHandlerLive<'p, C, P>
 {
-    async fn handle(
-        &self,
-        auth: &CloudAuthentication,
-        command: DeploymentSubcommand,
-    ) -> Result<GolemResult, GolemError> {
+    async fn handle(&self, command: DeploymentSubcommand) -> Result<GolemResult, GolemError> {
         match command {
             DeploymentSubcommand::Get {
                 project_ref,
                 definition_id,
             } => {
-                let project_id = self
-                    .projects
-                    .resolve_id_or_default(project_ref, auth)
-                    .await?;
+                let project_id = self.projects.resolve_id_or_default(project_ref).await?;
                 let res = self.client.get(project_id, &definition_id).await?;
 
                 Ok(GolemResult::Ok(Box::new(res)))
@@ -86,11 +74,7 @@ impl<'p, C: DeploymentClient + Sync + Send, P: ProjectClient + Sync + Send> Depl
                 subdomain,
             } => {
                 let deployment = ApiDeployment {
-                    project_id: self
-                        .projects
-                        .resolve_id_or_default(project_ref, auth)
-                        .await?
-                        .0,
+                    project_id: self.projects.resolve_id_or_default(project_ref).await?.0,
                     api_definition_id: definition_id,
                     site: Box::new(ApiSite { host, subdomain }),
                 };
@@ -104,10 +88,7 @@ impl<'p, C: DeploymentClient + Sync + Send, P: ProjectClient + Sync + Send> Depl
                 site,
                 definition_id,
             } => {
-                let project_id = self
-                    .projects
-                    .resolve_id_or_default(project_ref, auth)
-                    .await?;
+                let project_id = self.projects.resolve_id_or_default(project_ref).await?;
                 let res = self
                     .client
                     .delete(project_id, &definition_id, &site)

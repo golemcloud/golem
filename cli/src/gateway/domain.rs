@@ -3,7 +3,6 @@ use clap::Subcommand;
 
 use crate::clients::gateway::domain::DomainClient;
 use crate::clients::project::ProjectClient;
-use crate::clients::CloudAuthentication;
 use crate::model::{GolemError, GolemResult, ProjectRef};
 
 #[derive(Subcommand, Debug)]
@@ -34,11 +33,7 @@ pub enum DomainSubcommand {
 
 #[async_trait]
 pub trait DomainHandler {
-    async fn handle(
-        &self,
-        auth: &CloudAuthentication,
-        command: DomainSubcommand,
-    ) -> Result<GolemResult, GolemError>;
+    async fn handle(&self, command: DomainSubcommand) -> Result<GolemResult, GolemError>;
 }
 
 pub struct DomainHandlerLive<'p, C: DomainClient + Sync + Send, P: ProjectClient + Sync + Send> {
@@ -50,17 +45,10 @@ pub struct DomainHandlerLive<'p, C: DomainClient + Sync + Send, P: ProjectClient
 impl<'p, C: DomainClient + Sync + Send, P: ProjectClient + Sync + Send> DomainHandler
     for DomainHandlerLive<'p, C, P>
 {
-    async fn handle(
-        &self,
-        auth: &CloudAuthentication,
-        command: DomainSubcommand,
-    ) -> Result<GolemResult, GolemError> {
+    async fn handle(&self, command: DomainSubcommand) -> Result<GolemResult, GolemError> {
         match command {
             DomainSubcommand::Get { project_ref } => {
-                let project_id = self
-                    .projects
-                    .resolve_id_or_default(project_ref, auth)
-                    .await?;
+                let project_id = self.projects.resolve_id_or_default(project_ref).await?;
 
                 let res = self.client.get(project_id).await?;
 
@@ -70,10 +58,7 @@ impl<'p, C: DomainClient + Sync + Send, P: ProjectClient + Sync + Send> DomainHa
                 project_ref,
                 domain_name,
             } => {
-                let project_id = self
-                    .projects
-                    .resolve_id_or_default(project_ref, auth)
-                    .await?;
+                let project_id = self.projects.resolve_id_or_default(project_ref).await?;
 
                 let res = self.client.update(project_id, domain_name).await?;
 
@@ -83,10 +68,7 @@ impl<'p, C: DomainClient + Sync + Send, P: ProjectClient + Sync + Send> DomainHa
                 project_ref,
                 domain_name,
             } => {
-                let project_id = self
-                    .projects
-                    .resolve_id_or_default(project_ref, auth)
-                    .await?;
+                let project_id = self.projects.resolve_id_or_default(project_ref).await?;
                 let res = self.client.delete(project_id, &domain_name).await?;
                 Ok(GolemResult::Ok(Box::new(res)))
             }

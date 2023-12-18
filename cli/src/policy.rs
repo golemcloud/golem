@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use clap::Subcommand;
 
 use crate::clients::policy::ProjectPolicyClient;
-use crate::clients::CloudAuthentication;
 use crate::model::{GolemError, GolemResult, ProjectAction, ProjectPolicyId};
 
 #[derive(Subcommand, Debug)]
@@ -26,11 +25,7 @@ pub enum ProjectPolicySubcommand {
 
 #[async_trait]
 pub trait ProjectPolicyHandler {
-    async fn handle(
-        &self,
-        auth: &CloudAuthentication,
-        subcommand: ProjectPolicySubcommand,
-    ) -> Result<GolemResult, GolemError>;
+    async fn handle(&self, subcommand: ProjectPolicySubcommand) -> Result<GolemResult, GolemError>;
 }
 
 pub struct ProjectPolicyHandlerLive<C: ProjectPolicyClient + Send + Sync> {
@@ -39,11 +34,7 @@ pub struct ProjectPolicyHandlerLive<C: ProjectPolicyClient + Send + Sync> {
 
 #[async_trait]
 impl<C: ProjectPolicyClient + Send + Sync> ProjectPolicyHandler for ProjectPolicyHandlerLive<C> {
-    async fn handle(
-        &self,
-        auth: &CloudAuthentication,
-        subcommand: ProjectPolicySubcommand,
-    ) -> Result<GolemResult, GolemError> {
+    async fn handle(&self, subcommand: ProjectPolicySubcommand) -> Result<GolemResult, GolemError> {
         match subcommand {
             ProjectPolicySubcommand::Add {
                 project_actions,
@@ -51,13 +42,13 @@ impl<C: ProjectPolicyClient + Send + Sync> ProjectPolicyHandler for ProjectPolic
             } => {
                 let policy = self
                     .client
-                    .create(project_policy_name, project_actions, auth)
+                    .create(project_policy_name, project_actions)
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(policy)))
             }
             ProjectPolicySubcommand::Get { project_policy_id } => {
-                let policy = self.client.get(project_policy_id, auth).await?;
+                let policy = self.client.get(project_policy_id).await?;
 
                 Ok(GolemResult::Ok(Box::new(policy)))
             }
