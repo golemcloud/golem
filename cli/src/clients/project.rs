@@ -71,7 +71,7 @@ impl ProjectClient for ProjectClientLive {
     async fn delete(&self, project_id: ProjectId) -> Result<(), GolemError> {
         info!("Deleting project {project_id:?}");
 
-        let _ = v2_projects_project_id_delete(&self.configuration, &project_id.0.to_string());
+        let _ = v2_projects_project_id_delete(&self.configuration, &project_id.0.to_string()).await?;
 
         Ok(())
     }
