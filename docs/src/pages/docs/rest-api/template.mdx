@@ -136,9 +136,9 @@ curl -X PUT
 
 ### Get all templates of a project
 
-| Method | Path                                  | Request | Response               |
-| ------ | ------------------------------------- | ------- | ---------------------- |
-| GET    | `/v1/templates?projectId={projectId}` | -       | Array of Template JSON |
+| Method | Path                                   | Request | Response               |
+| ------ | -------------------------------------- | ------- | ---------------------- |
+| GET    | `/v1/templates?project-id={projectId}` | -       | Array of Template JSON |
 
 **Response format:**
 
@@ -151,7 +151,7 @@ Gets all templates belonging to the given project
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/templates?projectId=866e1f4a-cf1a-40aa-ad8f-77e33294e999'
+curl 'https://release.api.golem.cloud/v1/templates?project-id=866e1f4a-cf1a-40aa-ad8f-77e33294e999'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
