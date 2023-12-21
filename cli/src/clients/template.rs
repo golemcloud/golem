@@ -109,7 +109,7 @@ fn render_type(typ: &Type) -> String {
             err.clone()
                 .map_or("()".to_string(), |typ| render_type(&typ))
         ),
-        Type::Option(TypeOption { inner }) => format!("{}?", render_type(&inner)),
+        Type::Option(TypeOption { inner }) => format!("{}?", render_type(inner)),
         Type::Enum(TypeEnum { cases }) => format!("enum({})", cases.join(", ")),
         Type::Flags(TypeFlags { cases }) => format!("flags({})", cases.join(", ")),
         Type::Record(TypeRecord { cases }) => {
