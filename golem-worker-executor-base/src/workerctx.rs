@@ -7,7 +7,7 @@ use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus,
 };
-use golem_common::proto::golem::Val;
+use golem_api_grpc::proto::golem::Val;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use crate::error::GolemError;

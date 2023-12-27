@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use golem_common::model::{InvocationKey, WorkerId};
-use golem_common::proto::golem;
+use golem_api_grpc::proto::golem;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tracing::debug;
 use uuid::Uuid;
@@ -217,7 +217,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
 mod tests {
     use golem::{val, Val};
     use golem_common::model::{TemplateId, WorkerId};
-    use golem_common::proto::golem;
+    use golem_api_grpc::proto::golem;
 
     use crate::services::invocation_key::{
         InvocationKeyService, InvocationKeyServiceDefault, LookupResult,

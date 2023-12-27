@@ -11,9 +11,9 @@ use golem_common::model as common_model;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, ShardId, WorkerMetadata, WorkerStatus,
 };
-use golem_common::proto::golem;
-use golem_common::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
-use golem_common::proto::golem::ResourceLimits as GrpcResourceLimits;
+use golem_api_grpc::proto::golem;
+use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
+use golem_api_grpc::proto::golem::ResourceLimits as GrpcResourceLimits;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};

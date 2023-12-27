@@ -8,7 +8,7 @@ use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus,
 };
-use golem_common::proto::golem::Val;
+use golem_api_grpc::proto::golem::Val;
 use golem_worker_executor_base::error::{is_interrupt, GolemError};
 use golem_worker_executor_base::host::managed_stdio::ManagedStandardIo;
 use golem_worker_executor_base::model::{

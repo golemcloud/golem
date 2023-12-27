@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use golem_common::proto;
-use golem_common::proto::golem::workerexecutor::worker_executor_server::WorkerExecutorServer;
+use golem_api_grpc::proto;
+use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutorServer;
 use prometheus::Registry;
 use tokio::runtime::Handle;
 use tonic::transport::Server;

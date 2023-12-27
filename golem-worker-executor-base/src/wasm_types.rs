@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use golem_common::proto::golem;
+use golem_api_grpc::proto::golem;
 use wasmtime::component::*;
 
 use crate::error::GolemError;
