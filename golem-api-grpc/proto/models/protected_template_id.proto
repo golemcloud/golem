@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-package golem;
-
-import public "models/versioned_template_id.proto";
-
-message ProtectedTemplateId {
-  VersionedTemplateId versioned_template_id = 1;
-}

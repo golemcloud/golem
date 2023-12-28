@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem;
+
+import "golem/grant_id.proto";
+import "golem/project_grant_data.proto";
+
+message ProjectGrant {
+  GrantId id = 1;
+  ProjectGrantData data = 2;
+}

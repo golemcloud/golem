@@ -4,16 +4,16 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::config::RetryConfig;
-use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
-use golem_common::model::TemplateId;
 use golem_api_grpc::proto::golem::cloudservices::templateservice::template_service_client::TemplateServiceClient;
 use golem_api_grpc::proto::golem::cloudservices::templateservice::{
     download_template_response, get_latest_template_version_response, DownloadTemplateRequest,
     GetLatestTemplateVersionRequest,
 };
 use golem_api_grpc::proto::golem::{TemplateError, TokenSecret};
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::config::RetryConfig;
+use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
+use golem_common::model::TemplateId;
 use golem_common::retries::with_retries;
 use http::Uri;
 use prost::Message;

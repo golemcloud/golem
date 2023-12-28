@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package golem.cloudservices.projectservice;
+
+import public "golem/empty.proto";
+import public "golem/project.proto";
+import public "golem/project_error.proto";
+import public "golem/project_data_request.proto";
+import public "golem/project_id.proto";
+import public "golem/token_secret.proto";
+import public "golem/project_action.proto";
+
+service ProjectService {
+  rpc GetDefaultProject (GetDefaultProjectRequest) returns (GetDefaultProjectResponse);
+  rpc GetProjects (GetProjectsRequest) returns (GetProjectsResponse);
+  rpc CreateProject (CreateProjectRequest) returns (CreateProjectResponse);
+  rpc DeleteProject (DeleteProjectRequest) returns (DeleteProjectResponse);
+  rpc GetProject (GetProjectRequest) returns (GetProjectResponse);
+  rpc GetProjectActions (GetProjectActionsRequest) returns (GetProjectActionsResponse);
+}
+
+message GetDefaultProjectRequest {
+  TokenSecret tokenSecret = 1;
+}
+
+message GetDefaultProjectResponse {
+  oneof result {
+    Project success = 1;
+    ProjectError error = 2;
+  }
+}
+
+message GetProjectsRequest {
+  optional string projectName = 1;
+  TokenSecret tokenSecret = 2;
+}
+
+message GetProjectsResponse {
+  oneof result {
+    GetProjectsSuccessResponse success = 1;
+    ProjectError error = 2;
+  }
+}
+
+message GetProjectsSuccessResponse {
+  repeated Project data = 1;
+}
+
+message CreateProjectRequest {
+  ProjectDataRequest projectDataRequest = 1;
+  TokenSecret tokenSecret = 2;
+}
+
+message CreateProjectResponse {
+  oneof result {
+    CreateProjectSuccessResponse success = 1;
+    ProjectError error = 2;
+  }
+}
+
+message CreateProjectSuccessResponse {
+  optional Project project = 1;
+}
+
+message DeleteProjectRequest {
+  ProjectId projectId = 1;
+  TokenSecret tokenSecret = 2;
+}
+
+message DeleteProjectResponse {
+  oneof result {
+    Empty success = 1;
+    ProjectError error = 2;
+  }
+}
+
+message GetProjectRequest {
+  ProjectId projectId = 1;
+  TokenSecret tokenSecret = 2;
+}
+
+message GetProjectResponse {
+  oneof result {
+    Project success = 1;
+    ProjectError error = 2;
+  }
+}
+
+message GetProjectActionsRequest {
+  ProjectId projectId = 1;
+  TokenSecret tokenSecret = 2;
+}
+
+message GetProjectActionsResponse {
+  oneof result {
+      GetProjectActionsSuccessResponse success = 1;
+      ProjectError error = 2;
+  }
+}
+
+message GetProjectActionsSuccessResponse {
+  repeated ProjectAction data = 1;
+}

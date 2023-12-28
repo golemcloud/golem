@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package golem;
+
+import "golem/export_function.proto";
+
+message ExportInstance {
+  string name = 1;
+  repeated ExportFunction functions = 2;
+}

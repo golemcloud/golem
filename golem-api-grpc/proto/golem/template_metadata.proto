@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem;
+
+import "golem/export.proto";
+import "golem/producers.proto";
+
+message TemplateMetadata {
+  repeated Export exports = 1;
+  repeated Producers producers = 2;
+}

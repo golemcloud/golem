@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use golem_common::model::{PromiseId, ShardId, TemplateId, WorkerId};
 use golem_api_grpc::proto::golem;
+use golem_common::model::{PromiseId, ShardId, TemplateId, WorkerId};
 use tonic::Status;
 
 use crate::model::InterruptKind;

@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package golem;
+
+import "golem/project_actions.proto";
+import "golem/project_policy_id.proto";
+
+message ProjectPolicy {
+  ProjectPolicyId id = 1;
+  string name = 2;
+  ProjectActions actions = 3;
+}

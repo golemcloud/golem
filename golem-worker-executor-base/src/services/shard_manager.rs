@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use golem_common::model::{ShardAssignment, ShardId};
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client;
+use golem_common::model::{ShardAssignment, ShardId};
 use golem_common::retries::with_retries;
 
 use crate::error::GolemError;

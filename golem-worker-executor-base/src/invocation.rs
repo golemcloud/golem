@@ -1,6 +1,6 @@
 use anyhow::anyhow;
-use golem_common::model::{CallingConvention, VersionedWorkerId, WorkerStatus};
 use golem_api_grpc::proto::golem;
+use golem_common::model::{CallingConvention, VersionedWorkerId, WorkerStatus};
 use tracing::{debug, error, warn};
 use wasmtime::component::{Func, Val};
 use wasmtime::AsContextMut;

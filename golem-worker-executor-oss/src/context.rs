@@ -4,11 +4,11 @@ use std::sync::{Arc, RwLock};
 use anyhow::Error;
 use async_trait::async_trait;
 use cap_std::ambient_authority;
+use golem_api_grpc::proto::golem::Val;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus,
 };
-use golem_api_grpc::proto::golem::Val;
 use golem_worker_executor_base::error::{is_interrupt, GolemError};
 use golem_worker_executor_base::host::managed_stdio::ManagedStandardIo;
 use golem_worker_executor_base::model::{

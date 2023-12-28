@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package golem.cloudservices.projectgrantservice;
+
+import public "golem/empty.proto";
+import public "golem/grant_id.proto";
+import public "golem/project_id.proto";
+import public "golem/project_grant.proto";
+import public "golem/project_grant_error.proto";
+import public "golem/project_grant_data_request.proto";
+import public "golem/token_secret.proto";
+
+service ProjectGrantService {
+  rpc GetProjectGrants (GetProjectGrantsRequest) returns (GetProjectGrantsResponse);
+  rpc DeleteProjectGrant (DeleteProjectGrantRequest) returns (DeleteProjectGrantResponse);
+  rpc GetProjectGrant (GetProjectGrantRequest) returns (GetProjectGrantResponse);
+  rpc CreateProjectGrant (CreateProjectGrantRequest) returns (CreateProjectGrantResponse);
+}
+
+message GetProjectGrantsRequest {
+  ProjectId projectId = 1;
+  TokenSecret tokenSecret = 2;
+}
+
+message GetProjectGrantsResponse {
+  oneof result {
+    GetProjectGrantsSuccessResponse success = 1;
+    ProjectGrantError error = 2;
+  }
+}
+
+message GetProjectGrantsSuccessResponse {
+  repeated ProjectGrant data = 1;
+}
+
+message DeleteProjectGrantRequest {
+  ProjectId projectId = 1;
+  GrantId grantId = 2;
+  TokenSecret tokenSecret = 3;
+}
+
+message DeleteProjectGrantResponse {
+  oneof result {
+    Empty success = 1;
+    ProjectGrantError error = 2;
+  }
+}
+
+message GetProjectGrantRequest {
+  ProjectId projectId = 1;
+  GrantId grantId = 2;
+  TokenSecret tokenSecret = 3;
+}
+
+message GetProjectGrantResponse {
+  oneof result {
+    ProjectGrant success = 1;
+    ProjectGrantError error = 2;
+  }
+}
+
+message CreateProjectGrantRequest {
+  ProjectId projectId = 1;
+  ProjectGrantDataRequest data = 2;
+  TokenSecret tokenSecret = 3;
+}
+
+message CreateProjectGrantResponse {
+  oneof result {
+    ProjectGrant success = 1;
+    ProjectGrantError error = 2;
+  }
+}

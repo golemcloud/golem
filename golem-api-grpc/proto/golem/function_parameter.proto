@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package golem;
+
+import "golem/type.proto";
+
+message FunctionParameter {
+  string name = 1;
+  Type tpe = 2;
+}

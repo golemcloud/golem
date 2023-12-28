@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package golem;
+
+import "golem/val.proto";
+
+message InvokeParameters {
+  repeated Val params = 1;
+}

@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package golem.cloudservices.tokenservice;
+
+import public "golem/account_id.proto";
+import public "golem/empty.proto";
+import public "golem/create_token_dto.proto";
+import public "golem/token.proto";
+import public "golem/token_secret.proto";
+import public "golem/token_id.proto";
+import public "golem/token_error.proto";
+import public "golem/unsafe_token.proto";
+
+service TokenService {
+  rpc GetTokens (GetTokensRequest) returns (GetTokensResponse);
+  rpc CreateToken (CreateTokenRequest) returns (CreateTokenResponse);
+  rpc DeleteToken (DeleteTokenRequest) returns (DeleteTokenResponse);
+  rpc GetToken (GetTokenRequest) returns (GetTokenResponse);
+}
+
+message GetTokensRequest {
+  AccountId accountId = 1;
+  TokenSecret tokenSecret = 2;
+}
+
+message GetTokensResponse {
+  oneof result {
+    GetTokensSuccessResponse success = 1;
+    TokenError error = 2;
+  }
+}
+
+message GetTokensSuccessResponse {
+  repeated Token data = 1;
+}
+
+message CreateTokenRequest {
+  AccountId accountId = 1;
+  CreateTokenDTO createTokenDTO = 2;
+  TokenSecret tokenSecret = 3;
+}
+
+message CreateTokenResponse {
+  oneof result {
+    UnsafeToken success = 1;
+    TokenError error = 2;
+  }
+}
+
+message DeleteTokenRequest {
+  AccountId accountId = 1;
+  TokenId tokenId = 2;
+  TokenSecret tokenSecret = 3;
+}
+
+message DeleteTokenResponse {
+  oneof result {
+    Empty success = 1;
+    TokenError error = 2;
+  }
+}
+
+message GetTokenRequest {
+  AccountId accountId = 1;
+  TokenId tokenId = 2;
+  TokenSecret tokenSecret = 3;
+}
+
+message GetTokenResponse {
+  oneof result {
+    Token success = 1;
+    TokenError error = 2;
+  }
+}

@@ -1,4 +1,3 @@
-
 pub mod proto {
     use uuid::Uuid;
     tonic::include_proto!("mod");
@@ -110,8 +109,8 @@ pub mod proto {
                     ProjectAction::DeleteApiDefinition,
                     ProjectAction::CreateApiDefinition,
                 ]
-                    .into_iter()
-                    .collect::<HashSet<ProjectAction>>())
+                .into_iter()
+                .collect::<HashSet<ProjectAction>>())
             );
         }
     }

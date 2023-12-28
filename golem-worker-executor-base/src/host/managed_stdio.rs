@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use bytes::{Buf, BufMut, Bytes};
-use golem_common::model::{InvocationKey, WorkerId};
 use golem_api_grpc::proto::golem;
+use golem_common::model::{InvocationKey, WorkerId};
 use tokio::sync::{mpsc, Mutex};
 
 use crate::error::GolemError;

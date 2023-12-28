@@ -451,7 +451,9 @@ impl TryFrom<i32> for CallingConvention {
 impl From<golem_api_grpc::proto::golem::CallingConvention> for CallingConvention {
     fn from(value: golem_api_grpc::proto::golem::CallingConvention) -> Self {
         match value {
-            golem_api_grpc::proto::golem::CallingConvention::Component => CallingConvention::Component,
+            golem_api_grpc::proto::golem::CallingConvention::Component => {
+                CallingConvention::Component
+            }
             golem_api_grpc::proto::golem::CallingConvention::Stdio => CallingConvention::Stdio,
             golem_api_grpc::proto::golem::CallingConvention::StdioEventloop => {
                 CallingConvention::StdioEventloop
