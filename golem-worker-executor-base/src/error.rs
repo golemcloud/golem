@@ -335,39 +335,39 @@ impl From<GolemError> for Status {
     }
 }
 
-impl From<GolemError> for golem::GolemError {
+impl From<GolemError> for golem::common::GolemError {
     fn from(value: GolemError) -> Self {
         match value {
-            GolemError::InvalidRequest { details } => golem::GolemError {
-                error: Some(golem::golem_error::Error::InvalidRequest(
-                    golem::InvalidRequest { details },
+            GolemError::InvalidRequest { details } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::InvalidRequest(
+                    golem::common::InvalidRequest { details },
                 )),
             },
-            GolemError::WorkerAlreadyExists { worker_id } => golem::GolemError {
-                error: Some(golem::golem_error::Error::WorkerAlreadyExists(
-                    golem::WorkerAlreadyExists {
+            GolemError::WorkerAlreadyExists { worker_id } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::WorkerAlreadyExists(
+                    golem::common::WorkerAlreadyExists {
                         worker_id: Some(worker_id.into_proto()),
                     },
                 )),
             },
-            GolemError::WorkerNotFound { worker_id } => golem::GolemError {
-                error: Some(golem::golem_error::Error::WorkerNotFound(
-                    golem::WorkerNotFound {
+            GolemError::WorkerNotFound { worker_id } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::WorkerNotFound(
+                    golem::common::WorkerNotFound {
                         worker_id: Some(worker_id.into_proto()),
                     },
                 )),
             },
-            GolemError::WorkerCreationFailed { worker_id, details } => golem::GolemError {
-                error: Some(golem::golem_error::Error::WorkerCreationFailed(
-                    golem::WorkerCreationFailed {
+            GolemError::WorkerCreationFailed { worker_id, details } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::WorkerCreationFailed(
+                    golem::common::WorkerCreationFailed {
                         worker_id: Some(worker_id.into_proto()),
                         details,
                     },
                 )),
             },
-            GolemError::FailedToResumeWorker { worker_id } => golem::GolemError {
-                error: Some(golem::golem_error::Error::FailedToResumeWorker(
-                    golem::FailedToResumeWorker {
+            GolemError::FailedToResumeWorker { worker_id } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::FailedToResumeWorker(
+                    golem::common::FailedToResumeWorker {
                         worker_id: Some(worker_id.into_proto()),
                     },
                 )),
@@ -376,9 +376,9 @@ impl From<GolemError> for golem::GolemError {
                 template_id,
                 template_version,
                 reason,
-            } => golem::GolemError {
-                error: Some(golem::golem_error::Error::TemplateDownloadFailed(
-                    golem::TemplateDownloadFailed {
+            } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::TemplateDownloadFailed(
+                    golem::common::TemplateDownloadFailed {
                         template_id: Some(template_id.into()),
                         template_version,
                         reason,
@@ -389,9 +389,9 @@ impl From<GolemError> for golem::GolemError {
                 template_id,
                 template_version,
                 reason,
-            } => golem::GolemError {
-                error: Some(golem::golem_error::Error::TemplateParseFailed(
-                    golem::TemplateParseFailed {
+            } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::TemplateParseFailed(
+                    golem::common::TemplateParseFailed {
                         template_id: Some(template_id.into()),
                         template_version,
                         reason,
@@ -401,71 +401,75 @@ impl From<GolemError> for golem::GolemError {
             GolemError::GetLatestVersionOfTemplateFailed {
                 template_id,
                 reason,
-            } => golem::GolemError {
-                error: Some(golem::golem_error::Error::GetLatestVersionOfTemplateFailed(
-                    golem::GetLatestVersionOfTemplateFailed {
-                        template_id: Some(template_id.into()),
-                        reason,
-                    },
-                )),
+            } => golem::common::GolemError {
+                error: Some(
+                    golem::common::golem_error::Error::GetLatestVersionOfTemplateFailed(
+                        golem::common::GetLatestVersionOfTemplateFailed {
+                            template_id: Some(template_id.into()),
+                            reason,
+                        },
+                    ),
+                ),
             },
-            GolemError::PromiseNotFound { promise_id } => golem::GolemError {
-                error: Some(golem::golem_error::Error::PromiseNotFound(
-                    golem::PromiseNotFound {
+            GolemError::PromiseNotFound { promise_id } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::PromiseNotFound(
+                    golem::common::PromiseNotFound {
                         promise_id: Some(promise_id.into()),
                     },
                 )),
             },
-            GolemError::PromiseDropped { promise_id } => golem::GolemError {
-                error: Some(golem::golem_error::Error::PromiseDropped(
-                    golem::PromiseDropped {
+            GolemError::PromiseDropped { promise_id } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::PromiseDropped(
+                    golem::common::PromiseDropped {
                         promise_id: Some(promise_id.into()),
                     },
                 )),
             },
-            GolemError::PromiseAlreadyCompleted { promise_id } => golem::GolemError {
-                error: Some(golem::golem_error::Error::PromiseAlreadyCompleted(
-                    golem::PromiseAlreadyCompleted {
+            GolemError::PromiseAlreadyCompleted { promise_id } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::PromiseAlreadyCompleted(
+                    golem::common::PromiseAlreadyCompleted {
                         promise_id: Some(promise_id.into()),
                     },
                 )),
             },
-            GolemError::Interrupted { kind } => golem::GolemError {
-                error: Some(golem::golem_error::Error::Interrupted(golem::Interrupted {
-                    recover_immediately: kind == InterruptKind::Restart,
-                })),
-            },
-            GolemError::ParamTypeMismatch => golem::GolemError {
-                error: Some(golem::golem_error::Error::ParamTypeMismatch(
-                    golem::ParamTypeMismatch {},
+            GolemError::Interrupted { kind } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::Interrupted(
+                    golem::common::Interrupted {
+                        recover_immediately: kind == InterruptKind::Restart,
+                    },
                 )),
             },
-            GolemError::NoValueInMessage => golem::GolemError {
-                error: Some(golem::golem_error::Error::NoValueInMessage(
-                    golem::NoValueInMessage {},
+            GolemError::ParamTypeMismatch => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::ParamTypeMismatch(
+                    golem::common::ParamTypeMismatch {},
                 )),
             },
-            GolemError::ValueMismatch { details } => golem::GolemError {
-                error: Some(golem::golem_error::Error::ValueMismatch(
-                    golem::ValueMismatch { details },
+            GolemError::NoValueInMessage => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::NoValueInMessage(
+                    golem::common::NoValueInMessage {},
                 )),
             },
-            GolemError::UnexpectedOplogEntry { expected, got } => golem::GolemError {
-                error: Some(golem::golem_error::Error::UnexpectedOplogEntry(
-                    golem::UnexpectedOplogEntry { expected, got },
+            GolemError::ValueMismatch { details } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::ValueMismatch(
+                    golem::common::ValueMismatch { details },
                 )),
             },
-            GolemError::Runtime { details } => golem::GolemError {
-                error: Some(golem::golem_error::Error::RuntimeError(
-                    golem::RuntimeError { details },
+            GolemError::UnexpectedOplogEntry { expected, got } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::UnexpectedOplogEntry(
+                    golem::common::UnexpectedOplogEntry { expected, got },
+                )),
+            },
+            GolemError::Runtime { details } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::RuntimeError(
+                    golem::common::RuntimeError { details },
                 )),
             },
             GolemError::InvalidShardId {
                 shard_id,
                 shard_ids,
-            } => golem::GolemError {
-                error: Some(golem::golem_error::Error::InvalidShardId(
-                    golem::InvalidShardId {
+            } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::InvalidShardId(
+                    golem::common::InvalidShardId {
                         shard_id: Some(shard_id.into()),
                         shard_ids: shard_ids
                             .into_iter()
@@ -474,25 +478,25 @@ impl From<GolemError> for golem::GolemError {
                     },
                 )),
             },
-            GolemError::InvalidAccount => golem::GolemError {
-                error: Some(golem::golem_error::Error::InvalidAccount(
-                    golem::InvalidAccount {},
+            GolemError::InvalidAccount => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::InvalidAccount(
+                    golem::common::InvalidAccount {},
                 )),
             },
-            GolemError::PreviousInvocationFailed => golem::GolemError {
-                error: Some(golem::golem_error::Error::PreviousInvocationFailed(
-                    golem::PreviousInvocationFailed {},
+            GolemError::PreviousInvocationFailed => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::PreviousInvocationFailed(
+                    golem::common::PreviousInvocationFailed {},
                 )),
             },
-            GolemError::PreviousInvocationExited => golem::GolemError {
-                error: Some(golem::golem_error::Error::PreviousInvocationExited(
-                    golem::PreviousInvocationExited {},
+            GolemError::PreviousInvocationExited => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::PreviousInvocationExited(
+                    golem::common::PreviousInvocationExited {},
                 )),
             },
-            GolemError::Unknown { details } => golem::GolemError {
-                error: Some(golem::golem_error::Error::Unknown(golem::UnknownError {
-                    details,
-                })),
+            GolemError::Unknown { details } => golem::common::GolemError {
+                error: Some(golem::common::golem_error::Error::Unknown(
+                    golem::common::UnknownError { details },
+                )),
             },
         }
     }

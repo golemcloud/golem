@@ -1,20 +1,20 @@
 syntax = "proto3";
 
-import public "golem/account_id.proto";
-import public "golem/calling_convention.proto";
-import public "golem/empty.proto";
-import public "golem/golem_error.proto";
-import public "golem/invocation_key.proto";
-import public "golem/log_event.proto";
-import public "golem/promise_id.proto";
-import public "golem/resource_limits.proto";
-import public "golem/shard_id.proto";
-import public "golem/template_id.proto";
-import public "golem/type.proto";
-import public "golem/val.proto";
-import public "golem/worker_id.proto";
-import public "golem/worker_metadata.proto";
-import public "golem/worker_status.proto";
+import public "golem/common/account_id.proto";
+import public "golem/common/calling_convention.proto";
+import public "golem/common/empty.proto";
+import public "golem/common/golem_error.proto";
+import public "golem/common/invocation_key.proto";
+import public "golem/common/log_event.proto";
+import public "golem/common/promise_id.proto";
+import public "golem/common/resource_limits.proto";
+import public "golem/common/shard_id.proto";
+import public "golem/common/template_id.proto";
+import public "golem/common/type.proto";
+import public "golem/common/val.proto";
+import public "golem/common/worker_id.proto";
+import public "golem/common/worker_metadata.proto";
+import public "golem/common/worker_status.proto";
 
 package golem.workerexecutor;
 
@@ -23,39 +23,39 @@ service WorkerExecutor {
   rpc GetInvocationKey(GetInvocationKeyRequest) returns (GetInvocationKeyResponse);
   rpc InvokeAndAwaitWorker(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponse);
   rpc InvokeWorker(InvokeWorkerRequest) returns (InvokeWorkerResponse);
-  rpc ConnectWorker(ConnectWorkerRequest) returns (stream LogEvent);
-  rpc DeleteWorker(WorkerId) returns (DeleteWorkerResponse);
+  rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.common.LogEvent);
+  rpc DeleteWorker(golem.common.WorkerId) returns (DeleteWorkerResponse);
   rpc CompletePromise(CompletePromiseRequest) returns (CompletePromiseResponse);
   rpc InterruptWorker(InterruptWorkerRequest) returns (InterruptWorkerResponse);
   rpc RevokeShards(RevokeShardsRequest) returns (RevokeShardsResponse);
   rpc AssignShards(AssignShardsRequest) returns (AssignShardsResponse);
-  rpc GetWorkerMetadata(WorkerId) returns (GetWorkerMetadataResponse);
+  rpc GetWorkerMetadata(golem.common.WorkerId) returns (GetWorkerMetadataResponse);
   rpc ResumeWorker(ResumeWorkerRequest) returns (ResumeWorkerResponse);
 }
 
 message InvokeWorkerResponse {
   oneof result {
-    Empty success = 1;
-    GolemError failure = 2;
+    golem.common.Empty success = 1;
+    golem.common.GolemError failure = 2;
   }
 }
 
 message DeleteWorkerResponse {
   oneof result {
-    Empty success = 1;
-    GolemError failure = 2;
+    golem.common.Empty success = 1;
+    golem.common.GolemError failure = 2;
   }
 }
 
 message CompletePromiseRequest {
-  PromiseId promise_id = 1;
+  golem.common.PromiseId promise_id = 1;
   bytes data = 2;
 }
 
 message CompletePromiseResponse {
   oneof result {
     CompletePromiseSuccess success = 1;
-    GolemError failure = 2;
+    golem.common.GolemError failure = 2;
   }
 }
 
@@ -65,119 +65,119 @@ message CompletePromiseSuccess {
 
 message InterruptWorkerResponse {
   oneof result {
-    Empty success = 1;
-    GolemError failure = 2;
+    golem.common.Empty success = 1;
+    golem.common.GolemError failure = 2;
   }
 }
 
 message CreateWorkerRequest {
-  WorkerId worker_id = 1;
+  golem.common.WorkerId worker_id = 1;
   int32 template_version = 2;
   repeated string args = 3;
   map<string, string> env = 4;
-  AccountId account_id = 5;
-  ResourceLimits account_limits = 6;
+  golem.common.AccountId account_id = 5;
+  golem.common.ResourceLimits account_limits = 6;
 }
 
 message CreateWorkerResponse {
   oneof result {
-    Empty success = 1;
-    GolemError failure = 2;
+    golem.common.Empty success = 1;
+    golem.common.GolemError failure = 2;
   }
 }
 
 message GetInvocationKeyRequest {
-  WorkerId worker_id = 1;
+  golem.common.WorkerId worker_id = 1;
 }
 
 message GetInvocationKeyResponse {
   oneof result {
     GetInvocationKeySuccess success = 1;
-    GolemError failure = 2;
+    golem.common.GolemError failure = 2;
   }
 }
 
 message GetInvocationKeySuccess {
-  InvocationKey invocation_key = 1;
+  golem.common.InvocationKey invocation_key = 1;
 }
 
 message InvokeAndAwaitWorkerRequest {
-  WorkerId worker_id = 1;
+  golem.common.WorkerId worker_id = 1;
   string name = 2;
-  repeated Val input = 3;
-  InvocationKey invocation_key = 4;
-  CallingConvention calling_convention = 5;
-  AccountId account_id = 6;
-  ResourceLimits account_limits = 7;
+  repeated golem.common.Val input = 3;
+  golem.common.InvocationKey invocation_key = 4;
+  golem.common.CallingConvention calling_convention = 5;
+  golem.common.AccountId account_id = 6;
+  golem.common.ResourceLimits account_limits = 7;
 }
 
 message InvokeAndAwaitWorkerResponse {
   oneof result {
     InvokeAndAwaitWorkerSuccess success = 1;
-    GolemError failure = 2;
+    golem.common.GolemError failure = 2;
   }
 }
 
 message InvokeAndAwaitWorkerSuccess {
-  repeated Val output = 1;
+  repeated golem.common.Val output = 1;
 }
 
 message InvokeWorkerRequest {
-  WorkerId worker_id = 1;
+  golem.common.WorkerId worker_id = 1;
   string name = 2;
-  repeated Val input = 3;
-  AccountId account_id = 4;
-  ResourceLimits account_limits = 5;
+  repeated golem.common.Val input = 3;
+  golem.common.AccountId account_id = 4;
+  golem.common.ResourceLimits account_limits = 5;
 }
 
 message ConnectWorkerRequest {
-  WorkerId worker_id = 1;
-  AccountId account_id = 2;
-  ResourceLimits account_limits = 3;
+  golem.common.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  golem.common.ResourceLimits account_limits = 3;
 }
 
 message InterruptWorkerRequest {
-  WorkerId worker_id = 1;
+  golem.common.WorkerId worker_id = 1;
   bool recover_immediately = 2;
 }
 
 message RevokeShardsRequest {
-  repeated ShardId shard_ids = 1;
+  repeated golem.common.ShardId shard_ids = 1;
 }
 
 message RevokeShardsResponse {
   oneof result {
-    Empty success = 1;
-    GolemError failure = 2;
+    golem.common.Empty success = 1;
+    golem.common.GolemError failure = 2;
   }
 }
 
 message AssignShardsRequest {
-  repeated ShardId shard_ids = 1;
+  repeated golem.common.ShardId shard_ids = 1;
 }
 
 message AssignShardsResponse {
   oneof result {
-    Empty success = 1;
-    GolemError failure = 2;
+    golem.common.Empty success = 1;
+    golem.common.GolemError failure = 2;
   }
 }
 
 message GetWorkerMetadataResponse {
   oneof result {
-    WorkerMetadata success = 1;
-    GolemError failure = 2;
+    golem.common.WorkerMetadata success = 1;
+    golem.common.GolemError failure = 2;
   }
 }
 
 message ResumeWorkerRequest {
-  WorkerId worker_id = 1;
+  golem.common.WorkerId worker_id = 1;
   string name = 2;
 }
 
 message ResumeWorkerResponse {
   oneof result {
-    Empty success = 1;
-    GolemError failure = 2;
+    golem.common.Empty success = 1;
+    golem.common.GolemError failure = 2;
   }
 }

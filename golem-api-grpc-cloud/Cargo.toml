@@ -30,4 +30,5 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [build-dependencies]
+golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 tonic-build = "0.9"

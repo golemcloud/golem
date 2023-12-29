@@ -93,8 +93,8 @@ pub struct CurrentResourceLimits {
     pub max_memory: usize,
 }
 
-impl From<golem_api_grpc::proto::golem::ResourceLimits> for CurrentResourceLimits {
-    fn from(value: golem_api_grpc::proto::golem::ResourceLimits) -> Self {
+impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResourceLimits {
+    fn from(value: golem_api_grpc::proto::golem::common::ResourceLimits) -> Self {
         Self {
             fuel: value.available_fuel,
             max_memory: value.max_memory_per_worker as usize,

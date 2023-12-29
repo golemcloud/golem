@@ -22,7 +22,7 @@ pub trait InvocationKeyService {
         &self,
         worker_id: &WorkerId,
         key: &InvocationKey,
-        vals: Result<Vec<golem::Val>, GolemError>,
+        vals: Result<Vec<golem::common::Val>, GolemError>,
     );
     fn interrupt_key(&self, worker_id: &WorkerId, key: &InvocationKey);
     fn resume_key(&self, worker_id: &WorkerId, key: &InvocationKey);
@@ -44,8 +44,10 @@ pub struct InvocationKeyServiceDefault {
 #[derive(Debug)]
 struct State {
     pending_keys: std::collections::HashMap<(WorkerId, InvocationKey), PendingStatus>,
-    confirmed_keys:
-        std::collections::HashMap<(WorkerId, InvocationKey), Result<Vec<golem::Val>, GolemError>>,
+    confirmed_keys: std::collections::HashMap<
+        (WorkerId, InvocationKey),
+        Result<Vec<golem::common::Val>, GolemError>,
+    >,
 }
 
 #[derive(Clone, Debug)]
@@ -68,7 +70,7 @@ pub enum LookupResult {
     Invalid,
     Pending,
     Interrupted,
-    Complete(Result<Vec<golem::Val>, GolemError>),
+    Complete(Result<Vec<golem::common::Val>, GolemError>),
 }
 
 impl Default for InvocationKeyServiceDefault {
@@ -139,7 +141,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
         &self,
         worker_id: &WorkerId,
         key: &InvocationKey,
-        vals: Result<Vec<golem::Val>, GolemError>,
+        vals: Result<Vec<golem::common::Val>, GolemError>,
     ) {
         self.cleanup();
         let key = (worker_id.clone(), key.clone());
@@ -215,7 +217,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
 
 #[cfg(test)]
 mod tests {
-    use golem::{val, Val};
+    use golem::common::{val, Val};
     use golem_api_grpc::proto::golem;
     use golem_common::model::{TemplateId, WorkerId};
 

@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package golem.common;
+
+import "golem/common/export_function.proto";
+import "golem/common/export_instance.proto";
+
+message Export {
+  oneof export {
+    ExportInstance instance = 1;
+    ExportFunction function = 2;
+  }
+}

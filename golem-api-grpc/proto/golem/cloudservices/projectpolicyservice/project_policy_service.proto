@@ -2,13 +2,13 @@ syntax = "proto3";
 
 package golem.cloudservices.projectpolicyservice;
 
-import public "golem/empty.proto";
-import public "golem/error_body.proto";
-import public "golem/project_policy.proto";
-import public "golem/project_policy_data.proto";
-import public "golem/project_policy_error.proto";
-import public "golem/project_policy_id.proto";
-import public "golem/token_secret.proto";
+import public "golem/common/empty.proto";
+import public "golem/common/error_body.proto";
+import public "golem/common/project_policy.proto";
+import public "golem/common/project_policy_data.proto";
+import public "golem/common/project_policy_error.proto";
+import public "golem/common/project_policy_id.proto";
+import public "golem/common/token_secret.proto";
 
 service ProjectPolicyService {
   rpc CreateProjectPolicy (CreateProjectPolicyRequest) returns (CreateProjectPolicyResponse);
@@ -16,26 +16,26 @@ service ProjectPolicyService {
 }
 
 message CreateProjectPolicyRequest {
-  ProjectPolicyData projectPolicyData = 1;
-  TokenSecret tokenSecret = 2;
+  golem.common.ProjectPolicyData projectPolicyData = 1;
+  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message CreateProjectPolicyResponse {
   oneof result {
-    ProjectPolicy success = 1;
-    ProjectPolicyError error = 2;
+    golem.common.ProjectPolicy success = 1;
+    golem.common.ProjectPolicyError error = 2;
   }
 }
 
 message GetProjectPolicyRequest {
-  ProjectPolicyId projectPolicyId = 1;
-  TokenSecret tokenSecret = 2;
+  golem.common.ProjectPolicyId projectPolicyId = 1;
+  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetProjectPolicyResponse {
   oneof result {
-    ProjectPolicy success = 1;
-    ProjectPolicyError error = 2;
+    golem.common.ProjectPolicy success = 1;
+    golem.common.ProjectPolicyError error = 2;
   }
 }
 

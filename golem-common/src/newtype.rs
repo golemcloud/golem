@@ -45,10 +45,12 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl TryFrom<golem_api_grpc::proto::golem::$name> for $name {
+        impl TryFrom<golem_api_grpc::proto::golem::common::$name> for $name {
             type Error = String;
 
-            fn try_from(value: golem_api_grpc::proto::golem::$name) -> Result<Self, Self::Error> {
+            fn try_from(
+                value: golem_api_grpc::proto::golem::common::$name,
+            ) -> Result<Self, Self::Error> {
                 Ok(Self(
                     value
                         .value
@@ -58,9 +60,9 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl From<$name> for golem_api_grpc::proto::golem::$name {
+        impl From<$name> for golem_api_grpc::proto::golem::common::$name {
             fn from(value: $name) -> Self {
-                golem_api_grpc::proto::golem::$name {
+                golem_api_grpc::proto::golem::common::$name {
                     value: Some(value.0.into()),
                 }
             }

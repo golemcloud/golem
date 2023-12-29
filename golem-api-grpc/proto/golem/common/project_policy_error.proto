@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package golem.common;
+
+import "golem/common/error_body.proto";
+
+message ProjectPolicyError {
+  oneof error {
+    ErrorsBody bad_request = 1;
+    ErrorBody unauthorized = 2;
+    ErrorBody limit_exceeded = 3;
+    ErrorBody not_found = 4;
+    ErrorBody internal_error = 5;
+  }
+}

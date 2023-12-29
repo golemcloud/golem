@@ -13,7 +13,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .include_file("mod.rs")
         .compile(
             &[
-                "proto/golem/cloudservices/accountservice/account_service.proto",
+                "proto/golem/common/account.proto",
+                "proto/golem/common/account_error.proto",
+                "proto/golem/common/account_data.proto",
+                "proto/golem/common/empty.proto",
+                "proto/golem/common/plan.proto",
+                // "proto/golem/cloudservices/accountservice/account_service.proto",
                 "proto/golem/cloudservices/accountsummaryservice/account_summary_service.proto",
                 "proto/golem/cloudservices/grantservice/grant_service.proto",
                 "proto/golem/cloudservices/limitsservice/limits_service.proto",

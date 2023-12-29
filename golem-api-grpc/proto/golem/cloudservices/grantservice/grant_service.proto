@@ -2,11 +2,11 @@ syntax = "proto3";
 
 package golem.cloudservices.grantservice;
 
-import public "golem/account_id.proto";
-import public "golem/empty.proto";
-import public "golem/grant_error.proto";
-import public "golem/role.proto";
-import public "golem/token_secret.proto";
+import public "golem/common/account_id.proto";
+import public "golem/common/empty.proto";
+import public "golem/common/grant_error.proto";
+import public "golem/common/role.proto";
+import public "golem/common/token_secret.proto";
 
 service GrantService {
   rpc GetGrants (GetGrantsRequest) returns (GetGrantsResponse);
@@ -16,56 +16,56 @@ service GrantService {
 }
 
 message GetGrantsRequest {
-  AccountId accountId = 1;
-  TokenSecret tokenSecret = 2;
+  golem.common.AccountId accountId = 1;
+  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetGrantsResponse {
   oneof result {
     GetGrantsSuccessResponse success = 1;
-    GrantError error = 2;
+    golem.common.GrantError error = 2;
   }
 }
 
 message GetGrantsSuccessResponse {
-  repeated Role roles = 1;
+  repeated golem.common.Role roles = 1;
 }
 
 message DeleteGrantRequest {
-  AccountId accountId = 1;
-  Role role = 2;
-  TokenSecret tokenSecret = 3;
+  golem.common.AccountId accountId = 1;
+  golem.common.Role role = 2;
+  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message DeleteGrantResponse {
   oneof result {
-    Empty success = 1;
-    GrantError error = 2;
+    golem.common.Empty success = 1;
+    golem.common.GrantError error = 2;
   }
 }
 
 message GetGrantRequest {
-  AccountId accountId = 1;
-  Role role = 2;
-  TokenSecret tokenSecret = 3;
+  golem.common.AccountId accountId = 1;
+  golem.common.Role role = 2;
+  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message GetGrantResponse {
   oneof result {
-    Role role = 1;
-    GrantError error = 2;
+    golem.common.Role role = 1;
+    golem.common.GrantError error = 2;
   }
 }
 
 message PutGrantRequest {
-  AccountId accountId = 1;
-  Role role = 2;
-  TokenSecret tokenSecret = 3;
+  golem.common.AccountId accountId = 1;
+  golem.common.Role role = 2;
+  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message PutGrantResponse {
   oneof result {
-    Role role = 1;
-    GrantError error = 2;
+    golem.common.Role role = 1;
+    golem.common.GrantError error = 2;
   }
 }

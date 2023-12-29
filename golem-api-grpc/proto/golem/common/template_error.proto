@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package golem.common;
+
+import "golem/common/error_body.proto";
+
+message TemplateError {
+  oneof error {
+    ErrorsBody bad_request = 1;
+    ErrorBody unauthorized = 2;
+    ErrorBody limit_exceeded = 3;
+    ErrorBody not_found = 4;
+    ErrorBody already_exists = 5;
+    ErrorBody internal_error = 6;
+  }
+}

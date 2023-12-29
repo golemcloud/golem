@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package golem.common;
+
+
+enum CallingConvention {
+  COMPONENT = 0;
+  STDIO = 1;
+  STDIO_EVENTLOOP = 2;
+}

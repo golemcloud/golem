@@ -1862,6 +1862,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-api-grpc-cloud"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bincode 2.0.0-rc.3",
+ "bytes",
+ "dashmap",
+ "derive_more",
+ "futures-core",
+ "golem-api-grpc",
+ "humantime-serde",
+ "iso8601-timestamp",
+ "prost 0.12.3",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "golem-common"
 version = "0.0.0"
 dependencies = [

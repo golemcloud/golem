@@ -2,12 +2,12 @@ syntax = "proto3";
 
 package golem.cloudservices.limitsservice;
 
-import public "golem/account_id.proto";
-import public "golem/empty.proto";
-import public "golem/batch_update_resource_limits.proto";
-import public "golem/limits_error.proto";
-import public "golem/resource_limits.proto";
-import public "golem/token_secret.proto";
+import public "golem/common/account_id.proto";
+import public "golem/common/empty.proto";
+import public "golem/common/batch_update_resource_limits.proto";
+import public "golem/common/limits_error.proto";
+import public "golem/common/resource_limits.proto";
+import public "golem/common/token_secret.proto";
 
 service LimitsService {
   rpc GetLimits (GetLimitsRequest) returns (GetLimitsResponse);
@@ -15,26 +15,26 @@ service LimitsService {
 }
 
 message GetLimitsRequest {
-  AccountId accountId = 1;
-  TokenSecret tokenSecret = 2;
+  golem.common.AccountId accountId = 1;
+  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetLimitsResponse {
   oneof result {
-    ResourceLimits success = 1;
-    LimitsError error = 2;
+    golem.common.ResourceLimits success = 1;
+    golem.common.LimitsError error = 2;
   }
 }
 
 message BatchUpdateLimitsRequest {
-  BatchUpdateResourceLimits batchUpdateResourceLimits = 1;
-  TokenSecret tokenSecret = 2;
+  golem.common.BatchUpdateResourceLimits batchUpdateResourceLimits = 1;
+  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message BatchUpdateLimitsResponse {
   oneof result {
-    Empty success = 1;
-    LimitsError error = 2;
+    golem.common.Empty success = 1;
+    golem.common.LimitsError error = 2;
   }
 }
 

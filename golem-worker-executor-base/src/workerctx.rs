@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_api_grpc::proto::golem::Val;
+use golem_api_grpc::proto::golem::common::Val;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus,
