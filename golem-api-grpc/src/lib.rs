@@ -32,7 +32,7 @@ pub mod proto {
             get_project_actions_response, GetProjectActionsResponse,
             GetProjectActionsSuccessResponse,
         };
-        use crate::proto::golem::ProjectAction;
+        use crate::proto::golem::common::ProjectAction;
 
         #[test]
         fn test_uuid() {

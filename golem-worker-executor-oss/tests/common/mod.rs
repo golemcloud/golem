@@ -9,7 +9,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     ConnectWorkerRequest, CreateWorkerRequest, GetInvocationKeyRequest,
     InvokeAndAwaitWorkerRequest,
 };
-use golem_api_grpc::proto::golem::{
+use golem_api_grpc::proto::golem::common::{
     log_event, val, CallingConvention, LogEvent, StdOutLog, Val, ValList, ValRecord,
 };
 use golem_common::model::{AccountId, TemplateId, WorkerId};
