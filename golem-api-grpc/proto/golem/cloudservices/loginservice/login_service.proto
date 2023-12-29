@@ -6,7 +6,6 @@ import "golem/common/empty.proto";
 import "golem/common/login_error.proto";
 import "golem/common/o_auth2_data.proto";
 import "golem/common/token.proto";
-import "golem/common/token_secret.proto";
 import "golem/common/unsafe_token.proto";
 
 service LoginService {
@@ -47,7 +46,6 @@ message OAuth2Response {
 }
 
 message CurrentTokenRequest {
-  golem.common.TokenSecret tokenSecret = 1;
 }
 
 message CurrentTokenResponse {

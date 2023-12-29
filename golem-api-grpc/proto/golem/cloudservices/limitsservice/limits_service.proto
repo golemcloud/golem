@@ -7,7 +7,6 @@ import public "golem/common/empty.proto";
 import public "golem/common/batch_update_resource_limits.proto";
 import public "golem/common/limits_error.proto";
 import public "golem/common/resource_limits.proto";
-import public "golem/common/token_secret.proto";
 
 service LimitsService {
   rpc GetLimits (GetLimitsRequest) returns (GetLimitsResponse);
@@ -16,7 +15,6 @@ service LimitsService {
 
 message GetLimitsRequest {
   golem.common.AccountId accountId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetLimitsResponse {
@@ -28,7 +26,6 @@ message GetLimitsResponse {
 
 message BatchUpdateLimitsRequest {
   golem.common.BatchUpdateResourceLimits batchUpdateResourceLimits = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message BatchUpdateLimitsResponse {

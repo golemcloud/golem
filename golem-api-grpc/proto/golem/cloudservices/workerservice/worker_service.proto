@@ -9,7 +9,6 @@ import public "golem/common/invocation_key.proto";
 import public "golem/common/invoke_parameters.proto";
 import public "golem/common/invoke_result.proto";
 import public "golem/common/invoke_result_json.proto";
-import public "golem/common/token_secret.proto";
 import public "golem/common/versioned_worker_id.proto";
 import public "golem/common/worker_error.proto";
 import public "golem/common/worker_metadata.proto";
@@ -41,7 +40,6 @@ message LaunchNewWorkerRequest {
   string name = 2;
   repeated string args = 3;
   map<string, string> env = 4;
-  golem.common.TokenSecret tokenSecret = 5;
 }
 
 message LaunchNewWorkerResponse {
@@ -54,7 +52,6 @@ message LaunchNewWorkerResponse {
 message CompletePromiseRequest {
   golem.common.WorkerId workerId = 1;
   golem.common.CompleteParameters completeParameters = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message CompletePromiseResponse {
@@ -66,7 +63,6 @@ message CompletePromiseResponse {
 
 message DeleteWorkerRequest {
   golem.common.WorkerId workerId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message DeleteWorkerResponse {
@@ -78,7 +74,6 @@ message DeleteWorkerResponse {
 
 message GetWorkerMetadataRequest {
   golem.common.WorkerId workerId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetWorkerMetadataResponse {
@@ -91,7 +86,6 @@ message GetWorkerMetadataResponse {
 message InterruptWorkerRequest {
   golem.common.WorkerId workerId = 1;
   bool recoverImmediately = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message InterruptWorkerResponse {
@@ -107,7 +101,6 @@ message InvokeAndAwaitRequest {
   string function = 3;
   golem.common.InvokeParameters invokeParameters = 4;
   golem.common.CallingConvention callingConvention = 5;
-  golem.common.TokenSecret tokenSecret = 6;
 }
 
 // Temporary
@@ -117,7 +110,6 @@ message InvokeAndAwaitRequestJson {
   string function = 3;
   string invokeParametersJson = 4;
   golem.common.CallingConvention callingConvention = 5;
-  golem.common.TokenSecret tokenSecret = 6;
 }
 
 message InvokeAndAwaitResponse {
@@ -139,7 +131,6 @@ message InvokeRequest {
   golem.common.WorkerId workerId = 1;
   string function = 2;
   golem.common.InvokeParameters invokeParameters = 3;
-  golem.common.TokenSecret tokenSecret = 4;
 }
 
 // Temporary
@@ -147,7 +138,6 @@ message InvokeRequestJson {
   golem.common.WorkerId workerId = 1;
   string function = 2;
   string invokeParametersJson = 3;
-  golem.common.TokenSecret tokenSecret = 4;
 }
 
 message InvokeResponse {
@@ -159,7 +149,6 @@ message InvokeResponse {
 
 message GetInvocationKeyRequest {
   golem.common.WorkerId workerId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetInvocationKeyResponse {
@@ -171,7 +160,6 @@ message GetInvocationKeyResponse {
 
 message ResumeWorkerRequest {
   golem.common.WorkerId workerId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message ResumeWorkerResponse {
@@ -183,7 +171,6 @@ message ResumeWorkerResponse {
 
 message GetWorkerByIdRequest {
   golem.common.WorkerId workerId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetWorkerByIdResponse {
@@ -195,6 +182,5 @@ message GetWorkerByIdResponse {
 
 message ConnectWorkerRequest {
   golem.common.WorkerId worker_id = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 

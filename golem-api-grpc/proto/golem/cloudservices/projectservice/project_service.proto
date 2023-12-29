@@ -7,7 +7,6 @@ import public "golem/common/project.proto";
 import public "golem/common/project_error.proto";
 import public "golem/common/project_data_request.proto";
 import public "golem/common/project_id.proto";
-import public "golem/common/token_secret.proto";
 import public "golem/common/project_action.proto";
 
 service ProjectService {
@@ -20,7 +19,6 @@ service ProjectService {
 }
 
 message GetDefaultProjectRequest {
-  golem.common.TokenSecret tokenSecret = 1;
 }
 
 message GetDefaultProjectResponse {
@@ -32,7 +30,6 @@ message GetDefaultProjectResponse {
 
 message GetProjectsRequest {
   optional string projectName = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetProjectsResponse {
@@ -48,7 +45,6 @@ message GetProjectsSuccessResponse {
 
 message CreateProjectRequest {
   golem.common.ProjectDataRequest projectDataRequest = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message CreateProjectResponse {
@@ -64,7 +60,6 @@ message CreateProjectSuccessResponse {
 
 message DeleteProjectRequest {
   golem.common.ProjectId projectId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message DeleteProjectResponse {
@@ -76,7 +71,6 @@ message DeleteProjectResponse {
 
 message GetProjectRequest {
   golem.common.ProjectId projectId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetProjectResponse {
@@ -88,7 +82,6 @@ message GetProjectResponse {
 
 message GetProjectActionsRequest {
   golem.common.ProjectId projectId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetProjectActionsResponse {

@@ -7,7 +7,6 @@ import public "golem/common/project_id.proto";
 import public "golem/common/template.proto";
 import public "golem/common/template_error.proto";
 import public "golem/common/template_id.proto";
-import public "golem/common/token_secret.proto";
 
 service TemplateService {
   rpc GetTemplates (GetTemplatesRequest) returns (GetTemplatesResponse);
@@ -21,7 +20,6 @@ service TemplateService {
 message GetTemplatesRequest {
   golem.common.ProjectId projectId = 1;
   optional string templateName = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message GetTemplatesResponse {
@@ -45,7 +43,6 @@ message CreateTemplateRequest {
 message CreateTemplateRequestHeader {
   golem.common.ProjectId projectId = 1;
   string templateName = 2;
-  golem.common.TokenSecret tokenSecret = 4;
 }
 
 message CreateTemplateRequestChunk {
@@ -62,7 +59,6 @@ message CreateTemplateResponse {
 message DownloadTemplateRequest {
   golem.common.TemplateId templateId = 1;
   optional int32 version = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message DownloadTemplateResponse {
@@ -74,7 +70,6 @@ message DownloadTemplateResponse {
 
 message GetTemplateRequest {
   golem.common.TemplateId templateId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetTemplateResponse {
@@ -90,7 +85,6 @@ message GetTemplateSuccessResponse {
 
 message GetLatestTemplateVersionRequest {
   golem.common.TemplateId templateId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetLatestTemplateVersionResponse {
@@ -109,7 +103,6 @@ message UpdateTemplateRequest {
 
 message UpdateTemplateRequestHeader {
   golem.common.TemplateId templateId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message UpdateTemplateRequestChunk {

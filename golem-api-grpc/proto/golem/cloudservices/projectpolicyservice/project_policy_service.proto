@@ -8,7 +8,6 @@ import public "golem/common/project_policy.proto";
 import public "golem/common/project_policy_data.proto";
 import public "golem/common/project_policy_error.proto";
 import public "golem/common/project_policy_id.proto";
-import public "golem/common/token_secret.proto";
 
 service ProjectPolicyService {
   rpc CreateProjectPolicy (CreateProjectPolicyRequest) returns (CreateProjectPolicyResponse);
@@ -17,7 +16,6 @@ service ProjectPolicyService {
 
 message CreateProjectPolicyRequest {
   golem.common.ProjectPolicyData projectPolicyData = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message CreateProjectPolicyResponse {
@@ -29,7 +27,6 @@ message CreateProjectPolicyResponse {
 
 message GetProjectPolicyRequest {
   golem.common.ProjectPolicyId projectPolicyId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetProjectPolicyResponse {

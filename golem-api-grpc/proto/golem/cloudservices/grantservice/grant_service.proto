@@ -6,7 +6,6 @@ import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
 import public "golem/common/grant_error.proto";
 import public "golem/common/role.proto";
-import public "golem/common/token_secret.proto";
 
 service GrantService {
   rpc GetGrants (GetGrantsRequest) returns (GetGrantsResponse);
@@ -17,7 +16,6 @@ service GrantService {
 
 message GetGrantsRequest {
   golem.common.AccountId accountId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetGrantsResponse {
@@ -34,7 +32,6 @@ message GetGrantsSuccessResponse {
 message DeleteGrantRequest {
   golem.common.AccountId accountId = 1;
   golem.common.Role role = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message DeleteGrantResponse {
@@ -47,7 +44,6 @@ message DeleteGrantResponse {
 message GetGrantRequest {
   golem.common.AccountId accountId = 1;
   golem.common.Role role = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message GetGrantResponse {
@@ -60,7 +56,6 @@ message GetGrantResponse {
 message PutGrantRequest {
   golem.common.AccountId accountId = 1;
   golem.common.Role role = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message PutGrantResponse {

@@ -6,7 +6,6 @@ import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
 import public "golem/common/create_token_dto.proto";
 import public "golem/common/token.proto";
-import public "golem/common/token_secret.proto";
 import public "golem/common/token_id.proto";
 import public "golem/common/token_error.proto";
 import public "golem/common/unsafe_token.proto";
@@ -20,7 +19,6 @@ service TokenService {
 
 message GetTokensRequest {
   golem.common.AccountId accountId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetTokensResponse {
@@ -37,7 +35,6 @@ message GetTokensSuccessResponse {
 message CreateTokenRequest {
   golem.common.AccountId accountId = 1;
   golem.common.CreateTokenDTO createTokenDTO = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message CreateTokenResponse {
@@ -50,7 +47,6 @@ message CreateTokenResponse {
 message DeleteTokenRequest {
   golem.common.AccountId accountId = 1;
   golem.common.TokenId tokenId = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message DeleteTokenResponse {
@@ -63,7 +59,6 @@ message DeleteTokenResponse {
 message GetTokenRequest {
   golem.common.AccountId accountId = 1;
   golem.common.TokenId tokenId = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message GetTokenResponse {

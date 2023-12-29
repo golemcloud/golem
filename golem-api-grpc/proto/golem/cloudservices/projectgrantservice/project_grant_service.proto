@@ -8,7 +8,6 @@ import public "golem/common/project_id.proto";
 import public "golem/common/project_grant.proto";
 import public "golem/common/project_grant_error.proto";
 import public "golem/common/project_grant_data_request.proto";
-import public "golem/common/token_secret.proto";
 
 service ProjectGrantService {
   rpc GetProjectGrants (GetProjectGrantsRequest) returns (GetProjectGrantsResponse);
@@ -19,7 +18,6 @@ service ProjectGrantService {
 
 message GetProjectGrantsRequest {
   golem.common.ProjectId projectId = 1;
-  golem.common.TokenSecret tokenSecret = 2;
 }
 
 message GetProjectGrantsResponse {
@@ -36,7 +34,6 @@ message GetProjectGrantsSuccessResponse {
 message DeleteProjectGrantRequest {
   golem.common.ProjectId projectId = 1;
   golem.common.GrantId grantId = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message DeleteProjectGrantResponse {
@@ -49,7 +46,6 @@ message DeleteProjectGrantResponse {
 message GetProjectGrantRequest {
   golem.common.ProjectId projectId = 1;
   golem.common.GrantId grantId = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message GetProjectGrantResponse {
@@ -62,7 +58,6 @@ message GetProjectGrantResponse {
 message CreateProjectGrantRequest {
   golem.common.ProjectId projectId = 1;
   golem.common.ProjectGrantDataRequest data = 2;
-  golem.common.TokenSecret tokenSecret = 3;
 }
 
 message CreateProjectGrantResponse {
