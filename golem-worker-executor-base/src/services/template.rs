@@ -17,6 +17,7 @@ use golem_common::model::TemplateId;
 use golem_common::retries::with_retries;
 use http::Uri;
 use prost::Message;
+use tonic::Request;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 use wasmtime::component::Component;
@@ -235,16 +236,19 @@ async fn download_via_grpc(
                     .await?
                     .max_decoding_message_size(50 * 1024 * 1024);
 
-                let response = client
-                    .download_template(DownloadTemplateRequest {
-                        template_id: Some(template_id.clone().into()),
-                        version: Some(template_version),
-                        token_secret: Some(TokenSecret {
-                            value: Some((*access_token).into()),
-                        }),
-                    })
-                    .await?
-                    .into_inner();
+                let mut request = Request::new(DownloadTemplateRequest {
+                    template_id: Some(template_id.clone().into()),
+                    version: Some(template_version),
+                    token_secret: Some(TokenSecret {
+                        value: Some((*access_token).into()),
+                    }),
+                });
+                request.metadata_mut().insert(
+                    "authorization",
+                    format!("Bearer {}", access_token).parse().unwrap(),
+                );
+
+                let response = client.download_template(request).await?.into_inner();
 
                 let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
                 let bytes = chunks
@@ -292,13 +296,20 @@ async fn get_latest_version_via_grpc(
         |(endpoint, template_id, access_token)| {
             Box::pin(async move {
                 let mut client = TemplateServiceClient::connect(endpoint.clone()).await?;
+
+                let mut request = Request::new(GetLatestTemplateVersionRequest {
+                    template_id: Some(template_id.clone().into()),
+                    token_secret: Some(TokenSecret {
+                        value: Some((*access_token).into()),
+                    }),
+                });
+                request.metadata_mut().insert(
+                    "authorization",
+                    format!("Bearer {}", access_token).parse().unwrap(),
+                );
+
                 let response = client
-                    .get_latest_template_version(GetLatestTemplateVersionRequest {
-                        template_id: Some(template_id.clone().into()),
-                        token_secret: Some(TokenSecret {
-                            value: Some((*access_token).into()),
-                        }),
-                    })
+                    .get_latest_template_version(request)
                     .await?
                     .into_inner();
 
