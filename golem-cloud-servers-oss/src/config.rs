@@ -44,3 +44,17 @@ impl Default for CloudServiceConfig {
         Self::new()
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    pub fn config_is_loadable1() {
+        std::env::set_var("GOLEM__ROUTING_TABLE__HOST", "localhost");
+        std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
+        std::env::set_var("GOLEM__TEMPLATES__STORE__ROOT_PATH", "template_store");
+
+        // The rest can be loaded from the toml
+        let _ = super::CloudServiceConfig::new();
+    }
+}

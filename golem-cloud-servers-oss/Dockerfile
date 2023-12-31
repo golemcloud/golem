@@ -1,0 +1,49 @@
+FROM rust:1.74.0-bullseye as build
+
+RUN apt-get update && apt-get install -y unzip \
+    && PROTOC_ZIP=protoc-3.15.0-linux-x86_64.zip \
+    && curl -OL https://github.com/google/protobuf/releases/download/v3.15.0/$PROTOC_ZIP \
+    && unzip -o $PROTOC_ZIP -d /usr/local bin/protoc \
+    && rm -f $PROTOC_ZIP
+
+WORKDIR /app
+COPY . /app
+
+WORKDIR /app/cloud-servers-rust
+
+# Ensure base-image dependencies are compatible with worker-executor dependencies
+#RUN chmod +x pre-baked-image-check.sh
+#RUN set -e && ./pre-baked-image-check.sh
+
+RUN cargo build -p cloud-server --release --target-dir=/baseApp/target
+
+FROM debian:bullseye-slim
+
+WORKDIR app/
+
+COPY --from=build /baseApp/target/release/cloud-server .
+COPY --from=build /app/cloud-servers-rust/config/cloud-server.toml ./config/cloud-server.toml
+
+RUN apt-get update && apt-get install -y libssl-dev
+RUN apt-get update && apt-get install -y ca-certificates
+RUN update-ca-certificates
+
+ARG SHARD_MANAGER_HOST
+ARG SHARD_MANAGER_PORT
+ARG TEMPLATES__STORE__ROOT_PATH
+
+
+ENV ENVIRONMENT=$ENVIRONMENT \
+    RUST_LOG="debug,h2=warn,hyper=warn,tower=warn" \
+    WASMTIME_BACKTRACE_DETAILS=1 \
+    RUST_BACKTRACE=1 \
+    GOLEM__TEMPLATES__STORE__ROOT_PATH=$TEMPLATES__STORE__ROOT_PATH \
+    GOLEM__ROUTING_TABLE__HOST=$SHARD_MANAGER_HOST \
+    GOLEM__ROUTING_TABLE__PORT=$SHARD_MANAGER_PORT \
+    GOLEM__GRPC_PORT=9090 \
+    GOLEM__HTTP_PORT=8080
+
+EXPOSE 8080
+EXPOSE 9090
+
+ENTRYPOINT ["./cloudserver"]
