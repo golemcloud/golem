@@ -1,0 +1,38 @@
+[package]
+name = "cloud-server-oss"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cloud-server-oss"
+path = "src/server.rs"
+
+[[bin]]
+name = "cloud-servers-oss-yaml"
+path = "src/openapi_yaml.rs"
+
+[lib]
+
+[dependencies]
+golem-common = { path = "../golem-common", version = "0.0.0" }
+cloud-servers-lib = { path = "../cloud-servers-lib" }
+
+poem = { workspace = true }
+poem-openapi = { workspace = true }
+tonic = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = "0.7.10"
+futures-util = { workspace = true }
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "postgres", "uuid" , "migrate", "chrono"] }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+figment = { workspace = true }
+tap = "1.0.1"
+golem-wasm-ast = "0.1.1"
+mappable-rc = "0.1.1"
+
+

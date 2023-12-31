@@ -1,0 +1,17 @@
+http_port = 8081
+grpc_port = 9091
+
+[db]
+max_connections = 10
+host = "localhost"
+port = 5432
+database = "golem"
+#username
+#password
+
+[templates.store]
+object_prefix = ""
+
+[routing_table]
+# host
+# port
