@@ -9,11 +9,7 @@ RUN apt-get update && apt-get install -y unzip \
 WORKDIR /app
 COPY . /app
 
-WORKDIR /app/cloud-servers-rust
-
-# Ensure base-image dependencies are compatible with worker-executor dependencies
-#RUN chmod +x pre-baked-image-check.sh
-#RUN set -e && ./pre-baked-image-check.sh
+WORKDIR /app/golem-cloud-servers-oss
 
 RUN cargo build -p cloud-server --release --target-dir=/baseApp/target
 
@@ -22,7 +18,7 @@ FROM debian:bullseye-slim
 WORKDIR app/
 
 COPY --from=build /baseApp/target/release/cloud-server .
-COPY --from=build /app/cloud-servers-rust/config/cloud-server.toml ./config/cloud-server.toml
+COPY --from=build /app/golem-cloud-servers-oss/config/cloud-server.toml ./config/cloud-server.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates
