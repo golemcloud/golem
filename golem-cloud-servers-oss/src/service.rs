@@ -33,17 +33,17 @@ impl Services {
         );
 
         let routing_table_service: Arc<
-            dyn cloud_servers_base::routing_table::RoutingTableService + Send + Sync,
+            dyn golem_cloud_servers_base::routing_table::RoutingTableService + Send + Sync,
         > = Arc::new(
-            cloud_servers_base::routing_table::RoutingTableServiceDefault::new(
+            golem_cloud_servers_base::routing_table::RoutingTableServiceDefault::new(
                 config.routing_table.clone(),
             ),
         );
 
         let worker_executor_clients: Arc<
-            dyn cloud_servers_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
+            dyn golem_cloud_servers_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
         > = Arc::new(
-            cloud_servers_base::worker_executor_clients::WorkerExecutorClientsDefault::default(),
+            golem_cloud_servers_base::worker_executor_clients::WorkerExecutorClientsDefault::default(),
         );
 
         let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
