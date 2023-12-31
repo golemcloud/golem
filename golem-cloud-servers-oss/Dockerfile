@@ -11,13 +11,13 @@ COPY . /app
 
 WORKDIR /app/golem-cloud-servers-oss
 
-RUN cargo build -p cloud-server --release --target-dir=/baseApp/target
+RUN cargo build -p cloud-server-oss --release --target-dir=/baseApp/target
 
 FROM debian:bullseye-slim
 
 WORKDIR app/
 
-COPY --from=build /baseApp/target/release/cloud-server .
+COPY --from=build /baseApp/target/release/cloud-server-oss .
 COPY --from=build /app/golem-cloud-servers-oss/config/cloud-server.toml ./config/cloud-server.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
@@ -42,4 +42,4 @@ ENV ENVIRONMENT=$ENVIRONMENT \
 EXPOSE 8080
 EXPOSE 9090
 
-ENTRYPOINT ["./cloudserver"]
+ENTRYPOINT ["./cloud-server-oss"]
