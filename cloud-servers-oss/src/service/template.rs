@@ -689,10 +689,12 @@ mod wasm_converter {
                 Type::Variant(cloud_servers_base::model::TypeVariant {
                     cases: variants
                         .into_iter()
-                        .map(|(name, typ)| cloud_servers_base::model::NameOptionTypePair {
-                            name,
-                            typ: typ.map(|t| Box::new(convert_type(t))),
-                        })
+                        .map(
+                            |(name, typ)| cloud_servers_base::model::NameOptionTypePair {
+                                name,
+                                typ: typ.map(|t| Box::new(convert_type(t))),
+                            },
+                        )
                         .collect(),
                 })
             }
