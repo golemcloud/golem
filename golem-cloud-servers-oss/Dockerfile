@@ -21,6 +21,10 @@ WORKDIR app/
 COPY --from=build /baseApp/target/release/cloud-server-oss .
 COPY --from=build /app/golem-cloud-servers-oss/config/cloud-server.toml ./config/cloud-server.toml
 
+RUN apt-get update && apt-get install -y libssl-dev
+RUN apt-get update && apt-get install -y ca-certificates
+RUN update-ca-certificates
+
 ARG SHARD_MANAGER_HOST
 ARG SHARD_MANAGER_PORT
 ARG TEMPLATES__STORE__ROOT_PATH
