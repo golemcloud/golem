@@ -663,22 +663,30 @@ mod wasm_converter {
             AnalysedType::Tuple(items) => Type::Tuple(golem_cloud_servers_base::model::TypeTuple {
                 items: items.into_iter().map(convert_type).collect(),
             }),
-            AnalysedType::Record(cases) => Type::Record(golem_cloud_servers_base::model::TypeRecord {
-                cases: cases
-                    .into_iter()
-                    .map(|(name, typ)| golem_cloud_servers_base::model::NameTypePair {
-                        name,
-                        typ: Box::new(convert_type(typ)),
-                    })
-                    .collect(),
-            }),
+            AnalysedType::Record(cases) => {
+                Type::Record(golem_cloud_servers_base::model::TypeRecord {
+                    cases: cases
+                        .into_iter()
+                        .map(
+                            |(name, typ)| golem_cloud_servers_base::model::NameTypePair {
+                                name,
+                                typ: Box::new(convert_type(typ)),
+                            },
+                        )
+                        .collect(),
+                })
+            }
             AnalysedType::Flags(cases) => {
                 Type::Flags(golem_cloud_servers_base::model::TypeFlags { cases })
             }
-            AnalysedType::Enum(cases) => Type::Enum(golem_cloud_servers_base::model::TypeEnum { cases }),
-            AnalysedType::Option(inner) => Type::Option(golem_cloud_servers_base::model::TypeOption {
-                inner: Box::new(convert_type(*inner)),
-            }),
+            AnalysedType::Enum(cases) => {
+                Type::Enum(golem_cloud_servers_base::model::TypeEnum { cases })
+            }
+            AnalysedType::Option(inner) => {
+                Type::Option(golem_cloud_servers_base::model::TypeOption {
+                    inner: Box::new(convert_type(*inner)),
+                })
+            }
             AnalysedType::Result { ok, error } => {
                 Type::Result(golem_cloud_servers_base::model::TypeResult {
                     ok: ok.map(|t| Box::new(convert_type(*t))),

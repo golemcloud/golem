@@ -1,6 +1,6 @@
-use golem_cloud_servers_base::routing_table::RoutingTableConfig;
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
+use golem_cloud_servers_base::routing_table::RoutingTableConfig;
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
