@@ -15,14 +15,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .compile(
             &[
                 "proto/golem/cloudservices/accountservice/account_service.proto",
-                // "proto/golem/cloudservices/accountsummaryservice/account_summary_service.proto",
-                // "proto/golem/cloudservices/grantservice/grant_service.proto",
-                // "proto/golem/cloudservices/limitsservice/limits_service.proto",
-                // "proto/golem/cloudservices/loginservice/login_service.proto",
-                // "proto/golem/cloudservices/projectgrantservice/project_grant_service.proto",
-                // "proto/golem/cloudservices/projectpolicyservice/project_policy_service.proto",
-                // "proto/golem/cloudservices/projectservice/project_service.proto",
-                // "proto/golem/cloudservices/tokenservice/token_service.proto",
+                "proto/golem/cloudservices/accountsummaryservice/account_summary_service.proto",
+                "proto/golem/cloudservices/grantservice/grant_service.proto",
+                "proto/golem/cloudservices/limitsservice/limits_service.proto",
+                "proto/golem/cloudservices/loginservice/login_service.proto",
+                "proto/golem/cloudservices/projectgrantservice/project_grant_service.proto",
+                "proto/golem/cloudservices/projectpolicyservice/project_policy_service.proto",
+                "proto/golem/cloudservices/projectservice/project_service.proto",
+                "proto/golem/cloudservices/tokenservice/token_service.proto",
             ],
             &["../golem-api-grpc/proto", "proto"],
         )
