@@ -8,14 +8,14 @@ name = "cloud-server-oss"
 path = "src/server.rs"
 
 [[bin]]
-name = "cloud-servers-oss-yaml"
+name = "cloud-server-oss-yaml"
 path = "src/openapi_yaml.rs"
 
 [lib]
 
 [dependencies]
 golem-common = { path = "../golem-common", version = "0.0.0" }
-golem-cloud-servers-base = { path = "../golem-cloud-servers-base" }
+golem-cloud-server-base = { path = "../golem-cloud-server-base" }
 
 poem = { workspace = true }
 poem-openapi = { workspace = true }

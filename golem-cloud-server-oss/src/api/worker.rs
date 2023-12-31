@@ -11,7 +11,7 @@ use tonic::Status;
 
 use crate::service::template::{TemplateError, TemplateService};
 use crate::service::worker::WorkerService;
-use golem_cloud_servers_base::model::*;
+use golem_cloud_server_base::model::*;
 
 #[derive(ApiResponse)]
 pub enum WorkerError {

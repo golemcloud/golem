@@ -12,7 +12,7 @@ use tracing::{error, info};
 use crate::repo::template::TemplateRepo;
 use crate::repo::RepoError;
 use crate::service::template_object_store::TemplateObjectStore;
-use golem_cloud_servers_base::model::*;
+use golem_cloud_server_base::model::*;
 
 #[derive(Debug, Clone)]
 pub enum TemplateError {
@@ -564,10 +564,10 @@ mod wasm_converter {
     };
     use golem_wasm_ast::metadata::{Producers, ProducersField};
 
-    use golem_cloud_servers_base::model::*;
+    use golem_cloud_server_base::model::*;
 
-    pub fn convert_producers(producer: Producers) -> golem_cloud_servers_base::model::Producers {
-        golem_cloud_servers_base::model::Producers {
+    pub fn convert_producers(producer: Producers) -> golem_cloud_server_base::model::Producers {
+        golem_cloud_server_base::model::Producers {
             fields: producer
                 .fields
                 .into_iter()
@@ -582,7 +582,7 @@ mod wasm_converter {
             values: producer
                 .values
                 .into_iter()
-                .map(|value| golem_cloud_servers_base::model::VersionedName {
+                .map(|value| golem_cloud_server_base::model::VersionedName {
                     name: value.name,
                     version: value.version,
                 })
@@ -644,61 +644,59 @@ mod wasm_converter {
 
     fn convert_type(analysed_type: AnalysedType) -> Type {
         match analysed_type {
-            AnalysedType::Bool => Type::Bool(golem_cloud_servers_base::model::TypeBool),
-            AnalysedType::S8 => Type::S8(golem_cloud_servers_base::model::TypeS8),
-            AnalysedType::U8 => Type::U8(golem_cloud_servers_base::model::TypeU8),
-            AnalysedType::S16 => Type::S16(golem_cloud_servers_base::model::TypeS16),
-            AnalysedType::U16 => Type::U16(golem_cloud_servers_base::model::TypeU16),
-            AnalysedType::S32 => Type::S32(golem_cloud_servers_base::model::TypeS32),
-            AnalysedType::U32 => Type::U32(golem_cloud_servers_base::model::TypeU32),
-            AnalysedType::S64 => Type::S64(golem_cloud_servers_base::model::TypeS64),
-            AnalysedType::U64 => Type::U64(golem_cloud_servers_base::model::TypeU64),
-            AnalysedType::F32 => Type::F32(golem_cloud_servers_base::model::TypeF32),
-            AnalysedType::F64 => Type::F64(golem_cloud_servers_base::model::TypeF64),
-            AnalysedType::Chr => Type::Chr(golem_cloud_servers_base::model::TypeChr),
-            AnalysedType::Str => Type::Str(golem_cloud_servers_base::model::TypeStr),
-            AnalysedType::List(inner) => Type::List(golem_cloud_servers_base::model::TypeList {
+            AnalysedType::Bool => Type::Bool(golem_cloud_server_base::model::TypeBool),
+            AnalysedType::S8 => Type::S8(golem_cloud_server_base::model::TypeS8),
+            AnalysedType::U8 => Type::U8(golem_cloud_server_base::model::TypeU8),
+            AnalysedType::S16 => Type::S16(golem_cloud_server_base::model::TypeS16),
+            AnalysedType::U16 => Type::U16(golem_cloud_server_base::model::TypeU16),
+            AnalysedType::S32 => Type::S32(golem_cloud_server_base::model::TypeS32),
+            AnalysedType::U32 => Type::U32(golem_cloud_server_base::model::TypeU32),
+            AnalysedType::S64 => Type::S64(golem_cloud_server_base::model::TypeS64),
+            AnalysedType::U64 => Type::U64(golem_cloud_server_base::model::TypeU64),
+            AnalysedType::F32 => Type::F32(golem_cloud_server_base::model::TypeF32),
+            AnalysedType::F64 => Type::F64(golem_cloud_server_base::model::TypeF64),
+            AnalysedType::Chr => Type::Chr(golem_cloud_server_base::model::TypeChr),
+            AnalysedType::Str => Type::Str(golem_cloud_server_base::model::TypeStr),
+            AnalysedType::List(inner) => Type::List(golem_cloud_server_base::model::TypeList {
                 inner: Box::new(convert_type(*inner)),
             }),
-            AnalysedType::Tuple(items) => Type::Tuple(golem_cloud_servers_base::model::TypeTuple {
+            AnalysedType::Tuple(items) => Type::Tuple(golem_cloud_server_base::model::TypeTuple {
                 items: items.into_iter().map(convert_type).collect(),
             }),
             AnalysedType::Record(cases) => {
-                Type::Record(golem_cloud_servers_base::model::TypeRecord {
+                Type::Record(golem_cloud_server_base::model::TypeRecord {
                     cases: cases
                         .into_iter()
-                        .map(
-                            |(name, typ)| golem_cloud_servers_base::model::NameTypePair {
-                                name,
-                                typ: Box::new(convert_type(typ)),
-                            },
-                        )
+                        .map(|(name, typ)| golem_cloud_server_base::model::NameTypePair {
+                            name,
+                            typ: Box::new(convert_type(typ)),
+                        })
                         .collect(),
                 })
             }
             AnalysedType::Flags(cases) => {
-                Type::Flags(golem_cloud_servers_base::model::TypeFlags { cases })
+                Type::Flags(golem_cloud_server_base::model::TypeFlags { cases })
             }
             AnalysedType::Enum(cases) => {
-                Type::Enum(golem_cloud_servers_base::model::TypeEnum { cases })
+                Type::Enum(golem_cloud_server_base::model::TypeEnum { cases })
             }
             AnalysedType::Option(inner) => {
-                Type::Option(golem_cloud_servers_base::model::TypeOption {
+                Type::Option(golem_cloud_server_base::model::TypeOption {
                     inner: Box::new(convert_type(*inner)),
                 })
             }
             AnalysedType::Result { ok, error } => {
-                Type::Result(golem_cloud_servers_base::model::TypeResult {
+                Type::Result(golem_cloud_server_base::model::TypeResult {
                     ok: ok.map(|t| Box::new(convert_type(*t))),
                     err: error.map(|t| Box::new(convert_type(*t))),
                 })
             }
             AnalysedType::Variant(variants) => {
-                Type::Variant(golem_cloud_servers_base::model::TypeVariant {
+                Type::Variant(golem_cloud_server_base::model::TypeVariant {
                     cases: variants
                         .into_iter()
                         .map(
-                            |(name, typ)| golem_cloud_servers_base::model::NameOptionTypePair {
+                            |(name, typ)| golem_cloud_server_base::model::NameOptionTypePair {
                                 name,
                                 typ: typ.map(|t| Box::new(convert_type(t))),
                             },

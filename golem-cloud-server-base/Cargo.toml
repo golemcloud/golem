@@ -1,5 +1,5 @@
 [package]
-name = "golem-cloud-servers-base"
+name = "golem-cloud-server-base"
 version = "0.1.0"
 edition = "2021"
 

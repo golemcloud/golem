@@ -26,10 +26,10 @@ use tonic::{Status, Streaming};
 use tracing::{debug, info};
 
 use crate::service::template::{TemplateError, TemplateService};
-use golem_cloud_servers_base::model::*;
-use golem_cloud_servers_base::routing_table::{RoutingTableError, RoutingTableService};
-use golem_cloud_servers_base::typechecker::{TypeCheckIn, TypeCheckOut};
-use golem_cloud_servers_base::worker_executor_clients::WorkerExecutorClients;
+use golem_cloud_server_base::model::*;
+use golem_cloud_server_base::routing_table::{RoutingTableError, RoutingTableService};
+use golem_cloud_server_base::typechecker::{TypeCheckIn, TypeCheckOut};
+use golem_cloud_server_base::worker_executor_clients::WorkerExecutorClients;
 
 pub struct ConnectWorkerStream {
     streaming: Streaming<LogEvent>,
