@@ -1,3 +1,4 @@
+# Make sure you run docker build from the root directory of golem-services. See README.md
 FROM rust:1.74.0-bullseye as build
 
 RUN apt-get update && apt-get install -y unzip \
@@ -19,10 +20,6 @@ WORKDIR app/
 
 COPY --from=build /baseApp/target/release/cloud-server-oss .
 COPY --from=build /app/golem-cloud-servers-oss/config/cloud-server.toml ./config/cloud-server.toml
-
-RUN apt-get update && apt-get install -y libssl-dev
-RUN apt-get update && apt-get install -y ca-certificates
-RUN update-ca-certificates
 
 ARG SHARD_MANAGER_HOST
 ARG SHARD_MANAGER_PORT
