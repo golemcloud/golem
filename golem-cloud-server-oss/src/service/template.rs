@@ -667,12 +667,10 @@ mod wasm_converter {
                 Type::Record(golem_cloud_server_base::model::TypeRecord {
                     cases: cases
                         .into_iter()
-                        .map(
-                            |(name, typ)| golem_cloud_server_base::model::NameTypePair {
-                                name,
-                                typ: Box::new(convert_type(typ)),
-                            },
-                        )
+                        .map(|(name, typ)| golem_cloud_server_base::model::NameTypePair {
+                            name,
+                            typ: Box::new(convert_type(typ)),
+                        })
                         .collect(),
                 })
             }
