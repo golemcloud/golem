@@ -5,6 +5,7 @@ members = [
     "golem-worker-executor-base",
     "golem-worker-executor-oss",
     "golem-common",
+    "cloud-servers-lib"
 ]
 
 exclude = [
