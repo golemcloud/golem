@@ -45,7 +45,6 @@ impl Default for CloudServiceConfig {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     #[test]
