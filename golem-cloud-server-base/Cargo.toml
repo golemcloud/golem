@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 
 poem-openapi = { workspace = true }
 serde = { workspace = true }

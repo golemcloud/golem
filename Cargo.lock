@@ -908,6 +908,7 @@ dependencies = [
  "async-trait",
  "figment",
  "futures-util",
+ "golem-api-grpc",
  "golem-cloud-server-base",
  "golem-common",
  "golem-wasm-ast",
@@ -1844,21 +1845,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "golem-cloud-server-base"
-version = "0.1.0"
+name = "golem-api-grpc"
+version = "0.0.0"
 dependencies = [
  "async-trait",
- "bigdecimal",
- "golem-common",
- "http",
- "hyper 1.0.0-rc.3",
- "num-traits",
- "poem-openapi",
- "proptest",
+ "bincode 2.0.0-rc.3",
+ "bytes",
+ "dashmap",
+ "derive_more",
+ "futures-core",
+ "humantime-serde",
+ "iso8601-timestamp",
+ "prost 0.12.3",
  "serde",
  "serde_json",
+ "tokio",
  "tonic",
+ "tonic-build",
+ "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -1886,6 +1892,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-cloud-server-base"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bigdecimal",
+ "golem-api-grpc",
+ "golem-common",
+ "http",
+ "hyper 1.0.0-rc.3",
+ "num-traits",
+ "poem-openapi",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tonic",
+ "url",
+]
+
+[[package]]
 name = "golem-common"
 version = "0.0.0"
 dependencies = [
@@ -1896,6 +1921,7 @@ dependencies = [
  "derive_more",
  "fred",
  "futures-core",
+ "golem-api-grpc",
  "humantime-serde",
  "iso8601-timestamp",
  "lazy_static",
@@ -1976,6 +2002,7 @@ dependencies = [
  "fred",
  "futures",
  "futures-util",
+ "golem-api-grpc",
  "golem-common",
  "http",
  "http-body 1.0.0-rc.2",
@@ -2019,6 +2046,7 @@ dependencies = [
  "console-subscriber",
  "figment",
  "flume",
+ "golem-api-grpc",
  "golem-common",
  "golem-worker-executor-base",
  "humantime-serde",
