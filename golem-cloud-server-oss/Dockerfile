@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y unzip \
 WORKDIR /app
 COPY . /app
 
-WORKDIR /app/golem-cloud-servers-oss
+WORKDIR /app/golem-cloud-server-oss
 
 RUN cargo build -p cloud-server-oss --release --target-dir=/baseApp/target
 
@@ -19,7 +19,7 @@ FROM debian:bullseye-slim
 WORKDIR app/
 
 COPY --from=build /baseApp/target/release/cloud-server-oss .
-COPY --from=build /app/golem-cloud-servers-oss/config/cloud-server.toml ./config/cloud-server.toml
+COPY --from=build /app/golem-cloud-server-oss/config/cloud-server.toml ./config/cloud-server.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates
