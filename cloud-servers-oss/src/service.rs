@@ -33,17 +33,17 @@ impl Services {
         );
 
         let routing_table_service: Arc<
-            dyn cloud_servers_lib::routing_table::RoutingTableService + Send + Sync,
+            dyn cloud_servers_base::routing_table::RoutingTableService + Send + Sync,
         > = Arc::new(
-            cloud_servers_lib::routing_table::RoutingTableServiceDefault::new(
+            cloud_servers_base::routing_table::RoutingTableServiceDefault::new(
                 config.routing_table.clone(),
             ),
         );
 
         let worker_executor_clients: Arc<
-            dyn cloud_servers_lib::worker_executor_clients::WorkerExecutorClients + Sync + Send,
+            dyn cloud_servers_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
         > = Arc::new(
-            cloud_servers_lib::worker_executor_clients::WorkerExecutorClientsDefault::default(),
+            cloud_servers_base::worker_executor_clients::WorkerExecutorClientsDefault::default(),
         );
 
         let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =

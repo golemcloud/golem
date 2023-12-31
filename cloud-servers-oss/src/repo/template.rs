@@ -8,7 +8,7 @@ use sqlx::{Database, Pool};
 use uuid::Uuid;
 
 use crate::repo::RepoError;
-use cloud_servers_lib::model::*;
+use cloud_servers_base::model::*;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct TemplateRecord {

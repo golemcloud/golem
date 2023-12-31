@@ -26,10 +26,10 @@ use tonic::{Status, Streaming};
 use tracing::{debug, info};
 
 use crate::service::template::{TemplateError, TemplateService};
-use cloud_servers_lib::model::*;
-use cloud_servers_lib::routing_table::{RoutingTableError, RoutingTableService};
-use cloud_servers_lib::typechecker::{TypeCheckIn, TypeCheckOut};
-use cloud_servers_lib::worker_executor_clients::WorkerExecutorClients;
+use cloud_servers_base::model::*;
+use cloud_servers_base::routing_table::{RoutingTableError, RoutingTableService};
+use cloud_servers_base::typechecker::{TypeCheckIn, TypeCheckOut};
+use cloud_servers_base::worker_executor_clients::WorkerExecutorClients;
 
 pub struct ConnectWorkerStream {
     streaming: Streaming<LogEvent>,

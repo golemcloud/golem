@@ -12,7 +12,7 @@ use tracing::{error, info};
 use crate::repo::template::TemplateRepo;
 use crate::repo::RepoError;
 use crate::service::template_object_store::TemplateObjectStore;
-use cloud_servers_lib::model::*;
+use cloud_servers_base::model::*;
 
 #[derive(Debug, Clone)]
 pub enum TemplateError {
@@ -564,10 +564,10 @@ mod wasm_converter {
     };
     use golem_wasm_ast::metadata::{Producers, ProducersField};
 
-    use cloud_servers_lib::model::*;
+    use cloud_servers_base::model::*;
 
-    pub fn convert_producers(producer: Producers) -> cloud_servers_lib::model::Producers {
-        cloud_servers_lib::model::Producers {
+    pub fn convert_producers(producer: Producers) -> cloud_servers_base::model::Producers {
+        cloud_servers_base::model::Producers {
             fields: producer
                 .fields
                 .into_iter()
@@ -582,7 +582,7 @@ mod wasm_converter {
             values: producer
                 .values
                 .into_iter()
-                .map(|value| cloud_servers_lib::model::VersionedName {
+                .map(|value| cloud_servers_base::model::VersionedName {
                     name: value.name,
                     version: value.version,
                 })
@@ -644,52 +644,52 @@ mod wasm_converter {
 
     fn convert_type(analysed_type: AnalysedType) -> Type {
         match analysed_type {
-            AnalysedType::Bool => Type::Bool(cloud_servers_lib::model::TypeBool),
-            AnalysedType::S8 => Type::S8(cloud_servers_lib::model::TypeS8),
-            AnalysedType::U8 => Type::U8(cloud_servers_lib::model::TypeU8),
-            AnalysedType::S16 => Type::S16(cloud_servers_lib::model::TypeS16),
-            AnalysedType::U16 => Type::U16(cloud_servers_lib::model::TypeU16),
-            AnalysedType::S32 => Type::S32(cloud_servers_lib::model::TypeS32),
-            AnalysedType::U32 => Type::U32(cloud_servers_lib::model::TypeU32),
-            AnalysedType::S64 => Type::S64(cloud_servers_lib::model::TypeS64),
-            AnalysedType::U64 => Type::U64(cloud_servers_lib::model::TypeU64),
-            AnalysedType::F32 => Type::F32(cloud_servers_lib::model::TypeF32),
-            AnalysedType::F64 => Type::F64(cloud_servers_lib::model::TypeF64),
-            AnalysedType::Chr => Type::Chr(cloud_servers_lib::model::TypeChr),
-            AnalysedType::Str => Type::Str(cloud_servers_lib::model::TypeStr),
-            AnalysedType::List(inner) => Type::List(cloud_servers_lib::model::TypeList {
+            AnalysedType::Bool => Type::Bool(cloud_servers_base::model::TypeBool),
+            AnalysedType::S8 => Type::S8(cloud_servers_base::model::TypeS8),
+            AnalysedType::U8 => Type::U8(cloud_servers_base::model::TypeU8),
+            AnalysedType::S16 => Type::S16(cloud_servers_base::model::TypeS16),
+            AnalysedType::U16 => Type::U16(cloud_servers_base::model::TypeU16),
+            AnalysedType::S32 => Type::S32(cloud_servers_base::model::TypeS32),
+            AnalysedType::U32 => Type::U32(cloud_servers_base::model::TypeU32),
+            AnalysedType::S64 => Type::S64(cloud_servers_base::model::TypeS64),
+            AnalysedType::U64 => Type::U64(cloud_servers_base::model::TypeU64),
+            AnalysedType::F32 => Type::F32(cloud_servers_base::model::TypeF32),
+            AnalysedType::F64 => Type::F64(cloud_servers_base::model::TypeF64),
+            AnalysedType::Chr => Type::Chr(cloud_servers_base::model::TypeChr),
+            AnalysedType::Str => Type::Str(cloud_servers_base::model::TypeStr),
+            AnalysedType::List(inner) => Type::List(cloud_servers_base::model::TypeList {
                 inner: Box::new(convert_type(*inner)),
             }),
-            AnalysedType::Tuple(items) => Type::Tuple(cloud_servers_lib::model::TypeTuple {
+            AnalysedType::Tuple(items) => Type::Tuple(cloud_servers_base::model::TypeTuple {
                 items: items.into_iter().map(convert_type).collect(),
             }),
-            AnalysedType::Record(cases) => Type::Record(cloud_servers_lib::model::TypeRecord {
+            AnalysedType::Record(cases) => Type::Record(cloud_servers_base::model::TypeRecord {
                 cases: cases
                     .into_iter()
-                    .map(|(name, typ)| cloud_servers_lib::model::NameTypePair {
+                    .map(|(name, typ)| cloud_servers_base::model::NameTypePair {
                         name,
                         typ: Box::new(convert_type(typ)),
                     })
                     .collect(),
             }),
             AnalysedType::Flags(cases) => {
-                Type::Flags(cloud_servers_lib::model::TypeFlags { cases })
+                Type::Flags(cloud_servers_base::model::TypeFlags { cases })
             }
-            AnalysedType::Enum(cases) => Type::Enum(cloud_servers_lib::model::TypeEnum { cases }),
-            AnalysedType::Option(inner) => Type::Option(cloud_servers_lib::model::TypeOption {
+            AnalysedType::Enum(cases) => Type::Enum(cloud_servers_base::model::TypeEnum { cases }),
+            AnalysedType::Option(inner) => Type::Option(cloud_servers_base::model::TypeOption {
                 inner: Box::new(convert_type(*inner)),
             }),
             AnalysedType::Result { ok, error } => {
-                Type::Result(cloud_servers_lib::model::TypeResult {
+                Type::Result(cloud_servers_base::model::TypeResult {
                     ok: ok.map(|t| Box::new(convert_type(*t))),
                     err: error.map(|t| Box::new(convert_type(*t))),
                 })
             }
             AnalysedType::Variant(variants) => {
-                Type::Variant(cloud_servers_lib::model::TypeVariant {
+                Type::Variant(cloud_servers_base::model::TypeVariant {
                     cases: variants
                         .into_iter()
-                        .map(|(name, typ)| cloud_servers_lib::model::NameOptionTypePair {
+                        .map(|(name, typ)| cloud_servers_base::model::NameOptionTypePair {
                             name,
                             typ: typ.map(|t| Box::new(convert_type(t))),
                         })

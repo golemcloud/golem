@@ -1,5 +1,5 @@
 [package]
-name = "cloud-servers-lib"
+name = "cloud-servers-base"
 version = "0.1.0"
 edition = "2021"
 

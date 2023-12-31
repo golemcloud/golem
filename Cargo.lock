@@ -896,7 +896,7 @@ name = "cloud-server-oss"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "cloud-servers-lib",
+ "cloud-servers-base",
  "figment",
  "futures-util",
  "golem-common",
@@ -917,7 +917,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cloud-servers-lib"
+name = "cloud-servers-base"
 version = "0.1.0"
 dependencies = [
  "async-trait",
