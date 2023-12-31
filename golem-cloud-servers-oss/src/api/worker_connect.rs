@@ -120,7 +120,7 @@ impl From<crate::service::worker::WorkerError> for ConnectError {
 fn make_worker_id(
     template_id: TemplateId,
     worker_name: String,
-) -> std::result::Result<cloud_servers_base::model::WorkerId, ConnectError> {
-    cloud_servers_base::model::WorkerId::new(template_id, worker_name)
+) -> std::result::Result<golem_cloud_servers_base::model::WorkerId, ConnectError> {
+    golem_cloud_servers_base::model::WorkerId::new(template_id, worker_name)
         .map_err(|error| ConnectError(format!("Invalid worker name: {error}")))
 }

@@ -896,9 +896,9 @@ name = "cloud-server-oss"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "cloud-servers-base",
  "figment",
  "futures-util",
+ "golem-cloud-servers-base",
  "golem-common",
  "golem-wasm-ast",
  "mappable-rc",
@@ -914,24 +914,6 @@ dependencies = [
  "tonic",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "cloud-servers-base"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bigdecimal",
- "golem-common",
- "http",
- "hyper 1.0.0-rc.3",
- "num-traits",
- "poem-openapi",
- "proptest",
- "serde",
- "serde_json",
- "tonic",
- "url",
 ]
 
 [[package]]
@@ -1849,6 +1831,24 @@ dependencies = [
  "fallible-iterator",
  "indexmap 2.1.0",
  "stable_deref_trait",
+]
+
+[[package]]
+name = "golem-cloud-servers-base"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bigdecimal",
+ "golem-common",
+ "http",
+ "hyper 1.0.0-rc.3",
+ "num-traits",
+ "poem-openapi",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tonic",
+ "url",
 ]
 
 [[package]]

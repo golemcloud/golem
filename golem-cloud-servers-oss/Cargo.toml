@@ -15,7 +15,7 @@ path = "src/openapi_yaml.rs"
 
 [dependencies]
 golem-common = { path = "../golem-common", version = "0.0.0" }
-cloud-servers-base = { path = "../cloud-servers-base" }
+golem-cloud-servers-base = { path = "../golem-cloud-servers-base" }
 
 poem = { workspace = true }
 poem-openapi = { workspace = true }
