@@ -4,7 +4,8 @@ use std::io::{BufReader, Read};
 
 use async_trait::async_trait;
 use clap::Subcommand;
-use golem_gateway_client::models::CertificateRequest;
+use golem_gateway_client::model::CertificateRequest;
+use uuid::Uuid;
 
 use crate::clients::gateway::certificate::CertificateClient;
 use crate::clients::project::ProjectClient;
@@ -18,7 +19,7 @@ pub enum CertificateSubcommand {
         #[command(flatten)]
         project_ref: ProjectRef,
         #[arg(value_name = "certificate-id", value_hint = clap::ValueHint::Other)]
-        certificate_id: Option<String>,
+        certificate_id: Option<Uuid>,
     },
     #[command()]
     Add {
@@ -39,7 +40,7 @@ pub enum CertificateSubcommand {
         #[command(flatten)]
         project_ref: ProjectRef,
         #[arg(value_name = "certificate-id", value_hint = clap::ValueHint::Other)]
-        certificate_id: String,
+        certificate_id: Uuid,
     },
 }
 
@@ -92,10 +93,7 @@ impl<'p, C: CertificateClient + Sync + Send, P: ProjectClient + Sync + Send> Cer
             } => {
                 let project_id = self.projects.resolve_id_or_default(project_ref).await?;
 
-                let res = self
-                    .client
-                    .get(project_id, certificate_id.as_deref())
-                    .await?;
+                let res = self.client.get(project_id, certificate_id.as_ref()).await?;
 
                 Ok(GolemResult::Ok(Box::new(res)))
             }

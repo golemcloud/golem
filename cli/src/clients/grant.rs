@@ -1,9 +1,4 @@
 use async_trait::async_trait;
-use golem_client::apis::configuration::Configuration;
-use golem_client::apis::grant_api::{
-    v2_accounts_account_id_grants_get, v2_accounts_account_id_grants_role_delete,
-    v2_accounts_account_id_grants_role_get, v2_accounts_account_id_grants_role_put,
-};
 use tracing::info;
 
 use crate::model::{AccountId, GolemError, Role};
@@ -16,16 +11,16 @@ pub trait GrantClient {
     async fn delete(&self, account_id: AccountId, role: Role) -> Result<(), GolemError>;
 }
 
-pub struct GrantClientLive {
-    pub configuration: Configuration,
+pub struct GrantClientLive<C: golem_client::api::GrantClient + Sync + Send> {
+    pub client: C,
 }
 
 #[async_trait]
-impl GrantClient for GrantClientLive {
+impl<C: golem_client::api::GrantClient + Sync + Send> GrantClient for GrantClientLive<C> {
     async fn get_all(&self, account_id: AccountId) -> Result<Vec<Role>, GolemError> {
         info!("Getting account roles.");
 
-        let roles = v2_accounts_account_id_grants_get(&self.configuration, &account_id.id).await?;
+        let roles = self.client.get(&account_id.id).await?;
 
         Ok(roles.into_iter().map(api_to_cli).collect())
     }
@@ -35,8 +30,7 @@ impl GrantClient for GrantClientLive {
         let role = cli_to_api(role);
 
         Ok(api_to_cli(
-            v2_accounts_account_id_grants_role_get(&self.configuration, &account_id.id, role)
-                .await?,
+            self.client.role_get(&account_id.id, &role).await?,
         ))
     }
 
@@ -44,8 +38,7 @@ impl GrantClient for GrantClientLive {
         info!("Adding account role.");
         let role = cli_to_api(role);
 
-        let _ = v2_accounts_account_id_grants_role_put(&self.configuration, &account_id.id, role)
-            .await?;
+        let _ = self.client.role_put(&account_id.id, &role).await?;
 
         Ok(())
     }
@@ -54,32 +47,30 @@ impl GrantClient for GrantClientLive {
         info!("Deleting account role.");
         let role = cli_to_api(role);
 
-        let _ =
-            v2_accounts_account_id_grants_role_delete(&self.configuration, &account_id.id, role)
-                .await?;
+        let _ = self.client.role_delete(&account_id.id, &role).await?;
 
         Ok(())
     }
 }
 
-fn api_to_cli(role: golem_client::models::Role) -> Role {
+fn api_to_cli(role: golem_client::model::Role) -> Role {
     match role {
-        golem_client::models::Role::Admin {} => Role::Admin,
-        golem_client::models::Role::MarketingAdmin {} => Role::MarketingAdmin,
-        golem_client::models::Role::ViewProject {} => Role::ViewProject,
-        golem_client::models::Role::DeleteProject {} => Role::DeleteProject,
-        golem_client::models::Role::CreateProject {} => Role::CreateProject,
-        golem_client::models::Role::InstanceServer {} => Role::InstanceServer,
+        golem_client::model::Role::Admin {} => Role::Admin,
+        golem_client::model::Role::MarketingAdmin {} => Role::MarketingAdmin,
+        golem_client::model::Role::ViewProject {} => Role::ViewProject,
+        golem_client::model::Role::DeleteProject {} => Role::DeleteProject,
+        golem_client::model::Role::CreateProject {} => Role::CreateProject,
+        golem_client::model::Role::InstanceServer {} => Role::InstanceServer,
     }
 }
 
-fn cli_to_api(role: Role) -> golem_client::models::Role {
+fn cli_to_api(role: Role) -> golem_client::model::Role {
     match role {
-        Role::Admin {} => golem_client::models::Role::Admin,
-        Role::MarketingAdmin {} => golem_client::models::Role::MarketingAdmin,
-        Role::ViewProject {} => golem_client::models::Role::ViewProject,
-        Role::DeleteProject {} => golem_client::models::Role::DeleteProject,
-        Role::CreateProject {} => golem_client::models::Role::CreateProject,
-        Role::InstanceServer {} => golem_client::models::Role::InstanceServer,
+        Role::Admin {} => golem_client::model::Role::Admin,
+        Role::MarketingAdmin {} => golem_client::model::Role::MarketingAdmin,
+        Role::ViewProject {} => golem_client::model::Role::ViewProject,
+        Role::DeleteProject {} => golem_client::model::Role::DeleteProject,
+        Role::CreateProject {} => golem_client::model::Role::CreateProject,
+        Role::InstanceServer {} => golem_client::model::Role::InstanceServer,
     }
 }

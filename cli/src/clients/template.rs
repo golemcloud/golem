@@ -1,13 +1,24 @@
 use std::io::Read;
 
 use async_trait::async_trait;
-use golem_client::apis::configuration::Configuration;
-use golem_client::models::TemplateQuery;
-use reqwest::Url;
+use golem_client::model::Export;
+use golem_client::model::ExportFunction;
+use golem_client::model::ExportInstance;
+use golem_client::model::FunctionParameter;
+use golem_client::model::FunctionResult;
+use golem_client::model::NameOptionTypePair;
+use golem_client::model::NameTypePair;
+use golem_client::model::Template;
+use golem_client::model::TemplateQuery;
+use golem_client::model::Type;
+use golem_client::model::TypeEnum;
+use golem_client::model::TypeFlags;
+use golem_client::model::TypeRecord;
+use golem_client::model::TypeTuple;
+use golem_client::model::TypeVariant;
 use serde::Serialize;
 use tokio::fs::File;
 use tracing::info;
-use uuid::Uuid;
 
 use crate::model::{GolemError, PathBufOrStdin, TemplateName};
 use crate::{ProjectId, RawTemplateId};
@@ -33,8 +44,8 @@ pub trait TemplateClient {
 }
 
 #[derive(Clone)]
-pub struct TemplateClientLive {
-    pub configuration: Configuration,
+pub struct TemplateClientLive<C: golem_client::api::TemplateClient + Sync + Send> {
+    pub client: C,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
@@ -103,13 +114,18 @@ fn render_type(typ: &Type) -> String {
                 .join(", ");
             format!("variant({cases_str})")
         }
-        Type::Result(TypeResult { ok, err }) => format!(
+        Type::Result(boxed) => format!(
             "result({}, {})",
-            ok.clone().map_or("()".to_string(), |typ| render_type(&typ)),
-            err.clone()
+            boxed
+                .ok
+                .clone()
+                .map_or("()".to_string(), |typ| render_type(&typ)),
+            boxed
+                .err
+                .clone()
                 .map_or("()".to_string(), |typ| render_type(&typ))
         ),
-        Type::Option(TypeOption { inner }) => format!("{}?", render_type(inner)),
+        Type::Option(boxed) => format!("{}?", render_type(&boxed.inner)),
         Type::Enum(TypeEnum { cases }) => format!("enum({})", cases.join(", ")),
         Type::Flags(TypeFlags { cases }) => format!("flags({})", cases.join(", ")),
         Type::Record(TypeRecord { cases }) => {
@@ -124,7 +140,7 @@ fn render_type(typ: &Type) -> String {
             let typs: Vec<String> = items.iter().map(render_type).collect();
             format!("({})", typs.join(", "))
         }
-        Type::List(TypeList { inner }) => format!("[{}]", render_type(inner)),
+        Type::List(boxed) => format!("[{}]", render_type(&boxed.inner)),
         Type::Str { .. } => "str".to_string(),
         Type::Chr { .. } => "chr".to_string(),
         Type::F64 { .. } => "f64".to_string(),
@@ -168,7 +184,7 @@ fn show_exported_function(
 }
 
 #[async_trait]
-impl TemplateClient for TemplateClientLive {
+impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for TemplateClientLive<C> {
     async fn find(
         &self,
         project_id: Option<ProjectId>,
@@ -176,45 +192,15 @@ impl TemplateClient for TemplateClientLive {
     ) -> Result<Vec<TemplateView>, GolemError> {
         info!("Getting templates");
 
-        let url = format!("{}/v2/templates", &self.configuration.base_path);
+        let project_id = project_id.map(|p| p.0);
+        let name = name.map(|n| n.0);
 
-        let mut request = self
-            .configuration
+        let templates: Vec<Template> = self
             .client
-            .request(reqwest::Method::GET, url.as_str());
-
-        if let Some(project_id) = project_id {
-            request = request.query(&[("project-id", &project_id.0.to_string())])
-        }
-
-        if let Some(name) = name {
-            request = request.query(&[("template-name", &name.0)])
-        }
-
-        if let Some(ref token) = &self.configuration.bearer_access_token {
-            request = request.bearer_auth(token.to_string());
-        };
-
-        let request = request.build()?;
-
-        let templates_resp = self.configuration.client.execute(request).await?;
-
-        let status = templates_resp.status();
-        let content = templates_resp.text().await?;
-
-        if status.is_success() {
-            let templates: Vec<Template> = serde_json::from_str(&content).map_err(|err| {
-                GolemError(format!(
-                    "Failed to parse response as json: {err:?}, content: {content}"
-                ))
-            })?;
-            let views = templates.iter().map(|c| c.into()).collect();
-            Ok(views)
-        } else {
-            Err(GolemError(format!(
-                "Templates list request failed with status {status} and content {content}"
-            )))
-        }
+            .get(project_id.as_ref(), name.as_deref())
+            .await?;
+        let views = templates.iter().map(|c| c.into()).collect();
+        Ok(views)
     }
 
     async fn add(
@@ -230,35 +216,13 @@ impl TemplateClient for TemplateClientLive {
             template_name: name.0,
         };
 
-        let url = format!("{}/v2/templates", &self.configuration.base_path);
-
-        let mut request = self
-            .configuration
-            .client
-            .request(reqwest::Method::POST, url.as_str());
-
-        if let Some(ref token) = &self.configuration.bearer_access_token {
-            request = request.bearer_auth(token.to_string());
-        };
-        let mut form = reqwest::multipart::Form::new();
-        form = form.part(
-            "query",
-            reqwest::multipart::Part::text(
-                serde_json::to_string(&query).expect("Failed to serialize TemplateQuery to json"),
-            )
-            .mime_str("application/json")?,
-        );
-
-        match path {
+        let template = match path {
             PathBufOrStdin::Path(path) => {
                 let file = File::open(path)
                     .await
                     .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
 
-                form = form.part(
-                    "template",
-                    reqwest::multipart::Part::stream(file).mime_str("application/octet-stream")?,
-                );
+                self.client.post(&query, file).await?
             }
             PathBufOrStdin::Stdin => {
                 let mut bytes = Vec::new();
@@ -267,32 +231,11 @@ impl TemplateClient for TemplateClientLive {
                     .read_to_end(&mut bytes) // TODO: steaming request from stdin
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
-                form = form.part(
-                    "template",
-                    reqwest::multipart::Part::stream(bytes).mime_str("application/octet-stream")?,
-                );
+                self.client.post(&query, bytes).await?
             }
         };
 
-        request = request.multipart(form);
-
-        let resp = self.configuration.client.execute(request.build()?).await?;
-
-        let status = resp.status();
-        let content = resp.text().await?;
-
-        if status.is_success() {
-            let template: Template = serde_json::from_str(&content).map_err(|err| {
-                GolemError(format!(
-                    "Failed to parse response as json: {err:?}, content: {content}"
-                ))
-            })?;
-            Ok((&template).into())
-        } else {
-            Err(GolemError(format!(
-                "Templates add request failed with status {status} and content {content}"
-            )))
-        }
+        Ok((&template).into())
     }
 
     async fn update(
@@ -302,28 +245,13 @@ impl TemplateClient for TemplateClientLive {
     ) -> Result<TemplateView, GolemError> {
         info!("Updating template {id:?} from {path:?}");
 
-        let mut url = Url::parse(&self.configuration.base_path).unwrap();
-
-        url.path_segments_mut()
-            .unwrap()
-            .push("v2")
-            .push("templates")
-            .push(&id.0.to_string())
-            .push("upload");
-
-        let mut request = self.configuration.client.request(reqwest::Method::PUT, url);
-
-        if let Some(local_var_token) = &self.configuration.bearer_access_token {
-            request = request.bearer_auth(local_var_token.to_owned());
-        };
-
-        match path {
+        let template = match path {
             PathBufOrStdin::Path(path) => {
                 let file = File::open(path)
                     .await
                     .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
 
-                request = request.body(file);
+                self.client.template_id_upload_put(&id.0, file).await?
             }
             PathBufOrStdin::Stdin => {
                 let mut bytes = Vec::new();
@@ -332,203 +260,10 @@ impl TemplateClient for TemplateClientLive {
                     .read_to_end(&mut bytes) // TODO: steaming request from stdin
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
-                request = request.body(bytes);
+                self.client.template_id_upload_put(&id.0, bytes).await?
             }
         };
 
-        request = request.header(reqwest::header::CONTENT_TYPE, "application/octet-stream");
-
-        let resp = self.configuration.client.execute(request.build()?).await?;
-
-        let status = resp.status();
-        let content = resp.text().await?;
-
-        if status.is_success() {
-            let template: Template = serde_json::from_str(&content).map_err(|err| {
-                GolemError(format!(
-                    "Failed to parse response as json: {err:?}, content: {content}"
-                ))
-            })?;
-            Ok((&template).into())
-        } else {
-            Err(GolemError(format!(
-                "Templates update request failed with status {status} and content {content}"
-            )))
-        }
+        Ok((&template).into())
     }
 }
-
-// Temporary copy of data classes:
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Template {
-    pub versioned_template_id: VersionedTemplateId,
-    pub template_name: String,
-    pub template_size: i32,
-    pub metadata: TemplateMetadata,
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
-)]
-#[serde(rename_all = "camelCase")]
-struct VersionedTemplateId {
-    pub template_id: Uuid,
-    pub version: i32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TemplateMetadata {
-    pub exports: Vec<Export>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "type")]
-enum Export {
-    Instance(ExportInstance),
-    Function(ExportFunction),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct ExportInstance {
-    pub name: String,
-    pub functions: Vec<ExportFunction>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct ExportFunction {
-    pub name: String,
-    pub parameters: Vec<FunctionParameter>,
-    pub results: Vec<FunctionResult>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct FunctionParameter {
-    pub name: String,
-    pub typ: Type,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct FunctionResult {
-    pub name: Option<String>,
-    pub typ: Type,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "type")]
-enum Type {
-    Variant(TypeVariant),
-    Result(TypeResult),
-    Option(TypeOption),
-    Enum(TypeEnum),
-    Flags(TypeFlags),
-    Record(TypeRecord),
-    Tuple(TypeTuple),
-    List(TypeList),
-    Str(TypeStr),
-    Chr(TypeChr),
-    F64(TypeF64),
-    F32(TypeF32),
-    U64(TypeU64),
-    S64(TypeS64),
-    U32(TypeU32),
-    S32(TypeS32),
-    U16(TypeU16),
-    S16(TypeS16),
-    U8(TypeU8),
-    S8(TypeS8),
-    Bool(TypeBool),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeVariant {
-    pub cases: Vec<NameOptionTypePair>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct NameOptionTypePair {
-    pub name: String,
-    pub typ: Option<Box<Type>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeResult {
-    ok: Option<Box<Type>>,
-    err: Option<Box<Type>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeOption {
-    pub inner: Box<Type>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeEnum {
-    pub cases: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeFlags {
-    pub cases: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeRecord {
-    pub cases: Vec<NameTypePair>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct NameTypePair {
-    pub name: String,
-    pub typ: Box<Type>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeTuple {
-    pub items: Vec<Type>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeList {
-    pub inner: Box<Type>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeStr;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeChr;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeF64;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeF32;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeU64;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeS64;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeU32;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeS32;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeU16;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeS16;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeU8;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeS8;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct TypeBool;

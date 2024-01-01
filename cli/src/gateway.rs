@@ -6,7 +6,7 @@ mod healthcheck;
 
 use async_trait::async_trait;
 use clap::Subcommand;
-use golem_gateway_client::apis::configuration::Configuration;
+use golem_gateway_client::{Context, Security};
 
 use crate::clients::gateway::certificate::CertificateClientLive;
 use crate::clients::gateway::definition::DefinitionClientLive;
@@ -63,7 +63,7 @@ pub trait GatewayHandler {
 
 pub struct GatewayHandlerLive<'p, P: ProjectClient + Sync + Send> {
     pub base_url: reqwest::Url,
-    pub allow_insecure: bool,
+    pub client: reqwest::Client,
     pub projects: &'p P,
 }
 
@@ -75,37 +75,25 @@ impl<'p, P: ProjectClient + Sync + Send> GatewayHandler for GatewayHandlerLive<'
         auth: &CloudAuthentication,
         subcommand: GatewaySubcommand,
     ) -> Result<GolemResult, GolemError> {
-        let mut builder = reqwest::Client::builder();
-        if self.allow_insecure {
-            builder = builder.danger_accept_invalid_certs(true);
-        }
-        let client = builder.connection_verbose(true).build()?;
-
-        let mut base_url_string = self.base_url.to_string();
-
-        if base_url_string.pop() != Some('/') {
-            base_url_string = self.base_url.to_string();
-        }
-
-        let configuration = Configuration {
-            base_path: base_url_string,
-            user_agent: None,
-            client,
-            basic_auth: None,
-            oauth_access_token: None,
-            bearer_access_token: Some(auth.0.secret.value.to_string()),
-            api_key: None,
+        let context = Context {
+            base_url: self.base_url.clone(),
+            client: self.client.clone(),
+            security_token: Security::Bearer(auth.0.secret.value.to_string()),
         };
 
         let healthcheck_client = HealthcheckClientLive {
-            configuration: configuration.clone(),
+            client: golem_gateway_client::api::HealthcheckClientLive {
+                context: context.clone(),
+            },
         };
         let healthcheck_srv = HealthcheckHandlerLive {
             healthcheck: healthcheck_client,
         };
 
         let deployment_client = DeploymentClientLive {
-            configuration: configuration.clone(),
+            client: golem_gateway_client::api::ApiDeploymentClientLive {
+                context: context.clone(),
+            },
         };
         let deployment_srv = DeploymentHandlerLive {
             client: deployment_client,
@@ -113,7 +101,9 @@ impl<'p, P: ProjectClient + Sync + Send> GatewayHandler for GatewayHandlerLive<'
         };
 
         let definition_client = DefinitionClientLive {
-            configuration: configuration.clone(),
+            client: golem_gateway_client::api::ApiDefinitionClientLive {
+                context: context.clone(),
+            },
         };
         let definition_srv = DefinitionHandlerLive {
             client: definition_client,
@@ -121,7 +111,9 @@ impl<'p, P: ProjectClient + Sync + Send> GatewayHandler for GatewayHandlerLive<'
         };
 
         let certificate_client = CertificateClientLive {
-            configuration: configuration.clone(),
+            client: golem_gateway_client::api::ApiCertificateClientLive {
+                context: context.clone(),
+            },
         };
         let certificate_srv = CertificateHandlerLive {
             client: certificate_client,
@@ -129,7 +121,9 @@ impl<'p, P: ProjectClient + Sync + Send> GatewayHandler for GatewayHandlerLive<'
         };
 
         let domain_client = DomainClientLive {
-            configuration: configuration.clone(),
+            client: golem_gateway_client::api::ApiDomainClientLive {
+                context: context.clone(),
+            },
         };
         let domain_srv = DomainHandlerLive {
             client: domain_client,

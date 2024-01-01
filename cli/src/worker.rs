@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use clap::builder::ValueParser;
 use clap::Subcommand;
-use golem_client::models::InvokeParameters;
+use golem_client::model::InvokeParameters;
 
 use crate::clients::worker::WorkerClient;
 use crate::model::{
@@ -180,17 +180,13 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                         worker_name,
                         template_id,
                         function,
-                        InvokeParameters {
-                            params: Some(parameters),
-                        },
+                        InvokeParameters { params: parameters },
                         invocation_key,
                         use_stdio,
                     )
                     .await?;
 
-                Ok(GolemResult::Json(
-                    res.result.unwrap_or(serde_json::Value::Null),
-                ))
+                Ok(GolemResult::Json(res.result))
             }
             WorkerSubcommand::Invoke {
                 template_id_or_name,
@@ -205,9 +201,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                         worker_name,
                         template_id,
                         function,
-                        InvokeParameters {
-                            params: Some(parameters),
-                        },
+                        InvokeParameters { params: parameters },
                     )
                     .await?;
 

@@ -1,23 +1,15 @@
-use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
-use golem_client::apis::configuration::Configuration;
-use golem_client::apis::worker_api::{
-    v2_templates_template_id_workers_post, v2_templates_template_id_workers_worker_name_delete,
-    v2_templates_template_id_workers_worker_name_get,
-    v2_templates_template_id_workers_worker_name_interrupt_post,
-    v2_templates_template_id_workers_worker_name_invoke_and_await_post,
-    v2_templates_template_id_workers_worker_name_invoke_post,
-    v2_templates_template_id_workers_worker_name_key_post,
-};
-use golem_client::models::{
-    CallingConvention, InvokeParameters, InvokeResult, VersionedWorkerId, WorkerCreationRequest,
-    WorkerMetadata,
-};
+use golem_client::model::CallingConvention;
+use golem_client::model::InvokeParameters;
+use golem_client::model::InvokeResult;
+use golem_client::model::VersionedWorkerId;
+use golem_client::model::WorkerCreationRequest;
+use golem_client::model::WorkerMetadata;
+use golem_client::Context;
 use native_tls::TlsConnector;
-use reqwest::Url;
 use serde::Deserialize;
 use tokio::{task, time};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -82,13 +74,14 @@ pub trait WorkerClient {
 }
 
 #[derive(Clone)]
-pub struct WorkerClientLive {
-    pub configuration: Configuration,
+pub struct WorkerClientLive<C: golem_client::api::WorkerClient + Sync + Send> {
+    pub client: C,
+    pub context: Context,
     pub allow_insecure: bool,
 }
 
 #[async_trait]
-impl WorkerClient for WorkerClientLive {
+impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerClientLive<C> {
     async fn new_worker(
         &self,
         name: WorkerName,
@@ -98,16 +91,17 @@ impl WorkerClient for WorkerClientLive {
     ) -> Result<VersionedWorkerId, GolemError> {
         info!("Creating worker {name} of {}", template_id.0);
 
-        Ok(v2_templates_template_id_workers_post(
-            &self.configuration,
-            &template_id.0.to_string(),
-            WorkerCreationRequest {
-                name: name.0,
-                args,
-                env: env.into_iter().collect(),
-            },
-        )
-        .await?)
+        Ok(self
+            .client
+            .template_id_workers_post(
+                &template_id.0,
+                &WorkerCreationRequest {
+                    name: name.0,
+                    args,
+                    env: env.into_iter().collect(),
+                },
+            )
+            .await?)
     }
 
     async fn get_invocation_key(
@@ -117,12 +111,10 @@ impl WorkerClient for WorkerClientLive {
     ) -> Result<InvocationKey, GolemError> {
         info!("Getting invocation key for {}/{}", template_id.0, name.0);
 
-        let key = v2_templates_template_id_workers_worker_name_key_post(
-            &self.configuration,
-            &template_id.0.to_string(),
-            &name.0,
-        )
-        .await?;
+        let key = self
+            .client
+            .template_id_workers_worker_name_key_post(&template_id.0, &name.0)
+            .await?;
 
         Ok(key_api_to_cli(key))
     }
@@ -147,18 +139,17 @@ impl WorkerClient for WorkerClientLive {
             CallingConvention::Component
         };
 
-        Ok(
-            v2_templates_template_id_workers_worker_name_invoke_and_await_post(
-                &self.configuration,
-                &template_id.0.to_string(),
+        Ok(self
+            .client
+            .template_id_workers_worker_name_invoke_and_await_post(
+                &template_id.0,
                 &name.0,
                 &invocation_key.0,
                 &function,
-                parameters,
-                Some(calling_convention),
+                Some(&calling_convention),
+                &parameters,
             )
-            .await?,
-        )
+            .await?)
     }
 
     async fn invoke(
@@ -170,14 +161,15 @@ impl WorkerClient for WorkerClientLive {
     ) -> Result<(), GolemError> {
         info!("Invoke function {function} in {}/{}", template_id.0, name.0);
 
-        let _ = v2_templates_template_id_workers_worker_name_invoke_post(
-            &self.configuration,
-            &template_id.0.to_string(),
-            &name.0,
-            &function,
-            parameters,
-        )
-        .await?;
+        let _ = self
+            .client
+            .template_id_workers_worker_name_invoke_post(
+                &template_id.0,
+                &name.0,
+                &function,
+                &parameters,
+            )
+            .await?;
         Ok(())
     }
 
@@ -188,13 +180,10 @@ impl WorkerClient for WorkerClientLive {
     ) -> Result<(), GolemError> {
         info!("Interrupting {}/{}", template_id.0, name.0);
 
-        let _ = v2_templates_template_id_workers_worker_name_interrupt_post(
-            &self.configuration,
-            &template_id.0.to_string(),
-            &name.0,
-            Some(false),
-        )
-        .await?;
+        let _ = self
+            .client
+            .template_id_workers_worker_name_interrupt_post(&template_id.0, &name.0, Some(false))
+            .await?;
         Ok(())
     }
 
@@ -205,25 +194,20 @@ impl WorkerClient for WorkerClientLive {
     ) -> Result<(), GolemError> {
         info!("Simulating crash of {}/{}", template_id.0, name.0);
 
-        let _ = v2_templates_template_id_workers_worker_name_interrupt_post(
-            &self.configuration,
-            &template_id.0.to_string(),
-            &name.0,
-            Some(true),
-        )
-        .await?;
+        let _ = self
+            .client
+            .template_id_workers_worker_name_interrupt_post(&template_id.0, &name.0, Some(true))
+            .await?;
         Ok(())
     }
 
     async fn delete(&self, name: WorkerName, template_id: RawTemplateId) -> Result<(), GolemError> {
         info!("Deleting worker {}/{}", template_id.0, name.0);
 
-        let _ = v2_templates_template_id_workers_worker_name_delete(
-            &self.configuration,
-            &template_id.0.to_string(),
-            &name.0,
-        )
-        .await?;
+        let _ = self
+            .client
+            .template_id_workers_worker_name_delete(&template_id.0, &name.0)
+            .await?;
         Ok(())
     }
 
@@ -234,12 +218,10 @@ impl WorkerClient for WorkerClientLive {
     ) -> Result<WorkerMetadata, GolemError> {
         info!("Getting worker {}/{} metadata", template_id.0, name.0);
 
-        Ok(v2_templates_template_id_workers_worker_name_get(
-            &self.configuration,
-            &template_id.0.to_string(),
-            &name.0,
-        )
-        .await?)
+        Ok(self
+            .client
+            .template_id_workers_worker_name_get(&template_id.0, &name.0)
+            .await?)
     }
 
     async fn connect(
@@ -247,7 +229,7 @@ impl WorkerClient for WorkerClientLive {
         name: WorkerName,
         template_id: RawTemplateId,
     ) -> Result<(), GolemError> {
-        let mut url = Url::parse(&self.configuration.base_path).unwrap();
+        let mut url = self.context.base_url.clone();
 
         let ws_schema = if url.scheme() == "http" { "ws" } else { "wss" };
 
@@ -269,12 +251,9 @@ impl WorkerClient for WorkerClientLive {
         let headers = request.headers_mut();
         headers.insert(
             "Authorization",
-            format!(
-                "Bearer {}",
-                self.configuration.bearer_access_token.as_ref().unwrap()
-            )
-            .parse()
-            .unwrap(),
+            format!("Bearer {}", self.context.bearer_token().unwrap())
+                .parse()
+                .unwrap(),
         );
 
         let connector = if self.allow_insecure {
@@ -405,58 +384,6 @@ struct Log {
     pub message: String,
 }
 
-#[derive(Deserialize, Debug)]
-pub enum InstanceEndpointError {
-    BadRequest {
-        errors: Vec<String>,
-    },
-    Unauthorized {
-        error: String,
-    },
-    LimitExceeded {
-        error: String,
-    },
-    Golem {
-        #[serde(rename = "golemError")]
-        golem_error: golem_client::models::GolemError,
-    },
-    GatewayTimeout {},
-    NotFound {
-        error: String,
-    },
-    AlreadyExists {
-        error: String,
-    },
-}
-
-impl Display for InstanceEndpointError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InstanceEndpointError::BadRequest { errors } => {
-                write!(f, "BadRequest: {errors:?}")
-            }
-            InstanceEndpointError::Unauthorized { error } => {
-                write!(f, "Unauthorized: {error}")
-            }
-            InstanceEndpointError::LimitExceeded { error } => {
-                write!(f, "LimitExceeded: {error}")
-            }
-            InstanceEndpointError::Golem { golem_error } => {
-                write!(f, "Golem: {golem_error:?}")
-            }
-            InstanceEndpointError::GatewayTimeout {} => {
-                write!(f, "GatewayTimeout")
-            }
-            InstanceEndpointError::NotFound { error } => {
-                write!(f, "NotFound: {error}")
-            }
-            InstanceEndpointError::AlreadyExists { error } => {
-                write!(f, "AlreadyExists: {error}")
-            }
-        }
-    }
-}
-
-fn key_api_to_cli(key: golem_client::models::InvocationKey) -> InvocationKey {
+fn key_api_to_cli(key: golem_client::model::InvocationKey) -> InvocationKey {
     InvocationKey(key.value)
 }

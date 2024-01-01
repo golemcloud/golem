@@ -51,62 +51,56 @@ impl From<reqwest::Error> for GolemError {
 }
 
 impl<T: crate::clients::gateway::errors::ResponseContentErrorMapper>
-    From<golem_gateway_client::apis::Error<T>> for GolemError
+    From<golem_gateway_client::Error<T>> for GolemError
 {
-    fn from(value: golem_gateway_client::apis::Error<T>) -> Self {
+    fn from(value: golem_gateway_client::Error<T>) -> Self {
         match value {
-            golem_gateway_client::apis::Error::Reqwest(error) => GolemError::from(error),
-            golem_gateway_client::apis::Error::Serde(error) => {
+            golem_gateway_client::Error::Reqwest(error) => GolemError::from(error),
+            golem_gateway_client::Error::Serde(error) => {
                 GolemError(format!("Unexpected serde error: {error}"))
             }
-            golem_gateway_client::apis::Error::Io(error) => {
-                GolemError(format!("Unexpected io error: {error}"))
+            golem_gateway_client::Error::Item(data) => {
+                let error_str =
+                    crate::clients::gateway::errors::ResponseContentErrorMapper::map(data);
+                GolemError(format!("Response error: {error_str}"))
             }
-            golem_gateway_client::apis::Error::ResponseError(
-                golem_gateway_client::apis::ResponseContent {
-                    status,
-                    content,
-                    entity,
-                },
-            ) => match entity {
-                None => GolemError(format!(
-                    "Response error. Status: {status}, content: {content}"
-                )),
-                Some(e) => {
-                    let entity_str =
-                        crate::clients::gateway::errors::ResponseContentErrorMapper::map(e);
-                    GolemError(format!("Response error. Status: {status}, content: {content}, entity: {entity_str}"))
+            golem_gateway_client::Error::Unexpected { code, data } => {
+                match String::from_utf8(Vec::from(data)) {
+                    Ok(data_string) => GolemError(format!(
+                        "Unexpected http error. Code: {code}, content: {data_string}."
+                    )),
+                    Err(_) => GolemError(format!(
+                        "Unexpected http error. Code: {code}, can't parse content as string."
+                    )),
                 }
-            },
+            }
         }
     }
 }
 
-impl<T: crate::clients::errors::ResponseContentErrorMapper> From<golem_client::apis::Error<T>>
+impl<T: crate::clients::errors::ResponseContentErrorMapper> From<golem_client::Error<T>>
     for GolemError
 {
-    fn from(value: golem_client::apis::Error<T>) -> Self {
+    fn from(value: golem_client::Error<T>) -> Self {
         match value {
-            golem_client::apis::Error::Reqwest(error) => GolemError::from(error),
-            golem_client::apis::Error::Serde(error) => {
+            golem_client::Error::Reqwest(error) => GolemError::from(error),
+            golem_client::Error::Serde(error) => {
                 GolemError(format!("Unexpected serde error: {error}"))
             }
-            golem_client::apis::Error::Io(error) => {
-                GolemError(format!("Unexpected io error: {error}"))
+            golem_client::Error::Item(data) => {
+                let error_str = crate::clients::errors::ResponseContentErrorMapper::map(data);
+                GolemError(format!("Response error: {error_str}"))
             }
-            golem_client::apis::Error::ResponseError(golem_client::apis::ResponseContent {
-                status,
-                content,
-                entity,
-            }) => match entity {
-                None => GolemError(format!(
-                    "Response error. Status: {status}, content: {content}"
-                )),
-                Some(e) => {
-                    let entity_str = crate::clients::errors::ResponseContentErrorMapper::map(e);
-                    GolemError(format!("Response error. Status: {status}, content: {content}, entity: {entity_str}"))
+            golem_client::Error::Unexpected { code, data } => {
+                match String::from_utf8(Vec::from(data)) {
+                    Ok(data_string) => GolemError(format!(
+                        "Unexpected http error. Code: {code}, content: {data_string}."
+                    )),
+                    Err(_) => GolemError(format!(
+                        "Unexpected http error. Code: {code}, can't parse content as string."
+                    )),
                 }
-            },
+            }
         }
     }
 }

@@ -1,10 +1,7 @@
 use async_trait::async_trait;
-use golem_gateway_client::apis::api_certificate_api::{
-    v1_api_certificates_delete, v1_api_certificates_get, v1_api_certificates_post,
-};
-use golem_gateway_client::apis::configuration::Configuration;
-use golem_gateway_client::models::{Certificate, CertificateRequest};
-use tracing::info;
+use golem_gateway_client::model::Certificate;
+use golem_gateway_client::model::CertificateRequest;
+use uuid::Uuid;
 
 use crate::model::{GolemError, ProjectId};
 
@@ -13,7 +10,7 @@ pub trait CertificateClient {
     async fn get(
         &self,
         project_id: ProjectId,
-        certificate_id: Option<&str>,
+        certificate_id: Option<&Uuid>,
     ) -> Result<Vec<Certificate>, GolemError>;
 
     async fn create(&self, certificate: CertificateRequest) -> Result<Certificate, GolemError>;
@@ -21,49 +18,35 @@ pub trait CertificateClient {
     async fn delete(
         &self,
         project_id: ProjectId,
-        certificate_id: &str,
+        certificate_id: &Uuid,
     ) -> Result<String, GolemError>;
 }
 
-pub struct CertificateClientLive {
-    pub configuration: Configuration,
+pub struct CertificateClientLive<C: golem_gateway_client::api::ApiCertificateClient + Sync + Send> {
+    pub client: C,
 }
 
 #[async_trait]
-impl CertificateClient for CertificateClientLive {
+impl<C: golem_gateway_client::api::ApiCertificateClient + Sync + Send> CertificateClient
+    for CertificateClientLive<C>
+{
     async fn get(
         &self,
         project_id: ProjectId,
-        certificate_id: Option<&str>,
+        certificate_id: Option<&Uuid>,
     ) -> Result<Vec<Certificate>, GolemError> {
-        info!("Calling v1_api_certificates_get for project_id {project_id:?}, certificate_id {certificate_id:?} on base url {}", self.configuration.base_path);
-        Ok(v1_api_certificates_get(
-            &self.configuration,
-            &project_id.0.to_string(),
-            certificate_id,
-        )
-        .await?)
+        Ok(self.client.get(&project_id.0, certificate_id).await?)
     }
 
     async fn create(&self, certificate: CertificateRequest) -> Result<Certificate, GolemError> {
-        info!(
-            "Calling v1_api_certificates_post on base url {}",
-            self.configuration.base_path
-        );
-        Ok(v1_api_certificates_post(&self.configuration, certificate).await?)
+        Ok(self.client.post(&certificate).await?)
     }
 
     async fn delete(
         &self,
         project_id: ProjectId,
-        certificate_id: &str,
+        certificate_id: &Uuid,
     ) -> Result<String, GolemError> {
-        info!("Calling v1_api_certificates_delete for project_id {project_id:?}, certificate_id {certificate_id} on base url {}", self.configuration.base_path);
-        Ok(v1_api_certificates_delete(
-            &self.configuration,
-            &project_id.0.to_string(),
-            certificate_id,
-        )
-        .await?)
+        Ok(self.client.delete(&project_id.0, certificate_id).await?)
     }
 }

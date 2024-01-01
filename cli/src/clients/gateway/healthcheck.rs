@@ -1,7 +1,4 @@
 use async_trait::async_trait;
-use golem_gateway_client::apis::configuration::Configuration;
-use golem_gateway_client::apis::healthcheck_api::healthcheck_get;
-use tracing::info;
 
 use crate::model::GolemError;
 
@@ -10,18 +7,16 @@ pub trait HealthcheckClient {
     async fn healthcheck(&self) -> Result<(), GolemError>;
 }
 
-pub struct HealthcheckClientLive {
-    pub configuration: Configuration,
+pub struct HealthcheckClientLive<C: golem_gateway_client::api::HealthcheckClient + Sync + Send> {
+    pub client: C,
 }
 
 #[async_trait]
-impl HealthcheckClient for HealthcheckClientLive {
+impl<C: golem_gateway_client::api::HealthcheckClient + Sync + Send> HealthcheckClient
+    for HealthcheckClientLive<C>
+{
     async fn healthcheck(&self) -> Result<(), GolemError> {
-        info!(
-            "Calling healthcheck_get on base url: {}",
-            self.configuration.base_path
-        );
-        healthcheck_get(&self.configuration).await?;
+        self.client.healthcheck_get().await?;
         Ok(())
     }
 }

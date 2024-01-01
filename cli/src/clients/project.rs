@@ -1,9 +1,6 @@
 use async_trait::async_trait;
-use golem_client::apis::configuration::Configuration;
-use golem_client::apis::project_api::{
-    v2_projects_default_get, v2_projects_get, v2_projects_post, v2_projects_project_id_delete,
-};
-use golem_client::models::{Project, ProjectDataRequest};
+use golem_client::model::Project;
+use golem_client::model::ProjectDataRequest;
 use indoc::formatdoc;
 use tracing::info;
 
@@ -34,12 +31,12 @@ pub trait ProjectClient {
     }
 }
 
-pub struct ProjectClientLive {
-    pub configuration: Configuration,
+pub struct ProjectClientLive<C: golem_client::api::ProjectClient + Sync + Send> {
+    pub client: C,
 }
 
 #[async_trait]
-impl ProjectClient for ProjectClientLive {
+impl<C: golem_client::api::ProjectClient + Sync + Send> ProjectClient for ProjectClientLive<C> {
     async fn create(
         &self,
         owner_account_id: AccountId,
@@ -53,26 +50,25 @@ impl ProjectClient for ProjectClientLive {
             owner_account_id: owner_account_id.id,
             description: description.unwrap_or("".to_string()),
         };
-        Ok(v2_projects_post(&self.configuration, request).await?)
+        Ok(self.client.post(&request).await?)
     }
 
     async fn find(&self, name: Option<String>) -> Result<Vec<Project>, GolemError> {
         info!("Listing projects.");
 
-        Ok(v2_projects_get(&self.configuration, name.as_deref()).await?)
+        Ok(self.client.get(name.as_deref()).await?)
     }
 
     async fn find_default(&self) -> Result<Project, GolemError> {
         info!("Getting default project.");
 
-        Ok(v2_projects_default_get(&self.configuration).await?)
+        Ok(self.client.default_get().await?)
     }
 
     async fn delete(&self, project_id: ProjectId) -> Result<(), GolemError> {
         info!("Deleting project {project_id:?}");
 
-        let _ =
-            v2_projects_project_id_delete(&self.configuration, &project_id.0.to_string()).await?;
+        let _ = self.client.project_id_delete(&project_id.0).await?;
 
         Ok(())
     }
