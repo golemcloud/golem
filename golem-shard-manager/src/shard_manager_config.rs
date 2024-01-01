@@ -18,7 +18,7 @@ pub struct ShardManagerConfig {
 impl ShardManagerConfig {
     pub fn new() -> Self {
         Figment::new()
-            .merge(Toml::file("config/shard-manager.toml"))
+            .merge(Toml::file("config/golem-shard-manager.toml"))
             .merge(Env::prefixed("GOLEM__").split("__"))
             .extract()
             .expect("Failed to parse config")

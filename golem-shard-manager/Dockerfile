@@ -9,14 +9,14 @@ RUN apt-get update && apt-get install -y unzip \
 WORKDIR /app
 COPY . /app
 
-RUN cargo build -p shard-manager --release --target-dir=/baseApp/target
+RUN cargo build -p golem-shard-manager --release --target-dir=/baseApp/target
 
 FROM debian:bullseye-slim
 
 WORKDIR app/
 
-COPY --from=build /baseApp/target/release/shard-manager .
-COPY --from=build /app/shard-manager/config/shard-manager.toml ./config/shard-manager.toml
+COPY --from=build /baseApp/target/release/golem-shard-manager .
+COPY --from=build /app/golem-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates
@@ -37,5 +37,5 @@ ENV WASMTIME_BACKTRACE_DETAILS=1 \
 
 EXPOSE 8080
 
-ENTRYPOINT ["./shard-manager"]
+ENTRYPOINT ["./golem-shard-manager"]
 
