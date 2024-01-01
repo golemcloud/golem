@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package golem.cloudservices.accountsummaryservice;
+package golem.cloud.accountsummary;
 
 import public "golem/common/empty.proto";
 import public "golem/common/account_summary.proto";

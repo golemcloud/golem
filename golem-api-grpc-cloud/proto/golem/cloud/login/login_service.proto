@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package golem.cloudservices.loginservice;
+package golem.cloud.login;
 
 import "golem/common/empty.proto";
 import "golem/common/login_error.proto";

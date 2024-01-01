@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package golem.cloudservices.workerservice;
+package golem.worker;
 
 import public "golem/common/empty.proto";
 import public "golem/common/calling_convention.proto";

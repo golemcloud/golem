@@ -10,7 +10,7 @@ pub mod proto {
     mod tests {
         use std::collections::HashSet;
 
-        use crate::proto::golem::cloudservices::projectservice::{
+        use crate::proto::golem::cloud::project::{
             get_project_actions_response, GetProjectActionsResponse,
             GetProjectActionsSuccessResponse,
         };

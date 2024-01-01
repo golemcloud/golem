@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package golem.cloudservices.projectpolicyservice;
+package golem.cloud.projectpolicy;
 
 import public "golem/common/empty.proto";
 import public "golem/common/error_body.proto";
