@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use golem_common::proto::golem;
+use golem_api_grpc::proto::golem;
 use tonic::Status;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -54,22 +54,22 @@ impl From<ShardManagerError> for tonic::Status {
     }
 }
 
-impl From<ShardManagerError> for golem::ShardManagerError {
-    fn from(value: ShardManagerError) -> golem::ShardManagerError {
+impl From<ShardManagerError> for golem::common::ShardManagerError {
+    fn from(value: ShardManagerError) -> golem::common::ShardManagerError {
         match value {
-            ShardManagerError::InvalidRequest { details } => golem::ShardManagerError {
-                error: Some(golem::shard_manager_error::Error::InvalidRequest(
-                    golem::ErrorBody { error: details },
+            ShardManagerError::InvalidRequest { details } => golem::common::ShardManagerError {
+                error: Some(golem::common::shard_manager_error::Error::InvalidRequest(
+                    golem::common::ErrorBody { error: details },
                 )),
             },
-            ShardManagerError::Timeout { details } => golem::ShardManagerError {
-                error: Some(golem::shard_manager_error::Error::Timeout(
-                    golem::ErrorBody { error: details },
+            ShardManagerError::Timeout { details } => golem::common::ShardManagerError {
+                error: Some(golem::common::shard_manager_error::Error::Timeout(
+                    golem::common::ErrorBody { error: details },
                 )),
             },
-            ShardManagerError::Unknown(s) => golem::ShardManagerError {
-                error: Some(golem::shard_manager_error::Error::Unknown(
-                    golem::ErrorBody { error: s },
+            ShardManagerError::Unknown(s) => golem::common::ShardManagerError {
+                error: Some(golem::common::shard_manager_error::Error::Unknown(
+                    golem::common::ErrorBody { error: s },
                 )),
             },
         }

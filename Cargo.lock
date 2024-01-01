@@ -1952,6 +1952,7 @@ dependencies = [
  "figment",
  "fred",
  "futures",
+ "golem-api-grpc",
  "golem-common",
  "http",
  "humantime-serde",

@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem;
+use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::ShardId;
-use golem_common::proto::golem;
-use golem_common::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use tokio::time::timeout;
 use tonic::transport::Uri;
 use tonic_health::pb::health_check_response::ServingStatus;
