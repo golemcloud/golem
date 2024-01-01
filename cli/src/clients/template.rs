@@ -86,8 +86,8 @@ impl From<&Template> for TemplateView {
     }
 }
 
-fn render_type(tpe: &Type) -> String {
-    match tpe {
+fn render_type(typ: &Type) -> String {
+    match typ {
         Type::Variant(TypeVariant { cases }) => {
             let cases_str = cases
                 .iter()
@@ -95,7 +95,7 @@ fn render_type(tpe: &Type) -> String {
                     format!(
                         "{name}: {}",
                         typ.clone()
-                            .map(|tpe| render_type(&tpe))
+                            .map(|typ| render_type(&typ))
                             .unwrap_or("()".to_string())
                     )
                 })
@@ -105,9 +105,9 @@ fn render_type(tpe: &Type) -> String {
         }
         Type::Result(TypeResult { ok, err }) => format!(
             "result({}, {})",
-            ok.clone().map_or("()".to_string(), |tpe| render_type(&tpe)),
+            ok.clone().map_or("()".to_string(), |typ| render_type(&typ)),
             err.clone()
-                .map_or("()".to_string(), |tpe| render_type(&tpe))
+                .map_or("()".to_string(), |typ| render_type(&typ))
         ),
         Type::Option(TypeOption { inner }) => format!("{}?", render_type(inner)),
         Type::Enum(TypeEnum { cases }) => format!("enum({})", cases.join(", ")),
@@ -121,8 +121,8 @@ fn render_type(tpe: &Type) -> String {
             format!("{{{}}}", pairs.join(", "))
         }
         Type::Tuple(TypeTuple { items }) => {
-            let tpes: Vec<String> = items.iter().map(render_type).collect();
-            format!("({})", tpes.join(", "))
+            let typs: Vec<String> = items.iter().map(render_type).collect();
+            format!("({})", typs.join(", "))
         }
         Type::List(TypeList { inner }) => format!("[{}]", render_type(inner)),
         Type::Str { .. } => "str".to_string(),
@@ -143,8 +143,8 @@ fn render_type(tpe: &Type) -> String {
 
 fn render_result(r: &FunctionResult) -> String {
     match &r.name {
-        None => render_type(&r.tpe),
-        Some(name) => format!("{name}: {}", render_type(&r.tpe)),
+        None => render_type(&r.typ),
+        Some(name) => format!("{name}: {}", render_type(&r.typ)),
     }
 }
 
@@ -156,7 +156,7 @@ fn show_exported_function(
 ) -> String {
     let params = parameters
         .iter()
-        .map(|p| format!("{}: {}", p.name, render_type(&p.tpe)))
+        .map(|p| format!("{}: {}", p.name, render_type(&p.typ)))
         .collect::<Vec<String>>()
         .join(", ");
     let res_str = results
@@ -406,13 +406,13 @@ struct ExportFunction {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct FunctionParameter {
     pub name: String,
-    pub tpe: Type,
+    pub typ: Type,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct FunctionResult {
     pub name: Option<String>,
-    pub tpe: Type,
+    pub typ: Type,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
