@@ -1,0 +1,20 @@
+version: '3'
+
+services:
+  golem-shard-manager:
+    build:
+      context: .
+      dockerfile: golem-shard-manager/Dockerfile
+    ports:
+      - "8080:8080"
+
+  golem-cloud-server-oss:
+    build:
+      context: .
+      dockerfile: golem-cloud-server-oss/Dockerfile
+      args:
+        - SHARD_MANAGER_HOST=localhost
+        - SHARD_MANAGER_PORT=8080
+        - TEMPLATES__STORE__ROOT_PATH=myfile
+    ports:
+      - "8080:8080"
