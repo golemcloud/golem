@@ -129,6 +129,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-rwlock"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "261803dcc39ba9e72760ba6e16d0199b1eef9fc44e81bffabbebb9f5aea3906c"
+dependencies = [
+ "async-mutex",
+ "event-listener",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3820,6 +3830,36 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "digest",
+]
+
+[[package]]
+name = "shard-manager"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-rwlock",
+ "async-trait",
+ "bincode 2.0.0-rc.3",
+ "bytes",
+ "figment",
+ "fred",
+ "futures",
+ "golem-common",
+ "http",
+ "humantime-serde",
+ "hyper 1.0.0-rc.3",
+ "prometheus",
+ "prost 0.12.3",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "warp",
 ]
 
 [[package]]
