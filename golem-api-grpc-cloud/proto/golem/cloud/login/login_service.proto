@@ -3,10 +3,10 @@ syntax = "proto3";
 package golem.cloud.login;
 
 import "golem/common/empty.proto";
-import "golem/common/login_error.proto";
-import "golem/common/o_auth2_data.proto";
-import "golem/common/token.proto";
-import "golem/common/unsafe_token.proto";
+import "golem/cloud/common/login_error.proto";
+import "golem/cloud/common/o_auth2_data.proto";
+import "golem/cloud/common/token.proto";
+import "golem/cloud/common/unsafe_token.proto";
 
 service LoginService {
   rpc CompleteOAuth2 (CompleteOAuth2Request) returns (CompleteOAuth2Response);
@@ -21,15 +21,15 @@ message CompleteOAuth2Request {
 
 message CompleteOAuth2Response {
   oneof result {
-    golem.common.UnsafeToken success = 1;
-    golem.common.LoginError error = 2;
+    golem.cloud.common.UnsafeToken success = 1;
+    golem.cloud.common.LoginError error = 2;
   }
 }
 
 message StartOAuth2Response {
   oneof result {
-    golem.common.OAuth2Data success = 1;
-    golem.common.LoginError error = 2;
+    golem.cloud.common.OAuth2Data success = 1;
+    golem.cloud.common.LoginError error = 2;
   }
 }
 
@@ -40,8 +40,8 @@ message OAuth2Request {
 
 message OAuth2Response {
   oneof result {
-    golem.common.UnsafeToken success = 1;
-    golem.common.LoginError error = 2;
+    golem.cloud.common.UnsafeToken success = 1;
+    golem.cloud.common.LoginError error = 2;
   }
 }
 
@@ -50,7 +50,7 @@ message CurrentTokenRequest {
 
 message CurrentTokenResponse {
   oneof result {
-    golem.common.Token success = 1;
-    golem.common.LoginError error = 2;
+    golem.cloud.common.Token success = 1;
+    golem.cloud.common.LoginError error = 2;
   }
 }

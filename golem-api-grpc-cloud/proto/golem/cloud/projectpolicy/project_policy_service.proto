@@ -4,10 +4,10 @@ package golem.cloud.projectpolicy;
 
 import public "golem/common/empty.proto";
 import public "golem/common/error_body.proto";
-import public "golem/common/project_policy.proto";
-import public "golem/common/project_policy_data.proto";
-import public "golem/common/project_policy_error.proto";
-import public "golem/common/project_policy_id.proto";
+import public "golem/cloud/common/project_policy.proto";
+import public "golem/cloud/common/project_policy_data.proto";
+import public "golem/cloud/common/project_policy_error.proto";
+import public "golem/cloud/common/project_policy_id.proto";
 
 service ProjectPolicyService {
   rpc CreateProjectPolicy (CreateProjectPolicyRequest) returns (CreateProjectPolicyResponse);
@@ -15,24 +15,24 @@ service ProjectPolicyService {
 }
 
 message CreateProjectPolicyRequest {
-  golem.common.ProjectPolicyData projectPolicyData = 1;
+  golem.cloud.common.ProjectPolicyData projectPolicyData = 1;
 }
 
 message CreateProjectPolicyResponse {
   oneof result {
-    golem.common.ProjectPolicy success = 1;
-    golem.common.ProjectPolicyError error = 2;
+    golem.cloud.common.ProjectPolicy success = 1;
+    golem.cloud.common.ProjectPolicyError error = 2;
   }
 }
 
 message GetProjectPolicyRequest {
-  golem.common.ProjectPolicyId projectPolicyId = 1;
+  golem.cloud.common.ProjectPolicyId projectPolicyId = 1;
 }
 
 message GetProjectPolicyResponse {
   oneof result {
-    golem.common.ProjectPolicy success = 1;
-    golem.common.ProjectPolicyError error = 2;
+    golem.cloud.common.ProjectPolicy success = 1;
+    golem.cloud.common.ProjectPolicyError error = 2;
   }
 }
 

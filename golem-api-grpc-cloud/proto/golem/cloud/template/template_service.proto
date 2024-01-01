@@ -3,7 +3,8 @@ syntax = "proto3";
 package golem.template;
 
 import public "golem/common/empty.proto";
-import public "golem/common/template.proto";
+import public "golem/cloud/common/project_id.proto";
+import public "golem/cloud/common/template.proto";
 import public "golem/common/template_error.proto";
 import public "golem/common/template_id.proto";
 
@@ -17,7 +18,8 @@ service TemplateService {
 }
 
 message GetTemplatesRequest {
-  optional string templateName = 1;
+  golem.cloud.common.ProjectId projectId = 1;
+  optional string templateName = 2;
 }
 
 message GetTemplatesResponse {
@@ -28,7 +30,7 @@ message GetTemplatesResponse {
 }
 
 message GetTemplatesSuccessResponse {
-  repeated golem.common.Template templates = 1;
+  repeated golem.cloud.common.Template templates = 1;
 }
 
 message CreateTemplateRequest {
@@ -39,7 +41,8 @@ message CreateTemplateRequest {
 }
 
 message CreateTemplateRequestHeader {
-  string templateName = 1;
+  golem.cloud.common.ProjectId projectId = 1;
+  string templateName = 2;
 }
 
 message CreateTemplateRequestChunk {
@@ -48,7 +51,7 @@ message CreateTemplateRequestChunk {
 
 message CreateTemplateResponse {
   oneof result {
-    golem.common.Template success = 1;
+    golem.cloud.common.Template success = 1;
     golem.common.TemplateError error = 2;
   }
 }
@@ -77,7 +80,7 @@ message GetTemplateResponse {
 }
 
 message GetTemplateSuccessResponse {
-  repeated golem.common.Template templates = 1;
+  repeated golem.cloud.common.Template templates = 1;
 }
 
 message GetLatestTemplateVersionRequest {
@@ -108,7 +111,7 @@ message UpdateTemplateRequestChunk {
 
 message UpdateTemplateResponse {
   oneof result {
-    golem.common.Template success = 1;
+    golem.cloud.common.Template success = 1;
     golem.common.TemplateError error = 2;
   }
 }

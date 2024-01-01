@@ -30,13 +30,13 @@ pub mod proto {
 
         #[test]
         fn test_uuid() {
-            let project_id = uuid::Uuid::from_str("040eeaee-08fa-4273-83ea-bc26e10574c1").unwrap();
+            let template_id = uuid::Uuid::from_str("040eeaee-08fa-4273-83ea-bc26e10574c1").unwrap();
             let token = uuid::Uuid::from_str("5816ed13-4d6e-40d0-8391-f0eb75378476").unwrap();
 
-            let project_id_proto: golem::common::Uuid = project_id.into();
+            let template_id_proto: golem::common::Uuid = template_id.into();
             let token_proto: golem::common::Uuid = token.into();
 
-            println!("project_id_proto: {:?}", project_id_proto);
+            println!("template_id_proto: {:?}", template_id_proto);
             println!("token_proto: {:?}", token_proto);
         }
     }

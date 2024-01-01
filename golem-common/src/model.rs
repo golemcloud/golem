@@ -21,12 +21,12 @@ use uuid::Uuid;
 
 use crate::newtype_uuid;
 
-newtype_uuid!(GrantId);
-newtype_uuid!(PlanId);
-newtype_uuid!(ProjectId);
-newtype_uuid!(ProjectPolicyId);
+// newtype_uuid!(GrantId);
+// newtype_uuid!(PlanId);
+// newtype_uuid!(ProjectId);
+// newtype_uuid!(ProjectPolicyId);
 newtype_uuid!(TemplateId);
-newtype_uuid!(TokenId);
+// newtype_uuid!(TokenId);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]

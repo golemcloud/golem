@@ -3,8 +3,8 @@ syntax = "proto3";
 package golem.cloud.accountsummary;
 
 import public "golem/common/empty.proto";
-import public "golem/common/account_summary.proto";
-import public "golem/common/account_summary_error.proto";
+import public "golem/cloud/common/account_summary.proto";
+import public "golem/cloud/common/account_summary_error.proto";
 
 service AccountSummaryService {
   rpc GetAccountCount (GetAccountCountRequest) returns (GetAccountCountResponse);
@@ -17,7 +17,7 @@ message GetAccountCountRequest {
 message GetAccountCountResponse {
   oneof result {
     int64 success = 1;
-    golem.common.AccountSummaryError error = 2;
+    golem.cloud.common.AccountSummaryError error = 2;
   }
 }
 
@@ -29,10 +29,10 @@ message GetAccountsRequest {
 message GetAccountsResponse {
   oneof result {
     GetAccountsSuccessResponse success = 1;
-    golem.common.AccountSummaryError error = 2;
+    golem.cloud.common.AccountSummaryError error = 2;
   }
 }
 
 message GetAccountsSuccessResponse {
-  repeated golem.common.AccountSummary accounts = 1;
+  repeated golem.cloud.common.AccountSummary accounts = 1;
 }

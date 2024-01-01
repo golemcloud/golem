@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+import "golem/common/account_id.proto";
+import "golem/cloud/common/project_id.proto";
+import "golem/cloud/common/project_policy_id.proto";
+
+package golem.cloud.common;
+
+
+message ProjectGrantData {
+  golem.common.AccountId grantee_account_id = 1;
+  golem.cloud.common.ProjectId grantor_project_id = 2;
+  ProjectPolicyId project_policy_id = 3;
+}

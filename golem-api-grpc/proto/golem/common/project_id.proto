@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-import "golem/common/uuid.proto";
-
-package golem.common;
-
-message ProjectId {
-  UUID value = 1;
-}

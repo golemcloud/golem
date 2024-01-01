@@ -4,11 +4,11 @@ package golem.cloud.token;
 
 import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
-import public "golem/common/create_token_dto.proto";
-import public "golem/common/token.proto";
-import public "golem/common/token_id.proto";
-import public "golem/common/token_error.proto";
-import public "golem/common/unsafe_token.proto";
+import public "golem/cloud/common/create_token_dto.proto";
+import public "golem/cloud/common/token.proto";
+import public "golem/cloud/common/token_id.proto";
+import public "golem/cloud/common/token_error.proto";
+import public "golem/cloud/common/unsafe_token.proto";
 
 service TokenService {
   rpc GetTokens (GetTokensRequest) returns (GetTokensResponse);
@@ -24,46 +24,46 @@ message GetTokensRequest {
 message GetTokensResponse {
   oneof result {
     GetTokensSuccessResponse success = 1;
-    golem.common.TokenError error = 2;
+    golem.cloud.common.TokenError error = 2;
   }
 }
 
 message GetTokensSuccessResponse {
-  repeated golem.common.Token data = 1;
+  repeated golem.cloud.common.Token data = 1;
 }
 
 message CreateTokenRequest {
   golem.common.AccountId accountId = 1;
-  golem.common.CreateTokenDTO createTokenDTO = 2;
+  golem.cloud.common.CreateTokenDTO createTokenDTO = 2;
 }
 
 message CreateTokenResponse {
   oneof result {
-    golem.common.UnsafeToken success = 1;
-    golem.common.TokenError error = 2;
+    golem.cloud.common.UnsafeToken success = 1;
+    golem.cloud.common.TokenError error = 2;
   }
 }
 
 message DeleteTokenRequest {
   golem.common.AccountId accountId = 1;
-  golem.common.TokenId tokenId = 2;
+  golem.cloud.common.TokenId tokenId = 2;
 }
 
 message DeleteTokenResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.TokenError error = 2;
+    golem.cloud.common.TokenError error = 2;
   }
 }
 
 message GetTokenRequest {
   golem.common.AccountId accountId = 1;
-  golem.common.TokenId tokenId = 2;
+  golem.cloud.common.TokenId tokenId = 2;
 }
 
 message GetTokenResponse {
   oneof result {
-    golem.common.Token success = 1;
-    golem.common.TokenError error = 2;
+    golem.cloud.common.Token success = 1;
+    golem.cloud.common.TokenError error = 2;
   }
 }

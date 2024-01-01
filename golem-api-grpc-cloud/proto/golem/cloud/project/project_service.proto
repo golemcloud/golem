@@ -3,11 +3,11 @@ syntax = "proto3";
 package golem.cloud.project;
 
 import public "golem/common/empty.proto";
-import public "golem/common/project.proto";
-import public "golem/common/project_error.proto";
-import public "golem/common/project_data_request.proto";
-import public "golem/common/project_id.proto";
-import public "golem/common/project_action.proto";
+import public "golem/cloud/common/project.proto";
+import public "golem/cloud/common/project_error.proto";
+import public "golem/cloud/common/project_data_request.proto";
+import public "golem/cloud/common/project_id.proto";
+import public "golem/cloud/common/project_action.proto";
 
 service ProjectService {
   rpc GetDefaultProject (GetDefaultProjectRequest) returns (GetDefaultProjectResponse);
@@ -23,8 +23,8 @@ message GetDefaultProjectRequest {
 
 message GetDefaultProjectResponse {
   oneof result {
-    golem.common.Project success = 1;
-    golem.common.ProjectError error = 2;
+    golem.cloud.common.Project success = 1;
+    golem.cloud.common.ProjectError error = 2;
   }
 }
 
@@ -35,62 +35,62 @@ message GetProjectsRequest {
 message GetProjectsResponse {
   oneof result {
     GetProjectsSuccessResponse success = 1;
-    golem.common.ProjectError error = 2;
+    golem.cloud.common.ProjectError error = 2;
   }
 }
 
 message GetProjectsSuccessResponse {
-  repeated golem.common.Project data = 1;
+  repeated golem.cloud.common.Project data = 1;
 }
 
 message CreateProjectRequest {
-  golem.common.ProjectDataRequest projectDataRequest = 1;
+  golem.cloud.common.ProjectDataRequest projectDataRequest = 1;
 }
 
 message CreateProjectResponse {
   oneof result {
     CreateProjectSuccessResponse success = 1;
-    golem.common.ProjectError error = 2;
+    golem.cloud.common.ProjectError error = 2;
   }
 }
 
 message CreateProjectSuccessResponse {
-  optional golem.common.Project project = 1;
+  optional golem.cloud.common.Project project = 1;
 }
 
 message DeleteProjectRequest {
-  golem.common.ProjectId projectId = 1;
+  golem.cloud.common.ProjectId projectId = 1;
 }
 
 message DeleteProjectResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.ProjectError error = 2;
+    golem.cloud.common.ProjectError error = 2;
   }
 }
 
 message GetProjectRequest {
-  golem.common.ProjectId projectId = 1;
+  golem.cloud.common.ProjectId projectId = 1;
 }
 
 message GetProjectResponse {
   oneof result {
-    golem.common.Project success = 1;
-    golem.common.ProjectError error = 2;
+    golem.cloud.common.Project success = 1;
+    golem.cloud.common.ProjectError error = 2;
   }
 }
 
 message GetProjectActionsRequest {
-  golem.common.ProjectId projectId = 1;
+  golem.cloud.common.ProjectId projectId = 1;
 }
 
 message GetProjectActionsResponse {
   oneof result {
       GetProjectActionsSuccessResponse success = 1;
-      golem.common.ProjectError error = 2;
+      golem.cloud.common.ProjectError error = 2;
   }
 }
 
 message GetProjectActionsSuccessResponse {
-  repeated golem.common.ProjectAction data = 1;
+  repeated golem.cloud.common.ProjectAction data = 1;
 }
