@@ -22,13 +22,8 @@ RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates
 RUN update-ca-certificates
 
-ARG SHARD_MANAGER_PORT
-ARG REDIS_DATABASE
-ARG REDIS_KEY_PREFIX
-
 ENV WASMTIME_BACKTRACE_DETAILS=1 \
     RUST_BACKTRACE=1 \
-    GOLEM_SHARD_MANAGER_PORT=$SHARD_MANAGER_PORT \
     GOLEM__REDIS__PORT=6379 \
     GOLEM__REDIS__DATABASE=$REDIS_DATABASE \
     GOLEM__REDIS__KEY_PREFIX=$REDIS_KEY_PREFIX \
