@@ -13,7 +13,7 @@ services:
       context: .
       dockerfile: golem-cloud-server-oss/Dockerfile
       args:
-        - SHARD_MANAGER_HOST=localhost
+        - SHARD_MANAGER_HOST=golem-shard-manager
         - SHARD_MANAGER_PORT=8080
         - TEMPLATES__STORE__ROOT_PATH=myfile
     ports:
