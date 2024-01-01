@@ -1891,6 +1891,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-shard-manager"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-rwlock",
+ "async-trait",
+ "bincode 2.0.0-rc.3",
+ "bytes",
+ "figment",
+ "fred",
+ "futures",
+ "golem-common",
+ "http",
+ "humantime-serde",
+ "hyper 1.0.0-rc.3",
+ "prometheus",
+ "prost 0.12.3",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "warp",
+]
+
+[[package]]
 name = "golem-wasm-ast"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3830,36 +3860,6 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "digest",
-]
-
-[[package]]
-name = "shard-manager"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-rwlock",
- "async-trait",
- "bincode 2.0.0-rc.3",
- "bytes",
- "figment",
- "fred",
- "futures",
- "golem-common",
- "http",
- "humantime-serde",
- "hyper 1.0.0-rc.3",
- "prometheus",
- "prost 0.12.3",
- "serde",
- "serde_json",
- "tokio",
- "tonic",
- "tonic-health",
- "tonic-reflection",
- "tracing",
- "tracing-subscriber",
- "url",
- "warp",
 ]
 
 [[package]]

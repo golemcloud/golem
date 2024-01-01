@@ -7,7 +7,7 @@ members = [
     "golem-common",
     "golem-cloud-server-base",
     "golem-cloud-server-oss",
-    "shard-manager"
+    "golem-shard-manager"
 ]
 
 exclude = [
