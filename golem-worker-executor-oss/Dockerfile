@@ -45,4 +45,4 @@ ENV ENVIRONMENT=$ENVIRONMENT \
 
 EXPOSE 9000
 
-ENTRYPOINT ["./golem-worker-executor-oss"]
+ENTRYPOINT ["./worker-executor-oss"]
