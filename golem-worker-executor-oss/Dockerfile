@@ -1,4 +1,3 @@
-#FROM 242553885714.dkr.ecr.us-east-1.amazonaws.com/golem-rust-base-image-dev:626595d as build
 FROM rust:1.74.0-bullseye as build
 
 RUN apt-get update && apt-get install -y unzip \
@@ -10,29 +9,16 @@ RUN apt-get update && apt-get install -y unzip \
 WORKDIR /app
 COPY . /app
 
-WORKDIR /app/worker-executor
+WORKDIR /app/golem-worker-executor-oss
 
-# Ensure base-image dependencies are compatible with worker-executor dependencies
-#RUN chmod +x pre-baked-image-check.sh
-#RUN set -e && ./pre-baked-image-check.sh
-
-# All the target builds will not within worker-executor/target directory
-# but in /baseApp/ directory such that its a union of what's in base package ++ new dependencies in worker-executor
-RUN cargo build -p worker-executor --release --target-dir=/baseApp/target
-
-# This is the lightest image we could find
-# in the second stage. Good to make it even lighter!
-# The final size of the image depends on this stage of the build
-
-FROM segment/chamber:2 AS chamber
+RUN cargo build -p golem-worker-executor-oss --release --target-dir=/baseApp/target
 
 FROM debian:bullseye-slim
 
 WORKDIR app/
 
-COPY --from=chamber /chamber /bin/chamber
-COPY --from=build /baseApp/target/release/worker-executor .
-COPY --from=build /app/worker-executor/config/worker-executor.toml ./config/worker-executor.toml
+COPY --from=build /baseApp/target/release/golem-worker-executor-oss .
+COPY --from=build /app/worker-executor/config/worker-executor-local.toml ./config/worker-executor-local.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates
@@ -57,8 +43,6 @@ ENV ENVIRONMENT=$ENVIRONMENT \
     GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT=$SHARD_MANAGER_PORT \
     GOLEM__ENABLE_JSON_LOG=true
 
-COPY worker-executor/worker-executor-wrapper.sh worker-executor-wrapper.sh
-RUN chmod +x worker-executor-wrapper.sh
 EXPOSE 9000
 
-ENTRYPOINT ["./worker-executor-wrapper.sh"]
+ENTRYPOINT ["./golem-worker-executor-oss"]
