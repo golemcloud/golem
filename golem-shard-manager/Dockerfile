@@ -22,8 +22,11 @@ RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates
 RUN update-ca-certificates
 
+ARG REDIS_HOST
+
 ENV WASMTIME_BACKTRACE_DETAILS=1 \
     RUST_BACKTRACE=1 \
+    GOLEM__REDIS__HOST=$REDIS_HOST \
     GOLEM__REDIS__PORT=6379 \
     GOLEM__ENABLE_JSON_LOG=true \
     GOLEM__HTTP_PORT=8081

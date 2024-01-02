@@ -1,12 +1,21 @@
 version: '3'
 
 services:
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+
   golem-shard-manager:
     build:
       context: .
       dockerfile: golem-shard-manager/Dockerfile
+      args:
+        - REDIS_HOST=redis
     ports:
-      - "8080:8080"
+      - "8081:8081"
+    depends_on:
+      - redis
 
   golem-cloud-server-oss:
     build:
@@ -14,7 +23,7 @@ services:
       dockerfile: golem-cloud-server-oss/Dockerfile
       args:
         - SHARD_MANAGER_HOST=golem-shard-manager
-        - SHARD_MANAGER_PORT=8080
+        - SHARD_MANAGER_PORT=8081
         - TEMPLATES__STORE__ROOT_PATH=myfile
     ports:
       - "8080:8080"
