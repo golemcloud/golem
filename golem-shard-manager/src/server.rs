@@ -332,7 +332,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = ShardManagerConfig::new();
 
-
     // NOTE: to enable tokio-console, comment the lines above and uncomment the lines below,
     // and compile with RUSTFLAGS="--cfg tokio_unstable" cargo build
     // TODO: make tracing subscription configurable
@@ -360,9 +359,10 @@ async fn async_main(
 
     dbg!("Golem Shard Manager starting up...");
 
-    let _ = HttpServerImpl::new(
-        SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), shard_manager_config.http_port),
-    );
+    let _ = HttpServerImpl::new(SocketAddrV4::new(
+        Ipv4Addr::new(0, 0, 0, 0),
+        shard_manager_config.http_port,
+    ));
 
     dbg!("Using Redis at {}", shard_manager_config.redis.url());
     let pool = golem_common::redis::RedisPool::configured(&shard_manager_config.redis).await?;
@@ -378,7 +378,10 @@ async fn async_main(
     ));
 
     let shard_manager_port_str = env::var("GOLEM_SHARD_MANAGER_PORT")?;
-    dbg!("The port read from env is {}", shard_manager_port_str.clone());
+    dbg!(
+        "The port read from env is {}",
+        shard_manager_port_str.clone()
+    );
     let shard_manager_port = shard_manager_port_str.parse::<u16>()?;
     let shard_manager_addr = format!("0.0.0.0:{}", shard_manager_port);
 
