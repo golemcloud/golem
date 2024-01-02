@@ -4,7 +4,7 @@ use std::io::{BufReader, Read};
 
 use async_trait::async_trait;
 use clap::Subcommand;
-use golem_gateway_client::models::ApiDefinition;
+use golem_gateway_client::model::ApiDefinition;
 
 use crate::clients::gateway::definition::DefinitionClient;
 use crate::clients::project::ProjectClient;

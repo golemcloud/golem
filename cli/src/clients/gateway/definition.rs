@@ -1,10 +1,5 @@
 use async_trait::async_trait;
-use golem_gateway_client::apis::api_definition_api::{
-    v1_api_definitions_delete, v1_api_definitions_get, v1_api_definitions_put,
-};
-use golem_gateway_client::apis::configuration::Configuration;
-use golem_gateway_client::models::ApiDefinition;
-use tracing::info;
+use golem_gateway_client::model::ApiDefinition;
 
 use crate::model::{GolemError, ProjectId};
 
@@ -25,32 +20,24 @@ pub trait DefinitionClient {
     ) -> Result<String, GolemError>;
 }
 
-pub struct DefinitionClientLive {
-    pub configuration: Configuration,
+pub struct DefinitionClientLive<C: golem_gateway_client::api::ApiDefinitionClient + Sync + Send> {
+    pub client: C,
 }
 
 #[async_trait]
-impl DefinitionClient for DefinitionClientLive {
+impl<C: golem_gateway_client::api::ApiDefinitionClient + Sync + Send> DefinitionClient
+    for DefinitionClientLive<C>
+{
     async fn get(
         &self,
         project_id: ProjectId,
         api_definition_id: Option<&str>,
     ) -> Result<Vec<ApiDefinition>, GolemError> {
-        info!("Calling v1_api_definitions_get for project_id {project_id:?}, api_definition_id {api_definition_id:?} on base url {}", self.configuration.base_path);
-        Ok(v1_api_definitions_get(
-            &self.configuration,
-            &project_id.0.to_string(),
-            api_definition_id,
-        )
-        .await?)
+        Ok(self.client.get(&project_id.0, api_definition_id).await?)
     }
 
     async fn update(&self, api_definition: ApiDefinition) -> Result<ApiDefinition, GolemError> {
-        info!(
-            "Calling v1_api_definitions_put on base url {}",
-            self.configuration.base_path
-        );
-        Ok(v1_api_definitions_put(&self.configuration, api_definition).await?)
+        Ok(self.client.put(&api_definition).await?)
     }
 
     async fn delete(
@@ -58,12 +45,6 @@ impl DefinitionClient for DefinitionClientLive {
         project_id: ProjectId,
         api_definition_id: &str,
     ) -> Result<String, GolemError> {
-        info!("Calling v1_api_definitions_delete for project_id {project_id:?}, api_definition_id {api_definition_id} on base url {}", self.configuration.base_path);
-        Ok(v1_api_definitions_delete(
-            &self.configuration,
-            &project_id.0.to_string(),
-            api_definition_id,
-        )
-        .await?)
+        Ok(self.client.delete(&project_id.0, api_definition_id).await?)
     }
 }

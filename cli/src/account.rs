@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use clap::Subcommand;
-use golem_client::models::AccountData;
+use golem_client::model::AccountData;
 
 use crate::clients::account::AccountClient;
 use crate::clients::grant::GrantClient;

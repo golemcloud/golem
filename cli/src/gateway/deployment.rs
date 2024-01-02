@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use clap::Subcommand;
-use golem_gateway_client::models::{ApiDeployment, ApiSite};
+use golem_gateway_client::model::ApiDeployment;
+use golem_gateway_client::model::ApiSite;
 
 use crate::clients::gateway::deployment::DeploymentClient;
 use crate::clients::project::ProjectClient;
@@ -76,7 +77,7 @@ impl<'p, C: DeploymentClient + Sync + Send, P: ProjectClient + Sync + Send> Depl
                 let deployment = ApiDeployment {
                     project_id: self.projects.resolve_id_or_default(project_ref).await?.0,
                     api_definition_id: definition_id,
-                    site: Box::new(ApiSite { host, subdomain }),
+                    site: ApiSite { host, subdomain },
                 };
 
                 let res = self.client.update(deployment).await?;

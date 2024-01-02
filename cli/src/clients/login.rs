@@ -1,9 +1,10 @@
 use async_trait::async_trait;
-use golem_client::apis::configuration::Configuration;
-use golem_client::apis::login_api::{
-    login_oauth2_device_complete_post, login_oauth2_device_start_post, v2_login_token_get,
-};
-use golem_client::models::{OAuth2Data, Token, TokenSecret, UnsafeToken};
+use golem_client::api::LoginClient as HttpClient;
+use golem_client::model::OAuth2Data;
+use golem_client::model::Token;
+use golem_client::model::TokenSecret;
+use golem_client::model::UnsafeToken;
+use golem_client::{Context, Security};
 use tracing::info;
 
 use crate::model::GolemError;
@@ -17,26 +18,33 @@ pub trait LoginClient {
     async fn complete_oauth2(&self, session: String) -> Result<UnsafeToken, GolemError>;
 }
 
-pub struct LoginClientLive {
-    pub configuration: Configuration,
+pub struct LoginClientLive<C: HttpClient + Sync + Send> {
+    pub client: C,
+    pub context: Context,
 }
 
 #[async_trait]
-impl LoginClient for LoginClientLive {
+impl<C: HttpClient + Sync + Send> LoginClient for LoginClientLive<C> {
     async fn token_details(&self, manual_token: TokenSecret) -> Result<Token, GolemError> {
         info!("Getting token info");
-        let mut config = self.configuration.clone();
-        config.bearer_access_token = Some(manual_token.value.to_string());
-        Ok(v2_login_token_get(&config).await?)
+        let mut context = self.context.clone();
+        context.security_token = Security::Bearer(manual_token.value.to_string());
+
+        let client = golem_client::api::LoginClientLive { context };
+
+        Ok(client.v_2_login_token_get().await?)
     }
 
     async fn start_oauth2(&self) -> Result<OAuth2Data, GolemError> {
         info!("Start OAuth2 workflow");
-        Ok(login_oauth2_device_start_post(&self.configuration).await?)
+        Ok(self.client.login_oauth_2_device_start_post().await?)
     }
 
     async fn complete_oauth2(&self, session: String) -> Result<UnsafeToken, GolemError> {
         info!("Complete OAuth2 workflow");
-        Ok(login_oauth2_device_complete_post(&self.configuration, &session).await?)
+        Ok(self
+            .client
+            .login_oauth_2_device_complete_post(&session)
+            .await?)
     }
 }

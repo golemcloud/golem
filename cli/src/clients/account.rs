@@ -1,10 +1,7 @@
 use async_trait::async_trait;
-use golem_client::apis::account_api::{
-    v2_accounts_account_id_delete, v2_accounts_account_id_get, v2_accounts_account_id_plan_get,
-    v2_accounts_account_id_put, v2_accounts_post,
-};
-use golem_client::apis::configuration::Configuration;
-use golem_client::models::{Account, AccountData, Plan};
+use golem_client::model::Account;
+use golem_client::model::AccountData;
+use golem_client::model::Plan;
 use tracing::info;
 
 use crate::model::{AccountId, GolemError};
@@ -18,35 +15,35 @@ pub trait AccountClient {
     async fn delete(&self, id: &AccountId) -> Result<(), GolemError>;
 }
 
-pub struct AccountClientLive {
-    pub configuration: Configuration,
+pub struct AccountClientLive<C: golem_client::api::AccountClient + Sync + Send> {
+    pub client: C,
 }
 
 #[async_trait]
-impl AccountClient for AccountClientLive {
+impl<C: golem_client::api::AccountClient + Sync + Send> AccountClient for AccountClientLive<C> {
     async fn get(&self, id: &AccountId) -> Result<Account, GolemError> {
         info!("Getting account {id}");
-        Ok(v2_accounts_account_id_get(&self.configuration, &id.id).await?)
+        Ok(self.client.account_id_get(&id.id).await?)
     }
 
     async fn get_plan(&self, id: &AccountId) -> Result<Plan, GolemError> {
         info!("Getting account plan of {id}.");
-        Ok(v2_accounts_account_id_plan_get(&self.configuration, &id.id).await?)
+        Ok(self.client.account_id_plan_get(&id.id).await?)
     }
 
     async fn put(&self, id: &AccountId, data: AccountData) -> Result<Account, GolemError> {
         info!("Updating account {id}.");
-        Ok(v2_accounts_account_id_put(&self.configuration, &id.id, data).await?)
+        Ok(self.client.account_id_put(&id.id, &data).await?)
     }
 
     async fn post(&self, data: AccountData) -> Result<Account, GolemError> {
         info!("Creating account.");
-        Ok(v2_accounts_post(&self.configuration, data).await?)
+        Ok(self.client.post(&data).await?)
     }
 
     async fn delete(&self, id: &AccountId) -> Result<(), GolemError> {
         info!("Deleting account {id}.");
-        let _ = v2_accounts_account_id_delete(&self.configuration, &id.id).await?;
+        let _ = self.client.account_id_delete(&id.id).await?;
         Ok(())
     }
 }

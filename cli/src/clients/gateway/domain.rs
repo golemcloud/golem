@@ -1,10 +1,6 @@
 use async_trait::async_trait;
-use golem_gateway_client::apis::api_domain_api::{
-    v1_api_domains_delete, v1_api_domains_get, v1_api_domains_put,
-};
-use golem_gateway_client::apis::configuration::Configuration;
-use golem_gateway_client::models::{ApiDomain, DomainRequest};
-use tracing::info;
+use golem_gateway_client::model::ApiDomain;
+use golem_gateway_client::model::DomainRequest;
 
 use crate::model::{GolemError, ProjectId};
 
@@ -21,18 +17,16 @@ pub trait DomainClient {
     async fn delete(&self, project_id: ProjectId, domain_name: &str) -> Result<String, GolemError>;
 }
 
-pub struct DomainClientLive {
-    pub configuration: Configuration,
+pub struct DomainClientLive<C: golem_gateway_client::api::ApiDomainClient + Sync + Send> {
+    pub client: C,
 }
 
 #[async_trait]
-impl DomainClient for DomainClientLive {
+impl<C: golem_gateway_client::api::ApiDomainClient + Sync + Send> DomainClient
+    for DomainClientLive<C>
+{
     async fn get(&self, project_id: ProjectId) -> Result<Vec<ApiDomain>, GolemError> {
-        info!(
-            "Calling v1_api_domains_get for project_id {project_id:?} on base url {}",
-            self.configuration.base_path
-        );
-        Ok(v1_api_domains_get(&self.configuration, &project_id.0.to_string()).await?)
+        Ok(self.client.get(&project_id.0).await?)
     }
 
     async fn update(
@@ -40,22 +34,16 @@ impl DomainClient for DomainClientLive {
         project_id: ProjectId,
         domain_name: String,
     ) -> Result<ApiDomain, GolemError> {
-        info!("Calling v1_api_domains_get for project_id {project_id:?}, domain_name {domain_name} on base url {}", self.configuration.base_path);
-        Ok(v1_api_domains_put(
-            &self.configuration,
-            DomainRequest {
+        Ok(self
+            .client
+            .put(&DomainRequest {
                 project_id: project_id.0,
                 domain_name,
-            },
-        )
-        .await?)
+            })
+            .await?)
     }
 
     async fn delete(&self, project_id: ProjectId, domain_name: &str) -> Result<String, GolemError> {
-        info!("Calling v1_api_domains_get for project_id {project_id:?}, domain_name {domain_name} on base url {}", self.configuration.base_path);
-        Ok(
-            v1_api_domains_delete(&self.configuration, &project_id.0.to_string(), domain_name)
-                .await?,
-        )
+        Ok(self.client.delete(&project_id.0, domain_name).await?)
     }
 }

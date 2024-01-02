@@ -11,30 +11,30 @@ description = "Command line interface for Golem Cloud"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait = "0.1.74"
+async-trait = "0.1.76"
 chrono = { version = "0.4.31", features = ["serde"] }
-clap = { version = "4.4.6", features = ["derive"] }
-clap-verbosity-flag = "2.0.1"
+clap = { version = "4.4.12", features = ["derive"] }
+clap-verbosity-flag = "2.1.1"
 derive_more = "0.99.17"
-futures-util = "0.3.28"
-golem-client = "0.0.48"
-golem-gateway-client = "0.0.48"
+futures-util = "0.3.30"
+golem-client = "0.0.50"
+golem-gateway-client = "0.0.50"
 golem-examples = "0.1.9"
-http = "0.2.9"
+http = "1.0.0"
 indoc = "2.0.4"
 itertools = "0.11.0"
 native-tls = "0.2.11"
-reqwest = { version = "0.11.22", features = ["stream", "json", "multipart"] }
-serde = { version = "1.0.189", features = ["derive"] }
-serde_json = "1.0.107"
-serde_yaml = "0.9.25"
+reqwest = { version = "0.11.23", features = ["stream", "json", "multipart"] }
+serde = { version = "1.0.193", features = ["derive"] }
+serde_json = "1.0.108"
+serde_yaml = "0.9.29"
 strum = "0.25.0"
 strum_macros = "0.25.3"
-tokio = { version = "1.33.0", features = ["full"] }
+tokio = { version = "1.35.1", features = ["full"] }
 tokio-tungstenite = { version = "0.20.1", features = ["native-tls"] }
 tracing = "0.1.40"
 tungstenite = "0.20.1"
-url = "2.4.1"
-uuid = "1.5.0"
+url = "2.5.0"
+uuid = "1.6.1"
 dirs = "5.0.1"
-tracing-subscriber = "0.3.17"
+tracing-subscriber = "0.3.18"

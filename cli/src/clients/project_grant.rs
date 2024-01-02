@@ -1,7 +1,6 @@
 use async_trait::async_trait;
-use golem_client::apis::configuration::Configuration;
-use golem_client::apis::project_grant_api::v2_projects_project_id_grants_post;
-use golem_client::models::{ProjectGrant, ProjectGrantDataRequest};
+use golem_client::model::ProjectGrant;
+use golem_client::model::ProjectGrantDataRequest;
 use tracing::info;
 
 use crate::clients::action_cli_to_api;
@@ -23,12 +22,14 @@ pub trait ProjectGrantClient {
     ) -> Result<ProjectGrant, GolemError>;
 }
 
-pub struct ProjectGrantClientLive {
-    pub configuration: Configuration,
+pub struct ProjectGrantClientLive<C: golem_client::api::ProjectGrantClient + Sync + Send> {
+    pub client: C,
 }
 
 #[async_trait]
-impl ProjectGrantClient for ProjectGrantClientLive {
+impl<C: golem_client::api::ProjectGrantClient + Sync + Send> ProjectGrantClient
+    for ProjectGrantClientLive<C>
+{
     async fn create(
         &self,
         project_id: ProjectId,
@@ -44,14 +45,7 @@ impl ProjectGrantClient for ProjectGrantClientLive {
             project_policy_name: None,
         };
 
-        Ok(
-            v2_projects_project_id_grants_post(
-                &self.configuration,
-                &project_id.0.to_string(),
-                data,
-            )
-            .await?,
-        )
+        Ok(self.client.post(&project_id.0, &data).await?)
     }
 
     async fn create_actions(
@@ -68,13 +62,7 @@ impl ProjectGrantClient for ProjectGrantClientLive {
             project_policy_name: None,
             project_actions: actions.into_iter().map(action_cli_to_api).collect(),
         };
-        Ok(
-            v2_projects_project_id_grants_post(
-                &self.configuration,
-                &project_id.0.to_string(),
-                data,
-            )
-            .await?,
-        )
+
+        Ok(self.client.post(&project_id.0, &data).await?)
     }
 }
