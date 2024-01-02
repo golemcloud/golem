@@ -23,7 +23,7 @@ async fn server(addr: impl Into<SocketAddr> + Send) {
             .status(StatusCode::OK)
             .body(Body::from("shard manager is running"))
             .unwrap()
-    });    
+    });
 
     warp::serve(healthcheck).run(addr).await;
 }

@@ -28,3 +28,14 @@ services:
     ports:
       - "8080:8080"
       - "9090:9090"
+
+  golem-worker-executor-oss:
+    build:
+      context: .
+      dockerfile: golem-worker-executor-oss/Dockerfile
+      args:
+        - CLOUD_SERVICE_HOST=golem-cloud-server-oss
+        - SHARD_MANAGER_HOST=golem-shard-manager
+        - SHARD_MANAGER_PORT=8081
+    ports:
+      - "9000:9000"
