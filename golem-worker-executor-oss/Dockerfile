@@ -17,7 +17,7 @@ FROM debian:bullseye-slim
 
 WORKDIR app/
 
-COPY --from=build /baseApp/target/release/golem-worker-executor-oss .
+COPY --from=build /baseApp/target/release/worker-executor-oss .
 COPY --from=build /app/golem-worker-executor-oss/config/worker-executor-local.toml ./config/worker-executor-local.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
