@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 
 use http::{Response, StatusCode};
-use prometheus::{Encoder, Registry, TextEncoder};
 use tokio::task::JoinHandle;
 use warp::hyper::Body;
 use warp::Filter;
@@ -12,13 +11,13 @@ pub struct HttpServerImpl {
 }
 
 impl HttpServerImpl {
-    pub fn new(addr: impl Into<SocketAddr> + Send + 'static, registry: Registry) -> HttpServerImpl {
-        let handle = tokio::spawn(server(addr, registry));
+    pub fn new(addr: impl Into<SocketAddr> + Send + 'static) -> HttpServerImpl {
+        let handle = tokio::spawn(server(addr));
         HttpServerImpl { handle }
     }
 }
 
-async fn server(addr: impl Into<SocketAddr> + Send, registry: Registry) {
+async fn server(addr: impl Into<SocketAddr> + Send) {
     let healthcheck = warp::path!("healthcheck").map(|| {
         Response::builder()
             .status(StatusCode::OK)
@@ -26,20 +25,5 @@ async fn server(addr: impl Into<SocketAddr> + Send, registry: Registry) {
             .unwrap()
     });
 
-    let metrics = warp::path!("metrics").map(move || prometheus_metrics(registry.clone()));
-
-    warp::serve(healthcheck.or(metrics)).run(addr).await;
-}
-
-fn prometheus_metrics(registry: Registry) -> Response<Body> {
-    let encoder = TextEncoder::new();
-    let mut buffer = Vec::new();
-
-    let metric_families = registry.gather();
-    encoder.encode(&metric_families, &mut buffer).unwrap();
-
-    Response::builder()
-        .header("Content-Type", encoder.format_type())
-        .body(Body::from(buffer))
-        .unwrap()
+    warp::serve(healthcheck).run(addr).await;
 }

@@ -8,6 +8,7 @@ description = "Golem worker executor service"
 
 [lib]
 
+# Rename to golem-worker-executor-oss ?
 [[bin]]
 name = "worker-executor-oss"
 path = "src/server.rs"
