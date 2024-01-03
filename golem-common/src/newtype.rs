@@ -1,6 +1,6 @@
 #[macro_export]
 macro_rules! newtype_uuid {
-    ($name:ident) => {
+    ($name:ident, $proto_type:path) => {
         #[derive(
             Clone, Debug, PartialOrd, Ord, FromStr, Eq, Hash, PartialEq, Serialize, Deserialize,
         )]
@@ -45,12 +45,10 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl TryFrom<golem_api_grpc::proto::golem::common::$name> for $name {
+        impl TryFrom<$proto_type> for $name {
             type Error = String;
 
-            fn try_from(
-                value: golem_api_grpc::proto::golem::common::$name,
-            ) -> Result<Self, Self::Error> {
+            fn try_from(value: $proto_type) -> Result<Self, Self::Error> {
                 Ok(Self(
                     value
                         .value
@@ -60,9 +58,9 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl From<$name> for golem_api_grpc::proto::golem::common::$name {
+        impl From<$name> for $proto_type {
             fn from(value: $name) -> Self {
-                golem_api_grpc::proto::golem::common::$name {
+                $proto_type {
                     value: Some(value.0.into()),
                 }
             }

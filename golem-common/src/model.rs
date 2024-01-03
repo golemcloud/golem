@@ -25,7 +25,7 @@ use crate::newtype_uuid;
 // newtype_uuid!(PlanId);
 // newtype_uuid!(ProjectId);
 // newtype_uuid!(ProjectPolicyId);
-newtype_uuid!(TemplateId);
+newtype_uuid!(TemplateId, golem_api_grpc::proto::golem::common::TemplateId);
 // newtype_uuid!(TokenId);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
