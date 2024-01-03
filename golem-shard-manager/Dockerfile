@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y unzip curl \
     && rm -f $PROTOC_ZIP
 
 WORKDIR /app
-COPY /target/debug/golem-shard-manager ./
+COPY /target/x86_64-unknown-linux-gnu/debug/golem-shard-manager ./
 COPY /golem-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
