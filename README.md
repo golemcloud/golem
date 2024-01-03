@@ -6,14 +6,19 @@ See [Golem Cloud](https://golem.cloud) for more information.
 
 ## Local Testing
 
-To build all projects and spin up services
+To spin up services
 
 ```bash
- docker-compose up --build
+docker-compose up
 ```
 
-To reuse existing builds to spin up services
+Note that docker-compose up alone will not rebuild the changes.
+
+We avoid Rust base images and cargo usage within docker for faster builds.
+Therefore, for changes to reflect:
 
 ```bash
+# from the root of the project
+cargo build
 docker-compose up 
 ```

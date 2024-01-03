@@ -1,22 +1,14 @@
-FROM rust:1.74.0-bullseye as build
+FROM debian:bullseye-slim
 
-RUN apt-get update && apt-get install -y unzip \
+RUN apt-get update && apt-get install -y unzip curl \
     && PROTOC_ZIP=protoc-3.15.0-linux-x86_64.zip \
     && curl -OL https://github.com/google/protobuf/releases/download/v3.15.0/$PROTOC_ZIP \
     && unzip -o $PROTOC_ZIP -d /usr/local bin/protoc \
     && rm -f $PROTOC_ZIP
 
 WORKDIR /app
-COPY . /app
-
-RUN cargo build -p golem-shard-manager --release --target-dir=/baseApp/target
-
-FROM debian:bullseye-slim
-
-WORKDIR app/
-
-COPY --from=build /baseApp/target/release/golem-shard-manager .
-COPY --from=build /app/golem-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
+COPY /target/debug/golem-shard-manager ./
+COPY /golem-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates

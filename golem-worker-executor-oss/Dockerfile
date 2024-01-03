@@ -1,24 +1,14 @@
-FROM rust:1.74.0-bullseye as build
+FROM debian:bullseye-slim
 
-RUN apt-get update && apt-get install -y unzip \
+RUN apt-get update && apt-get install -y unzip curl\
     && PROTOC_ZIP=protoc-3.15.0-linux-x86_64.zip \
     && curl -OL https://github.com/google/protobuf/releases/download/v3.15.0/$PROTOC_ZIP \
     && unzip -o $PROTOC_ZIP -d /usr/local bin/protoc \
     && rm -f $PROTOC_ZIP
 
 WORKDIR /app
-COPY . /app
-
-WORKDIR /app/golem-worker-executor-oss
-
-RUN cargo build -p golem-worker-executor-oss --release --target-dir=/baseApp/target
-
-FROM debian:bullseye-slim
-
-WORKDIR app/
-
-COPY --from=build /baseApp/target/release/worker-executor-oss .
-COPY --from=build /app/golem-worker-executor-oss/config/worker-executor-local.toml ./config/worker-executor.toml
+COPY /target/debug/worker-executor-oss ./
+COPY /golem-worker-executor-oss/config/worker-executor-local.toml ./config/worker-executor.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates
