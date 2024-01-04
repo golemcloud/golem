@@ -1,4 +1,4 @@
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 WORKDIR /app
 COPY /target/x86_64-unknown-linux-gnu/debug/golem-shard-manager ./
