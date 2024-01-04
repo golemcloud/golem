@@ -19,6 +19,6 @@ Therefore, for changes to reflect:
 
 ```bash
 # from the root of the project
-cargo build
+cargo build --target x86_64-unknown-linux-gnu
 docker-compose up 
 ```
