@@ -1,13 +1,7 @@
-FROM debian:bullseye-slim
-
-RUN apt-get update && apt-get install -y unzip curl \
-    && PROTOC_ZIP=protoc-3.15.0-linux-x86_64.zip \
-    && curl -OL https://github.com/google/protobuf/releases/download/v3.15.0/$PROTOC_ZIP \
-    && unzip -o $PROTOC_ZIP -d /usr/local bin/protoc \
-    && rm -f $PROTOC_ZIP
+FROM debian:bookworm-slim
 
 WORKDIR /app
-COPY /target/debug/golem-shard-manager ./
+COPY /target/x86_64-unknown-linux-gnu/debug/golem-shard-manager ./
 COPY /golem-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
