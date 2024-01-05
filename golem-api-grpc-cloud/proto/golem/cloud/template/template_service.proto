@@ -8,7 +8,7 @@ import public "golem/cloud/common/template.proto";
 import public "golem/common/template_error.proto";
 import public "golem/common/template_id.proto";
 
-service TemplateService {
+service CloudTemplateService {
   rpc GetTemplates (GetTemplatesRequest) returns (GetTemplatesResponse);
   rpc CreateTemplate (stream CreateTemplateRequest) returns (CreateTemplateResponse);
   rpc DownloadTemplate (DownloadTemplateRequest) returns (stream DownloadTemplateResponse);

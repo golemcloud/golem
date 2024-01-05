@@ -8,7 +8,7 @@ import "golem/cloud/common/o_auth2_data.proto";
 import "golem/cloud/common/token.proto";
 import "golem/cloud/common/unsafe_token.proto";
 
-service LoginService {
+service CloudLoginService {
   rpc CompleteOAuth2 (CompleteOAuth2Request) returns (CompleteOAuth2Response);
   rpc StartOAuth2 (golem.common.Empty) returns (StartOAuth2Response);
   rpc CurrentToken (CurrentTokenRequest) returns (CurrentTokenResponse);

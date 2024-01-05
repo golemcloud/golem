@@ -6,7 +6,7 @@ import public "golem/common/empty.proto";
 import public "golem/cloud/common/account_summary.proto";
 import public "golem/cloud/common/account_summary_error.proto";
 
-service AccountSummaryService {
+service CloudAccountSummaryService {
   rpc GetAccountCount (GetAccountCountRequest) returns (GetAccountCountResponse);
   rpc GetAccounts (GetAccountsRequest) returns (GetAccountsResponse);
 }

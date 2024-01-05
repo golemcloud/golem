@@ -9,7 +9,7 @@ import public "golem/cloud/common/project_data_request.proto";
 import public "golem/cloud/common/project_id.proto";
 import public "golem/cloud/common/project_action.proto";
 
-service ProjectService {
+service CloudProjectService {
   rpc GetDefaultProject (GetDefaultProjectRequest) returns (GetDefaultProjectResponse);
   rpc GetProjects (GetProjectsRequest) returns (GetProjectsResponse);
   rpc CreateProject (CreateProjectRequest) returns (CreateProjectResponse);

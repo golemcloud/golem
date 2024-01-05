@@ -9,7 +9,7 @@ import public "golem/cloud/common/project_grant.proto";
 import public "golem/cloud/common/project_grant_error.proto";
 import public "golem/cloud/common/project_grant_data_request.proto";
 
-service ProjectGrantService {
+service CloudProjectGrantService {
   rpc GetProjectGrants (GetProjectGrantsRequest) returns (GetProjectGrantsResponse);
   rpc DeleteProjectGrant (DeleteProjectGrantRequest) returns (DeleteProjectGrantResponse);
   rpc GetProjectGrant (GetProjectGrantRequest) returns (GetProjectGrantResponse);

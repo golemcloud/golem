@@ -9,7 +9,7 @@ import public "golem/cloud/common/account_data.proto";
 import public "golem/cloud/common/account_error.proto";
 import public "golem/cloud/common/plan.proto";
 
-service AccountService {
+service CloudAccountService {
   rpc DeleteAccount (AccountDeleteRequest) returns (AccountDeleteResponse);
   rpc GetAccount (AccountGetRequest) returns (AccountGetResponse);
   rpc GetPlan (AccountGetPlanRequest) returns (AccountGetPlanResponse);

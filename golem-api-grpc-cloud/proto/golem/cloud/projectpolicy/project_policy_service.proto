@@ -9,7 +9,7 @@ import public "golem/cloud/common/project_policy_data.proto";
 import public "golem/cloud/common/project_policy_error.proto";
 import public "golem/cloud/common/project_policy_id.proto";
 
-service ProjectPolicyService {
+service CloudProjectPolicyService {
   rpc CreateProjectPolicy (CreateProjectPolicyRequest) returns (CreateProjectPolicyResponse);
   rpc GetProjectPolicy (GetProjectPolicyRequest) returns (GetProjectPolicyResponse);
 }

@@ -8,7 +8,7 @@ import public "golem/cloud/common/batch_update_resource_limits.proto";
 import public "golem/cloud/common/limits_error.proto";
 import public "golem/common/resource_limits.proto";
 
-service LimitsService {
+service CloudLimitsService {
   rpc GetLimits (GetLimitsRequest) returns (GetLimitsResponse);
   rpc BatchUpdateLimits (BatchUpdateLimitsRequest) returns (BatchUpdateLimitsResponse);
 }

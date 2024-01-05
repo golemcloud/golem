@@ -10,7 +10,7 @@ import public "golem/cloud/common/token_id.proto";
 import public "golem/cloud/common/token_error.proto";
 import public "golem/cloud/common/unsafe_token.proto";
 
-service TokenService {
+service CloudTokenService {
   rpc GetTokens (GetTokensRequest) returns (GetTokensResponse);
   rpc CreateToken (CreateTokenRequest) returns (CreateTokenResponse);
   rpc DeleteToken (DeleteTokenRequest) returns (DeleteTokenResponse);
