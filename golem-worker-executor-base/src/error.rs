@@ -335,75 +335,87 @@ impl From<GolemError> for Status {
     }
 }
 
-impl From<GolemError> for golem::common::GolemError {
+impl From<GolemError> for golem::common::WorkerExecutorError {
     fn from(value: GolemError) -> Self {
         match value {
-            GolemError::InvalidRequest { details } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::InvalidRequest(
+            GolemError::InvalidRequest { details } => golem::common::WorkerExecutorError {
+                error: Some(golem::common::worker_executor_error::Error::InvalidRequest(
                     golem::common::InvalidRequest { details },
                 )),
             },
-            GolemError::WorkerAlreadyExists { worker_id } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::WorkerAlreadyExists(
-                    golem::common::WorkerAlreadyExists {
-                        worker_id: Some(worker_id.into_proto()),
-                    },
-                )),
+            GolemError::WorkerAlreadyExists { worker_id } => golem::common::WorkerExecutorError {
+                error: Some(
+                    golem::common::worker_executor_error::Error::WorkerAlreadyExists(
+                        golem::common::WorkerAlreadyExists {
+                            worker_id: Some(worker_id.into_proto()),
+                        },
+                    ),
+                ),
             },
-            GolemError::WorkerNotFound { worker_id } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::WorkerNotFound(
+            GolemError::WorkerNotFound { worker_id } => golem::common::WorkerExecutorError {
+                error: Some(golem::common::worker_executor_error::Error::WorkerNotFound(
                     golem::common::WorkerNotFound {
                         worker_id: Some(worker_id.into_proto()),
                     },
                 )),
             },
-            GolemError::WorkerCreationFailed { worker_id, details } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::WorkerCreationFailed(
-                    golem::common::WorkerCreationFailed {
-                        worker_id: Some(worker_id.into_proto()),
-                        details,
-                    },
-                )),
-            },
-            GolemError::FailedToResumeWorker { worker_id } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::FailedToResumeWorker(
-                    golem::common::FailedToResumeWorker {
-                        worker_id: Some(worker_id.into_proto()),
-                    },
-                )),
+            GolemError::WorkerCreationFailed { worker_id, details } => {
+                golem::common::WorkerExecutorError {
+                    error: Some(
+                        golem::common::worker_executor_error::Error::WorkerCreationFailed(
+                            golem::common::WorkerCreationFailed {
+                                worker_id: Some(worker_id.into_proto()),
+                                details,
+                            },
+                        ),
+                    ),
+                }
+            }
+            GolemError::FailedToResumeWorker { worker_id } => golem::common::WorkerExecutorError {
+                error: Some(
+                    golem::common::worker_executor_error::Error::FailedToResumeWorker(
+                        golem::common::FailedToResumeWorker {
+                            worker_id: Some(worker_id.into_proto()),
+                        },
+                    ),
+                ),
             },
             GolemError::TemplateDownloadFailed {
                 template_id,
                 template_version,
                 reason,
-            } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::TemplateDownloadFailed(
-                    golem::common::TemplateDownloadFailed {
-                        template_id: Some(template_id.into()),
-                        template_version,
-                        reason,
-                    },
-                )),
+            } => golem::common::WorkerExecutorError {
+                error: Some(
+                    golem::common::worker_executor_error::Error::TemplateDownloadFailed(
+                        golem::common::TemplateDownloadFailed {
+                            template_id: Some(template_id.into()),
+                            template_version,
+                            reason,
+                        },
+                    ),
+                ),
             },
             GolemError::TemplateParseFailed {
                 template_id,
                 template_version,
                 reason,
-            } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::TemplateParseFailed(
-                    golem::common::TemplateParseFailed {
-                        template_id: Some(template_id.into()),
-                        template_version,
-                        reason,
-                    },
-                )),
+            } => golem::common::WorkerExecutorError {
+                error: Some(
+                    golem::common::worker_executor_error::Error::TemplateParseFailed(
+                        golem::common::TemplateParseFailed {
+                            template_id: Some(template_id.into()),
+                            template_version,
+                            reason,
+                        },
+                    ),
+                ),
             },
             GolemError::GetLatestVersionOfTemplateFailed {
                 template_id,
                 reason,
-            } => golem::common::GolemError {
+            } => golem::common::WorkerExecutorError {
                 error: Some(
-                    golem::common::golem_error::Error::GetLatestVersionOfTemplateFailed(
+                    golem::common::worker_executor_error::Error::GetLatestVersionOfTemplateFailed(
                         golem::common::GetLatestVersionOfTemplateFailed {
                             template_id: Some(template_id.into()),
                             reason,
@@ -411,64 +423,78 @@ impl From<GolemError> for golem::common::GolemError {
                     ),
                 ),
             },
-            GolemError::PromiseNotFound { promise_id } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::PromiseNotFound(
-                    golem::common::PromiseNotFound {
-                        promise_id: Some(promise_id.into()),
-                    },
-                )),
+            GolemError::PromiseNotFound { promise_id } => golem::common::WorkerExecutorError {
+                error: Some(
+                    golem::common::worker_executor_error::Error::PromiseNotFound(
+                        golem::common::PromiseNotFound {
+                            promise_id: Some(promise_id.into()),
+                        },
+                    ),
+                ),
             },
-            GolemError::PromiseDropped { promise_id } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::PromiseDropped(
+            GolemError::PromiseDropped { promise_id } => golem::common::WorkerExecutorError {
+                error: Some(golem::common::worker_executor_error::Error::PromiseDropped(
                     golem::common::PromiseDropped {
                         promise_id: Some(promise_id.into()),
                     },
                 )),
             },
-            GolemError::PromiseAlreadyCompleted { promise_id } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::PromiseAlreadyCompleted(
-                    golem::common::PromiseAlreadyCompleted {
-                        promise_id: Some(promise_id.into()),
-                    },
-                )),
-            },
-            GolemError::Interrupted { kind } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::Interrupted(
+            GolemError::PromiseAlreadyCompleted { promise_id } => {
+                golem::common::WorkerExecutorError {
+                    error: Some(
+                        golem::common::worker_executor_error::Error::PromiseAlreadyCompleted(
+                            golem::common::PromiseAlreadyCompleted {
+                                promise_id: Some(promise_id.into()),
+                            },
+                        ),
+                    ),
+                }
+            }
+            GolemError::Interrupted { kind } => golem::common::WorkerExecutorError {
+                error: Some(golem::common::worker_executor_error::Error::Interrupted(
                     golem::common::Interrupted {
                         recover_immediately: kind == InterruptKind::Restart,
                     },
                 )),
             },
-            GolemError::ParamTypeMismatch => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::ParamTypeMismatch(
-                    golem::common::ParamTypeMismatch {},
-                )),
+            GolemError::ParamTypeMismatch => golem::common::WorkerExecutorError {
+                error: Some(
+                    golem::common::worker_executor_error::Error::ParamTypeMismatch(
+                        golem::common::ParamTypeMismatch {},
+                    ),
+                ),
             },
-            GolemError::NoValueInMessage => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::NoValueInMessage(
-                    golem::common::NoValueInMessage {},
-                )),
+            GolemError::NoValueInMessage => golem::common::WorkerExecutorError {
+                error: Some(
+                    golem::common::worker_executor_error::Error::NoValueInMessage(
+                        golem::common::NoValueInMessage {},
+                    ),
+                ),
             },
-            GolemError::ValueMismatch { details } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::ValueMismatch(
+            GolemError::ValueMismatch { details } => golem::common::WorkerExecutorError {
+                error: Some(golem::common::worker_executor_error::Error::ValueMismatch(
                     golem::common::ValueMismatch { details },
                 )),
             },
-            GolemError::UnexpectedOplogEntry { expected, got } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::UnexpectedOplogEntry(
-                    golem::common::UnexpectedOplogEntry { expected, got },
-                )),
-            },
-            GolemError::Runtime { details } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::RuntimeError(
+            GolemError::UnexpectedOplogEntry { expected, got } => {
+                golem::common::WorkerExecutorError {
+                    error: Some(
+                        golem::common::worker_executor_error::Error::UnexpectedOplogEntry(
+                            golem::common::UnexpectedOplogEntry { expected, got },
+                        ),
+                    ),
+                }
+            }
+            GolemError::Runtime { details } => golem::common::WorkerExecutorError {
+                error: Some(golem::common::worker_executor_error::Error::RuntimeError(
                     golem::common::RuntimeError { details },
                 )),
             },
             GolemError::InvalidShardId {
                 shard_id,
                 shard_ids,
-            } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::InvalidShardId(
+            } => golem::common::WorkerExecutorError {
+                error: Some(golem::common::worker_executor_error::Error::InvalidShardId(
                     golem::common::InvalidShardId {
                         shard_id: Some(shard_id.into()),
                         shard_ids: shard_ids
@@ -478,23 +504,27 @@ impl From<GolemError> for golem::common::GolemError {
                     },
                 )),
             },
-            GolemError::InvalidAccount => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::InvalidAccount(
+            GolemError::InvalidAccount => golem::common::WorkerExecutorError {
+                error: Some(golem::common::worker_executor_error::Error::InvalidAccount(
                     golem::common::InvalidAccount {},
                 )),
             },
-            GolemError::PreviousInvocationFailed => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::PreviousInvocationFailed(
-                    golem::common::PreviousInvocationFailed {},
-                )),
+            GolemError::PreviousInvocationFailed => golem::common::WorkerExecutorError {
+                error: Some(
+                    golem::common::worker_executor_error::Error::PreviousInvocationFailed(
+                        golem::common::PreviousInvocationFailed {},
+                    ),
+                ),
             },
-            GolemError::PreviousInvocationExited => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::PreviousInvocationExited(
-                    golem::common::PreviousInvocationExited {},
-                )),
+            GolemError::PreviousInvocationExited => golem::common::WorkerExecutorError {
+                error: Some(
+                    golem::common::worker_executor_error::Error::PreviousInvocationExited(
+                        golem::common::PreviousInvocationExited {},
+                    ),
+                ),
             },
-            GolemError::Unknown { details } => golem::common::GolemError {
-                error: Some(golem::common::golem_error::Error::Unknown(
+            GolemError::Unknown { details } => golem::common::WorkerExecutorError {
+                error: Some(golem::common::worker_executor_error::Error::Unknown(
                     golem::common::UnknownError { details },
                 )),
             },
