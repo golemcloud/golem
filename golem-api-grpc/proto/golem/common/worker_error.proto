@@ -3,7 +3,7 @@ syntax = "proto3";
 package golem.common;
 
 import "golem/common/error_body.proto";
-import "golem/common/worker_executor_error.proto";
+import "golem/common/worker_execution_error.proto";
 
 message WorkerError {
   oneof error {
@@ -12,6 +12,6 @@ message WorkerError {
     ErrorBody limit_exceeded = 3;
     ErrorBody not_found = 4;
     ErrorBody already_exists = 5;
-    WorkerExecutorError internal_error = 6;
+    WorkerExecutionError internal_error = 6;
   }
 }

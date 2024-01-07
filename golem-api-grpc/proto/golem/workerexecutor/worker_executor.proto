@@ -14,7 +14,7 @@ import public "golem/common/val.proto";
 import public "golem/common/worker_id.proto";
 import public "golem/common/worker_metadata.proto";
 import public "golem/common/worker_status.proto";
-import public "golem/common/worker_executor_error.proto";
+import public "golem/common/worker_execution_error.proto";
 
 package golem.workerexecutor;
 
@@ -36,14 +36,14 @@ service WorkerExecutor {
 message InvokeWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.WorkerExecutorError failure = 2;
+    golem.common.WorkerExecutionError failure = 2;
   }
 }
 
 message DeleteWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.WorkerExecutorError failure = 2;
+    golem.common.WorkerExecutionError failure = 2;
   }
 }
 
@@ -55,7 +55,7 @@ message CompletePromiseRequest {
 message CompletePromiseResponse {
   oneof result {
     CompletePromiseSuccess success = 1;
-    golem.common.WorkerExecutorError failure = 2;
+    golem.common.WorkerExecutionError failure = 2;
   }
 }
 
@@ -66,7 +66,7 @@ message CompletePromiseSuccess {
 message InterruptWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.WorkerExecutorError failure = 2;
+    golem.common.WorkerExecutionError failure = 2;
   }
 }
 
@@ -82,7 +82,7 @@ message CreateWorkerRequest {
 message CreateWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.WorkerExecutorError failure = 2;
+    golem.common.WorkerExecutionError failure = 2;
   }
 }
 
@@ -93,7 +93,7 @@ message GetInvocationKeyRequest {
 message GetInvocationKeyResponse {
   oneof result {
     GetInvocationKeySuccess success = 1;
-    golem.common.WorkerExecutorError failure = 2;
+    golem.common.WorkerExecutionError failure = 2;
   }
 }
 
@@ -114,7 +114,7 @@ message InvokeAndAwaitWorkerRequest {
 message InvokeAndAwaitWorkerResponse {
   oneof result {
     InvokeAndAwaitWorkerSuccess success = 1;
-    golem.common.WorkerExecutorError failure = 2;
+    golem.common.WorkerExecutionError failure = 2;
   }
 }
 
@@ -148,7 +148,7 @@ message RevokeShardsRequest {
 message RevokeShardsResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.WorkerExecutorError failure = 2;
+    golem.common.WorkerExecutionError failure = 2;
   }
 }
 
@@ -159,14 +159,14 @@ message AssignShardsRequest {
 message AssignShardsResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.WorkerExecutorError failure = 2;
+    golem.common.WorkerExecutionError failure = 2;
   }
 }
 
 message GetWorkerMetadataResponse {
   oneof result {
     golem.common.WorkerMetadata success = 1;
-    golem.common.WorkerExecutorError failure = 2;
+    golem.common.WorkerExecutionError failure = 2;
   }
 }
 
@@ -178,6 +178,6 @@ message ResumeWorkerRequest {
 message ResumeWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.WorkerExecutorError failure = 2;
+    golem.common.WorkerExecutionError failure = 2;
   }
 }

@@ -2365,81 +2365,81 @@ pub enum GolemError {
     InvalidAccount(GolemErrorInvalidAccount),
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::WorkerExecutorError> for GolemError {
+impl TryFrom<golem_api_grpc::proto::golem::common::WorkerExecutionError> for GolemError {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::WorkerExecutorError,
+        value: golem_api_grpc::proto::golem::common::WorkerExecutionError,
     ) -> Result<Self, Self::Error> {
         match value.error {
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::InvalidRequest(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::InvalidRequest(err)) => {
                 Ok(GolemError::InvalidRequest(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::WorkerAlreadyExists(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::WorkerAlreadyExists(err)) => {
                 Ok(GolemError::WorkerAlreadyExists(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::WorkerNotFound(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::WorkerNotFound(err)) => {
                 Ok(GolemError::WorkerNotFound(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::WorkerCreationFailed(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::WorkerCreationFailed(err)) => {
                 Ok(GolemError::WorkerCreationFailed(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::FailedToResumeWorker(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::FailedToResumeWorker(err)) => {
                 Ok(GolemError::FailedToResumeWorker(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::TemplateDownloadFailed(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::TemplateDownloadFailed(err)) => {
                 Ok(GolemError::TemplateDownloadFailed(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::TemplateParseFailed(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::TemplateParseFailed(err)) => {
                 Ok(GolemError::TemplateParseFailed(err.try_into()?))
             }
             Some(
-                golem_api_grpc::proto::golem::common::worker_executor_error::Error::GetLatestVersionOfTemplateFailed(
+                golem_api_grpc::proto::golem::common::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(
                     err,
                 ),
             ) => Ok(GolemError::GetLatestVersionOfTemplateFailed(
                 err.try_into()?,
             )),
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::PromiseNotFound(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PromiseNotFound(err)) => {
                 Ok(GolemError::PromiseNotFound(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::PromiseDropped(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PromiseDropped(err)) => {
                 Ok(GolemError::PromiseDropped(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::PromiseAlreadyCompleted(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PromiseAlreadyCompleted(err)) => {
                 Ok(GolemError::PromiseAlreadyCompleted(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::Interrupted(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::Interrupted(err)) => {
                 Ok(GolemError::Interrupted(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::ParamTypeMismatch(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::ParamTypeMismatch(err)) => {
                 Ok(GolemError::ParamTypeMismatch(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::NoValueInMessage(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::NoValueInMessage(err)) => {
                 Ok(GolemError::NoValueInMessage(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::ValueMismatch(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::ValueMismatch(err)) => {
                 Ok(GolemError::ValueMismatch(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::UnexpectedOplogEntry(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::UnexpectedOplogEntry(err)) => {
                 Ok(GolemError::UnexpectedOplogEntry(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::RuntimeError(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::RuntimeError(err)) => {
                 Ok(GolemError::RuntimeError(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::InvalidShardId(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::InvalidShardId(err)) => {
                 Ok(GolemError::InvalidShardId(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::PreviousInvocationFailed(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PreviousInvocationFailed(err)) => {
                 Ok(GolemError::PreviousInvocationFailed(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::PreviousInvocationExited(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PreviousInvocationExited(err)) => {
                 Ok(GolemError::PreviousInvocationExited(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::Unknown(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::Unknown(err)) => {
                 Ok(GolemError::Unknown(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::InvalidAccount(err)) => {
+            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::InvalidAccount(err)) => {
                 Ok(GolemError::InvalidAccount(err.into()))
             }
             None => Err("Missing field: error".to_string()),
@@ -2447,117 +2447,117 @@ impl TryFrom<golem_api_grpc::proto::golem::common::WorkerExecutorError> for Gole
     }
 }
 
-impl From<GolemError> for golem_api_grpc::proto::golem::common::WorkerExecutorError {
+impl From<GolemError> for golem_api_grpc::proto::golem::common::WorkerExecutionError {
     fn from(error: GolemError) -> Self {
         match error {
             GolemError::InvalidRequest(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::InvalidRequest(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::InvalidRequest(err.into())),
                 }
             },
             GolemError::WorkerAlreadyExists(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::WorkerAlreadyExists(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::WorkerAlreadyExists(err.into())),
                 }
             },
             GolemError::WorkerNotFound(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::WorkerNotFound(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::WorkerNotFound(err.into())),
                 }
             },
             GolemError::WorkerCreationFailed(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::WorkerCreationFailed(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::WorkerCreationFailed(err.into())),
                 }
             },
             GolemError::FailedToResumeWorker(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::FailedToResumeWorker(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::FailedToResumeWorker(err.into())),
                 }
             },
             GolemError::TemplateDownloadFailed(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::TemplateDownloadFailed(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::TemplateDownloadFailed(err.into())),
                 }
             },
             GolemError::TemplateParseFailed(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::TemplateParseFailed(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::TemplateParseFailed(err.into())),
                 }
             },
             GolemError::GetLatestVersionOfTemplateFailed(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::GetLatestVersionOfTemplateFailed(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(err.into())),
                 }
             },
             GolemError::PromiseNotFound(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::PromiseNotFound(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PromiseNotFound(err.into())),
                 }
             },
             GolemError::PromiseDropped(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::PromiseDropped(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PromiseDropped(err.into())),
                 }
             },
             GolemError::PromiseAlreadyCompleted(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::PromiseAlreadyCompleted(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PromiseAlreadyCompleted(err.into())),
                 }
             },
             GolemError::Interrupted(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::Interrupted(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::Interrupted(err.into())),
                 }
             },
             GolemError::ParamTypeMismatch(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::ParamTypeMismatch(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::ParamTypeMismatch(err.into())),
                 }
             },
             GolemError::NoValueInMessage(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::NoValueInMessage(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::NoValueInMessage(err.into())),
                 }
             },
             GolemError::ValueMismatch(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::ValueMismatch(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::ValueMismatch(err.into())),
                 }
             },
             GolemError::UnexpectedOplogEntry(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::UnexpectedOplogEntry(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::UnexpectedOplogEntry(err.into())),
                 }
             },
             GolemError::RuntimeError(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::RuntimeError(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::RuntimeError(err.into())),
                 }
             },
             GolemError::InvalidShardId(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::InvalidShardId(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::InvalidShardId(err.into())),
                 }
             },
             GolemError::PreviousInvocationFailed(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::PreviousInvocationFailed(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PreviousInvocationFailed(err.into())),
                 }
             },
             GolemError::PreviousInvocationExited(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::PreviousInvocationExited(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PreviousInvocationExited(err.into())),
                 }
             },
             GolemError::Unknown(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::Unknown(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::Unknown(err.into())),
                 }
             },
             GolemError::InvalidAccount(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutorError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_executor_error::Error::InvalidAccount(err.into())),
+                golem_api_grpc::proto::golem::common::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::InvalidAccount(err.into())),
                 }
             }
         }
@@ -2569,11 +2569,11 @@ pub struct GolemErrorBody {
     pub golem_error: GolemError,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::WorkerExecutorError> for GolemErrorBody {
+impl TryFrom<golem_api_grpc::proto::golem::common::WorkerExecutionError> for GolemErrorBody {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::WorkerExecutorError,
+        value: golem_api_grpc::proto::golem::common::WorkerExecutionError,
     ) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
             golem_error: value.try_into()?,

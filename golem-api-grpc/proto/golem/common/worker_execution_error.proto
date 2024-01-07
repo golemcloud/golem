@@ -8,7 +8,7 @@ import "golem/common/worker_id.proto";
 package golem.common;
 
 
-message WorkerExecutorError {
+message WorkerExecutionError {
   oneof error {
     InvalidRequest invalid_request = 1;
     WorkerAlreadyExists worker_already_exists = 2;

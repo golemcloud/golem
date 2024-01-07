@@ -28,11 +28,6 @@ service WorkerService {
   rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc GetWorkerById (GetWorkerByIdRequest) returns (GetWorkerByIdResponse);
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.common.LogEvent);
-
-  // Temporary for proxying the REST API
-  rpc InvokeJson (InvokeRequestJson) returns (InvokeResponse);
-  // Temporary for proxying the REST API
-  rpc InvokeAndAwaitJson (InvokeAndAwaitRequestJson) returns (InvokeAndAwaitResponseJson);
 }
 
 message LaunchNewWorkerRequest {
@@ -103,26 +98,9 @@ message InvokeAndAwaitRequest {
   golem.common.CallingConvention callingConvention = 5;
 }
 
-// Temporary
-message InvokeAndAwaitRequestJson {
-  golem.common.WorkerId workerId = 1;
-  golem.common.InvocationKey invocationKey = 2;
-  string function = 3;
-  string invokeParametersJson = 4;
-  golem.common.CallingConvention callingConvention = 5;
-}
-
 message InvokeAndAwaitResponse {
   oneof result {
     golem.common.InvokeResult success = 1;
-    golem.common.WorkerError error = 2;
-  }
-}
-
-// Temporary
-message InvokeAndAwaitResponseJson {
-  oneof result {
-    golem.common.InvokeResultJson success = 1;
     golem.common.WorkerError error = 2;
   }
 }
@@ -131,13 +109,6 @@ message InvokeRequest {
   golem.common.WorkerId workerId = 1;
   string function = 2;
   golem.common.InvokeParameters invokeParameters = 3;
-}
-
-// Temporary
-message InvokeRequestJson {
-  golem.common.WorkerId workerId = 1;
-  string function = 2;
-  string invokeParametersJson = 3;
 }
 
 message InvokeResponse {

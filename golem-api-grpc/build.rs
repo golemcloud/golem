@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/common/versioned_name.proto",
                 "proto/golem/common/versioned_template_id.proto",
                 "proto/golem/common/versioned_worker_id.proto",
-                "proto/golem/common/worker_executor_error.proto",
+                "proto/golem/common/worker_execution_error.proto",
                 "proto/golem/common/worker_error.proto",
                 "proto/golem/common/worker_id.proto",
                 "proto/golem/common/worker_metadata.proto",
