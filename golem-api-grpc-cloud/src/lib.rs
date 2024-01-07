@@ -10,11 +10,11 @@ pub mod proto {
     mod tests {
         use std::collections::HashSet;
 
-        use crate::proto::golem::cloud::projectpolicy::ProjectAction;
         use crate::proto::golem::cloud::project::{
             get_project_actions_response, GetProjectActionsResponse,
             GetProjectActionsSuccessResponse,
         };
+        use crate::proto::golem::cloud::projectpolicy::ProjectAction;
 
         #[test]
         fn test_project_action_conversion() {
