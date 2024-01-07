@@ -1110,11 +1110,13 @@ mod tests {
                                     fields: vec![
                                         golem_api_grpc::proto::golem::template::NameTypePair {
                                             name: "nested".to_string(),
-                                            typ: Some(golem_api_grpc::proto::golem::template::Type {
-                                                r#type: Some(Type::Primitive(TypePrimitive {
-                                                    primitive: PrimitiveType::Str as i32,
-                                                })),
-                                            }),
+                                            typ: Some(
+                                                golem_api_grpc::proto::golem::template::Type {
+                                                    r#type: Some(Type::Primitive(TypePrimitive {
+                                                        primitive: PrimitiveType::Str as i32,
+                                                    })),
+                                                },
+                                            ),
                                         },
                                     ],
                                 },
@@ -1295,13 +1297,15 @@ mod tests {
                                 0
                             },
                         }),
-                        expected_type: Type::Enum(golem_api_grpc::proto::golem::template::TypeEnum {
-                            names: if unique_values.is_empty() {
-                                vec!["const_name".to_string()]
-                            } else {
-                                unique_values.iter().map(|name| name.to_string()).collect()
+                        expected_type: Type::Enum(
+                            golem_api_grpc::proto::golem::template::TypeEnum {
+                                names: if unique_values.is_empty() {
+                                    vec!["const_name".to_string()]
+                                } else {
+                                    unique_values.iter().map(|name| name.to_string()).collect()
+                                },
                             },
-                        }),
+                        ),
                     }
                 }),
                 any::<Vec<String>>().prop_map(|values| {
@@ -1349,9 +1353,11 @@ mod tests {
                         }),
                         expected_type: Type::List(Box::new(
                             golem_api_grpc::proto::golem::template::TypeList {
-                                elem: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
-                                    r#type: expected_type.into(),
-                                })),
+                                elem: Some(Box::new(
+                                    golem_api_grpc::proto::golem::template::Type {
+                                        r#type: expected_type.into(),
+                                    },
+                                )),
                             },
                         )),
                     }
@@ -1395,9 +1401,11 @@ mod tests {
                                     .map(|(name, val)| {
                                         golem_api_grpc::proto::golem::template::NameTypePair {
                                             name: name.to_string(),
-                                            typ: Some(golem_api_grpc::proto::golem::template::Type {
-                                                r#type: Some(val.expected_type.clone()),
-                                            }),
+                                            typ: Some(
+                                                golem_api_grpc::proto::golem::template::Type {
+                                                    r#type: Some(val.expected_type.clone()),
+                                                },
+                                            ),
                                         }
                                     })
                                     .collect(),
