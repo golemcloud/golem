@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-package golem.cloud.common;
-
-
-message AccountData {
-  string name = 1;
-  string email = 2;
-}

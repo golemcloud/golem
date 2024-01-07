@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+import "golem/common/uuid.proto";
+
+package golem.cloud.plan;
+
+message PlanId {
+  golem.common.UUID value = 1;
+}

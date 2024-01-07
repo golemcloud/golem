@@ -4,11 +4,11 @@ package golem.cloud.token;
 
 import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
-import public "golem/cloud/common/create_token_dto.proto";
-import public "golem/cloud/common/token.proto";
-import public "golem/cloud/common/token_id.proto";
-import public "golem/cloud/common/token_error.proto";
-import public "golem/cloud/common/unsafe_token.proto";
+import public "golem/cloud/token/create_token_dto.proto";
+import public "golem/cloud/token/token.proto";
+import public "golem/cloud/token/token_id.proto";
+import public "golem/cloud/token/token_error.proto";
+import public "golem/cloud/token/unsafe_token.proto";
 
 service CloudTokenService {
   rpc GetTokens (GetTokensRequest) returns (GetTokensResponse);
@@ -24,46 +24,46 @@ message GetTokensRequest {
 message GetTokensResponse {
   oneof result {
     GetTokensSuccessResponse success = 1;
-    golem.cloud.common.TokenError error = 2;
+    golem.cloud.token.TokenError error = 2;
   }
 }
 
 message GetTokensSuccessResponse {
-  repeated golem.cloud.common.Token data = 1;
+  repeated golem.cloud.token.Token data = 1;
 }
 
 message CreateTokenRequest {
   golem.common.AccountId accountId = 1;
-  golem.cloud.common.CreateTokenDTO createTokenDTO = 2;
+  golem.cloud.token.CreateTokenDTO createTokenDTO = 2;
 }
 
 message CreateTokenResponse {
   oneof result {
-    golem.cloud.common.UnsafeToken success = 1;
-    golem.cloud.common.TokenError error = 2;
+    golem.cloud.token.UnsafeToken success = 1;
+    golem.cloud.token.TokenError error = 2;
   }
 }
 
 message DeleteTokenRequest {
   golem.common.AccountId accountId = 1;
-  golem.cloud.common.TokenId tokenId = 2;
+  golem.cloud.token.TokenId tokenId = 2;
 }
 
 message DeleteTokenResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.cloud.common.TokenError error = 2;
+    golem.cloud.token.TokenError error = 2;
   }
 }
 
 message GetTokenRequest {
   golem.common.AccountId accountId = 1;
-  golem.cloud.common.TokenId tokenId = 2;
+  golem.cloud.token.TokenId tokenId = 2;
 }
 
 message GetTokenResponse {
   oneof result {
-    golem.cloud.common.Token success = 1;
-    golem.cloud.common.TokenError error = 2;
+    golem.cloud.token.Token success = 1;
+    golem.cloud.token.TokenError error = 2;
   }
 }

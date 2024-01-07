@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem.cloud.token;
+
+import "golem/cloud/token/token.proto";
+import "golem/cloud/token/token_secret.proto";
+
+message UnsafeToken {
+  golem.cloud.token.Token data = 1;
+  golem.cloud.token.TokenSecret secret = 2;
+}

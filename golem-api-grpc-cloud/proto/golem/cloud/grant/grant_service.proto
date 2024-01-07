@@ -4,8 +4,8 @@ package golem.cloud.grant;
 
 import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
-import public "golem/cloud/common/grant_error.proto";
-import public "golem/cloud/common/role.proto";
+import public "golem/cloud/grant/grant_error.proto";
+import public "golem/cloud/grant/role.proto";
 
 service CloudGrantService {
   rpc GetGrants (GetGrantsRequest) returns (GetGrantsResponse);
@@ -21,46 +21,46 @@ message GetGrantsRequest {
 message GetGrantsResponse {
   oneof result {
     GetGrantsSuccessResponse success = 1;
-    golem.cloud.common.GrantError error = 2;
+    golem.cloud.grant.GrantError error = 2;
   }
 }
 
 message GetGrantsSuccessResponse {
-  repeated golem.cloud.common.Role roles = 1;
+  repeated golem.cloud.grant.Role roles = 1;
 }
 
 message DeleteGrantRequest {
   golem.common.AccountId accountId = 1;
-  golem.cloud.common.Role role = 2;
+  golem.cloud.grant.Role role = 2;
 }
 
 message DeleteGrantResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.cloud.common.GrantError error = 2;
+    golem.cloud.grant.GrantError error = 2;
   }
 }
 
 message GetGrantRequest {
   golem.common.AccountId accountId = 1;
-  golem.cloud.common.Role role = 2;
+  golem.cloud.grant.Role role = 2;
 }
 
 message GetGrantResponse {
   oneof result {
-    golem.cloud.common.Role role = 1;
-    golem.cloud.common.GrantError error = 2;
+    golem.cloud.grant.Role role = 1;
+    golem.cloud.grant.GrantError error = 2;
   }
 }
 
 message PutGrantRequest {
   golem.common.AccountId accountId = 1;
-  golem.cloud.common.Role role = 2;
+  golem.cloud.grant.Role role = 2;
 }
 
 message PutGrantResponse {
   oneof result {
-    golem.cloud.common.Role role = 1;
-    golem.cloud.common.GrantError error = 2;
+    golem.cloud.grant.Role role = 1;
+    golem.cloud.grant.GrantError error = 2;
   }
 }

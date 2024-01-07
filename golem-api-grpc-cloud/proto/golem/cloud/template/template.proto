@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package golem.cloud.template;
 
-import "golem/cloud/common/project_id.proto";
+import "golem/cloud/project/project_id.proto";
 import "golem/template/protected_template_id.proto";
 import "golem/template/template_metadata.proto";
 import "golem/template/user_template_id.proto";
@@ -15,5 +15,5 @@ message Template {
   string template_name = 4;
   int32 template_size = 5;
   golem.template.TemplateMetadata metadata = 6;
-  golem.cloud.common.ProjectId project_id = 7;
+  golem.cloud.project.ProjectId project_id = 7;
 }

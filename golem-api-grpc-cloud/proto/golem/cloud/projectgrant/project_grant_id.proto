@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+import "golem/common/uuid.proto";
+
+package golem.cloud.projectgrant;
+
+message ProjectGrantId {
+  golem.common.UUID value = 1;
+}

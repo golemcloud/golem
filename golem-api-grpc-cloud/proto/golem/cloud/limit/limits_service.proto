@@ -4,8 +4,8 @@ package golem.cloud.limit;
 
 import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
-import public "golem/cloud/common/batch_update_resource_limits.proto";
-import public "golem/cloud/common/limits_error.proto";
+import public "golem/cloud/limit/batch_update_resource_limits.proto";
+import public "golem/cloud/limit/limits_error.proto";
 import public "golem/common/resource_limits.proto";
 
 service CloudLimitsService {
@@ -20,18 +20,18 @@ message GetLimitsRequest {
 message GetLimitsResponse {
   oneof result {
     golem.common.ResourceLimits success = 1;
-    golem.cloud.common.LimitsError error = 2;
+    golem.cloud.limit.LimitsError error = 2;
   }
 }
 
 message BatchUpdateLimitsRequest {
-  golem.cloud.common.BatchUpdateResourceLimits batchUpdateResourceLimits = 1;
+  golem.cloud.limit.BatchUpdateResourceLimits batchUpdateResourceLimits = 1;
 }
 
 message BatchUpdateLimitsResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.cloud.common.LimitsError error = 2;
+    golem.cloud.limit.LimitsError error = 2;
   }
 }
 
