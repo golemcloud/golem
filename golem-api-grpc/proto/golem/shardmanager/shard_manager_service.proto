@@ -1,9 +1,9 @@
 syntax = "proto3";
 
-import public "golem/common/pod.proto";
-import public "golem/common/routing_table.proto";
-import public "golem/common/shard_id.proto";
-import public "golem/common/shard_manager_error.proto";
+import public "golem/shardmanager/pod.proto";
+import public "golem/shardmanager/routing_table.proto";
+import public "golem/shardmanager/shard_id.proto";
+import public "golem/shardmanager/shard_manager_error.proto";
 
 package golem.shardmanager;
 
@@ -16,8 +16,8 @@ message GetRoutingTableRequest {}
 
 message GetRoutingTableResponse {
   oneof result {
-    golem.common.RoutingTable success = 1;
-    golem.common.ShardManagerError failure = 2;
+    golem.shardmanager.RoutingTable success = 1;
+    golem.shardmanager.ShardManagerError failure = 2;
   }
 }
 
@@ -29,11 +29,11 @@ message RegisterRequest {
 message RegisterResponse {
   oneof result {
     RegisterSuccess success = 1;
-    golem.common.ShardManagerError failure = 2;
+    golem.shardmanager.ShardManagerError failure = 2;
   }
 }
 
 message RegisterSuccess {
   uint32 number_of_shards = 1;
-  repeated golem.common.ShardId shard_ids = 2;
+  repeated golem.shardmanager.ShardId shard_ids = 2;
 }

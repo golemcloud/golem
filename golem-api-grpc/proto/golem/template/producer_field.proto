@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package golem.template;
+
+import "golem/template/versioned_name.proto";
+
+message ProducerField {
+  string name = 1;
+  repeated VersionedName values = 2;
+}

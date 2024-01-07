@@ -42,17 +42,17 @@ impl Pod {
     }
 }
 
-impl From<Pod> for golem::common::Pod {
-    fn from(value: Pod) -> golem::common::Pod {
-        golem::common::Pod {
+impl From<Pod> for golem::shardmanager::Pod {
+    fn from(value: Pod) -> golem::shardmanager::Pod {
+        golem::shardmanager::Pod {
             host: value.host,
             port: value.port as u32,
         }
     }
 }
 
-impl From<golem::common::Pod> for Pod {
-    fn from(proto: golem::common::Pod) -> Self {
+impl From<golem::shardmanager::Pod> for Pod {
+    fn from(proto: golem::shardmanager::Pod) -> Self {
         Self {
             host: proto.host,
             port: proto.port as u16,
@@ -137,9 +137,9 @@ impl RoutingTable {
     }
 }
 
-impl From<RoutingTable> for golem::common::RoutingTable {
-    fn from(routing_table: RoutingTable) -> golem::common::RoutingTable {
-        golem::common::RoutingTable {
+impl From<RoutingTable> for golem::shardmanager::RoutingTable {
+    fn from(routing_table: RoutingTable) -> golem::shardmanager::RoutingTable {
+        golem::shardmanager::RoutingTable {
             number_of_shards: routing_table.number_of_shards as u32,
             shard_assignments: routing_table
                 .shard_assignments
@@ -149,7 +149,7 @@ impl From<RoutingTable> for golem::common::RoutingTable {
                         .into_iter()
                         .map(move |shard_id| (pod.clone(), shard_id))
                 })
-                .map(|(pod, shard_id)| golem::common::RoutingTableEntry {
+                .map(|(pod, shard_id)| golem::shardmanager::RoutingTableEntry {
                     pod: Some(pod.into()),
                     shard_id: Some(shard_id.into()),
                 })
@@ -158,8 +158,8 @@ impl From<RoutingTable> for golem::common::RoutingTable {
     }
 }
 
-impl From<golem::common::RoutingTable> for RoutingTable {
-    fn from(routing_table: golem::common::RoutingTable) -> Self {
+impl From<golem::shardmanager::RoutingTable> for RoutingTable {
+    fn from(routing_table: golem::shardmanager::RoutingTable) -> Self {
         let mut shard_assignments: HashMap<Pod, HashSet<ShardId>> = HashMap::new();
         for entry in routing_table.shard_assignments {
             let pod = entry.pod.unwrap().into();

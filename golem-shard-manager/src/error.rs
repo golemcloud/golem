@@ -54,21 +54,25 @@ impl From<ShardManagerError> for tonic::Status {
     }
 }
 
-impl From<ShardManagerError> for golem::common::ShardManagerError {
-    fn from(value: ShardManagerError) -> golem::common::ShardManagerError {
+impl From<ShardManagerError> for golem::shardmanager::ShardManagerError {
+    fn from(value: ShardManagerError) -> golem::shardmanager::ShardManagerError {
         match value {
-            ShardManagerError::InvalidRequest { details } => golem::common::ShardManagerError {
-                error: Some(golem::common::shard_manager_error::Error::InvalidRequest(
+            ShardManagerError::InvalidRequest { details } => {
+                golem::shardmanager::ShardManagerError {
+                    error: Some(
+                        golem::shardmanager::shard_manager_error::Error::InvalidRequest(
+                            golem::common::ErrorBody { error: details },
+                        ),
+                    ),
+                }
+            }
+            ShardManagerError::Timeout { details } => golem::shardmanager::ShardManagerError {
+                error: Some(golem::shardmanager::shard_manager_error::Error::Timeout(
                     golem::common::ErrorBody { error: details },
                 )),
             },
-            ShardManagerError::Timeout { details } => golem::common::ShardManagerError {
-                error: Some(golem::common::shard_manager_error::Error::Timeout(
-                    golem::common::ErrorBody { error: details },
-                )),
-            },
-            ShardManagerError::Unknown(s) => golem::common::ShardManagerError {
-                error: Some(golem::common::shard_manager_error::Error::Unknown(
+            ShardManagerError::Unknown(s) => golem::shardmanager::ShardManagerError {
+                error: Some(golem::shardmanager::shard_manager_error::Error::Unknown(
                     golem::common::ErrorBody { error: s },
                 )),
             },

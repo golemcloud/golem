@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
-use golem_api_grpc::proto::golem::common::TemplateError;
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
+use golem_api_grpc::proto::golem::template::TemplateError;
 use golem_api_grpc::proto::golem::template::{
     download_template_response, get_latest_template_version_response, DownloadTemplateRequest,
     GetLatestTemplateVersionRequest,

@@ -4,9 +4,9 @@ package golem.template;
 
 import public "golem/common/empty.proto";
 import public "golem/cloud/common/project_id.proto";
-import public "golem/cloud/common/template.proto";
-import public "golem/common/template_error.proto";
-import public "golem/common/template_id.proto";
+import public "golem/cloud/template/template.proto";
+import public "golem/template/template_error.proto";
+import public "golem/template/template_id.proto";
 
 service CloudTemplateService {
   rpc GetTemplates (GetTemplatesRequest) returns (GetTemplatesResponse);
@@ -25,12 +25,12 @@ message GetTemplatesRequest {
 message GetTemplatesResponse {
   oneof result {
     GetTemplatesSuccessResponse success = 1;
-    golem.common.TemplateError error = 2;
+    golem.template.TemplateError error = 2;
   }
 }
 
 message GetTemplatesSuccessResponse {
-  repeated golem.cloud.common.Template templates = 1;
+  repeated golem.cloud.template.Template templates = 1;
 }
 
 message CreateTemplateRequest {
@@ -51,46 +51,46 @@ message CreateTemplateRequestChunk {
 
 message CreateTemplateResponse {
   oneof result {
-    golem.cloud.common.Template success = 1;
-    golem.common.TemplateError error = 2;
+    golem.cloud.template.Template success = 1;
+    golem.template.TemplateError error = 2;
   }
 }
 
 message DownloadTemplateRequest {
-  golem.common.TemplateId templateId = 1;
+  golem.template.TemplateId templateId = 1;
   optional int32 version = 2;
 }
 
 message DownloadTemplateResponse {
   oneof result {
     bytes successChunk = 1;
-    golem.common.TemplateError error = 2;
+    golem.template.TemplateError error = 2;
   }
 }
 
 message GetTemplateRequest {
-  golem.common.TemplateId templateId = 1;
+  golem.template.TemplateId templateId = 1;
 }
 
 message GetTemplateResponse {
   oneof result {
     GetTemplateSuccessResponse success = 1;
-    golem.common.TemplateError error = 2;
+    golem.template.TemplateError error = 2;
   }
 }
 
 message GetTemplateSuccessResponse {
-  repeated golem.cloud.common.Template templates = 1;
+  repeated golem.cloud.template.Template templates = 1;
 }
 
 message GetLatestTemplateVersionRequest {
-  golem.common.TemplateId templateId = 1;
+  golem.template.TemplateId templateId = 1;
 }
 
 message GetLatestTemplateVersionResponse {
   oneof result {
     int32 success = 1;
-    golem.common.TemplateError error = 2;
+    golem.template.TemplateError error = 2;
   }
 }
 
@@ -102,7 +102,7 @@ message UpdateTemplateRequest {
 }
 
 message UpdateTemplateRequestHeader {
-  golem.common.TemplateId templateId = 1;
+  golem.template.TemplateId templateId = 1;
 }
 
 message UpdateTemplateRequestChunk {
@@ -111,8 +111,8 @@ message UpdateTemplateRequestChunk {
 
 message UpdateTemplateResponse {
   oneof result {
-    golem.cloud.common.Template success = 1;
-    golem.common.TemplateError error = 2;
+    golem.cloud.template.Template success = 1;
+    golem.template.TemplateError error = 2;
   }
 }
 

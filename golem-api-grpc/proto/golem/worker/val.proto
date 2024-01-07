@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package golem.worker;
+
+message Val {
+  oneof val {
+    bool bool = 1;
+    int32 s8 = 2;
+    int32 u8 = 3;
+    int32 s16 = 4;
+    int32 u16 = 5;
+    int32 s32 = 6;
+    int64 u32 = 7;
+    int64 s64 = 8;
+    int64 u64 = 9;
+    float f32 = 10;
+    double f64 = 11;
+    int32 char = 12;
+    string string = 13;
+    ValList list = 14;
+    ValRecord record = 15;
+    ValTuple tuple = 16;
+    ValVariant variant = 17;
+    ValEnum enum = 18;
+    ValOption option = 20;
+    ValResult result = 21;
+    ValFlags flags = 22;
+  }
+}
+
+message ValList {
+  repeated Val values = 2;
+}
+
+message ValRecord {
+  repeated Val values = 2;
+}
+
+message ValTuple {
+  repeated Val values = 2;
+}
+
+message ValVariant {
+  int32 discriminant = 2;
+  optional Val value = 3;
+}
+
+message ValEnum {
+  int32 discriminant = 2;
+}
+
+message ValOption {
+  int32 discriminant = 2;
+  optional Val value = 3;
+}
+
+message ValResult {
+  int32 discriminant = 2;
+  optional Val value = 3;
+}
+
+message ValFlags {
+  int32 count = 2;
+  repeated int32 value = 3;
+}

@@ -334,8 +334,8 @@ impl ManagedStandardIo {
                                 } else {
                                     let result = String::from_utf8(captured)
                                         .map(|captured_string| {
-                                            vec![golem::common::Val {
-                                                val: Some(golem::common::val::Val::String(
+                                            vec![golem::worker::Val {
+                                                val: Some(golem::worker::val::Val::String(
                                                     captured_string,
                                                 )),
                                             }]

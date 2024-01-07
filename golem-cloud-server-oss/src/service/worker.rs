@@ -7,8 +7,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use golem_api_grpc::proto::golem::common::{
-    FunctionResult, InvokeResult as ProtoInvokeResult, LogEvent, Val as ProtoVal,
+use golem_api_grpc::proto::golem::template::FunctionResult;
+use golem_api_grpc::proto::golem::worker::{
+    InvokeResult as ProtoInvokeResult, LogEvent, Val as ProtoVal,
 };
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
@@ -388,7 +389,7 @@ impl WorkerService for WorkerServiceDefault {
             |worker_executor_client, worker_id| {
                 Box::pin(async move {
                     let response = worker_executor_client
-                        .delete_worker(golem_api_grpc::proto::golem::common::WorkerId::from(
+                        .delete_worker(golem_api_grpc::proto::golem::worker::WorkerId::from(
                             worker_id.clone(),
                         ))
                         .await
@@ -824,7 +825,7 @@ impl WorkerService for WorkerServiceDefault {
             |worker_executor_client, worker_id| {
                 Box::pin(async move {
                     let response = worker_executor_client.get_worker_metadata(
-                        golem_api_grpc::proto::golem::common::WorkerId::from(worker_id.clone())
+                        golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id.clone())
                     ).await.map_err(|err| {
                         GolemError::RuntimeError(GolemErrorRuntimeError {
                             details: err.to_string(),

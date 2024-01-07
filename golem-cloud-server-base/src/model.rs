@@ -1,4 +1,4 @@
-use golem_api_grpc::proto::golem::common::{
+use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
 use golem_common::model::{ShardId, TemplateId, WorkerStatus};
@@ -45,11 +45,11 @@ impl VersionedTemplateId {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::VersionedTemplateId> for VersionedTemplateId {
+impl TryFrom<golem_api_grpc::proto::golem::template::VersionedTemplateId> for VersionedTemplateId {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::VersionedTemplateId,
+        value: golem_api_grpc::proto::golem::template::VersionedTemplateId,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             template_id: value.template_id.ok_or("Missing template_id")?.try_into()?,
@@ -58,7 +58,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::VersionedTemplateId> for Vers
     }
 }
 
-impl From<VersionedTemplateId> for golem_api_grpc::proto::golem::common::VersionedTemplateId {
+impl From<VersionedTemplateId> for golem_api_grpc::proto::golem::template::VersionedTemplateId {
     fn from(value: VersionedTemplateId) -> Self {
         Self {
             template_id: Some(value.template_id.into()),
@@ -82,11 +82,11 @@ pub struct UserTemplateId {
     pub versioned_template_id: VersionedTemplateId,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::UserTemplateId> for UserTemplateId {
+impl TryFrom<golem_api_grpc::proto::golem::template::UserTemplateId> for UserTemplateId {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::UserTemplateId,
+        value: golem_api_grpc::proto::golem::template::UserTemplateId,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             versioned_template_id: value
@@ -97,7 +97,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::UserTemplateId> for UserTempl
     }
 }
 
-impl From<UserTemplateId> for golem_api_grpc::proto::golem::common::UserTemplateId {
+impl From<UserTemplateId> for golem_api_grpc::proto::golem::template::UserTemplateId {
     fn from(value: UserTemplateId) -> Self {
         Self {
             versioned_template_id: Some(value.versioned_template_id.into()),
@@ -126,11 +126,11 @@ impl ProtectedTemplateId {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::ProtectedTemplateId> for ProtectedTemplateId {
+impl TryFrom<golem_api_grpc::proto::golem::template::ProtectedTemplateId> for ProtectedTemplateId {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::ProtectedTemplateId,
+        value: golem_api_grpc::proto::golem::template::ProtectedTemplateId,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             versioned_template_id: value
@@ -141,7 +141,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::ProtectedTemplateId> for Prot
     }
 }
 
-impl From<ProtectedTemplateId> for golem_api_grpc::proto::golem::common::ProtectedTemplateId {
+impl From<ProtectedTemplateId> for golem_api_grpc::proto::golem::template::ProtectedTemplateId {
     fn from(value: ProtectedTemplateId) -> Self {
         Self {
             versioned_template_id: Some(value.versioned_template_id.into()),
@@ -828,13 +828,13 @@ pub enum Type {
     Bool(TypeBool),
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::Type> for Type {
+impl TryFrom<golem_api_grpc::proto::golem::template::Type> for Type {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::common::Type) -> Result<Self, Self::Error> {
+    fn try_from(value: golem_api_grpc::proto::golem::template::Type) -> Result<Self, Self::Error> {
         match value.r#type {
             None => Err("Missing type".to_string()),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Variant(variant)) => {
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Variant(variant)) => {
                 Ok(Self::Variant(TypeVariant {
                     cases: variant
                         .cases
@@ -852,7 +852,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::Type> for Type {
                         .collect::<Result<_, _>>()?,
                 }))
             }
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Result(result)) => {
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Result(result)) => {
                 let ok = match result.ok {
                     None => None,
                     Some(ok) => Some(Box::new((*ok).try_into()?)),
@@ -864,20 +864,20 @@ impl TryFrom<golem_api_grpc::proto::golem::common::Type> for Type {
 
                 Ok(Self::Result(TypeResult { ok, err }))
             }
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Option(option)) => {
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Option(option)) => {
                 Ok(Self::Option(TypeOption {
                     inner: Box::new((*option.elem.ok_or("Missing elem")?).try_into()?),
                 }))
             }
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Enum(r#enum)) => {
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Enum(r#enum)) => {
                 Ok(Self::Enum(TypeEnum {
                     cases: r#enum.names,
                 }))
             }
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Flags(flags)) => {
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Flags(flags)) => {
                 Ok(Self::Flags(TypeFlags { cases: flags.names }))
             }
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Record(record)) => {
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Record(record)) => {
                 Ok(Self::Record(TypeRecord {
                     cases: record
                         .fields
@@ -891,7 +891,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::Type> for Type {
                         .collect::<Result<_, _>>()?,
                 }))
             }
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Tuple(tuple)) => {
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Tuple(tuple)) => {
                 Ok(Self::Tuple(TypeTuple {
                     items: tuple
                         .elems
@@ -900,219 +900,229 @@ impl TryFrom<golem_api_grpc::proto::golem::common::Type> for Type {
                         .collect::<Result<_, _>>()?,
                 }))
             }
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::List(list)) => {
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::List(list)) => {
                 Ok(Self::List(TypeList {
                     inner: Box::new((*list.elem.ok_or("Missing elem")?).try_into()?),
                 }))
             }
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 12 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 12 },
             )) => Ok(Self::Str(TypeStr)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 11 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 11 },
             )) => Ok(Self::Chr(TypeChr)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 10 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 10 },
             )) => Ok(Self::F64(TypeF64)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 9 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 9 },
             )) => Ok(Self::F32(TypeF32)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 8 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 8 },
             )) => Ok(Self::U64(TypeU64)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 7 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 7 },
             )) => Ok(Self::S64(TypeS64)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 6 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 6 },
             )) => Ok(Self::U32(TypeU32)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 5 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 5 },
             )) => Ok(Self::S32(TypeS32)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 4 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 4 },
             )) => Ok(Self::U16(TypeU16)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 3 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 3 },
             )) => Ok(Self::S16(TypeS16)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 2 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 2 },
             )) => Ok(Self::U8(TypeU8)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 1 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 1 },
             )) => Ok(Self::S8(TypeS8)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 0 },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 0 },
             )) => Ok(Self::Bool(TypeBool)),
-            Some(golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::common::TypePrimitive { primitive },
+            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                golem_api_grpc::proto::golem::template::TypePrimitive { primitive },
             )) => Err(format!("Invalid primitive: {}", primitive)),
         }
     }
 }
 
-impl From<Type> for golem_api_grpc::proto::golem::common::Type {
+impl From<Type> for golem_api_grpc::proto::golem::template::Type {
     fn from(value: Type) -> Self {
         match value {
             Type::Variant(variant) => Self {
-                r#type: Some(golem_api_grpc::proto::golem::common::r#type::Type::Variant(
-                    golem_api_grpc::proto::golem::common::TypeVariant {
-                        cases: variant
-                            .cases
-                            .into_iter()
-                            .map(
-                                |case| golem_api_grpc::proto::golem::common::NameOptionTypePair {
-                                    name: case.name,
-                                    typ: case.typ.map(|typ| (*typ).into()),
-                                },
-                            )
-                            .collect(),
-                    },
-                )),
+                r#type: Some(
+                    golem_api_grpc::proto::golem::template::r#type::Type::Variant(
+                        golem_api_grpc::proto::golem::template::TypeVariant {
+                            cases: variant
+                                .cases
+                                .into_iter()
+                                .map(|case| {
+                                    golem_api_grpc::proto::golem::template::NameOptionTypePair {
+                                        name: case.name,
+                                        typ: case.typ.map(|typ| (*typ).into()),
+                                    }
+                                })
+                                .collect(),
+                        },
+                    ),
+                ),
             },
             Type::Result(result) => Self {
-                r#type: Some(golem_api_grpc::proto::golem::common::r#type::Type::Result(
-                    Box::new(golem_api_grpc::proto::golem::common::TypeResult {
-                        ok: result.ok.map(|ok| Box::new((*ok).into())),
-                        err: result.err.map(|err| Box::new((*err).into())),
-                    }),
-                )),
+                r#type: Some(
+                    golem_api_grpc::proto::golem::template::r#type::Type::Result(Box::new(
+                        golem_api_grpc::proto::golem::template::TypeResult {
+                            ok: result.ok.map(|ok| Box::new((*ok).into())),
+                            err: result.err.map(|err| Box::new((*err).into())),
+                        },
+                    )),
+                ),
             },
             Type::Option(option) => Self {
-                r#type: Some(golem_api_grpc::proto::golem::common::r#type::Type::Option(
-                    Box::new(golem_api_grpc::proto::golem::common::TypeOption {
-                        elem: Some(Box::new((*option.inner).into())),
-                    }),
-                )),
+                r#type: Some(
+                    golem_api_grpc::proto::golem::template::r#type::Type::Option(Box::new(
+                        golem_api_grpc::proto::golem::template::TypeOption {
+                            elem: Some(Box::new((*option.inner).into())),
+                        },
+                    )),
+                ),
             },
             Type::Enum(r#enum) => Self {
-                r#type: Some(golem_api_grpc::proto::golem::common::r#type::Type::Enum(
-                    golem_api_grpc::proto::golem::common::TypeEnum {
+                r#type: Some(golem_api_grpc::proto::golem::template::r#type::Type::Enum(
+                    golem_api_grpc::proto::golem::template::TypeEnum {
                         names: r#enum.cases,
                     },
                 )),
             },
             Type::Flags(flags) => Self {
-                r#type: Some(golem_api_grpc::proto::golem::common::r#type::Type::Flags(
-                    golem_api_grpc::proto::golem::common::TypeFlags { names: flags.cases },
+                r#type: Some(golem_api_grpc::proto::golem::template::r#type::Type::Flags(
+                    golem_api_grpc::proto::golem::template::TypeFlags { names: flags.cases },
                 )),
             },
             Type::Record(record) => Self {
-                r#type: Some(golem_api_grpc::proto::golem::common::r#type::Type::Record(
-                    golem_api_grpc::proto::golem::common::TypeRecord {
-                        fields: record
-                            .cases
-                            .into_iter()
-                            .map(|case| golem_api_grpc::proto::golem::common::NameTypePair {
-                                name: case.name,
-                                typ: Some((*case.typ).into()),
-                            })
-                            .collect(),
-                    },
-                )),
+                r#type: Some(
+                    golem_api_grpc::proto::golem::template::r#type::Type::Record(
+                        golem_api_grpc::proto::golem::template::TypeRecord {
+                            fields: record
+                                .cases
+                                .into_iter()
+                                .map(
+                                    |case| golem_api_grpc::proto::golem::template::NameTypePair {
+                                        name: case.name,
+                                        typ: Some((*case.typ).into()),
+                                    },
+                                )
+                                .collect(),
+                        },
+                    ),
+                ),
             },
             Type::Tuple(tuple) => Self {
-                r#type: Some(golem_api_grpc::proto::golem::common::r#type::Type::Tuple(
-                    golem_api_grpc::proto::golem::common::TypeTuple {
+                r#type: Some(golem_api_grpc::proto::golem::template::r#type::Type::Tuple(
+                    golem_api_grpc::proto::golem::template::TypeTuple {
                         elems: tuple.items.into_iter().map(|item| item.into()).collect(),
                     },
                 )),
             },
             Type::List(list) => Self {
-                r#type: Some(golem_api_grpc::proto::golem::common::r#type::Type::List(
-                    Box::new(golem_api_grpc::proto::golem::common::TypeList {
+                r#type: Some(golem_api_grpc::proto::golem::template::r#type::Type::List(
+                    Box::new(golem_api_grpc::proto::golem::template::TypeList {
                         elem: Some(Box::new((*list.inner).into())),
                     }),
                 )),
             },
             Type::Str(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 12 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 12 },
                     ),
                 ),
             },
             Type::Chr(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 11 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 11 },
                     ),
                 ),
             },
             Type::F64(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 10 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 10 },
                     ),
                 ),
             },
             Type::F32(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 9 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 9 },
                     ),
                 ),
             },
             Type::U64(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 8 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 8 },
                     ),
                 ),
             },
             Type::S64(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 7 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 7 },
                     ),
                 ),
             },
             Type::U32(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 6 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 6 },
                     ),
                 ),
             },
             Type::S32(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 5 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 5 },
                     ),
                 ),
             },
             Type::U16(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 4 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 4 },
                     ),
                 ),
             },
             Type::S16(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 3 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 3 },
                     ),
                 ),
             },
             Type::U8(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 2 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 2 },
                     ),
                 ),
             },
             Type::S8(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 1 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 1 },
                     ),
                 ),
             },
             Type::Bool(_) => Self {
                 r#type: Some(
-                    golem_api_grpc::proto::golem::common::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::common::TypePrimitive { primitive: 0 },
+                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
+                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 0 },
                     ),
                 ),
             },
@@ -1126,11 +1136,11 @@ pub struct FunctionParameter {
     pub tpe: Type,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::FunctionParameter> for FunctionParameter {
+impl TryFrom<golem_api_grpc::proto::golem::template::FunctionParameter> for FunctionParameter {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::FunctionParameter,
+        value: golem_api_grpc::proto::golem::template::FunctionParameter,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
@@ -1139,7 +1149,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::FunctionParameter> for Functi
     }
 }
 
-impl From<FunctionParameter> for golem_api_grpc::proto::golem::common::FunctionParameter {
+impl From<FunctionParameter> for golem_api_grpc::proto::golem::template::FunctionParameter {
     fn from(value: FunctionParameter) -> Self {
         Self {
             name: value.name,
@@ -1154,11 +1164,11 @@ pub struct FunctionResult {
     pub tpe: Type,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::FunctionResult> for FunctionResult {
+impl TryFrom<golem_api_grpc::proto::golem::template::FunctionResult> for FunctionResult {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::FunctionResult,
+        value: golem_api_grpc::proto::golem::template::FunctionResult,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
@@ -1167,7 +1177,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::FunctionResult> for FunctionR
     }
 }
 
-impl From<FunctionResult> for golem_api_grpc::proto::golem::common::FunctionResult {
+impl From<FunctionResult> for golem_api_grpc::proto::golem::template::FunctionResult {
     fn from(value: FunctionResult) -> Self {
         Self {
             name: value.name,
@@ -1182,11 +1192,11 @@ pub struct ExportInstance {
     pub functions: Vec<ExportFunction>,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::ExportInstance> for ExportInstance {
+impl TryFrom<golem_api_grpc::proto::golem::template::ExportInstance> for ExportInstance {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::ExportInstance,
+        value: golem_api_grpc::proto::golem::template::ExportInstance,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
@@ -1199,7 +1209,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::ExportInstance> for ExportIns
     }
 }
 
-impl From<ExportInstance> for golem_api_grpc::proto::golem::common::ExportInstance {
+impl From<ExportInstance> for golem_api_grpc::proto::golem::template::ExportInstance {
     fn from(value: ExportInstance) -> Self {
         Self {
             name: value.name,
@@ -1219,11 +1229,11 @@ pub struct ExportFunction {
     pub results: Vec<FunctionResult>,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::ExportFunction> for ExportFunction {
+impl TryFrom<golem_api_grpc::proto::golem::template::ExportFunction> for ExportFunction {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::ExportFunction,
+        value: golem_api_grpc::proto::golem::template::ExportFunction,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
@@ -1241,7 +1251,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::ExportFunction> for ExportFun
     }
 }
 
-impl From<ExportFunction> for golem_api_grpc::proto::golem::common::ExportFunction {
+impl From<ExportFunction> for golem_api_grpc::proto::golem::template::ExportFunction {
     fn from(value: ExportFunction) -> Self {
         Self {
             name: value.name,
@@ -1266,33 +1276,39 @@ pub enum Export {
     Function(ExportFunction),
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::Export> for Export {
+impl TryFrom<golem_api_grpc::proto::golem::template::Export> for Export {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::common::Export) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: golem_api_grpc::proto::golem::template::Export,
+    ) -> Result<Self, Self::Error> {
         match value.export {
             None => Err("Missing export".to_string()),
-            Some(golem_api_grpc::proto::golem::common::export::Export::Instance(instance)) => {
+            Some(golem_api_grpc::proto::golem::template::export::Export::Instance(instance)) => {
                 Ok(Self::Instance(instance.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::export::Export::Function(function)) => {
+            Some(golem_api_grpc::proto::golem::template::export::Export::Function(function)) => {
                 Ok(Self::Function(function.try_into()?))
             }
         }
     }
 }
 
-impl From<Export> for golem_api_grpc::proto::golem::common::Export {
+impl From<Export> for golem_api_grpc::proto::golem::template::Export {
     fn from(value: Export) -> Self {
         match value {
             Export::Instance(instance) => Self {
                 export: Some(
-                    golem_api_grpc::proto::golem::common::export::Export::Instance(instance.into()),
+                    golem_api_grpc::proto::golem::template::export::Export::Instance(
+                        instance.into(),
+                    ),
                 ),
             },
             Export::Function(function) => Self {
                 export: Some(
-                    golem_api_grpc::proto::golem::common::export::Export::Function(function.into()),
+                    golem_api_grpc::proto::golem::template::export::Export::Function(
+                        function.into(),
+                    ),
                 ),
             },
         }
@@ -1307,8 +1323,8 @@ pub struct VersionedName {
     pub version: String,
 }
 
-impl From<golem_api_grpc::proto::golem::common::VersionedName> for VersionedName {
-    fn from(value: golem_api_grpc::proto::golem::common::VersionedName) -> Self {
+impl From<golem_api_grpc::proto::golem::template::VersionedName> for VersionedName {
+    fn from(value: golem_api_grpc::proto::golem::template::VersionedName) -> Self {
         Self {
             name: value.name,
             version: value.version,
@@ -1316,7 +1332,7 @@ impl From<golem_api_grpc::proto::golem::common::VersionedName> for VersionedName
     }
 }
 
-impl From<VersionedName> for golem_api_grpc::proto::golem::common::VersionedName {
+impl From<VersionedName> for golem_api_grpc::proto::golem::template::VersionedName {
     fn from(value: VersionedName) -> Self {
         Self {
             name: value.name,
@@ -1333,8 +1349,8 @@ pub struct ProducerField {
     pub values: Vec<VersionedName>,
 }
 
-impl From<golem_api_grpc::proto::golem::common::ProducerField> for ProducerField {
-    fn from(value: golem_api_grpc::proto::golem::common::ProducerField) -> Self {
+impl From<golem_api_grpc::proto::golem::template::ProducerField> for ProducerField {
+    fn from(value: golem_api_grpc::proto::golem::template::ProducerField) -> Self {
         Self {
             name: value.name,
             values: value.values.into_iter().map(|value| value.into()).collect(),
@@ -1342,7 +1358,7 @@ impl From<golem_api_grpc::proto::golem::common::ProducerField> for ProducerField
     }
 }
 
-impl From<ProducerField> for golem_api_grpc::proto::golem::common::ProducerField {
+impl From<ProducerField> for golem_api_grpc::proto::golem::template::ProducerField {
     fn from(value: ProducerField) -> Self {
         Self {
             name: value.name,
@@ -1358,15 +1374,15 @@ pub struct Producers {
     pub fields: Vec<ProducerField>,
 }
 
-impl From<golem_api_grpc::proto::golem::common::Producers> for Producers {
-    fn from(value: golem_api_grpc::proto::golem::common::Producers) -> Self {
+impl From<golem_api_grpc::proto::golem::template::Producers> for Producers {
+    fn from(value: golem_api_grpc::proto::golem::template::Producers) -> Self {
         Self {
             fields: value.fields.into_iter().map(|field| field.into()).collect(),
         }
     }
 }
 
-impl From<Producers> for golem_api_grpc::proto::golem::common::Producers {
+impl From<Producers> for golem_api_grpc::proto::golem::template::Producers {
     fn from(value: Producers) -> Self {
         Self {
             fields: value.fields.into_iter().map(|field| field.into()).collect(),
@@ -1425,11 +1441,11 @@ impl TemplateMetadata {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::TemplateMetadata> for TemplateMetadata {
+impl TryFrom<golem_api_grpc::proto::golem::template::TemplateMetadata> for TemplateMetadata {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::TemplateMetadata,
+        value: golem_api_grpc::proto::golem::template::TemplateMetadata,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             exports: value
@@ -1446,7 +1462,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::TemplateMetadata> for Templat
     }
 }
 
-impl From<TemplateMetadata> for golem_api_grpc::proto::golem::common::TemplateMetadata {
+impl From<TemplateMetadata> for golem_api_grpc::proto::golem::template::TemplateMetadata {
     fn from(value: TemplateMetadata) -> Self {
         Self {
             exports: value
@@ -1542,11 +1558,11 @@ impl From<WorkerId> for golem_common::model::WorkerId {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::WorkerId> for WorkerId {
+impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::WorkerId,
+        value: golem_api_grpc::proto::golem::worker::WorkerId,
     ) -> Result<Self, Self::Error> {
         let worker_name: Id = value.name.try_into().map_err(String::from)?;
 
@@ -1557,7 +1573,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::WorkerId> for WorkerId {
     }
 }
 
-impl From<WorkerId> for golem_api_grpc::proto::golem::common::WorkerId {
+impl From<WorkerId> for golem_api_grpc::proto::golem::worker::WorkerId {
     fn from(value: WorkerId) -> Self {
         Self {
             template_id: Some(value.template_id.into()),
@@ -1582,11 +1598,11 @@ pub struct VersionedWorkerId {
     pub template_version_used: i32,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::VersionedWorkerId> for VersionedWorkerId {
+impl TryFrom<golem_api_grpc::proto::golem::worker::VersionedWorkerId> for VersionedWorkerId {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::VersionedWorkerId,
+        value: golem_api_grpc::proto::golem::worker::VersionedWorkerId,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
@@ -1595,7 +1611,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::VersionedWorkerId> for Versio
     }
 }
 
-impl From<VersionedWorkerId> for golem_api_grpc::proto::golem::common::VersionedWorkerId {
+impl From<VersionedWorkerId> for golem_api_grpc::proto::golem::worker::VersionedWorkerId {
     fn from(value: VersionedWorkerId) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
@@ -1614,7 +1630,7 @@ pub struct CompleteParameters {
     pub data: Vec<u8>,
 }
 
-impl From<CompleteParameters> for golem_api_grpc::proto::golem::common::CompleteParameters {
+impl From<CompleteParameters> for golem_api_grpc::proto::golem::worker::CompleteParameters {
     fn from(value: CompleteParameters) -> Self {
         Self {
             oplog_idx: value.oplog_idx,
@@ -1633,11 +1649,11 @@ pub struct PromiseId {
     pub oplog_idx: i32,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::PromiseId> for PromiseId {
+impl TryFrom<golem_api_grpc::proto::golem::worker::PromiseId> for PromiseId {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::PromiseId,
+        value: golem_api_grpc::proto::golem::worker::PromiseId,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value
@@ -1649,7 +1665,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::PromiseId> for PromiseId {
     }
 }
 
-impl From<PromiseId> for golem_api_grpc::proto::golem::common::PromiseId {
+impl From<PromiseId> for golem_api_grpc::proto::golem::worker::PromiseId {
     fn from(value: PromiseId) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
@@ -1663,14 +1679,14 @@ pub struct GolemErrorInvalidRequest {
     pub details: String,
 }
 
-impl From<golem_api_grpc::proto::golem::common::InvalidRequest> for GolemErrorInvalidRequest {
-    fn from(value: golem_api_grpc::proto::golem::common::InvalidRequest) -> Self {
+impl From<golem_api_grpc::proto::golem::worker::InvalidRequest> for GolemErrorInvalidRequest {
+    fn from(value: golem_api_grpc::proto::golem::worker::InvalidRequest) -> Self {
         Self {
             details: value.details,
         }
     }
 }
-impl From<GolemErrorInvalidRequest> for golem_api_grpc::proto::golem::common::InvalidRequest {
+impl From<GolemErrorInvalidRequest> for golem_api_grpc::proto::golem::worker::InvalidRequest {
     fn from(value: GolemErrorInvalidRequest) -> Self {
         Self {
             details: value.details,
@@ -1685,13 +1701,13 @@ pub struct GolemErrorWorkerAlreadyExists {
     pub worker_id: WorkerId,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::WorkerAlreadyExists>
+impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerAlreadyExists>
     for GolemErrorWorkerAlreadyExists
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::WorkerAlreadyExists,
+        value: golem_api_grpc::proto::golem::worker::WorkerAlreadyExists,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value
@@ -1703,7 +1719,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::WorkerAlreadyExists>
 }
 
 impl From<GolemErrorWorkerAlreadyExists>
-    for golem_api_grpc::proto::golem::common::WorkerAlreadyExists
+    for golem_api_grpc::proto::golem::worker::WorkerAlreadyExists
 {
     fn from(value: GolemErrorWorkerAlreadyExists) -> Self {
         Self {
@@ -1719,11 +1735,11 @@ pub struct GolemErrorWorkerNotFound {
     pub worker_id: WorkerId,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::WorkerNotFound> for GolemErrorWorkerNotFound {
+impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerNotFound> for GolemErrorWorkerNotFound {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::WorkerNotFound,
+        value: golem_api_grpc::proto::golem::worker::WorkerNotFound,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value
@@ -1734,7 +1750,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::WorkerNotFound> for GolemErro
     }
 }
 
-impl From<GolemErrorWorkerNotFound> for golem_api_grpc::proto::golem::common::WorkerNotFound {
+impl From<GolemErrorWorkerNotFound> for golem_api_grpc::proto::golem::worker::WorkerNotFound {
     fn from(value: GolemErrorWorkerNotFound) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
@@ -1750,13 +1766,13 @@ pub struct GolemErrorWorkerCreationFailed {
     pub details: String,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::WorkerCreationFailed>
+impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerCreationFailed>
     for GolemErrorWorkerCreationFailed
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::WorkerCreationFailed,
+        value: golem_api_grpc::proto::golem::worker::WorkerCreationFailed,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value
@@ -1769,7 +1785,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::WorkerCreationFailed>
 }
 
 impl From<GolemErrorWorkerCreationFailed>
-    for golem_api_grpc::proto::golem::common::WorkerCreationFailed
+    for golem_api_grpc::proto::golem::worker::WorkerCreationFailed
 {
     fn from(value: GolemErrorWorkerCreationFailed) -> Self {
         Self {
@@ -1786,13 +1802,13 @@ pub struct GolemErrorFailedToResumeWorker {
     pub worker_id: WorkerId,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::FailedToResumeWorker>
+impl TryFrom<golem_api_grpc::proto::golem::worker::FailedToResumeWorker>
     for GolemErrorFailedToResumeWorker
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::FailedToResumeWorker,
+        value: golem_api_grpc::proto::golem::worker::FailedToResumeWorker,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value
@@ -1804,7 +1820,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::FailedToResumeWorker>
 }
 
 impl From<GolemErrorFailedToResumeWorker>
-    for golem_api_grpc::proto::golem::common::FailedToResumeWorker
+    for golem_api_grpc::proto::golem::worker::FailedToResumeWorker
 {
     fn from(value: GolemErrorFailedToResumeWorker) -> Self {
         Self {
@@ -1821,13 +1837,13 @@ pub struct GolemErrorTemplateDownloadFailed {
     pub reason: String,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::TemplateDownloadFailed>
+impl TryFrom<golem_api_grpc::proto::golem::worker::TemplateDownloadFailed>
     for GolemErrorTemplateDownloadFailed
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::TemplateDownloadFailed,
+        value: golem_api_grpc::proto::golem::worker::TemplateDownloadFailed,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             template_id: VersionedTemplateId {
@@ -1843,11 +1859,11 @@ impl TryFrom<golem_api_grpc::proto::golem::common::TemplateDownloadFailed>
 }
 
 impl From<GolemErrorTemplateDownloadFailed>
-    for golem_api_grpc::proto::golem::common::TemplateDownloadFailed
+    for golem_api_grpc::proto::golem::worker::TemplateDownloadFailed
 {
     fn from(value: GolemErrorTemplateDownloadFailed) -> Self {
         let template_version = value.template_id.version;
-        let template_id = golem_api_grpc::proto::golem::common::TemplateId {
+        let template_id = golem_api_grpc::proto::golem::template::TemplateId {
             value: Some(value.template_id.template_id.0.into()),
         };
         Self {
@@ -1866,13 +1882,13 @@ pub struct GolemErrorTemplateParseFailed {
     pub reason: String,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::TemplateParseFailed>
+impl TryFrom<golem_api_grpc::proto::golem::worker::TemplateParseFailed>
     for GolemErrorTemplateParseFailed
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::TemplateParseFailed,
+        value: golem_api_grpc::proto::golem::worker::TemplateParseFailed,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             template_id: VersionedTemplateId {
@@ -1888,11 +1904,11 @@ impl TryFrom<golem_api_grpc::proto::golem::common::TemplateParseFailed>
 }
 
 impl From<GolemErrorTemplateParseFailed>
-    for golem_api_grpc::proto::golem::common::TemplateParseFailed
+    for golem_api_grpc::proto::golem::worker::TemplateParseFailed
 {
     fn from(value: GolemErrorTemplateParseFailed) -> Self {
         let template_version = value.template_id.version;
-        let template_id = golem_api_grpc::proto::golem::common::TemplateId {
+        let template_id = golem_api_grpc::proto::golem::template::TemplateId {
             value: Some(value.template_id.template_id.0.into()),
         };
         Self {
@@ -1911,13 +1927,13 @@ pub struct GolemErrorGetLatestVersionOfTemplateFailed {
     pub reason: String,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::GetLatestVersionOfTemplateFailed>
+impl TryFrom<golem_api_grpc::proto::golem::worker::GetLatestVersionOfTemplateFailed>
     for GolemErrorGetLatestVersionOfTemplateFailed
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::GetLatestVersionOfTemplateFailed,
+        value: golem_api_grpc::proto::golem::worker::GetLatestVersionOfTemplateFailed,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             template_id: value
@@ -1930,7 +1946,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::GetLatestVersionOfTemplateFai
 }
 
 impl From<GolemErrorGetLatestVersionOfTemplateFailed>
-    for golem_api_grpc::proto::golem::common::GetLatestVersionOfTemplateFailed
+    for golem_api_grpc::proto::golem::worker::GetLatestVersionOfTemplateFailed
 {
     fn from(value: GolemErrorGetLatestVersionOfTemplateFailed) -> Self {
         Self {
@@ -1947,11 +1963,11 @@ pub struct GolemErrorPromiseNotFound {
     pub promise_id: PromiseId,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::PromiseNotFound> for GolemErrorPromiseNotFound {
+impl TryFrom<golem_api_grpc::proto::golem::worker::PromiseNotFound> for GolemErrorPromiseNotFound {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::PromiseNotFound,
+        value: golem_api_grpc::proto::golem::worker::PromiseNotFound,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             promise_id: value
@@ -1962,7 +1978,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::PromiseNotFound> for GolemErr
     }
 }
 
-impl From<GolemErrorPromiseNotFound> for golem_api_grpc::proto::golem::common::PromiseNotFound {
+impl From<GolemErrorPromiseNotFound> for golem_api_grpc::proto::golem::worker::PromiseNotFound {
     fn from(value: GolemErrorPromiseNotFound) -> Self {
         Self {
             promise_id: Some(value.promise_id.into()),
@@ -1977,11 +1993,11 @@ pub struct GolemErrorPromiseDropped {
     pub promise_id: PromiseId,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::PromiseDropped> for GolemErrorPromiseDropped {
+impl TryFrom<golem_api_grpc::proto::golem::worker::PromiseDropped> for GolemErrorPromiseDropped {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::PromiseDropped,
+        value: golem_api_grpc::proto::golem::worker::PromiseDropped,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             promise_id: value
@@ -1992,7 +2008,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::PromiseDropped> for GolemErro
     }
 }
 
-impl From<GolemErrorPromiseDropped> for golem_api_grpc::proto::golem::common::PromiseDropped {
+impl From<GolemErrorPromiseDropped> for golem_api_grpc::proto::golem::worker::PromiseDropped {
     fn from(value: GolemErrorPromiseDropped) -> Self {
         Self {
             promise_id: Some(value.promise_id.into()),
@@ -2007,13 +2023,13 @@ pub struct GolemErrorPromiseAlreadyCompleted {
     pub promise_id: PromiseId,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::PromiseAlreadyCompleted>
+impl TryFrom<golem_api_grpc::proto::golem::worker::PromiseAlreadyCompleted>
     for GolemErrorPromiseAlreadyCompleted
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::PromiseAlreadyCompleted,
+        value: golem_api_grpc::proto::golem::worker::PromiseAlreadyCompleted,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             promise_id: value
@@ -2025,7 +2041,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::PromiseAlreadyCompleted>
 }
 
 impl From<GolemErrorPromiseAlreadyCompleted>
-    for golem_api_grpc::proto::golem::common::PromiseAlreadyCompleted
+    for golem_api_grpc::proto::golem::worker::PromiseAlreadyCompleted
 {
     fn from(value: GolemErrorPromiseAlreadyCompleted) -> Self {
         Self {
@@ -2041,15 +2057,15 @@ pub struct GolemErrorInterrupted {
     pub recover_immediately: bool,
 }
 
-impl From<golem_api_grpc::proto::golem::common::Interrupted> for GolemErrorInterrupted {
-    fn from(value: golem_api_grpc::proto::golem::common::Interrupted) -> Self {
+impl From<golem_api_grpc::proto::golem::worker::Interrupted> for GolemErrorInterrupted {
+    fn from(value: golem_api_grpc::proto::golem::worker::Interrupted) -> Self {
         Self {
             recover_immediately: value.recover_immediately,
         }
     }
 }
 
-impl From<GolemErrorInterrupted> for golem_api_grpc::proto::golem::common::Interrupted {
+impl From<GolemErrorInterrupted> for golem_api_grpc::proto::golem::worker::Interrupted {
     fn from(value: GolemErrorInterrupted) -> Self {
         Self {
             recover_immediately: value.recover_immediately,
@@ -2060,13 +2076,13 @@ impl From<GolemErrorInterrupted> for golem_api_grpc::proto::golem::common::Inter
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 pub struct GolemErrorParamTypeMismatch {}
 
-impl From<golem_api_grpc::proto::golem::common::ParamTypeMismatch> for GolemErrorParamTypeMismatch {
-    fn from(_value: golem_api_grpc::proto::golem::common::ParamTypeMismatch) -> Self {
+impl From<golem_api_grpc::proto::golem::worker::ParamTypeMismatch> for GolemErrorParamTypeMismatch {
+    fn from(_value: golem_api_grpc::proto::golem::worker::ParamTypeMismatch) -> Self {
         Self {}
     }
 }
 
-impl From<GolemErrorParamTypeMismatch> for golem_api_grpc::proto::golem::common::ParamTypeMismatch {
+impl From<GolemErrorParamTypeMismatch> for golem_api_grpc::proto::golem::worker::ParamTypeMismatch {
     fn from(_value: GolemErrorParamTypeMismatch) -> Self {
         Self {}
     }
@@ -2075,13 +2091,13 @@ impl From<GolemErrorParamTypeMismatch> for golem_api_grpc::proto::golem::common:
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 pub struct GolemErrorNoValueInMessage {}
 
-impl From<golem_api_grpc::proto::golem::common::NoValueInMessage> for GolemErrorNoValueInMessage {
-    fn from(_value: golem_api_grpc::proto::golem::common::NoValueInMessage) -> Self {
+impl From<golem_api_grpc::proto::golem::worker::NoValueInMessage> for GolemErrorNoValueInMessage {
+    fn from(_value: golem_api_grpc::proto::golem::worker::NoValueInMessage) -> Self {
         Self {}
     }
 }
 
-impl From<GolemErrorNoValueInMessage> for golem_api_grpc::proto::golem::common::NoValueInMessage {
+impl From<GolemErrorNoValueInMessage> for golem_api_grpc::proto::golem::worker::NoValueInMessage {
     fn from(_value: GolemErrorNoValueInMessage) -> Self {
         Self {}
     }
@@ -2092,15 +2108,15 @@ pub struct GolemErrorValueMismatch {
     pub details: String,
 }
 
-impl From<golem_api_grpc::proto::golem::common::ValueMismatch> for GolemErrorValueMismatch {
-    fn from(value: golem_api_grpc::proto::golem::common::ValueMismatch) -> Self {
+impl From<golem_api_grpc::proto::golem::worker::ValueMismatch> for GolemErrorValueMismatch {
+    fn from(value: golem_api_grpc::proto::golem::worker::ValueMismatch) -> Self {
         Self {
             details: value.details,
         }
     }
 }
 
-impl From<GolemErrorValueMismatch> for golem_api_grpc::proto::golem::common::ValueMismatch {
+impl From<GolemErrorValueMismatch> for golem_api_grpc::proto::golem::worker::ValueMismatch {
     fn from(value: GolemErrorValueMismatch) -> Self {
         Self {
             details: value.details,
@@ -2114,10 +2130,10 @@ pub struct GolemErrorUnexpectedOplogEntry {
     pub got: String,
 }
 
-impl From<golem_api_grpc::proto::golem::common::UnexpectedOplogEntry>
+impl From<golem_api_grpc::proto::golem::worker::UnexpectedOplogEntry>
     for GolemErrorUnexpectedOplogEntry
 {
-    fn from(value: golem_api_grpc::proto::golem::common::UnexpectedOplogEntry) -> Self {
+    fn from(value: golem_api_grpc::proto::golem::worker::UnexpectedOplogEntry) -> Self {
         Self {
             expected: value.expected,
             got: value.got,
@@ -2126,7 +2142,7 @@ impl From<golem_api_grpc::proto::golem::common::UnexpectedOplogEntry>
 }
 
 impl From<GolemErrorUnexpectedOplogEntry>
-    for golem_api_grpc::proto::golem::common::UnexpectedOplogEntry
+    for golem_api_grpc::proto::golem::worker::UnexpectedOplogEntry
 {
     fn from(value: GolemErrorUnexpectedOplogEntry) -> Self {
         Self {
@@ -2141,15 +2157,15 @@ pub struct GolemErrorRuntimeError {
     pub details: String,
 }
 
-impl From<golem_api_grpc::proto::golem::common::RuntimeError> for GolemErrorRuntimeError {
-    fn from(value: golem_api_grpc::proto::golem::common::RuntimeError) -> Self {
+impl From<golem_api_grpc::proto::golem::worker::RuntimeError> for GolemErrorRuntimeError {
+    fn from(value: golem_api_grpc::proto::golem::worker::RuntimeError) -> Self {
         Self {
             details: value.details,
         }
     }
 }
 
-impl From<GolemErrorRuntimeError> for golem_api_grpc::proto::golem::common::RuntimeError {
+impl From<GolemErrorRuntimeError> for golem_api_grpc::proto::golem::worker::RuntimeError {
     fn from(value: GolemErrorRuntimeError) -> Self {
         Self {
             details: value.details,
@@ -2165,10 +2181,10 @@ pub struct GolemErrorInvalidShardId {
     pub shard_ids: std::collections::HashSet<ShardId>,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::InvalidShardId> for GolemErrorInvalidShardId {
+impl TryFrom<golem_api_grpc::proto::golem::worker::InvalidShardId> for GolemErrorInvalidShardId {
     type Error = String;
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::InvalidShardId,
+        value: golem_api_grpc::proto::golem::worker::InvalidShardId,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             shard_id: value.shard_id.ok_or("Missing field: shard_id")?.into(),
@@ -2177,7 +2193,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::InvalidShardId> for GolemErro
     }
 }
 
-impl From<GolemErrorInvalidShardId> for golem_api_grpc::proto::golem::common::InvalidShardId {
+impl From<GolemErrorInvalidShardId> for golem_api_grpc::proto::golem::worker::InvalidShardId {
     fn from(value: GolemErrorInvalidShardId) -> Self {
         Self {
             shard_id: Some(value.shard_id.into()),
@@ -2189,15 +2205,15 @@ impl From<GolemErrorInvalidShardId> for golem_api_grpc::proto::golem::common::In
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 pub struct GolemErrorPreviousInvocationFailed {}
 
-impl From<golem_api_grpc::proto::golem::common::PreviousInvocationFailed>
+impl From<golem_api_grpc::proto::golem::worker::PreviousInvocationFailed>
     for GolemErrorPreviousInvocationFailed
 {
-    fn from(_value: golem_api_grpc::proto::golem::common::PreviousInvocationFailed) -> Self {
+    fn from(_value: golem_api_grpc::proto::golem::worker::PreviousInvocationFailed) -> Self {
         Self {}
     }
 }
 impl From<GolemErrorPreviousInvocationFailed>
-    for golem_api_grpc::proto::golem::common::PreviousInvocationFailed
+    for golem_api_grpc::proto::golem::worker::PreviousInvocationFailed
 {
     fn from(_value: GolemErrorPreviousInvocationFailed) -> Self {
         Self {}
@@ -2207,16 +2223,16 @@ impl From<GolemErrorPreviousInvocationFailed>
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 pub struct GolemErrorPreviousInvocationExited {}
 
-impl From<golem_api_grpc::proto::golem::common::PreviousInvocationExited>
+impl From<golem_api_grpc::proto::golem::worker::PreviousInvocationExited>
     for GolemErrorPreviousInvocationExited
 {
-    fn from(_value: golem_api_grpc::proto::golem::common::PreviousInvocationExited) -> Self {
+    fn from(_value: golem_api_grpc::proto::golem::worker::PreviousInvocationExited) -> Self {
         Self {}
     }
 }
 
 impl From<GolemErrorPreviousInvocationExited>
-    for golem_api_grpc::proto::golem::common::PreviousInvocationExited
+    for golem_api_grpc::proto::golem::worker::PreviousInvocationExited
 {
     fn from(_value: GolemErrorPreviousInvocationExited) -> Self {
         Self {}
@@ -2228,15 +2244,15 @@ pub struct GolemErrorUnknown {
     pub details: String,
 }
 
-impl From<golem_api_grpc::proto::golem::common::UnknownError> for GolemErrorUnknown {
-    fn from(value: golem_api_grpc::proto::golem::common::UnknownError) -> Self {
+impl From<golem_api_grpc::proto::golem::worker::UnknownError> for GolemErrorUnknown {
+    fn from(value: golem_api_grpc::proto::golem::worker::UnknownError) -> Self {
         Self {
             details: value.details,
         }
     }
 }
 
-impl From<GolemErrorUnknown> for golem_api_grpc::proto::golem::common::UnknownError {
+impl From<GolemErrorUnknown> for golem_api_grpc::proto::golem::worker::UnknownError {
     fn from(value: GolemErrorUnknown) -> Self {
         Self {
             details: value.details,
@@ -2247,13 +2263,13 @@ impl From<GolemErrorUnknown> for golem_api_grpc::proto::golem::common::UnknownEr
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 pub struct GolemErrorInvalidAccount {}
 
-impl From<golem_api_grpc::proto::golem::common::InvalidAccount> for GolemErrorInvalidAccount {
-    fn from(_value: golem_api_grpc::proto::golem::common::InvalidAccount) -> Self {
+impl From<golem_api_grpc::proto::golem::worker::InvalidAccount> for GolemErrorInvalidAccount {
+    fn from(_value: golem_api_grpc::proto::golem::worker::InvalidAccount) -> Self {
         Self {}
     }
 }
 
-impl From<GolemErrorInvalidAccount> for golem_api_grpc::proto::golem::common::InvalidAccount {
+impl From<GolemErrorInvalidAccount> for golem_api_grpc::proto::golem::worker::InvalidAccount {
     fn from(_value: GolemErrorInvalidAccount) -> Self {
         Self {}
     }
@@ -2302,11 +2318,11 @@ pub struct WorkerMetadata {
     pub retry_count: i32,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::WorkerMetadata> for WorkerMetadata {
+impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::WorkerMetadata,
+        value: golem_api_grpc::proto::golem::worker::WorkerMetadata,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
@@ -2319,7 +2335,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::WorkerMetadata> for WorkerMet
     }
 }
 
-impl From<WorkerMetadata> for golem_api_grpc::proto::golem::common::WorkerMetadata {
+impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
     fn from(value: WorkerMetadata) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
@@ -2365,81 +2381,81 @@ pub enum GolemError {
     InvalidAccount(GolemErrorInvalidAccount),
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::WorkerExecutionError> for GolemError {
+impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerExecutionError> for GolemError {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::WorkerExecutionError,
+        value: golem_api_grpc::proto::golem::worker::WorkerExecutionError,
     ) -> Result<Self, Self::Error> {
         match value.error {
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::InvalidRequest(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::InvalidRequest(err)) => {
                 Ok(GolemError::InvalidRequest(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::WorkerAlreadyExists(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::WorkerAlreadyExists(err)) => {
                 Ok(GolemError::WorkerAlreadyExists(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::WorkerNotFound(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::WorkerNotFound(err)) => {
                 Ok(GolemError::WorkerNotFound(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::WorkerCreationFailed(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::WorkerCreationFailed(err)) => {
                 Ok(GolemError::WorkerCreationFailed(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::FailedToResumeWorker(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::FailedToResumeWorker(err)) => {
                 Ok(GolemError::FailedToResumeWorker(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::TemplateDownloadFailed(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::TemplateDownloadFailed(err)) => {
                 Ok(GolemError::TemplateDownloadFailed(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::TemplateParseFailed(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::TemplateParseFailed(err)) => {
                 Ok(GolemError::TemplateParseFailed(err.try_into()?))
             }
             Some(
-                golem_api_grpc::proto::golem::common::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(
+                golem_api_grpc::proto::golem::worker::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(
                     err,
                 ),
             ) => Ok(GolemError::GetLatestVersionOfTemplateFailed(
                 err.try_into()?,
             )),
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PromiseNotFound(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PromiseNotFound(err)) => {
                 Ok(GolemError::PromiseNotFound(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PromiseDropped(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PromiseDropped(err)) => {
                 Ok(GolemError::PromiseDropped(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PromiseAlreadyCompleted(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PromiseAlreadyCompleted(err)) => {
                 Ok(GolemError::PromiseAlreadyCompleted(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::Interrupted(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::Interrupted(err)) => {
                 Ok(GolemError::Interrupted(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::ParamTypeMismatch(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::ParamTypeMismatch(err)) => {
                 Ok(GolemError::ParamTypeMismatch(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::NoValueInMessage(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::NoValueInMessage(err)) => {
                 Ok(GolemError::NoValueInMessage(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::ValueMismatch(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::ValueMismatch(err)) => {
                 Ok(GolemError::ValueMismatch(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::UnexpectedOplogEntry(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::UnexpectedOplogEntry(err)) => {
                 Ok(GolemError::UnexpectedOplogEntry(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::RuntimeError(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::RuntimeError(err)) => {
                 Ok(GolemError::RuntimeError(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::InvalidShardId(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::InvalidShardId(err)) => {
                 Ok(GolemError::InvalidShardId(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PreviousInvocationFailed(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PreviousInvocationFailed(err)) => {
                 Ok(GolemError::PreviousInvocationFailed(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PreviousInvocationExited(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PreviousInvocationExited(err)) => {
                 Ok(GolemError::PreviousInvocationExited(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::Unknown(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::Unknown(err)) => {
                 Ok(GolemError::Unknown(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::InvalidAccount(err)) => {
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::InvalidAccount(err)) => {
                 Ok(GolemError::InvalidAccount(err.into()))
             }
             None => Err("Missing field: error".to_string()),
@@ -2447,117 +2463,117 @@ impl TryFrom<golem_api_grpc::proto::golem::common::WorkerExecutionError> for Gol
     }
 }
 
-impl From<GolemError> for golem_api_grpc::proto::golem::common::WorkerExecutionError {
+impl From<GolemError> for golem_api_grpc::proto::golem::worker::WorkerExecutionError {
     fn from(error: GolemError) -> Self {
         match error {
             GolemError::InvalidRequest(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::InvalidRequest(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::InvalidRequest(err.into())),
                 }
             },
             GolemError::WorkerAlreadyExists(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::WorkerAlreadyExists(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::WorkerAlreadyExists(err.into())),
                 }
             },
             GolemError::WorkerNotFound(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::WorkerNotFound(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::WorkerNotFound(err.into())),
                 }
             },
             GolemError::WorkerCreationFailed(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::WorkerCreationFailed(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::WorkerCreationFailed(err.into())),
                 }
             },
             GolemError::FailedToResumeWorker(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::FailedToResumeWorker(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::FailedToResumeWorker(err.into())),
                 }
             },
             GolemError::TemplateDownloadFailed(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::TemplateDownloadFailed(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::TemplateDownloadFailed(err.into())),
                 }
             },
             GolemError::TemplateParseFailed(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::TemplateParseFailed(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::TemplateParseFailed(err.into())),
                 }
             },
             GolemError::GetLatestVersionOfTemplateFailed(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(err.into())),
                 }
             },
             GolemError::PromiseNotFound(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PromiseNotFound(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PromiseNotFound(err.into())),
                 }
             },
             GolemError::PromiseDropped(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PromiseDropped(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PromiseDropped(err.into())),
                 }
             },
             GolemError::PromiseAlreadyCompleted(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PromiseAlreadyCompleted(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PromiseAlreadyCompleted(err.into())),
                 }
             },
             GolemError::Interrupted(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::Interrupted(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::Interrupted(err.into())),
                 }
             },
             GolemError::ParamTypeMismatch(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::ParamTypeMismatch(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::ParamTypeMismatch(err.into())),
                 }
             },
             GolemError::NoValueInMessage(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::NoValueInMessage(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::NoValueInMessage(err.into())),
                 }
             },
             GolemError::ValueMismatch(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::ValueMismatch(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::ValueMismatch(err.into())),
                 }
             },
             GolemError::UnexpectedOplogEntry(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::UnexpectedOplogEntry(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::UnexpectedOplogEntry(err.into())),
                 }
             },
             GolemError::RuntimeError(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::RuntimeError(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::RuntimeError(err.into())),
                 }
             },
             GolemError::InvalidShardId(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::InvalidShardId(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::InvalidShardId(err.into())),
                 }
             },
             GolemError::PreviousInvocationFailed(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PreviousInvocationFailed(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PreviousInvocationFailed(err.into())),
                 }
             },
             GolemError::PreviousInvocationExited(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::PreviousInvocationExited(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PreviousInvocationExited(err.into())),
                 }
             },
             GolemError::Unknown(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::Unknown(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::Unknown(err.into())),
                 }
             },
             GolemError::InvalidAccount(err) => {
-                golem_api_grpc::proto::golem::common::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::common::worker_execution_error::Error::InvalidAccount(err.into())),
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::InvalidAccount(err.into())),
                 }
             }
         }
@@ -2569,11 +2585,11 @@ pub struct GolemErrorBody {
     pub golem_error: GolemError,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::WorkerExecutionError> for GolemErrorBody {
+impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerExecutionError> for GolemErrorBody {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::WorkerExecutionError,
+        value: golem_api_grpc::proto::golem::worker::WorkerExecutionError,
     ) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
             golem_error: value.try_into()?,
@@ -2617,11 +2633,11 @@ pub struct Template {
     pub metadata: TemplateMetadata,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::Template> for Template {
+impl TryFrom<golem_api_grpc::proto::golem::template::Template> for Template {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::Template,
+        value: golem_api_grpc::proto::golem::template::Template,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             versioned_template_id: value
@@ -2643,7 +2659,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::Template> for Template {
     }
 }
 
-impl From<Template> for golem_api_grpc::proto::golem::common::Template {
+impl From<Template> for golem_api_grpc::proto::golem::template::Template {
     fn from(value: Template) -> Self {
         Self {
             versioned_template_id: Some(value.versioned_template_id.into()),

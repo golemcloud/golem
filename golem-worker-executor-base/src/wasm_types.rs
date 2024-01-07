@@ -6,89 +6,89 @@ use wasmtime::component::*;
 use crate::error::GolemError;
 
 /// Converts a Golem protobuf Val to a wasmtime Val based on the available type information.
-pub fn decode_param(param: &golem::common::Val, param_type: &Type) -> Result<Val, GolemError> {
+pub fn decode_param(param: &golem::worker::Val, param_type: &Type) -> Result<Val, GolemError> {
     match param_type {
         Type::Bool => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::Bool(bool) => Ok(Val::Bool(bool)),
+                golem::worker::val::Val::Bool(bool) => Ok(Val::Bool(bool)),
                 _ => Err(GolemError::ParamTypeMismatch),
             }
         }
         Type::S8 => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::S8(s8) => Ok(Val::S8(s8 as i8)),
+                golem::worker::val::Val::S8(s8) => Ok(Val::S8(s8 as i8)),
                 _ => Err(GolemError::ParamTypeMismatch),
             }
         }
         Type::U8 => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::U8(u8) => Ok(Val::U8(u8 as u8)),
+                golem::worker::val::Val::U8(u8) => Ok(Val::U8(u8 as u8)),
                 _ => Err(GolemError::ParamTypeMismatch),
             }
         }
         Type::S16 => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::S16(s16) => Ok(Val::S16(s16 as i16)),
+                golem::worker::val::Val::S16(s16) => Ok(Val::S16(s16 as i16)),
                 _ => Err(GolemError::ParamTypeMismatch),
             }
         }
         Type::U16 => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::U16(u16) => Ok(Val::U16(u16 as u16)),
+                golem::worker::val::Val::U16(u16) => Ok(Val::U16(u16 as u16)),
                 _ => Err(GolemError::ParamTypeMismatch),
             }
         }
         Type::S32 => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::S32(s32) => Ok(Val::S32(s32)),
+                golem::worker::val::Val::S32(s32) => Ok(Val::S32(s32)),
                 _ => Err(GolemError::ParamTypeMismatch),
             }
         }
         Type::U32 => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::U32(u32) => Ok(Val::U32(u32 as u32)),
+                golem::worker::val::Val::U32(u32) => Ok(Val::U32(u32 as u32)),
                 _ => Err(GolemError::ParamTypeMismatch),
             }
         }
         Type::S64 => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::S64(s64) => Ok(Val::S64(s64)),
+                golem::worker::val::Val::S64(s64) => Ok(Val::S64(s64)),
                 _ => Err(GolemError::ParamTypeMismatch),
             }
         }
         Type::U64 => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::U64(u64) => Ok(Val::U64(u64 as u64)),
+                golem::worker::val::Val::U64(u64) => Ok(Val::U64(u64 as u64)),
                 _ => Err(GolemError::ParamTypeMismatch),
             }
         }
         Type::Float32 => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::F32(f32) => Ok(Val::Float32(f32)),
+                golem::worker::val::Val::F32(f32) => Ok(Val::Float32(f32)),
                 _ => Err(GolemError::ParamTypeMismatch),
             }
         }
         Type::Float64 => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::F64(f64) => Ok(Val::Float64(f64)),
+                golem::worker::val::Val::F64(f64) => Ok(Val::Float64(f64)),
                 _ => Err(GolemError::ParamTypeMismatch),
             }
         }
         Type::Char => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::Char(i32) => {
+                golem::worker::val::Val::Char(i32) => {
                     let char =
                         std::char::from_u32(i32 as u32).ok_or(GolemError::ValueMismatch {
                             details: format!("could not convert {} to char", i32),
@@ -101,14 +101,14 @@ pub fn decode_param(param: &golem::common::Val, param_type: &Type) -> Result<Val
         Type::String => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::String(string) => Ok(Val::String(string.into_boxed_str())),
+                golem::worker::val::Val::String(string) => Ok(Val::String(string.into_boxed_str())),
                 _ => Err(GolemError::ParamTypeMismatch),
             }
         }
         Type::List(ty) => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::List(golem::common::ValList { values, .. }) => {
+                golem::worker::val::Val::List(golem::worker::ValList { values, .. }) => {
                     let decoded_values = values
                         .iter()
                         .map(|v| decode_param(v, &ty.ty()))
@@ -123,7 +123,7 @@ pub fn decode_param(param: &golem::common::Val, param_type: &Type) -> Result<Val
         Type::Record(ty) => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::Record(golem::common::ValRecord { values, .. }) => {
+                golem::worker::val::Val::Record(golem::worker::ValRecord { values, .. }) => {
                     let record_values = values
                         .iter()
                         .zip(ty.fields())
@@ -142,7 +142,7 @@ pub fn decode_param(param: &golem::common::Val, param_type: &Type) -> Result<Val
         Type::Tuple(ty) => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::Tuple(golem::common::ValTuple { values, .. }) => {
+                golem::worker::val::Val::Tuple(golem::worker::ValTuple { values, .. }) => {
                     let tuple_values: Vec<Val> = values
                         .iter()
                         .zip(ty.types())
@@ -158,8 +158,8 @@ pub fn decode_param(param: &golem::common::Val, param_type: &Type) -> Result<Val
         Type::Variant(ty) => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::Variant(variant) => {
-                    let golem::common::ValVariant {
+                golem::worker::val::Val::Variant(variant) => {
+                    let golem::worker::ValVariant {
                         discriminant,
                         value,
                         ..
@@ -195,7 +195,7 @@ pub fn decode_param(param: &golem::common::Val, param_type: &Type) -> Result<Val
         Type::Enum(ty) => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::Enum(golem::common::ValEnum { discriminant, .. }) => {
+                golem::worker::val::Val::Enum(golem::worker::ValEnum { discriminant, .. }) => {
                     let names: Vec<&str> = ty.names().collect();
                     let name: &str =
                         names
@@ -215,8 +215,8 @@ pub fn decode_param(param: &golem::common::Val, param_type: &Type) -> Result<Val
         Type::Option(ty) => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::Option(option) => {
-                    let golem::common::ValOption { value, .. } = *option;
+                golem::worker::val::Val::Option(option) => {
+                    let golem::worker::ValOption { value, .. } = *option;
                     match value {
                         Some(value) => {
                             let decoded_value = decode_param(&value, &ty.ty())?;
@@ -237,8 +237,8 @@ pub fn decode_param(param: &golem::common::Val, param_type: &Type) -> Result<Val
         Type::Result(ty) => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::Result(result) => {
-                    let golem::common::ValResult {
+                golem::worker::val::Val::Result(result) => {
+                    let golem::worker::ValResult {
                         discriminant,
                         value,
                         ..
@@ -271,7 +271,7 @@ pub fn decode_param(param: &golem::common::Val, param_type: &Type) -> Result<Val
         Type::Flags(ty) => {
             let val = &param.val;
             match val.clone().ok_or(GolemError::NoValueInMessage)? {
-                golem::common::val::Val::Flags(flags) => {
+                golem::worker::val::Val::Flags(flags) => {
                     let flag_names = ty.names().collect::<Vec<&str>>();
                     let active_flags: Vec<&str> = flag_names
                         .iter()
@@ -298,52 +298,52 @@ pub fn decode_param(param: &golem::common::Val, param_type: &Type) -> Result<Val
 }
 
 /// Converts a wasmtime Val to a Golem protobuf Val
-pub fn encode_output(value: &Val) -> Result<golem::common::Val, GolemError> {
+pub fn encode_output(value: &Val) -> Result<golem::worker::Val, GolemError> {
     match value {
-        Val::Bool(bool) => Ok(golem::common::Val {
-            val: Some(golem::common::val::Val::Bool(*bool)),
+        Val::Bool(bool) => Ok(golem::worker::Val {
+            val: Some(golem::worker::val::Val::Bool(*bool)),
         }),
-        Val::S8(i8) => Ok(golem::common::Val {
-            val: Some(golem::common::val::Val::S8(*i8 as i32)),
+        Val::S8(i8) => Ok(golem::worker::Val {
+            val: Some(golem::worker::val::Val::S8(*i8 as i32)),
         }),
-        Val::U8(u8) => Ok(golem::common::Val {
-            val: Some(golem::common::val::Val::U8(*u8 as i32)),
+        Val::U8(u8) => Ok(golem::worker::Val {
+            val: Some(golem::worker::val::Val::U8(*u8 as i32)),
         }),
-        Val::S16(i16) => Ok(golem::common::Val {
-            val: Some(golem::common::val::Val::S16(*i16 as i32)),
+        Val::S16(i16) => Ok(golem::worker::Val {
+            val: Some(golem::worker::val::Val::S16(*i16 as i32)),
         }),
-        Val::U16(u16) => Ok(golem::common::Val {
-            val: Some(golem::common::val::Val::U16(*u16 as i32)),
+        Val::U16(u16) => Ok(golem::worker::Val {
+            val: Some(golem::worker::val::Val::U16(*u16 as i32)),
         }),
-        Val::S32(i32) => Ok(golem::common::Val {
-            val: Some(golem::common::val::Val::S32(*i32)),
+        Val::S32(i32) => Ok(golem::worker::Val {
+            val: Some(golem::worker::val::Val::S32(*i32)),
         }),
         Val::U32(u32) => {
             let i32 = *u32 as i64;
-            Ok(golem::common::Val {
-                val: Some(golem::common::val::Val::U32(i32)),
+            Ok(golem::worker::Val {
+                val: Some(golem::worker::val::Val::U32(i32)),
             })
         }
-        Val::S64(i64) => Ok(golem::common::Val {
-            val: Some(golem::common::val::Val::S64(*i64)),
+        Val::S64(i64) => Ok(golem::worker::Val {
+            val: Some(golem::worker::val::Val::S64(*i64)),
         }),
         Val::U64(u64) => {
             let i64 = *u64 as i64;
-            Ok(golem::common::Val {
-                val: Some(golem::common::val::Val::U64(i64)),
+            Ok(golem::worker::Val {
+                val: Some(golem::worker::val::Val::U64(i64)),
             })
         }
-        Val::Float32(f32) => Ok(golem::common::Val {
-            val: Some(golem::common::val::Val::F32(*f32)),
+        Val::Float32(f32) => Ok(golem::worker::Val {
+            val: Some(golem::worker::val::Val::F32(*f32)),
         }),
-        Val::Float64(f64) => Ok(golem::common::Val {
-            val: Some(golem::common::val::Val::F64(*f64)),
+        Val::Float64(f64) => Ok(golem::worker::Val {
+            val: Some(golem::worker::val::Val::F64(*f64)),
         }),
-        Val::Char(char) => Ok(golem::common::Val {
-            val: Some(golem::common::val::Val::Char(*char as i32)),
+        Val::Char(char) => Ok(golem::worker::Val {
+            val: Some(golem::worker::val::Val::Char(*char as i32)),
         }),
-        Val::String(string) => Ok(golem::common::Val {
-            val: Some(golem::common::val::Val::String(string.to_string())),
+        Val::String(string) => Ok(golem::worker::Val {
+            val: Some(golem::worker::val::Val::String(string.to_string())),
         }),
         Val::List(list) => {
             let values = list.deref();
@@ -351,8 +351,8 @@ pub fn encode_output(value: &Val) -> Result<golem::common::Val, GolemError> {
             for value in values.iter() {
                 encoded_values.push(encode_output(value)?);
             }
-            Ok(golem::common::Val {
-                val: Some(golem::common::val::Val::List(golem::common::ValList {
+            Ok(golem::worker::Val {
+                val: Some(golem::worker::val::Val::List(golem::worker::ValList {
                     values: encoded_values,
                 })),
             })
@@ -361,9 +361,9 @@ pub fn encode_output(value: &Val) -> Result<golem::common::Val, GolemError> {
             let encoded_values = record
                 .fields()
                 .map(|(_, value)| encode_output(value))
-                .collect::<Result<Vec<golem::common::Val>, GolemError>>()?;
-            Ok(golem::common::Val {
-                val: Some(golem::common::val::Val::Record(golem::common::ValRecord {
+                .collect::<Result<Vec<golem::worker::Val>, GolemError>>()?;
+            Ok(golem::worker::Val {
+                val: Some(golem::worker::val::Val::Record(golem::worker::ValRecord {
                     values: encoded_values,
                 })),
             })
@@ -373,9 +373,9 @@ pub fn encode_output(value: &Val) -> Result<golem::common::Val, GolemError> {
                 .values()
                 .iter()
                 .map(encode_output)
-                .collect::<Result<Vec<golem::common::Val>, GolemError>>()?;
-            Ok(golem::common::Val {
-                val: Some(golem::common::val::Val::Tuple(golem::common::ValTuple {
+                .collect::<Result<Vec<golem::worker::Val>, GolemError>>()?;
+            Ok(golem::worker::Val {
+                val: Some(golem::worker::val::Val::Tuple(golem::worker::ValTuple {
                     values: encoded_values,
                 })),
             })
@@ -388,9 +388,9 @@ pub fn encode_output(value: &Val) -> Result<golem::common::Val, GolemError> {
                 value,
             } = wasm_variant;
             let encoded_output = value.map(|value| encode_output(&value)).transpose()?;
-            Ok(golem::common::Val {
-                val: Some(golem::common::val::Val::Variant(Box::new(
-                    golem::common::ValVariant {
+            Ok(golem::worker::Val {
+                val: Some(golem::worker::val::Val::Variant(Box::new(
+                    golem::worker::ValVariant {
                         discriminant: discriminant as i32,
                         value: encoded_output.map(Box::new),
                     },
@@ -403,8 +403,8 @@ pub fn encode_output(value: &Val) -> Result<golem::common::Val, GolemError> {
                 ty: _,
                 discriminant,
             } = wasm_enum;
-            Ok(golem::common::Val {
-                val: Some(golem::common::val::Val::Enum(golem::common::ValEnum {
+            Ok(golem::worker::Val {
+                val: Some(golem::worker::val::Val::Enum(golem::worker::ValEnum {
                     discriminant: discriminant as i32,
                 })),
             })
@@ -412,18 +412,18 @@ pub fn encode_output(value: &Val) -> Result<golem::common::Val, GolemError> {
         Val::Option(option) => match option.value() {
             Some(value) => {
                 let encoded_output = encode_output(value)?;
-                Ok(golem::common::Val {
-                    val: Some(golem::common::val::Val::Option(Box::new(
-                        golem::common::ValOption {
+                Ok(golem::worker::Val {
+                    val: Some(golem::worker::val::Val::Option(Box::new(
+                        golem::worker::ValOption {
                             discriminant: 1,
                             value: Some(Box::new(encoded_output)),
                         },
                     ))),
                 })
             }
-            None => Ok(golem::common::Val {
-                val: Some(golem::common::val::Val::Option(Box::new(
-                    golem::common::ValOption {
+            None => Ok(golem::worker::Val {
+                val: Some(golem::worker::val::Val::Option(Box::new(
+                    golem::worker::ValOption {
                         discriminant: 0,
                         value: None,
                     },
@@ -435,9 +435,9 @@ pub fn encode_output(value: &Val) -> Result<golem::common::Val, GolemError> {
             match result.value() {
                 Ok(value) => {
                     let encoded_output = value.map(encode_output).transpose()?;
-                    Ok(golem::common::Val {
-                        val: Some(golem::common::val::Val::Result(Box::new(
-                            golem::common::ValResult {
+                    Ok(golem::worker::Val {
+                        val: Some(golem::worker::val::Val::Result(Box::new(
+                            golem::worker::ValResult {
                                 discriminant: 0,
                                 value: encoded_output.map(Box::new),
                             },
@@ -446,9 +446,9 @@ pub fn encode_output(value: &Val) -> Result<golem::common::Val, GolemError> {
                 }
                 Err(value) => {
                     let encoded_output = value.map(encode_output).transpose()?;
-                    Ok(golem::common::Val {
-                        val: Some(golem::common::val::Val::Result(Box::new(
-                            golem::common::ValResult {
+                    Ok(golem::worker::Val {
+                        val: Some(golem::worker::val::Val::Result(Box::new(
+                            golem::worker::ValResult {
                                 discriminant: 1,
                                 value: encoded_output.map(Box::new),
                             },
@@ -474,8 +474,8 @@ pub fn encode_output(value: &Val) -> Result<golem::common::Val, GolemError> {
                     }
                 }
             }
-            Ok(golem::common::Val {
-                val: Some(golem::common::val::Val::Flags(golem::common::ValFlags {
+            Ok(golem::worker::Val {
+                val: Some(golem::worker::val::Val::Flags(golem::worker::ValFlags {
                     count: count as i32,
                     value: encoded_value,
                 })),

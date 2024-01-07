@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+import "golem/template/template_id.proto";
+
+package golem.template;
+
+
+message VersionedTemplateId {
+  TemplateId template_id = 1;
+  int32 version = 2;
+}

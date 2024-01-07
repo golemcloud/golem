@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package golem.cloud.template;
+
+import "golem/cloud/common/project_id.proto";
+import "golem/template/protected_template_id.proto";
+import "golem/template/template_metadata.proto";
+import "golem/template/user_template_id.proto";
+import "golem/template/versioned_template_id.proto";
+
+message Template {
+  golem.template.VersionedTemplateId versioned_template_id = 1;
+  golem.template.UserTemplateId user_template_id = 2;
+  golem.template.ProtectedTemplateId protected_template_id = 3;
+  string template_name = 4;
+  int32 template_size = 5;
+  golem.template.TemplateMetadata metadata = 6;
+  golem.cloud.common.ProjectId project_id = 7;
+}

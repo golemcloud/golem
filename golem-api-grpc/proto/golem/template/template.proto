@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package golem.template;
+
+import "golem/template/protected_template_id.proto";
+import "golem/template/template_metadata.proto";
+import "golem/template/user_template_id.proto";
+import "golem/template/versioned_template_id.proto";
+
+message Template {
+  VersionedTemplateId versioned_template_id = 1;
+  UserTemplateId user_template_id = 2;
+  ProtectedTemplateId protected_template_id = 3;
+  string template_name = 4;
+  int32 template_size = 5;
+  TemplateMetadata metadata = 6;
+}

@@ -3,7 +3,7 @@ use std::env;
 use std::path::Path;
 use std::sync::Arc;
 
-use golem_api_grpc::proto::golem::common::{
+use golem_api_grpc::proto::golem::worker::{
     log_event, val, CallingConvention, LogEvent, StdOutLog, Val, ValList, ValRecord,
 };
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;

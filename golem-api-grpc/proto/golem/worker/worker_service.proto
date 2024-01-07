@@ -3,18 +3,17 @@ syntax = "proto3";
 package golem.worker;
 
 import public "golem/common/empty.proto";
-import public "golem/common/calling_convention.proto";
-import public "golem/common/complete_parameters.proto";
-import public "golem/common/invocation_key.proto";
-import public "golem/common/invoke_parameters.proto";
-import public "golem/common/invoke_result.proto";
-import public "golem/common/invoke_result_json.proto";
-import public "golem/common/versioned_worker_id.proto";
-import public "golem/common/worker_error.proto";
-import public "golem/common/worker_metadata.proto";
-import public "golem/common/log_event.proto";
-import public "golem/common/worker_id.proto";
-import public "golem/common/template_id.proto";
+import public "golem/worker/calling_convention.proto";
+import public "golem/worker/complete_parameters.proto";
+import public "golem/worker/invocation_key.proto";
+import public "golem/worker/invoke_parameters.proto";
+import public "golem/worker/invoke_result.proto";
+import public "golem/worker/versioned_worker_id.proto";
+import public "golem/worker/worker_error.proto";
+import public "golem/worker/worker_metadata.proto";
+import public "golem/worker/log_event.proto";
+import public "golem/worker/worker_id.proto";
+import public "golem/template/template_id.proto";
 
 service WorkerService {
   rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
@@ -27,11 +26,11 @@ service WorkerService {
   rpc GetInvocationKey (GetInvocationKeyRequest) returns (GetInvocationKeyResponse);
   rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc GetWorkerById (GetWorkerByIdRequest) returns (GetWorkerByIdResponse);
-  rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.common.LogEvent);
+  rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
 }
 
 message LaunchNewWorkerRequest {
-  golem.common.TemplateId templateId = 1;
+  golem.template.TemplateId templateId = 1;
   string name = 2;
   repeated string args = 3;
   map<string, string> env = 4;
@@ -39,119 +38,119 @@ message LaunchNewWorkerRequest {
 
 message LaunchNewWorkerResponse {
   oneof result {
-    golem.common.VersionedWorkerId success = 1;
-    golem.common.WorkerError error = 2;
+    golem.worker.VersionedWorkerId success = 1;
+    golem.worker.WorkerError error = 2;
   }
 }
 
 message CompletePromiseRequest {
-  golem.common.WorkerId workerId = 1;
-  golem.common.CompleteParameters completeParameters = 2;
+  golem.worker.WorkerId workerId = 1;
+  golem.worker.CompleteParameters completeParameters = 2;
 }
 
 message CompletePromiseResponse {
   oneof result {
     bool success = 1;
-    golem.common.WorkerError error = 2;
+    golem.worker.WorkerError error = 2;
   }
 }
 
 message DeleteWorkerRequest {
-  golem.common.WorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
 }
 
 message DeleteWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.WorkerError error = 2;
+    golem.worker.WorkerError error = 2;
   }
 }
 
 message GetWorkerMetadataRequest {
-  golem.common.WorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
 }
 
 message GetWorkerMetadataResponse {
   oneof result {
-    golem.common.WorkerMetadata success = 1;
-    golem.common.WorkerError error = 2;
+    golem.worker.WorkerMetadata success = 1;
+    golem.worker.WorkerError error = 2;
   }
 }
 
 message InterruptWorkerRequest {
-  golem.common.WorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
   bool recoverImmediately = 2;
 }
 
 message InterruptWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.WorkerError error = 2;
+    golem.worker.WorkerError error = 2;
   }
 }
 
 message InvokeAndAwaitRequest {
-  golem.common.WorkerId workerId = 1;
-  golem.common.InvocationKey invocationKey = 2;
+  golem.worker.WorkerId workerId = 1;
+  golem.worker.InvocationKey invocationKey = 2;
   string function = 3;
-  golem.common.InvokeParameters invokeParameters = 4;
-  golem.common.CallingConvention callingConvention = 5;
+  golem.worker.InvokeParameters invokeParameters = 4;
+  golem.worker.CallingConvention callingConvention = 5;
 }
 
 message InvokeAndAwaitResponse {
   oneof result {
-    golem.common.InvokeResult success = 1;
-    golem.common.WorkerError error = 2;
+    golem.worker.InvokeResult success = 1;
+    golem.worker.WorkerError error = 2;
   }
 }
 
 message InvokeRequest {
-  golem.common.WorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
   string function = 2;
-  golem.common.InvokeParameters invokeParameters = 3;
+  golem.worker.InvokeParameters invokeParameters = 3;
 }
 
 message InvokeResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.WorkerError error = 2;
+    golem.worker.WorkerError error = 2;
   }
 }
 
 message GetInvocationKeyRequest {
-  golem.common.WorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
 }
 
 message GetInvocationKeyResponse {
   oneof result {
-    golem.common.InvocationKey success = 1;
-    golem.common.WorkerError error = 2;
+    golem.worker.InvocationKey success = 1;
+    golem.worker.WorkerError error = 2;
   }
 }
 
 message ResumeWorkerRequest {
-  golem.common.WorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
 }
 
 message ResumeWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.common.WorkerError error = 2;
+    golem.worker.WorkerError error = 2;
   }
 }
 
 message GetWorkerByIdRequest {
-  golem.common.WorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
 }
 
 message GetWorkerByIdResponse {
   oneof result {
-    golem.common.VersionedWorkerId success = 1;
-    golem.common.WorkerError error = 2;
+    golem.worker.VersionedWorkerId success = 1;
+    golem.worker.WorkerError error = 2;
   }
 }
 
 message ConnectWorkerRequest {
-  golem.common.WorkerId worker_id = 1;
+  golem.worker.WorkerId worker_id = 1;
 }
 

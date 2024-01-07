@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package golem.worker;
+
+
+message CompleteParameters {
+  int32 oplog_idx = 1;
+  bytes data = 2;
+}

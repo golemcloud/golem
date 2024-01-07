@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+import "golem/shardmanager/pod.proto";
+import "golem/shardmanager/shard_id.proto";
+
+package golem.shardmanager;
+
+message RoutingTableEntry {
+  ShardId shard_id = 1;
+  Pod pod = 2;
+}
