@@ -134,7 +134,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         info!("Done with promise shard service");
 
-
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
         let worker_service = services::worker::configured(
             &golem_config.workers,
