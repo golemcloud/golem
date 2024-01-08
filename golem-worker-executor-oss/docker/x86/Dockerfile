@@ -1,4 +1,3 @@
-# Build stage
 FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /app
 
@@ -17,18 +16,14 @@ RUN apt-get update && apt-get install -y unzip \
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN cargo chef cook --release --target=x86_64-unknown-linux-gnu
-RUN cargo build -p golem-worker-executor-oss --target=x86_64-unknown-linux-gnu
+RUN cargo chef cook --release
+RUN cargo build -p golem-worker-executor-oss
 
 FROM debian:bookworm-slim
 
 WORKDIR /app
-COPY --from=builder /app/target/x86_64-unknown-linux-gnu/debug/worker-executor-oss ./
+COPY --from=builder /app/target/debug/worker-executor-oss ./
 COPY --from=builder /app/golem-worker-executor-oss/config/worker-executor-local.toml ./config/worker-executor.toml
-
-RUN apt-get update && apt-get install -y libssl-dev
-RUN apt-get update && apt-get install -y ca-certificates
-RUN update-ca-certificates
 
 ARG ENVIRONMENT
 ARG CLOUD_SERVICE_HOST

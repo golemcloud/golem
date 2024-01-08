@@ -12,6 +12,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  docker:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+          fetch-depth: '0'
+      - name: Set version
+        id: set-version
+        run: echo "VERSION=$(git describe --tags --abbrev=0 || git rev-parse --short HEAD)" >> $GITHUB_ENV
+      - name: Build tag and push shard-manager to Amazon ECR
+        id: build-image
+        run:
+          docker build -t worker-executor:${{ env.VERSION }}  -f golem-worker-executor-oss/docker/x86/Dockerfile .
+
   build:
     runs-on: ubuntu-latest
     steps:
