@@ -9,7 +9,7 @@ services:
   golem-shard-manager:
     build:
       context: .
-      dockerfile: golem-shard-manager/Dockerfile
+      dockerfile: golem-shard-manager/docker/x86/Dockerfile
       args:
         - REDIS_HOST=redis
     ports:
@@ -20,7 +20,7 @@ services:
   golem-cloud-server-oss:
     build:
       context: .
-      dockerfile: golem-cloud-server-oss/Dockerfile
+      dockerfile: golem-cloud-server-oss/docker/x86/Dockerfile
       args:
         - SHARD_MANAGER_HOST=golem-shard-manager
         - SHARD_MANAGER_PORT=8081
@@ -33,7 +33,7 @@ services:
   golem-worker-executor-oss:
     build:
       context: .
-      dockerfile: golem-worker-executor-oss/Dockerfile
+      dockerfile: golem-worker-executor-oss/docker/x86/Dockerfile
       args:
         - ENVIRONMENT=local
         - CLOUD_SERVICE_HOST=golem-cloud-server-oss

@@ -22,7 +22,6 @@ RUN cargo build -p golem-shard-manager
 FROM debian:bookworm-slim
 
 WORKDIR /app
-WORKDIR /app
 COPY --from=builder /app/target/debug/golem-shard-manager ./
 COPY --from=builder /app/golem-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
 
