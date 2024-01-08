@@ -59,17 +59,7 @@ max_delay = "2s"
 multiplier = 2
 
 [shard_manager_service]
-type = "Grpc"
-
-[shard_manager_service.config]
-host = "localhost"
-port = 9001
-
-[shard_manager_service.config.retries]
-max_attempts = 5
-min_delay = "100ms"
-max_delay = "2s"
-multiplier = 2
+type = "SingleShard"
 
 [promises]
 type = "InMemory"
