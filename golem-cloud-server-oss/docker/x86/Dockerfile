@@ -17,7 +17,7 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo chef cook --release
-RUN cargo build -p golem-cloud-server-oss
+RUN cargo build -p cloud-server-oss
 
 FROM debian:bookworm-slim
 
