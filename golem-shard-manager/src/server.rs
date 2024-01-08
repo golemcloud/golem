@@ -373,15 +373,18 @@ async fn async_main(
         &pool,
         &shard_manager_config.number_of_shards,
     ));
+
     let instance_server_service = Arc::new(WorkerExecutorServiceDefault::new(
         shard_manager_config.instance_server_service.clone(),
     ));
 
     let shard_manager_port_str = env::var("GOLEM_SHARD_MANAGER_PORT")?;
+
     dbg!(
         "The port read from env is {}",
         shard_manager_port_str.clone()
     );
+
     let shard_manager_port = shard_manager_port_str.parse::<u16>()?;
     let shard_manager_addr = format!("0.0.0.0:{}", shard_manager_port);
 
