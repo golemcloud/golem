@@ -113,6 +113,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         info!("Using Redis at {}", golem_config.redis.url());
         let pool = golem_common::redis::RedisPool::configured(&golem_config.redis).await?;
 
+        info!("Done with pool");
+
         let template_service = template::configured(
             &golem_config.template_service,
             &golem_config.template_cache,
@@ -122,9 +124,16 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let golem_config = Arc::new(golem_config.clone());
 
+        info!("Done with golem");
+
         let promise_service = promise::configured(&golem_config.promises, pool.clone());
 
+        info!("Done with promise service");
+
         let shard_service = Arc::new(ShardServiceDefault::new());
+
+        info!("Done with promise shard service");
+
 
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
         let worker_service = services::worker::configured(
