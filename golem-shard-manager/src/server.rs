@@ -367,19 +367,12 @@ async fn async_main(
     dbg!("Using Redis at {}", shard_manager_config.redis.url());
     let pool = golem_common::redis::RedisPool::configured(&shard_manager_config.redis).await?;
 
-    dbg!("Done with pool at");
-
     let shard_manager_config = Arc::new(shard_manager_config.clone());
-
-    dbg!("Done with pool shard manager config");
 
     let persistence_service = Arc::new(PersistenceServiceDefault::new(
         &pool,
         &shard_manager_config.number_of_shards,
     ));
-
-    dbg!("Done with pool persistence service");
-
 
     let instance_server_service = Arc::new(WorkerExecutorServiceDefault::new(
         shard_manager_config.instance_server_service.clone(),
@@ -387,19 +380,17 @@ async fn async_main(
 
     let shard_manager_port_str = env::var("GOLEM_SHARD_MANAGER_PORT")?;
 
-    dbg!("Done herE???");
     dbg!(
         "The port read from env is {}",
         shard_manager_port_str.clone()
     );
+
     let shard_manager_port = shard_manager_port_str.parse::<u16>()?;
     let shard_manager_addr = format!("0.0.0.0:{}", shard_manager_port);
 
     dbg!("Listening on port {}", shard_manager_port);
 
     let addr = shard_manager_addr.parse()?;
-
-    dbg!("The address is {}", addr);
 
     let shard_manager = ShardManagerServiceImpl::new(
         persistence_service,
@@ -409,7 +400,7 @@ async fn async_main(
     .await?;
 
     let service = ShardManagerServiceServer::new(shard_manager);
-
+    
     // TODO: configurable limits
     Server::builder()
         .concurrency_limit_per_connection(1024)
