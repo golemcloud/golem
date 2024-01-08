@@ -27,7 +27,8 @@ Once the cargo build is successful, simply run
 
 ```bash
 # from the root of the project
-docker-compose up 
+# --build will rebuild the images based on the cargo targets in the previous step
+docker-compose up --build
 ```
 
 If you have issues running the above cargo build command, then read on:
