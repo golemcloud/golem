@@ -69,3 +69,5 @@ cargo build --target x86_64-unknown-linux-gnu
 ### WINDOWS
 TBD
 
+We will be trying cargo chef and offload cargo build to docker context without impacting the build time.
+
