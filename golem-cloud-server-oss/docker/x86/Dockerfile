@@ -22,7 +22,7 @@ RUN cargo build -p cloud-server-oss
 FROM debian:bookworm-slim
 
 WORKDIR /app
-COPY --from=builder /app/target/debug/debug/cloud-server-oss ./
+COPY --from=builder /app/target/debug/cloud-server-oss ./
 COPY --from=builder /app/golem-cloud-server-oss/config/cloud-server.toml ./config/cloud-server.toml
 
 ARG SHARD_MANAGER_HOST
