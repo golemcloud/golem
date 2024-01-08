@@ -1,10 +1,24 @@
 # Build stage
-FROM rust:latest as builder
-
+FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /app
-COPY . .
 
-RUN cargo build -p golem-worker-executor-oss --release --target=x86_64-unknown-linux-gnu
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef as builder
+
+RUN apt-get update && apt-get install -y unzip \
+    && PROTOC_ZIP=protoc-3.15.0-linux-x86_64.zip \
+    && curl -OL https://github.com/google/protobuf/releases/download/v3.15.0/$PROTOC_ZIP \
+    && unzip -o $PROTOC_ZIP -d /usr/local bin/protoc \
+    && rm -f $PROTOC_ZIP
+
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+COPY . .
+RUN cargo chef cook --release --target=x86_64-unknown-linux-gnu
+RUN cargo build -p golem-worker-executor-oss --target=x86_64-unknown-linux-gnu
 
 FROM debian:bookworm-slim
 
