@@ -63,7 +63,7 @@ type = "Grpc"
 
 [shard_manager_service.config]
 host = "localhost"
-port = "9001"
+port = 9001
 
 [shard_manager_service.config.retries]
 max_attempts = 5
