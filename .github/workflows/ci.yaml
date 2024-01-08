@@ -27,7 +27,10 @@ jobs:
       - name: Build tag and push shard-manager to Amazon ECR
         id: build-image
         run:
-          docker build -t worker-executor:${{ env.VERSION }}  -f golem-worker-executor-oss/docker/x86/Dockerfile .
+          docker build -t golem-worker-executor:${{ env.VERSION }} -f golem-worker-executor-oss/docker/x86/Dockerfile .
+          # TODO; Decide on this tag before pushing to docker hub?
+          docker build -t golem-server:${{ env.VERSION }} -f golem-cloud-server-oss/docker/x86/Dockerfile .
+          docker build -t golem-shard-manager:${{ env.VERSION }} -f golem-shard-manager-oss/docker/x86/Dockerfile .
 
   build:
     runs-on: ubuntu-latest
