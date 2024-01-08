@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     pub fn local_config_is_loadable() {
-        let _ = GolemConfig::from_file("config/worker-executor-local.toml");
+        let _ = GolemConfig::from_file("config/worker-executor.toml");
         let _ = AdditionalGolemConfig::from_file("config/worker-executor-local.toml");
     }
 }

@@ -58,12 +58,12 @@ min_delay = "100ms"
 max_delay = "2s"
 multiplier = 2
 
+[shard_manager_service]
+type = "Grpc"
+
 [shard_manager_service.config]
 # host
 # port
-
-[shard_manager_service]
-type = "Grpc"
 
 [shard_manager_service.config.retries]
 max_attempts = 5
