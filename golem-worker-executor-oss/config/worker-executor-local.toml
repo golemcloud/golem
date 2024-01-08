@@ -62,8 +62,8 @@ multiplier = 2
 type = "Grpc"
 
 [shard_manager_service.config]
-# host
-# port
+host = "localhost"
+port = "9001"
 
 [shard_manager_service.config.retries]
 max_attempts = 5
