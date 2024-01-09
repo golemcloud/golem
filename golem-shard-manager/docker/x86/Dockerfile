@@ -16,13 +16,12 @@ RUN apt-get update && apt-get install -y unzip \
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN cargo chef cook --release
-RUN cargo build -p golem-shard-manager
+RUN cargo build -p golem-shard-manager --release --bin golem-shard-manager
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime
 
 WORKDIR /app
-COPY --from=builder /app/target/debug/golem-shard-manager ./
+COPY --from=builder /app/target/release/golem-shard-manager ./
 COPY --from=builder /app/golem-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
 
 ARG REDIS_HOST

@@ -16,13 +16,12 @@ RUN apt-get update && apt-get install -y unzip \
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN cargo chef cook --release
-RUN cargo build -p cloud-server-oss
+RUN cargo build -p cloud-server-oss --release --bin cloud-server-oss
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime
 
 WORKDIR /app
-COPY --from=builder /app/target/debug/cloud-server-oss ./
+COPY --from=builder /app/target/release/cloud-server-oss /usr/local/bin
 COPY --from=builder /app/golem-cloud-server-oss/config/cloud-server.toml ./config/cloud-server.toml
 
 ARG SHARD_MANAGER_HOST
@@ -42,4 +41,4 @@ ENV ENVIRONMENT=$ENVIRONMENT \
 EXPOSE 8080
 EXPOSE 9090
 
-ENTRYPOINT ["./cloud-server-oss"]
+ENTRYPOINT ["/usr/local/bin/cloud-server-oss"]

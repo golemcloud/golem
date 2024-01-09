@@ -16,13 +16,12 @@ RUN apt-get update && apt-get install -y unzip \
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN cargo chef cook --release
-RUN cargo build -p golem-worker-executor-oss
+RUN cargo build -p golem-worker-executor-oss --release --bin worker-executor-oss
 
 FROM debian:bookworm-slim
 
 WORKDIR /app
-COPY --from=builder /app/target/debug/worker-executor-oss ./
+COPY --from=builder /app/target/release/worker-executor-oss ./
 COPY --from=builder /app/golem-worker-executor-oss/config/worker-executor-local.toml ./config/worker-executor.toml
 
 ARG ENVIRONMENT
