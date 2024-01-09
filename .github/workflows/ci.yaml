@@ -27,9 +27,9 @@ jobs:
       - name: Build docker images for all services and push to Docker Hub
         id: build-image
         run: |
-          docker build -t golem-worker-executor:${{ env.VERSION }} -f golem-worker-executor-oss/docker/x86/Dockerfile .
-          docker build -t golem-server:${{ env.VERSION }} -f golem-cloud-server-oss/docker/x86/Dockerfile .
-          docker build -t golem-shard-manager:${{ env.VERSION }} -f golem-shard-manager-oss/docker/x86/Dockerfile .
+          docker build -t golem-worker-executor:${{ env.VERSION }} -f golem-worker-executor-oss/docker/amd64/Dockerfile .
+          docker build -t golem-server:${{ env.VERSION }} -f golem-cloud-server-oss/docker/amd64/Dockerfile .
+          docker build -t golem-shard-manager:${{ env.VERSION }} -f golem-shard-manager-oss/docker/amd64/Dockerfile .
 
   build:
     runs-on: ubuntu-latest
