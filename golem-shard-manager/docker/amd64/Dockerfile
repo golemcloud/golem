@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y unzip \
     && rm -f $PROTOC_ZIP
 
 COPY --from=planner /app/recipe.json recipe.json
+COPY ./Cargo.toml ./Cargo.lock ./
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build -p golem-shard-manager --release --bin golem-shard-manager
@@ -38,4 +39,3 @@ EXPOSE 8081
 EXPOSE 9001
 
 ENTRYPOINT ["./golem-shard-manager"]
-
