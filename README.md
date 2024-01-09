@@ -12,10 +12,9 @@ To spin up services
 docker-compose up
 ```
 
-Note that docker-compose up alone will not rebuild the changes.
-So run cargo build first, and in this case you need to specify
-the target x86_64-unknown-linux-gnu
+Note: docker-compose up alone will not rebuild the changes.
+To compose up with changes:
 
 ```bash
-cargo build --build
+docker-compose up --build
 ```
