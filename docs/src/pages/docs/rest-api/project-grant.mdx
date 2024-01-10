@@ -8,7 +8,7 @@ Projects can have grants providing access to other accounts than the project's o
 
 | Method | Path                               | Request | Response                   |
 | ------ | ---------------------------------- | ------- | -------------------------- |
-| GET    | `/v1/projects/{project-id}/grants` | -       | Array of ProjectGrant JSON |
+| GET    | `/v2/projects/{project-id}/grants` | -       | Array of ProjectGrant JSON |
 
 **Response format:**
 
@@ -37,7 +37,7 @@ Returns all projects grants associated with the given project. For each grant:
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants'
+curl 'https://release.api.golem.cloud/v2/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -45,7 +45,7 @@ curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e332
 
 | Method | Path                                          | Request | Response          |
 | ------ | --------------------------------------------- | ------- | ----------------- |
-| GET    | `/v1/projects/{project-id}/grants/{grant-id}` | -       | ProjectGrant JSON |
+| GET    | `/v2/projects/{project-id}/grants/{grant-id}` | -       | ProjectGrant JSON |
 
 **Response format:**
 
@@ -67,7 +67,7 @@ Returns a specific grant of a specific project. The returned object is the same 
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants/2b21e703-cd02-4873-bb6b-e1caa3c2961f'
+curl 'https://release.api.golem.cloud/v2/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants/2b21e703-cd02-4873-bb6b-e1caa3c2961f'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -75,7 +75,7 @@ curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e332
 
 | Method | Path                               | Request                      | Response          |
 | ------ | ---------------------------------- | ---------------------------- | ----------------- |
-| POST   | `/v1/projects/{project-id}/grants` | ProjectGrantDataRequest JSON | ProjectGrant JSON |
+| POST   | `/v2/projects/{project-id}/grants` | ProjectGrantDataRequest JSON | ProjectGrant JSON |
 
 **Request format:**
 
@@ -112,7 +112,7 @@ The response describes the new project grant including it's `id` that can be use
 
 ```bash
 curl -X POST
-     'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants'
+     'https://release.api.golem.cloud/v2/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants'
      -H 'Content-Type: application/json'
      -d '{"granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5", "projectPolicyId": "2b41858e-a327-4e63-9539-ff9b123c88a2"}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
@@ -122,7 +122,7 @@ curl -X POST
 
 | Method | Path                               | Request                                 | Response          |
 | ------ | ---------------------------------- | --------------------------------------- | ----------------- |
-| POST   | `/v1/projects/{project-id}/grants` | ProjectGrantDataWithProjectActions JSON | ProjectGrant JSON |
+| POST   | `/v2/projects/{project-id}/grants` | ProjectGrantDataWithProjectActions JSON | ProjectGrant JSON |
 
 **Request format:**
 
@@ -161,7 +161,7 @@ The response describes the new project grant including it's `id` that can be use
 
 ```bash
 curl -X POST
-     'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants'
+     'https://release.api.golem.cloud/v2/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants'
      -H 'Content-Type: application/json'
      -d '{"granteeAccountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5", "projectActions": ["ViewComponent", "ViewInstance"], "projectPolicyName": "my new policy"}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
@@ -171,7 +171,7 @@ curl -X POST
 
 | Method | Path                                          | Request | Response |
 | ------ | --------------------------------------------- | ------- | -------- |
-| DELETE | `/v1/projects/{project-id}/grants/{grant-id}` | -       | -        |
+| DELETE | `/v2/projects/{project-id}/grants/{grant-id}` | -       | -        |
 
 **Explanation**
 
@@ -181,7 +181,7 @@ Deletes an existing grant of a specific project.
 
 ```bash
 curl -X DELETE
-     'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants/2b21e703-cd02-4873-bb6b-e1caa3c2961f'
+     'https://release.api.golem.cloud/v2/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999/grants/2b21e703-cd02-4873-bb6b-e1caa3c2961f'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 

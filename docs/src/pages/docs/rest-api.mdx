@@ -2,13 +2,13 @@ import { Card, Cards } from "nextra/components"
 
 # REST API
 
-The Golem REST API is located at [https://release.api.golem.cloud](https://release.api.golem.cloud/v1). For all API calls, the user must provide a token for authentication. To obtain the golem token, the user should register an external oauth2 token with the Golem service using the `v1/oauth2` endpoint.
+The Golem REST API is located at [https://release.api.golem.cloud](https://release.api.golem.cloud/v2). For all API calls, the user must provide a token for authentication. To obtain the golem token, the user should register an external oauth2 token with the Golem service using the `v2/oauth2` endpoint.
 
 # Authentication
 
-All endpoints (except for `/v1/oauth2` ) requires authorization header `Authorization: bearer <token-secret>` where `token-secret` is one of:
+All endpoints (except for `/v2/oauth2` ) requires authorization header `Authorization: bearer <token-secret>` where `token-secret` is one of:
 
-- the `secret` field of the response of the `v1/oauth2` endpoint.
+- the `secret` field of the response of the `v2/oauth2` endpoint.
 - a custom API token created using the **Token API**
 
 # API reference

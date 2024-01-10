@@ -8,7 +8,7 @@ The account API allows users to query and manipulate their own account data.
 
 | Method | Path                        | Request | Response     |
 | ------ | --------------------------- | ------- | ------------ |
-| GET    | `/v1/accounts/{account_id}` | -       | Account JSON |
+| GET    | `/v2/accounts/{account_id}` | -       | Account JSON |
 
 **Response format:**
 
@@ -24,7 +24,7 @@ The account API allows users to query and manipulate their own account data.
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5'
+curl 'https://release.api.golem.cloud/v2/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -32,7 +32,7 @@ curl 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecd
 
 | Method | Path                             | Request | Response  |
 | ------ | -------------------------------- | ------- | --------- |
-| GET    | `/v1/accounts/{account_id}/plan` | -       | Plan JSON |
+| GET    | `/v2/accounts/{account_id}/plan` | -       | Plan JSON |
 
 **Response format:**
 
@@ -62,7 +62,7 @@ curl 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecd
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5/plan'
+curl 'https://release.api.golem.cloud/v2/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5/plan'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -70,7 +70,7 @@ curl 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecd
 
 | Method | Path                        | Request      | Response     |
 | ------ | --------------------------- | ------------ | ------------ |
-| PUT    | `/v1/accounts/{account_id}` | Account JSON | Account JSON |
+| PUT    | `/v2/accounts/{account_id}` | Account JSON | Account JSON |
 
 **Request and response format:**
 
@@ -93,7 +93,7 @@ The response is the updated account data.
 
 ```bash
 curl
-  -X PUT 'https://release.api.golem.cloud/v1/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5'
+  -X PUT 'https://release.api.golem.cloud/v2/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5'
   -H 'Content-Type: application/json'
   -d '{"id": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5", "name": "User name", "email": "user2@ema.il", "planId": "26b3c9da-e11c-4643-9271-26c8f3d025a1"}'
   -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
