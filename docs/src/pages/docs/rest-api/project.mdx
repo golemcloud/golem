@@ -10,7 +10,7 @@ Every account has a **default project** which is assumed when no specific projec
 
 | Method | Path                   | Request | Response     |
 | ------ | ---------------------- | ------- | ------------ |
-| GET    | `/v1/projects/default` | -       | Project JSON |
+| GET    | `/v2/projects/default` | -       | Project JSON |
 
 **Response format:**
 
@@ -36,7 +36,7 @@ Every account has a **default project** which is assumed when no specific projec
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/projects/default'
+curl 'https://release.api.golem.cloud/v2/projects/default'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -44,7 +44,7 @@ curl 'https://release.api.golem.cloud/v1/projects/default'
 
 | Method | Path                        | Request | Response     |
 | ------ | --------------------------- | ------- | ------------ |
-| GET    | `/v1/projects/{project-id}` | -       | Project JSON |
+| GET    | `/v2/projects/{project-id}` | -       | Project JSON |
 
 **Response format:**
 
@@ -68,7 +68,7 @@ Gets a project by its identifier. Response is the same as for the **default proj
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999'
+curl 'https://release.api.golem.cloud/v2/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -76,7 +76,7 @@ curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e332
 
 | Method | Path           | Request | Response              |
 | ------ | -------------- | ------- | --------------------- |
-| GET    | `/v1/projects` | -       | Array of Project JSON |
+| GET    | `/v2/projects` | -       | Array of Project JSON |
 
 **Response format:**
 
@@ -102,7 +102,7 @@ Returns all projects of the account.
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/projects'
+curl 'https://release.api.golem.cloud/v2/projects'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -110,7 +110,7 @@ curl 'https://release.api.golem.cloud/v1/projects'
 
 | Method | Path                            | Request | Response              |
 | ------ | ------------------------------- | ------- | --------------------- |
-| GET    | `/v1/projects?project-name=xxx` | -       | Array of Project JSON |
+| GET    | `/v2/projects?project-name=xxx` | -       | Array of Project JSON |
 
 **Response format:**
 
@@ -136,7 +136,7 @@ Returns all projects of the account that has the given `name`. As unique names a
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/projects?project-name=xxx'
+curl 'https://release.api.golem.cloud/v2/projects?project-name=xxx'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -144,7 +144,7 @@ curl 'https://release.api.golem.cloud/v1/projects?project-name=xxx'
 
 | Method | Path           | Request                 | Response     |
 | ------ | -------------- | ----------------------- | ------------ |
-| POST   | `/v1/projects` | ProjectDataRequest JSON | Project JSON |
+| POST   | `/v2/projects` | ProjectDataRequest JSON | Project JSON |
 
 **Request format:**
 
@@ -178,7 +178,7 @@ Creates a new project. The `ownerAccountId` must be the caller's account ID.
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999'
+curl 'https://release.api.golem.cloud/v2/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -186,7 +186,7 @@ curl 'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e332
 
 | Method | Path                        | Request | Response |
 | ------ | --------------------------- | ------- | -------- |
-| DELETE | `/v1/projects/{project-id}` | -       | -        |
+| DELETE | `/v2/projects/{project-id}` | -       | -        |
 
 **Explanation**
 
@@ -196,7 +196,7 @@ Deletes a project given by its identifier.
 
 ```bash
 curl -X DELETE
-     'https://release.api.golem.cloud/v1/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999'
+     'https://release.api.golem.cloud/v2/projects/866e1f4a-cf1a-40aa-ad8f-77e33294e999'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 

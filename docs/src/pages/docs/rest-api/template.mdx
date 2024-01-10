@@ -10,7 +10,7 @@ The template API provides endpoint to upload, download and find Golem templates 
 
 | Method | Path                          | Request | Response               |
 | ------ | ----------------------------- | ------- | ---------------------- |
-| GET    | `/v1/templates/{template_id}` | -       | Array of Template JSON |
+| GET    | `/v2/templates/{template_id}` | -       | Array of Template JSON |
 
 **Response format:**
 
@@ -106,7 +106,7 @@ This endpoint returns a list of **all versions** for the template id provided as
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78'
+curl 'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -114,7 +114,7 @@ curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b1752
 
 | Method | Path                                 | Request                  | Response      |
 | ------ | ------------------------------------ | ------------------------ | ------------- |
-| PUT    | `/v1/templates/{template_id}/upload` | application/octet-stream | Template JSON |
+| PUT    | `/v2/templates/{template_id}/upload` | application/octet-stream | Template JSON |
 
 **Request format**
 
@@ -128,7 +128,7 @@ The response is a JSON containing the updated template metadata as described in 
 
 ```bash
 curl -X PUT
-     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/upload'
+     'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/upload'
      -H 'Content-Type: application/octet-stream'
      --data-binary @new-template.wasm
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
@@ -138,7 +138,7 @@ curl -X PUT
 
 | Method | Path                                   | Request | Response               |
 | ------ | -------------------------------------- | ------- | ---------------------- |
-| GET    | `/v1/templates?project-id={projectId}` | -       | Array of Template JSON |
+| GET    | `/v2/templates?project-id={projectId}` | -       | Array of Template JSON |
 
 **Response format:**
 
@@ -151,7 +151,7 @@ Gets all templates belonging to the given project
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/templates?project-id=866e1f4a-cf1a-40aa-ad8f-77e33294e999'
+curl 'https://release.api.golem.cloud/v2/templates?project-id=866e1f4a-cf1a-40aa-ad8f-77e33294e999'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -159,7 +159,7 @@ curl 'https://release.api.golem.cloud/v1/templates?project-id=866e1f4a-cf1a-40aa
 
 | Method | Path                                                                | Request | Response               |
 | ------ | ------------------------------------------------------------------- | ------- | ---------------------- |
-| GET    | `/v1/templates?project-id={projectId}&template-name={templateName}` | -       | Array of Template JSON |
+| GET    | `/v2/templates?project-id={projectId}&template-name={templateName}` | -       | Array of Template JSON |
 
 **Response format:**
 
@@ -172,7 +172,7 @@ Gets all templates belonging to the given project **with a given name**. Because
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/templates?project-id=866e1f4a-cf1a-40aa-ad8f-77e33294e999?template-name=test'
+curl 'https://release.api.golem.cloud/v2/templates?project-id=866e1f4a-cf1a-40aa-ad8f-77e33294e999?template-name=test'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -180,7 +180,7 @@ curl 'https://release.api.golem.cloud/v1/templates?project-id=866e1f4a-cf1a-40aa
 
 | Method | Path            | Request             | Response      |
 | ------ | --------------- | ------------------- | ------------- |
-| POST   | `/v1/templates` | multipart/form-data | Template JSON |
+| POST   | `/v2/templates` | multipart/form-data | Template JSON |
 
 **Request format**
 
@@ -208,7 +208,7 @@ The response is a JSON containing the updated template metadata as described in 
 
 ```bash
 curl -X POST
-     'https://release.api.golem.cloud/v1/templates'
+     'https://release.api.golem.cloud/v2/templates'
      -H 'Content-Type: multipart/form-data'
      -F 'field0={"componentName": "test-template"}; type=application/json'
      -F 'componentName=@new-template.wasm; type=application/octet-stream'
@@ -219,7 +219,7 @@ curl -X POST
 
 | Method | Path                                                     | Request | Response                      |
 | ------ | -------------------------------------------------------- | ------- | ----------------------------- |
-| GET    | `/v1/templates/{template_id}/download?version={version}` | -       | application/octet-stream WASM |
+| GET    | `/v2/templates/{template_id}/download?version={version}` | -       | application/octet-stream WASM |
 
 **Response format:**
 
@@ -232,7 +232,7 @@ Downloads a specific version of the template's WASM.
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/download'
+curl 'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/download'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -240,7 +240,7 @@ curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b1752
 
 | Method | Path                                 | Request | Response    |
 | ------ | ------------------------------------ | ------- | ----------- |
-| GET    | `/v1/templates/{template_id}/latest` | -       | JSON number |
+| GET    | `/v2/templates/{template_id}/latest` | -       | JSON number |
 
 **Response format:**
 
@@ -253,7 +253,7 @@ Gets the latest version of a template.
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/latest'
+curl 'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/latest'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 

@@ -22,7 +22,7 @@ The following actions can be used in the `projectActions` fields of this API:
 
 | Method | Path                                       | Request | Response           |
 | ------ | ------------------------------------------ | ------- | ------------------ |
-| GET    | `/v1/project-policies/{project-policy-id}` | -       | ProjectPolicy JSON |
+| GET    | `/v2/project-policies/{project-policy-id}` | -       | ProjectPolicy JSON |
 
 **Response format:**
 
@@ -41,7 +41,7 @@ Returns a given project policy by it's ID. Project policy identifiers are used i
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/project-policies/2b41858e-a327-4e63-9539-ff9b123c88a2'
+curl 'https://release.api.golem.cloud/v2/project-policies/2b41858e-a327-4e63-9539-ff9b123c88a2'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -49,7 +49,7 @@ curl 'https://release.api.golem.cloud/v1/project-policies/2b41858e-a327-4e63-953
 
 | Method | Path                   | Request                | Response           |
 | ------ | ---------------------- | ---------------------- | ------------------ |
-| POST   | `/v1/project-policies` | ProjectPolicyData JSON | ProjectPolicy JSON |
+| POST   | `/v2/project-policies` | ProjectPolicyData JSON | ProjectPolicy JSON |
 
 **Request format:**
 
@@ -78,7 +78,7 @@ Creates a new project policy and returns the object describing it, including the
 
 ```bash
 curl -X POST
-     'https://release.api.golem.cloud/v1/project-policies'
+     'https://release.api.golem.cloud/v2/project-policies'
      -H 'Content-Type: application/json'
      -d '{"name": "a policy", "projectActions": ["ViewComponent", "ViewInstance"]}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'

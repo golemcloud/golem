@@ -8,7 +8,7 @@ The worker API allows to launch new workers, query and manipulate their status, 
 
 | Method | Path                               | Request | Response               |
 | ------ | ---------------------------------- | ------- | ---------------------- |
-| GET    | `/v1/templates/workers/{workerId}` | -       | VersionedWorkerId JSON |
+| GET    | `/v2/templates/workers/{workerId}` | -       | VersionedWorkerId JSON |
 
 **Response format:**
 
@@ -35,7 +35,7 @@ These components are:
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/templates/workers/70ff8f69-e121-40ea-b59a-b17526f37a78.test-worker-1'
+curl 'https://release.api.golem.cloud/v2/templates/workers/70ff8f69-e121-40ea-b59a-b17526f37a78.test-worker-1'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -43,7 +43,7 @@ curl 'https://release.api.golem.cloud/v1/templates/workers/70ff8f69-e121-40ea-b5
 
 | Method | Path                                              | Request | Response            |
 | ------ | ------------------------------------------------- | ------- | ------------------- |
-| GET    | `/v1/templates/{templateId}/workers/{workerName}` | -       | WorkerMetadata JSON |
+| GET    | `/v2/templates/{templateId}/workers/{workerName}` | -       | WorkerMetadata JSON |
 
 **Response format:**
 
@@ -84,7 +84,7 @@ Returns metadata about an existing worker:
 **Example cURL:**
 
 ```bash
-curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1'
+curl 'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -92,7 +92,7 @@ curl 'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b1752
 
 | Method | Path                                  | Request                    | Response               |
 | ------ | ------------------------------------- | -------------------------- | ---------------------- |
-| POST   | `/v1/templates/{templateId}/workers}` | WorkerCreationRequest JSON | VersionedWorkerId JSON |
+| POST   | `/v2/templates/{templateId}/workers}` | WorkerCreationRequest JSON | VersionedWorkerId JSON |
 
 **Request format:**
 
@@ -131,7 +131,7 @@ Creates a new worker. The worker initially is in `Idle` status, waiting to be in
 
 ```bash
 curl -X POST
-     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers'
+     'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers'
      -H 'Content-Type: application/json'
      -d '{"name": "test-worker-1", "args": [], "env": []}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
@@ -141,7 +141,7 @@ curl -X POST
 
 | Method | Path                                              | Request | Response |
 | ------ | ------------------------------------------------- | ------- | -------- |
-| DELETE | `/v1/templates/{templateId}/workers/{workerName}` | -       | -        |
+| DELETE | `/v2/templates/{templateId}/workers/{workerName}` | -       | -        |
 
 **Explanation**
 
@@ -151,7 +151,7 @@ Interrupts and deletes an existing worker.
 
 ```bash
 curl -X DELETE
-     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1'
+     'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -159,7 +159,7 @@ curl -X DELETE
 
 | Method | Path                                                  | Request | Response           |
 | ------ | ----------------------------------------------------- | ------- | ------------------ |
-| POST   | `/v1/templates/{templateId}/workers/{workerName}/key` | -       | InvocationKey JSON |
+| POST   | `/v2/templates/{templateId}/workers/{workerName}/key` | -       | InvocationKey JSON |
 
 **Response format**
 
@@ -179,7 +179,7 @@ An invocation key is passed to the below defined invoke APIs to guarantee that r
 
 ```bash
 curl -X POST
-     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/key'
+     'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/key'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
@@ -187,7 +187,7 @@ curl -X POST
 
 | Method | Path                                                               | Request               | Response          |
 | ------ | ------------------------------------------------------------------ | --------------------- | ----------------- |
-| POST   | `/v1/templates/{templateId}/workers/{workerName}/invoke-and-await` | InvokeParameters JSON | InvokeResult JSON |
+| POST   | `/v2/templates/{templateId}/workers/{workerName}/invoke-and-await` | InvokeParameters JSON | InvokeResult JSON |
 
 **Query parameters**
 
@@ -224,7 +224,7 @@ To learn more about how exactly the **function name,** the **parameters** and th
 
 ```bash
 curl -X POST
-     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/invoke-and-await?invocation-key=4fb80f49-d9c1-4b11-9d46-26261f26e0bf&function=golem:test/run'
+     'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/invoke-and-await?invocation-key=4fb80f49-d9c1-4b11-9d46-26261f26e0bf&function=golem:test/run'
      -H 'Content-Type: application/json'
      -d '{"params": ["x", 10, {"msg": "hello"}]}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
@@ -234,7 +234,7 @@ curl -X POST
 
 | Method | Path                                                     | Request               | Response |
 | ------ | -------------------------------------------------------- | --------------------- | -------- |
-| POST   | `/v1/templates/{templateId}/workers/{workerName}/invoke` | InvokeParameters JSON | -        |
+| POST   | `/v2/templates/{templateId}/workers/{workerName}/invoke` | InvokeParameters JSON | -        |
 
 **Query parameters**
 
@@ -258,7 +258,7 @@ To understand how to get the function name and how to encode the function parame
 
 ```bash
 curl -X POST
-     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/invoke?function=golem:test/run'
+     'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/invoke?function=golem:test/run'
      -H 'Content-Type: application/json'
      -d '{"params": ["x", 10, {"msg": "hello"}]}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
@@ -268,7 +268,7 @@ curl -X POST
 
 | Method | Path                                                       | Request                 | Response  |
 | ------ | ---------------------------------------------------------- | ----------------------- | --------- |
-| POST   | `/v1/templates/{templateId}/workers/{workerName}/complete` | CompleteParameters JSON | JSON bool |
+| POST   | `/v2/templates/{templateId}/workers/{workerName}/complete` | CompleteParameters JSON | JSON bool |
 
 **Request format**
 
@@ -293,7 +293,7 @@ Learn more about promises in [Promises](/docs/promises)
 
 ```bash
 curl -X POST
-     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/complete'
+     'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/complete'
      -H 'Content-Type: application/json'
      -d '{"oplogIdx": 101, "data": [1, 22, 0, 5, 100]}'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
@@ -303,7 +303,7 @@ curl -X POST
 
 | Method | Path                                                        | Request                 | Response  |
 | ------ | ----------------------------------------------------------- | ----------------------- | --------- |
-| POST   | `/v1/templates/{templateId}/workers/{workerName}/interrupt` | CompleteParameters JSON | JSON bool |
+| POST   | `/v2/templates/{templateId}/workers/{workerName}/interrupt` | CompleteParameters JSON | JSON bool |
 
 **Query parameters**
 
@@ -319,7 +319,7 @@ An interrupted worker can be still used, and it is going to be automatically res
 
 ```bash
 curl -X POST
-     'https://release.api.golem.cloud/v1/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/interrupt'
+     'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/workers/test-worker-1/interrupt'
      -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
 ```
 
