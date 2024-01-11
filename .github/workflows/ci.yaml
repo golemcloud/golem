@@ -12,6 +12,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  docker:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+          fetch-depth: '0'
+      - uses: satackey/action-docker-layer-caching@v0.0.11
+        continue-on-error: true
+      - name: Set version
+        id: set-version
+        run: echo "VERSION=$(git describe --tags --abbrev=0 || git rev-parse --short HEAD)" >> $GITHUB_ENV
+      - name: Build docker images for all services and push to Docker Hub
+        id: build-image
+        run: |
+          docker build -t golem-worker-executor:${{ env.VERSION }} -f golem-worker-executor-oss/docker/amd64/Dockerfile .
+          docker build -t golem-server:${{ env.VERSION }} -f golem-cloud-server-oss/docker/amd64/Dockerfile .
+          docker build -t golem-shard-manager:${{ env.VERSION }} -f golem-shard-manager/docker/amd64/Dockerfile .
+
   build:
     runs-on: ubuntu-latest
     steps:

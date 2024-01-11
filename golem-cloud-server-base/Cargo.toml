@@ -1,0 +1,21 @@
+[package]
+name = "golem-cloud-server-base"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+
+[dependencies]
+golem-common = { path = "../golem-common", version = "0.0.0" }
+
+poem-openapi = { workspace = true }
+serde = { workspace = true }
+url = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+hyper = { workspace = true }
+tonic = { workspace = true }
+http = { workspace = true }
+num-traits = "0.2"
+bigdecimal = "0.4.2"
+proptest = "1.4.0"

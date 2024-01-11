@@ -1,0 +1,35 @@
+[package]
+name = "golem-shard-manager"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "golem-shard-manager"
+path = "src/server.rs"
+
+[dependencies]
+golem-common = { path = "../golem-common", version = "0.0.0" }
+
+anyhow = { workspace = true }
+async-rwlock = "1.3.0"
+async-trait = { workspace = true }
+bincode = { workspace = true }
+bytes = { workspace = true }
+figment = { workspace = true }
+fred = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+humantime-serde = { workspace = true }
+hyper = { workspace = true }
+prometheus = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tonic-reflection = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt", "std", "json"] }
+url = { workspace = true }
+warp = { workspace = true }
