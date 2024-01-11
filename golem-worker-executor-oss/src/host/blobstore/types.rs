@@ -3,7 +3,9 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use tonic::codegen::Bytes;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, StreamResult, Subscribe};
+use wasmtime_wasi::preview2::{
+    HostInputStream, HostOutputStream, InputStream, StreamResult, Subscribe,
+};
 
 use crate::context::Context;
 use crate::preview2::wasi::blobstore::types::{
@@ -15,33 +17,39 @@ use crate::preview2::wasi::blobstore::types::{
 impl HostIncomingValue for Context {
     async fn incoming_value_consume_sync(
         &mut self,
-        _self_: Resource<IncomingValue>,
+        self_: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<IncomingValueSyncBody, Error>> {
-        todo!()
+        let body = self.table().get::<IncomingValue>(&self_)?.body.clone();
+        let bytes = body.write().unwrap().drain(..).collect();
+        Ok(Ok(bytes))
     }
 
     async fn incoming_value_consume_async(
         &mut self,
-        _self_: Resource<IncomingValue>,
+        self_: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<Resource<IncomingValueAsyncBody>, Error>> {
-        todo!()
+        let body = self.table().get::<IncomingValue>(&self_)?.body.clone();
+        let input_stream: InputStream =
+            InputStream::Host(Box::new(IncomingValueAsyncBodyEntry::new(body)));
+        let incoming_value_async_body = self.table_mut().push(input_stream)?;
+        Ok(Ok(incoming_value_async_body))
     }
 
-    async fn size(&mut self, _self_: Resource<IncomingValue>) -> anyhow::Result<u64> {
-        todo!()
+    async fn size(&mut self, self_: Resource<IncomingValue>) -> anyhow::Result<u64> {
+        let body = self.table().get::<IncomingValue>(&self_)?.body.clone();
+        let size = body.read().unwrap().len();
+        Ok(size as u64)
     }
 
-    fn drop(&mut self, _rep: Resource<IncomingValue>) -> anyhow::Result<()> {
-        todo!()
+    fn drop(&mut self, rep: Resource<IncomingValue>) -> anyhow::Result<()> {
+        self.table_mut().delete::<IncomingValue>(rep)?;
+        Ok(())
     }
 }
 
 #[async_trait]
 impl HostOutgoingValue for Context {
-    async fn new_outgoing_value(
-        &mut self,
-        _self_: Resource<OutgoingValueEntry>,
-    ) -> anyhow::Result<Resource<OutgoingValueEntry>> {
+    async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValueEntry>> {
         let outgoing_value = self.table_mut().push(OutgoingValueEntry::new())?;
         Ok(outgoing_value)
     }
@@ -65,62 +73,6 @@ impl HostOutgoingValue for Context {
 
 #[async_trait]
 impl Host for Context {}
-// async fn outgoing_value_write_body(&mut self, outgoing_value: OutgoingValue) -> anyhow::Result<Result<Resource<OutgoingValueBodyAsync>, ()>> {
-//     let body = self
-//         .table()
-//         .get::<OutgoingValueEntry>(outgoing_value)?
-//         .body
-//         .clone();
-//     let outgoing_value_async_body = self
-//         .table_mut()
-//         .push_output_stream(Box::new(OutgoingValueBodyAsyncEntry::new(body)))?;
-//     Ok(Ok(outgoing_value_async_body))
-// }
-//
-// async fn drop_incoming_value(&mut self, incoming_value: IncomingValue) -> anyhow::Result<()> {
-//     self.table_mut()
-//         .delete::<IncomingValueEntry>(incoming_value)?;
-//     Ok(())
-// }
-//
-// async fn incoming_value_consume_sync(
-//     &mut self,
-//     incoming_value: IncomingValue,
-// ) -> anyhow::Result<Result<IncomingValueSyncBody, Error>> {
-//     let body = self
-//         .table()
-//         .get::<IncomingValueEntry>(incoming_value)?
-//         .body
-//         .clone();
-//     let value = body.write().unwrap().drain(..).collect();
-//     Ok(Ok(value))
-// }
-//
-// async fn incoming_value_consume_async(
-//     &mut self,
-//     incoming_value: IncomingValue,
-// ) -> anyhow::Result<Result<IncomingValueAsyncBody, Error>> {
-//     let body = self
-//         .table()
-//         .get::<IncomingValueEntry>(incoming_value)?
-//         .body
-//         .clone();
-//     let incoming_value_async_body = self
-//         .table_mut()
-//         .push_input_stream(Box::new(IncomingValueAsyncBodyEntry::new(body)))?;
-//     Ok(Ok(incoming_value_async_body))
-// }
-//
-// async fn size(&mut self, incoming_value: IncomingValue) -> anyhow::Result<u64> {
-//     let body = self
-//         .table()
-//         .get::<OutgoingValueEntry>(incoming_value)?
-//         .body
-//         .clone();
-//     let size = body.read().unwrap().len() as u64;
-//     Ok(size)
-// }
-// }
 
 pub struct ContainerEntry {
     pub name: String,
@@ -197,12 +149,10 @@ impl IncomingValueEntry {
 }
 
 struct IncomingValueAsyncBodyEntry {
-    #[allow(unused)]
     body: Arc<RwLock<Vec<u8>>>,
 }
 
 impl IncomingValueAsyncBodyEntry {
-    #[allow(unused)]
     pub fn new(body: Arc<RwLock<Vec<u8>>>) -> IncomingValueAsyncBodyEntry {
         IncomingValueAsyncBodyEntry { body }
     }
