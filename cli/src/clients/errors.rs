@@ -119,9 +119,6 @@ impl ResponseContentErrorMapper for ProjectPolicyError {
             ProjectPolicyError::Error401(error) => {
                 format!("Unauthorized: {error:?}")
             }
-            ProjectPolicyError::Error403(error) => {
-                format!("Forbidden: {error:?}")
-            }
             ProjectPolicyError::Error404(error) => {
                 format!("NotFound: {error:?}")
             }
