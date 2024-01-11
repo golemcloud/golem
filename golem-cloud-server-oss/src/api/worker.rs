@@ -126,7 +126,7 @@ pub struct WorkerApi {
     pub worker_service: Arc<dyn WorkerService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/templates", tag = ApiTags::Worker)]
+#[OpenApi(prefix_path = "/templates", tag = ApiTags::Worker)]
 impl WorkerApi {
     #[oai(path = "/workers/:worker_id", method = "get")]
     async fn get_worker_by_id(&self, worker_id: Path<String>) -> Result<Json<VersionedWorkerId>> {
