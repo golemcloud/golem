@@ -64,10 +64,7 @@ impl HostIncomingValue for Context {
 
 #[async_trait]
 impl HostOutgoingValue for Context {
-    async fn new_outgoing_value(
-        &mut self,
-        _self_: Resource<OutgoingValueEntry>,
-    ) -> anyhow::Result<Resource<OutgoingValueEntry>> {
+    async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValueEntry>> {
         let outgoing_value = self.table_mut().push(OutgoingValueEntry::new())?;
         Ok(outgoing_value)
     }
