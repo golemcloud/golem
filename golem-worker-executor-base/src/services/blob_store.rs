@@ -4,8 +4,10 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3 as s3;
+use bincode::{Decode, Encode};
 use golem_common::model::AccountId;
 use s3::config::Region;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 
 use crate::services::golem_config::{BlobStoreServiceConfig, BlobStoreServiceS3Config};
@@ -716,6 +718,7 @@ impl BlobStoreService for BlobStoreServiceInMemory {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct ObjectMetadata {
     pub name: String,
     pub container: String,
