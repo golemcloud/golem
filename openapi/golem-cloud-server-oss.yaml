@@ -7,7 +7,7 @@ tags:
 - name: Template
 - name: Worker
 paths:
-  /templates/{template_id}:
+  /v1/templates/{template_id}:
     get:
       tags:
       - Template
@@ -65,7 +65,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /templates/{template_id}/upload:
+  /v1/templates/{template_id}/upload:
     put:
       tags:
       - Template
@@ -128,7 +128,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /templates:
+  /v1/templates:
     post:
       tags:
       - Template
@@ -246,7 +246,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /templates/{template_id}/download:
+  /v1/templates/{template_id}/download:
     get:
       tags:
       - Template
@@ -311,7 +311,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /templates/{template_id}/latest:
+  /v1/templates/{template_id}/latest:
     get:
       tags:
       - Template
@@ -368,7 +368,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /templates/workers/{worker_id}:
+  /v1/templates/workers/{worker_id}:
     get:
       tags:
       - Worker
@@ -411,7 +411,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /templates/{template_id}/workers:
+  /v1/templates/{template_id}/workers:
     post:
       tags:
       - Worker
@@ -461,7 +461,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /templates/{template_id}/workers/{worker_name}:
+  /v1/templates/{template_id}/workers/{worker_name}:
     delete:
       tags:
       - Worker
@@ -562,7 +562,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /templates/{template_id}/workers/{worker_name}/key:
+  /v1/templates/{template_id}/workers/{worker_name}/key:
     post:
       tags:
       - Worker
@@ -613,7 +613,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /templates/{template_id}/workers/{worker_name}/invoke-and-await:
+  /v1/templates/{template_id}/workers/{worker_name}/invoke-and-await:
     post:
       tags:
       - Worker
@@ -691,7 +691,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /templates/{template_id}/workers/{worker_name}/invoke:
+  /v1/templates/{template_id}/workers/{worker_name}/invoke:
     post:
       tags:
       - Worker
@@ -755,7 +755,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /templates/{template_id}/workers/{worker_name}/complete:
+  /v1/templates/{template_id}/workers/{worker_name}/complete:
     post:
       tags:
       - Worker
@@ -812,7 +812,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /templates/{template_id}/workers/{worker_name}/interrupt:
+  /v1/templates/{template_id}/workers/{worker_name}/interrupt:
     post:
       tags:
       - Worker
@@ -870,7 +870,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /templates/{template_id}/workers/{worker_name}/resume:
+  /v1/templates/{template_id}/workers/{worker_name}/resume:
     post:
       tags:
       - Worker
@@ -2055,3 +2055,4 @@ components:
       - Retrying
       - Failed
       - Exited
+

@@ -21,6 +21,23 @@ jobs:
         with:
           submodules: true
           fetch-depth: '0'
+      - uses: actions/cache/restore@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Set version
+        id: set-version
+        run: |
+          if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
+            echo "DOCKER_VERSION=${{ github.ref }}" >> $GITHUB_ENV
+          else
+            echo "DOCKER_VERSION=$(git describe --tags --abbrev=0 || git rev-parse --short HEAD)" >> $GITHUB_ENV
+          fi
       - uses: satackey/action-docker-layer-caching@v0.0.11
         continue-on-error: true
       - name: Set version
@@ -29,9 +46,17 @@ jobs:
       - name: Build docker images for all services and push to Docker Hub
         id: build-image
         run: |
-          docker build -t golem-worker-executor:${{ env.VERSION }} -f golem-worker-executor-oss/docker/amd64/Dockerfile .
-          docker build -t golem-server:${{ env.VERSION }} -f golem-cloud-server-oss/docker/amd64/Dockerfile .
-          docker build -t golem-shard-manager:${{ env.VERSION }} -f golem-shard-manager/docker/amd64/Dockerfile .
+          docker build -t golem-worker-executor:${{ env.DOCKER_VERSION }} -f golem-worker-executor-oss/docker/amd64/Dockerfile .
+          docker build -t golem-server:${{ env.DOCKER_VERSION }} -f golem-cloud-server-oss/docker/amd64/Dockerfile .
+          docker build -t golem-shard-manager:${{ env.DOCKER_VERSION }} -f golem-shard-manager/docker/amd64/Dockerfile .
+      - name: Push docker images to Docker Hub on tag release
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        run: |
+          echo "${DOCKERHUB_PASSWORD}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+          docker push golem-worker-executor:${{ env.DOCKER_VERSION }}
+          ocker push golem-server:${{ env.DOCKER_VERSION }}
+          docker push golem-shard-manager:${{ env.DOCKER_VERSION }}
+  
 
   build:
     runs-on: ubuntu-latest
