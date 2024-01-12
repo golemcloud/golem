@@ -30,6 +30,8 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run Cargo Build to build cache
+        run: cargo build
       - name: Set version
         id: set-version
         run: |
@@ -39,6 +41,17 @@ jobs:
             COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
             echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
           fi
+      - name: Insert COPY command to Dockerfile (for faster build)
+        run: |
+          awk '/FROM chef as builder/ { print; print "COPY --from=planner ~/.cargo ~/.cargo/"; next }1' golem-worker-executor-oss/docker/amd64/Dockerfile > Dockerfile1.tmp
+          mv Dockerfile1.tmp golem-worker-executor-oss/docker/amd64/Dockerfile
+          
+          awk '/FROM chef as builder/ { print; print "COPY --from=planner ~/.cargo ~/.cargo/"; next }1' golem-cloud-server-oss/docker/amd64/Dockerfile > Dockerfile2.tmp
+          mv Dockerfile2.tmp golem-cloud-server-oss/docker/amd64/Dockerfile
+          
+          awk '/FROM chef as builder/ { print; print "COPY --from=planner ~/.cargo ~/.cargo/"; next }1'golem-shard-manager/docker/amd64/Dockerfile > Dockerfile3.tmp
+          mv Dockerfile3.tmp golem-shard-manager/docker/amd64/Dockerfile
+
       - uses: satackey/action-docker-layer-caching@v0.0.11
         continue-on-error: true
       - name: Build docker images for all services and push to Docker Hub
