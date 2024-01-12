@@ -21,17 +21,66 @@ jobs:
         with:
           submodules: true
           fetch-depth: '0'
-      - uses: satackey/action-docker-layer-caching@v0.0.11
-        continue-on-error: true
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/cache/restore@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run Cargo Build to build cache
+        run: cargo build
+      - name: Move Cargo directories
+        run: |
+          mkdir -p .cargo/bin/
+          mkdir -p .cargo/registry/index/
+          mkdir -p .cargo/registry/cache/
+          cp -r ~/.cargo/bin/* .cargo/bin/
+          cp -r ~/.cargo/registry/index/* .cargo/registry/index/
+          cp -r ~/.cargo/registry/cache/* .cargo/registry/cache/
       - name: Set version
         id: set-version
-        run: echo "VERSION=$(git describe --tags --abbrev=0 || git rev-parse --short HEAD)" >> $GITHUB_ENV
+        run: |
+          if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
+            echo "DOCKER_VERSION=${{ github.ref }}" >> $GITHUB_ENV
+          else
+            COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
+            echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
+          fi
+      - name: Insert COPY command to Dockerfile (for faster build)
+        run: |
+          awk '/FROM chef AS planner/ { print; print "COPY /.cargo /root/.cargo/"; next }1' golem-worker-executor-oss/docker/amd64/Dockerfile > Dockerfile1.tmp
+          mv Dockerfile1.tmp golem-worker-executor-oss/docker/amd64/Dockerfile
+          cat golem-worker-executor-oss/docker/amd64/Dockerfile
+          
+          awk '/FROM chef AS planner/ { print; print "COPY /.cargo /root/.cargo"; next }1' golem-cloud-server-oss/docker/amd64/Dockerfile > Dockerfile2.tmp
+          mv Dockerfile2.tmp golem-cloud-server-oss/docker/amd64/Dockerfile
+          
+          awk '/FROM chef AS planner/ { print; print "COPY /.cargo /root/.cargo"; next }1' golem-shard-manager/docker/amd64/Dockerfile > Dockerfile3.tmp
+          mv Dockerfile3.tmp golem-shard-manager/docker/amd64/Dockerfile
+
+      - uses: satackey/action-docker-layer-caching@v0.0.11
+        continue-on-error: true
       - name: Build docker images for all services and push to Docker Hub
         id: build-image
         run: |
-          docker build -t golem-worker-executor:${{ env.VERSION }} -f golem-worker-executor-oss/docker/amd64/Dockerfile .
-          docker build -t golem-server:${{ env.VERSION }} -f golem-cloud-server-oss/docker/amd64/Dockerfile .
-          docker build -t golem-shard-manager:${{ env.VERSION }} -f golem-shard-manager/docker/amd64/Dockerfile .
+          docker build -t golem-worker-executor:${{ env.DOCKER_VERSION }} -f golem-worker-executor-oss/docker/amd64/Dockerfile .
+          docker build -t golem-server:${{ env.DOCKER_VERSION }} -f golem-cloud-server-oss/docker/amd64/Dockerfile .
+          docker build -t golem-shard-manager:${{ env.DOCKER_VERSION }} -f golem-shard-manager/docker/amd64/Dockerfile .
+      - name: Push docker images to Docker Hub on tag release
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        run: |
+          echo "${DOCKERHUB_PASSWORD}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+          docker push golem-worker-executor:${{ env.DOCKER_VERSION }}
+          ocker push golem-server:${{ env.DOCKER_VERSION }}
+          docker push golem-shard-manager:${{ env.DOCKER_VERSION }}
+  
 
   build:
     runs-on: ubuntu-latest
