@@ -126,9 +126,7 @@ impl ResponseContentErrorMapper for ProjectPolicyError {
             ProjectPolicyError::Error500(error) => {
                 format!("InternalError: {error:?}")
             }
-            _ => {
-                format!("UnknownError")
-            }
+            _ => "UnknownError".into(),
         }
     }
 }
