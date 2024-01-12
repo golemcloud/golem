@@ -110,6 +110,7 @@ impl ResponseContentErrorMapper for ProjectGrantError {
     }
 }
 
+#[allow(unreachable_patterns)]
 impl ResponseContentErrorMapper for ProjectPolicyError {
     fn map(self) -> String {
         match self {
@@ -124,6 +125,9 @@ impl ResponseContentErrorMapper for ProjectPolicyError {
             }
             ProjectPolicyError::Error500(error) => {
                 format!("InternalError: {error:?}")
+            }
+            _ => {
+                format!("UnknownError")
             }
         }
     }
