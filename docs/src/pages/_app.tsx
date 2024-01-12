@@ -13,7 +13,7 @@ const sansFont = localFont({
 export default function MyApp({ Component, pageProps }: AppProps) {
   return (
     <div
-      className={`${sansFont.variable} dark:bg-background-dark bg-background-light font-sans`}
+      className={`${sansFont.variable} bg-background-light font-sans dark:bg-background-dark`}
       style={{
         // Alternate t style for Satoshi.
         fontFeatureSettings: '"ss03" 1',

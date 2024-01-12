@@ -1,0 +1,4411 @@
+openapi: 3.0.0
+info:
+  title: Golem API
+  version: "2.0"
+servers: []
+tags:
+  - name: Account
+    description: The account API allows users to query and manipulate their own account data.
+  - name: AccountSummary
+  - name: Grant
+  - name: HealthCheck
+  - name: Limits
+    description: The limits API allows users to query their current resource limits.
+  - name: Login
+    description: The login endpoints are implementing an OAuth2 flow.
+  - name: Project
+    description: |-
+      Projects are groups of templates and their workers, providing both a separate namespace for these entities and allows sharing between accounts.
+
+      Every account has a default project which is assumed when no specific project ID is passed in some template and worker related APIs.
+  - name: ProjectGrant
+    description: |-
+      Projects can have grants providing access to other accounts than the project's owner.
+
+      The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
+  - name: ProjectPolicy
+    description: |-
+      Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
+
+      The following actions can be used in the projectActions fields of this API:
+      - `ViewComponent` grants read access to a template
+      - `CreateComponent` allows creating new templates in a project
+      - `UpdateComponent` allows uploading new versions for existing templates in a project
+      - `DeleteComponent` allows deleting templates from a project
+      - `ViewInstance` allows querying existing workers of a template belonging to the project
+      - `CreateInstance` allows launching new workers of a template in the project
+      - `UpdateInstance` allows manipulating existing workers of a template belonging to the project
+      - `DeleteInstance` allows deleting workers of a template belonging to the project
+      - `ViewProjectGrants` allows listing the existing grants of the project
+      - `CreateProjectGrants` allows creating new grants for the project
+      - `DeleteProjectGrants` allows deleting existing grants of the project
+  - name: Template
+    description: The template API provides endpoint to upload, download and find Golem templates (WASM files with associated metadata).
+  - name: Token
+    description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
+  - name: Worker
+    description: The worker API allows to launch new workers, query and manipulate their status, and invoke their exported functions.
+paths:
+  /v2/accounts/{account_id}:
+    get:
+      tags:
+        - Account
+      summary: Get account
+      description: Retrieve an account for a given Account ID
+      parameters:
+        - name: account_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    put:
+      tags:
+        - Account
+      summary: Update account
+      description: |-
+        Allows the user to change the account details such as name and email.
+
+        Changing the planId is not allowed and the request will be rejected.
+        The response is the updated account data.
+      parameters:
+        - name: account_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: "#/components/schemas/AccountData"
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    delete:
+      tags:
+        - Account
+      summary: Delete account
+      description: Delete an account.
+      parameters:
+        - name: account_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/DeleteAccountResponse"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/accounts/{account_id}/plan:
+    get:
+      tags:
+        - Account
+      summary: Get account's plan
+      parameters:
+        - name: account_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/accounts:
+    post:
+      tags:
+        - Account
+      summary: Create account
+      description: Create a new account. The response is the created account data.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: "#/components/schemas/AccountData"
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/admin/accounts:
+    get:
+      tags:
+        - AccountSummary
+      parameters:
+        - name: skip
+          schema:
+            type: integer
+            format: int32
+          in: query
+          required: true
+          deprecated: false
+          explode: true
+        - name: limit
+          schema:
+            type: integer
+            format: int32
+          in: query
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountSummary"
+        "401":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/admin/accounts/count:
+    get:
+      tags:
+        - AccountSummary
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: integer
+                format: int64
+        "401":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/accounts/{account_id}/grants:
+    get:
+      tags:
+        - Grant
+      parameters:
+        - name: account_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Role"
+        "400":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/accounts/{account_id}/grants/{role}:
+    get:
+      tags:
+        - Grant
+      parameters:
+        - name: account_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: role
+          schema:
+            $ref: "#/components/schemas/Role"
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Role"
+        "400":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    put:
+      tags:
+        - Grant
+      parameters:
+        - name: account_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: role
+          schema:
+            $ref: "#/components/schemas/Role"
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Role"
+        "400":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    delete:
+      tags:
+        - Grant
+      parameters:
+        - name: account_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: role
+          schema:
+            $ref: "#/components/schemas/Role"
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/DeleteGrantResponse"
+        "400":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/resource-limits:
+    get:
+      tags:
+        - Limits
+      summary: Get resource limits for a given account.
+      parameters:
+        - name: account-id
+          schema:
+            type: string
+          in: query
+          description: The Account ID to check resource limits for.
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ResourceLimits"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    post:
+      tags:
+        - Limits
+      summary: Update resource limits for a given account.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: "#/components/schemas/BatchUpdateResourceLimits"
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/UpdateResourceLimitsResponse"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/oauth2:
+    post:
+      tags:
+        - Login
+      summary: Acquire token with OAuth2 authorization
+      description: |
+        Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
+
+        In the response:
+        - `id` is the identifier of the token itself
+        - `accountId` is the account's identifier, can be used on the account API
+        - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
+      parameters:
+        - name: provider
+          schema:
+            type: string
+          in: query
+          description: Currently only `github` is supported.
+          required: true
+          deprecated: false
+          explode: true
+        - name: access-token
+          schema:
+            type: string
+          in: query
+          description: OAuth2 access token
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/UnsafeToken"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Failed to login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: External service call failed during login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+  /v2/login/token:
+    get:
+      tags:
+        - Login
+      summary: Get information about a token
+      description: |-
+        Gets information about a token that is selected by the secret key passed in the Authorization header.
+        The JSON is the same as the data object in the oauth2 endpoint's response.
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Token"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Failed to login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: External service call failed during login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /login/oauth2/device/start:
+    post:
+      tags:
+        - Login
+      summary: Start GitHub OAuth2 interactive flow
+      description: |-
+        Starts an interactive authorization flow.
+        The user must open the returned url and enter the userCode in a form before the expires deadline.
+        Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/OAuth2Data"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Failed to login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: External service call failed during login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+  /login/oauth2/device/complete:
+    post:
+      tags:
+        - Login
+      summary: Finish GitHub OAuth2 interactive flow
+      description: |-
+        Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
+        Returns a JSON string containing the encodedSession from the start endpoint's response.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              type: string
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/UnsafeToken"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Failed to login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: External service call failed during login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+  /healthcheck:
+    get:
+      tags:
+        - HealthCheck
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/HealthcheckResponse"
+  /version:
+    get:
+      tags:
+        - HealthCheck
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/VersionInfo"
+  /v2/projects/default:
+    get:
+      tags:
+        - Project
+      summary: Get the default project
+      description: |-
+        - name of the project can be used for lookup the project if the ID is now known
+        - defaultEnvironmentId is currently always default
+        - projectType is either Default
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/projects:
+    get:
+      tags:
+        - Project
+      summary: List all projects
+      description: |-
+        Returns all projects of the account if no project-name is specified.
+        Otherwise, returns all projects of the account that has the given name.
+        As unique names are not enforced on the API level, the response may contain multiple entries.
+      parameters:
+        - name: project-name
+          schema:
+            type: string
+          in: query
+          description: Filter by project name
+          required: false
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    post:
+      tags:
+        - Project
+      summary: Create project
+      description: Creates a new project. The ownerAccountId must be the caller's account ID.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: "#/components/schemas/ProjectDataRequest"
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/projects/{project_id}:
+    get:
+      tags:
+        - Project
+      summary: Get project by ID
+      description: Gets a project by its identifier. Response is the same as for the default project.
+      parameters:
+        - name: project_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    delete:
+      tags:
+        - Project
+      summary: Delete project
+      description: Deletes a project given by its identifier.
+      parameters:
+        - name: project_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/DeleteProjectResponse"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/projects/{project_id}/actions:
+    get:
+      tags:
+        - Project
+      summary: Get project actions
+      description: Returns a list of actions that can be performed on the project.
+      parameters:
+        - name: project_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectAction"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/projects/{project_id}/grants:
+    get:
+      tags:
+        - ProjectGrant
+      summary: Get a project's grants
+      description: |-
+        Returns all projects grants associated with the given project.
+
+        For each grant:
+        - `id`` is the identifier of the grant itself
+        - `granteeAccountId` the account that gets access for the project
+        - `grantorProjectId` the project ID
+        - `projectPolicyId` the associated policy - see the project policy API below
+      parameters:
+        - name: project_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectGrant"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    post:
+      tags:
+        - ProjectGrant
+      summary: Create a project grant
+      description: |-
+        Creates a new project grant from the following information:
+        - `granteeAccountId` the account that gets access for the project
+        - `projectPolicyId` the associated policy - see the project policy API below
+
+        The response describes the new project grant including it's id that can be used to query specifically this grant in the future.
+      parameters:
+        - name: project_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: "#/components/schemas/ProjectGrantDataRequest"
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ProjectGrant"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/projects/{project_id}/grants/{grant_id}:
+    get:
+      tags:
+        - ProjectGrant
+      summary: Get a specific grant of a project
+      description: Returns a specific grant of a specific project. The returned object is the same as the elements of the grants endpoint's response described above.
+      parameters:
+        - name: project_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: grant_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ProjectGrant"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    delete:
+      tags:
+        - ProjectGrant
+      summary: Delete a project grant
+      description: Deletes an existing grant of a specific project.
+      parameters:
+        - name: project_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: grant_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/DeleteProjectGrantResponse"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/project-policies/{project_policy_id}:
+    get:
+      tags:
+        - ProjectPolicy
+      summary: Get a project policy
+      description: Returns a given project policy by it's ID. Project policy identifiers are used in project grants.
+      parameters:
+        - name: project_policy_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ProjectPolicy"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/project-policies:
+    post:
+      tags:
+        - ProjectPolicy
+      summary: Create a project policy
+      description: Creates a new project policy and returns the object describing it, including the newly created policy's id.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: "#/components/schemas/ProjectPolicyData"
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ProjectPolicy"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/{template_id}:
+    get:
+      tags:
+        - Template
+      summary: Get the metadata for all template versions
+      description: |-
+        Each template can have multiple versions. Every time a new WASM is uploaded for a given template id, that creates a new version.
+        This endpoint returns a list of all versions for the template id provided as part of the URL. Each element of the response describes a single version of a template, but does not contain the binary (WASM) itself:
+
+        - `versionedTemplateId` associates a specific version with the template id
+        - `userTemplateId` and protectedTemplateId are implementation details, not used elsewhere on the public API
+        - `templateName` is the human-readable name of the template
+        - `templateSize` is the WASM binary's size in bytes
+        - `metadata` contains information extracted from the WASM itself
+        - `metadata.exports` is a list of exported functions, including their parameter's and return value's types
+        - `metadata.producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem template.
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Template"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of templates exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Template already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/{template_id}/upload:
+    put:
+      tags:
+        - Template
+      summary: Update a template
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of templates exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Template already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates:
+    post:
+      tags:
+        - Template
+      summary: Upload a new template
+      description: The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - query
+                - template
+              properties:
+                query:
+                  $ref: "#/components/schemas/TemplateQuery"
+                template:
+                  type: string
+                  format: binary
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of templates exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Template already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    get:
+      tags:
+        - Template
+      summary: Get all templates
+      description: Gets all templates, optionally filtered by project and/or template name.
+      parameters:
+        - name: project-id
+          schema:
+            type: string
+            format: uuid
+          in: query
+          description: Project ID to filter by
+          required: false
+          deprecated: false
+          explode: true
+        - name: template-name
+          schema:
+            type: string
+          in: query
+          description: Template name to filter by
+          required: false
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Template"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of templates exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Template already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/{template_id}/download:
+    get:
+      tags:
+        - Template
+      summary: Download a template
+      description: Downloads a specific version of the template's WASM.
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: version
+          schema:
+            type: integer
+            format: int32
+          in: query
+          required: false
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of templates exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Template already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/{template_id}/latest:
+    get:
+      tags:
+        - Template
+      summary: Get the latest version of a given template
+      description: Gets the latest version of a template.
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: integer
+                format: int32
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of templates exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Template already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/accounts/{account_id}/tokens:
+    get:
+      tags:
+        - Token
+      summary: Get all tokens
+      description: |-
+        Gets all created tokens of an account.
+        The format of each element is the same as the data object in the oauth2 endpoint's response.
+      parameters:
+        - name: account_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Token"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Token not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    post:
+      tags:
+        - Token
+      summary: Create new token
+      description: |
+        Creates a new token with a given expiration date.
+        The response not only contains the token data but also the secret which can be passed as a bearer token to the Authorization header to the Golem Cloud REST API.
+      parameters:
+        - name: account_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: "#/components/schemas/CreateTokenDTO"
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/UnsafeToken"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Token not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/accounts/{account_id}/tokens/{token_id}:
+    get:
+      tags:
+        - Token
+      summary: Get a specific token
+      description: |-
+        Gets information about a token given by it's identifier.
+        The JSON is the same as the data object in the oauth2 endpoint's response.
+      parameters:
+        - name: account_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: token_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/Token"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Token not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    delete:
+      tags:
+        - Token
+      summary: Delete a token
+      description: Deletes a previously created token given by it's identifier.
+      parameters:
+        - name: account_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: token_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/DeleteTokenResponse"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Token not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/workers/{worker_id}:
+    get:
+      tags:
+        - Worker
+      summary: Get a versioned worker id by it's template id and worker name
+      description: |-
+        This endpoint just returns the components of a worker identifier based on a textual workerId of the format templateId.workerName
+        These components are:
+
+        - `rawTemplateId` the same as the templateId part of the input string
+        - `workerName` the same as the workerName part of the input string
+        - `templateVersionUsed` is the specific template version the worker is running with
+      parameters:
+        - name: worker_id
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/VersionedWorkerId"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/GolemErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/{template_id}/workers:
+    post:
+      tags:
+        - Worker
+      summary: Launch a new worker.
+      description: |-
+        Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
+
+        The parameters in the request are the following:
+        - `name` is the name of the created worker. This has to be unique, but only for a given template
+        - `args` is a list of strings which appear as command line arguments for the worker
+        - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: "#/components/schemas/WorkerCreationRequest"
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/VersionedWorkerId"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/GolemErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/{template_id}/workers/{worker_name}:
+    delete:
+      tags:
+        - Worker
+      summary: Delete a worker
+      description: Interrupts and deletes an existing worker.
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: worker_name
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/DeleteWorkerResponse"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/GolemErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+    get:
+      tags:
+        - Worker
+      summary: Get metadata of a worker
+      description: |-
+        Returns metadata about an existing worker:
+        - `workerId` is a combination of the used template and the worker's user specified name
+        - `accountId` the account the worker is created by
+        - `args` is the provided command line arguments passed to the worker
+        - `env` is the provided map of environment variables passed to the worker
+        - `templateVersion` is the version of the template used by the worker
+        - `retryCount` is the number of retries the worker did in case of a failure
+        - `status` is the worker's current status, one of the following:
+        - `Running` if the worker is currently executing
+        - `Idle` if the worker is waiting for an invocation
+        - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
+        - `Interrupted` if the worker was interrupted by the user
+        - `Retrying` if the worker failed, and an automatic retry was scheduled for it
+        - `Failed` if the worker failed and there are no more retries scheduled for it
+        - `Exited` if the worker explicitly exited using the exit WASI function
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: worker_name
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/WorkerMetadata"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/GolemErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/{template_id}/workers/{worker_name}/key:
+    post:
+      tags:
+        - Worker
+      summary: Get an invocation key
+      description: |-
+        Creates an invocation key for a given worker.
+        An invocation key is passed to the below defined invoke APIs to guarantee that retrying those invocations only performs the operation on the worker once.
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: worker_name
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/InvocationKey"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/GolemErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/{template_id}/workers/{worker_name}/invoke-and-await:
+    post:
+      tags:
+        - Worker
+      summary: Invoke a function and await it's resolution
+      description: Supply the parameters in the request body as JSON.
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: worker_name
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: invocation-key
+          schema:
+            type: string
+          in: query
+          description: must be created with the create invokation key endpoint
+          required: true
+          deprecated: false
+          explode: true
+        - name: function
+          schema:
+            type: string
+          in: query
+          description: name of the exported function to be invoked
+          required: true
+          deprecated: false
+          explode: true
+        - name: calling-convention
+          schema:
+            $ref: "#/components/schemas/CallingConvention"
+          in: query
+          description: One of `component`, `stdio`, `stdio-event-loop`. Defaults to `component`.
+          required: false
+          deprecated: false
+          explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: "#/components/schemas/InvokeParameters"
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/InvokeResult"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/GolemErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/{template_id}/workers/{worker_name}/invoke:
+    post:
+      tags:
+        - Worker
+      summary: Invoke a function
+      description: |-
+        A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns. Custom calling convention and invocation key is not supported.
+        To understand how to get the function name and how to encode the function parameters check Template interface
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: worker_name
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: function
+          schema:
+            type: string
+          in: query
+          description: name of the exported function to be invoked
+          required: true
+          deprecated: false
+          explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: "#/components/schemas/InvokeParameters"
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/InvokeResponse"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/GolemErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/{template_id}/workers/{worker_name}/complete:
+    post:
+      tags:
+        - Worker
+      summary: Complete a promise
+      description: |-
+        Completes a promise with a given custom array of bytes.
+        The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+        The data field is sent back to the worker and it has no predefined meaning.
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: worker_name
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: "#/components/schemas/CompleteParameters"
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: boolean
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/GolemErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/{template_id}/workers/{worker_name}/interrupt:
+    post:
+      tags:
+        - Worker
+      summary: Interrupt a worker
+      description: |-
+        Interrupts the execution of a worker.
+        The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
+        An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
+        For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: worker_name
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: recovery-immediately
+          schema:
+            type: boolean
+          in: query
+          description: if true will simulate a worker recovery. Defaults to false.
+          required: false
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/InterruptResponse"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/GolemErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+  /v2/templates/{template_id}/workers/{worker_name}/resume:
+    post:
+      tags:
+        - Worker
+      summary: Resume a worker
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: worker_name
+          schema:
+            type: string
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ResumeResponse"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/GolemErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+components:
+  schemas:
+    Account:
+      type: object
+      required:
+        - id
+        - name
+        - email
+        - planId
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        planId:
+          type: string
+          format: uuid
+    AccountData:
+      type: object
+      required:
+        - name
+        - email
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+    AccountSummary:
+      type: object
+      required:
+        - id
+        - name
+        - email
+        - templatesCount
+        - workersCount
+        - createdAt
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        templatesCount:
+          type: integer
+          format: int64
+        workersCount:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+    BatchUpdateResourceLimits:
+      type: object
+      required:
+        - updates
+      properties:
+        updates:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+    CallingConvention:
+      type: string
+      enum:
+        - Component
+        - Stdio
+        - StdioEventloop
+    CompleteParameters:
+      type: object
+      required:
+        - oplogIdx
+        - data
+      properties:
+        oplogIdx:
+          type: integer
+          format: int32
+        data:
+          type: array
+          items:
+            type: integer
+            format: uint8
+    CreateTokenDTO:
+      type: object
+      required:
+        - expiresAt
+      properties:
+        expiresAt:
+          type: string
+          format: date-time
+    DeleteAccountResponse:
+      type: object
+    DeleteGrantResponse:
+      type: object
+    DeleteProjectGrantResponse:
+      type: object
+    DeleteProjectResponse:
+      type: object
+    DeleteTokenResponse:
+      type: object
+    DeleteWorkerResponse:
+      type: object
+    ErrorBody:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+    ErrorsBody:
+      type: object
+      required:
+        - errors
+      properties:
+        errors:
+          type: array
+          items:
+            type: string
+    Export:
+      type: object
+      oneOf:
+        - $ref: "#/components/schemas/Export_ExportInstance"
+        - $ref: "#/components/schemas/Export_ExportFunction"
+      discriminator:
+        propertyName: type
+        mapping:
+          Instance: "#/components/schemas/Export_ExportInstance"
+          Function: "#/components/schemas/Export_ExportFunction"
+    ExportFunction:
+      type: object
+      required:
+        - name
+        - parameters
+        - results
+      properties:
+        name:
+          type: string
+        parameters:
+          type: array
+          items:
+            $ref: "#/components/schemas/FunctionParameter"
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/FunctionResult"
+    ExportInstance:
+      type: object
+      required:
+        - name
+        - functions
+      properties:
+        name:
+          type: string
+        functions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportFunction"
+    Export_ExportFunction:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Function
+        - $ref: "#/components/schemas/ExportFunction"
+    Export_ExportInstance:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Instance
+        - $ref: "#/components/schemas/ExportInstance"
+    FunctionParameter:
+      type: object
+      required:
+        - name
+        - typ
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: "#/components/schemas/Type"
+    FunctionResult:
+      type: object
+      required:
+        - typ
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: "#/components/schemas/Type"
+    GolemError:
+      type: object
+      oneOf:
+        - $ref: "#/components/schemas/GolemError_GolemErrorInvalidRequest"
+        - $ref: "#/components/schemas/GolemError_GolemErrorWorkerAlreadyExists"
+        - $ref: "#/components/schemas/GolemError_GolemErrorWorkerNotFound"
+        - $ref: "#/components/schemas/GolemError_GolemErrorWorkerCreationFailed"
+        - $ref: "#/components/schemas/GolemError_GolemErrorFailedToResumeWorker"
+        - $ref: "#/components/schemas/GolemError_GolemErrorTemplateDownloadFailed"
+        - $ref: "#/components/schemas/GolemError_GolemErrorTemplateParseFailed"
+        - $ref: "#/components/schemas/GolemError_GolemErrorGetLatestVersionOfTemplateFailed"
+        - $ref: "#/components/schemas/GolemError_GolemErrorPromiseNotFound"
+        - $ref: "#/components/schemas/GolemError_GolemErrorPromiseDropped"
+        - $ref: "#/components/schemas/GolemError_GolemErrorPromiseAlreadyCompleted"
+        - $ref: "#/components/schemas/GolemError_GolemErrorInterrupted"
+        - $ref: "#/components/schemas/GolemError_GolemErrorParamTypeMismatch"
+        - $ref: "#/components/schemas/GolemError_GolemErrorNoValueInMessage"
+        - $ref: "#/components/schemas/GolemError_GolemErrorValueMismatch"
+        - $ref: "#/components/schemas/GolemError_GolemErrorUnexpectedOplogEntry"
+        - $ref: "#/components/schemas/GolemError_GolemErrorRuntimeError"
+        - $ref: "#/components/schemas/GolemError_GolemErrorInvalidShardId"
+        - $ref: "#/components/schemas/GolemError_GolemErrorPreviousInvocationFailed"
+        - $ref: "#/components/schemas/GolemError_GolemErrorPreviousInvocationExited"
+        - $ref: "#/components/schemas/GolemError_GolemErrorUnknown"
+        - $ref: "#/components/schemas/GolemError_GolemErrorInvalidAccount"
+      discriminator:
+        propertyName: type
+        mapping:
+          InvalidRequest: "#/components/schemas/GolemError_GolemErrorInvalidRequest"
+          WorkerAlreadyExists: "#/components/schemas/GolemError_GolemErrorWorkerAlreadyExists"
+          WorkerNotFound: "#/components/schemas/GolemError_GolemErrorWorkerNotFound"
+          WorkerCreationFailed: "#/components/schemas/GolemError_GolemErrorWorkerCreationFailed"
+          FailedToResumeWorker: "#/components/schemas/GolemError_GolemErrorFailedToResumeWorker"
+          TemplateDownloadFailed: "#/components/schemas/GolemError_GolemErrorTemplateDownloadFailed"
+          TemplateParseFailed: "#/components/schemas/GolemError_GolemErrorTemplateParseFailed"
+          GetLatestVersionOfTemplateFailed: "#/components/schemas/GolemError_GolemErrorGetLatestVersionOfTemplateFailed"
+          PromiseNotFound: "#/components/schemas/GolemError_GolemErrorPromiseNotFound"
+          PromiseDropped: "#/components/schemas/GolemError_GolemErrorPromiseDropped"
+          PromiseAlreadyCompleted: "#/components/schemas/GolemError_GolemErrorPromiseAlreadyCompleted"
+          Interrupted: "#/components/schemas/GolemError_GolemErrorInterrupted"
+          ParamTypeMismatch: "#/components/schemas/GolemError_GolemErrorParamTypeMismatch"
+          NoValueInMessage: "#/components/schemas/GolemError_GolemErrorNoValueInMessage"
+          ValueMismatch: "#/components/schemas/GolemError_GolemErrorValueMismatch"
+          UnexpectedOplogEntry: "#/components/schemas/GolemError_GolemErrorUnexpectedOplogEntry"
+          RuntimeError: "#/components/schemas/GolemError_GolemErrorRuntimeError"
+          InvalidShardId: "#/components/schemas/GolemError_GolemErrorInvalidShardId"
+          PreviousInvocationFailed: "#/components/schemas/GolemError_GolemErrorPreviousInvocationFailed"
+          PreviousInvocationExited: "#/components/schemas/GolemError_GolemErrorPreviousInvocationExited"
+          Unknown: "#/components/schemas/GolemError_GolemErrorUnknown"
+          InvalidAccount: "#/components/schemas/GolemError_GolemErrorInvalidAccount"
+    GolemErrorBody:
+      type: object
+      required:
+        - golemError
+      properties:
+        golemError:
+          $ref: "#/components/schemas/GolemError"
+    GolemErrorFailedToResumeWorker:
+      type: object
+      required:
+        - workerId
+      properties:
+        workerId:
+          $ref: "#/components/schemas/WorkerId"
+    GolemErrorGetLatestVersionOfTemplateFailed:
+      type: object
+      required:
+        - templateId
+        - reason
+      properties:
+        templateId:
+          type: string
+          format: uuid
+        reason:
+          type: string
+    GolemErrorInterrupted:
+      type: object
+      required:
+        - recoverImmediately
+      properties:
+        recoverImmediately:
+          type: boolean
+    GolemErrorInvalidAccount:
+      type: object
+    GolemErrorInvalidRequest:
+      type: object
+      required:
+        - details
+      properties:
+        details:
+          type: string
+    GolemErrorInvalidShardId:
+      type: object
+      required:
+        - shardId
+        - shardIds
+      properties:
+        shardId:
+          $ref: "#/components/schemas/ShardId"
+        shardIds:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShardId"
+    GolemErrorNoValueInMessage:
+      type: object
+    GolemErrorParamTypeMismatch:
+      type: object
+    GolemErrorPreviousInvocationExited:
+      type: object
+    GolemErrorPreviousInvocationFailed:
+      type: object
+    GolemErrorPromiseAlreadyCompleted:
+      type: object
+      required:
+        - promiseId
+      properties:
+        promiseId:
+          $ref: "#/components/schemas/PromiseId"
+    GolemErrorPromiseDropped:
+      type: object
+      required:
+        - promiseId
+      properties:
+        promiseId:
+          $ref: "#/components/schemas/PromiseId"
+    GolemErrorPromiseNotFound:
+      type: object
+      required:
+        - promiseId
+      properties:
+        promiseId:
+          $ref: "#/components/schemas/PromiseId"
+    GolemErrorRuntimeError:
+      type: object
+      required:
+        - details
+      properties:
+        details:
+          type: string
+    GolemErrorTemplateDownloadFailed:
+      type: object
+      required:
+        - templateId
+        - reason
+      properties:
+        templateId:
+          $ref: "#/components/schemas/VersionedTemplateId"
+        reason:
+          type: string
+    GolemErrorTemplateParseFailed:
+      type: object
+      required:
+        - templateId
+        - reason
+      properties:
+        templateId:
+          $ref: "#/components/schemas/VersionedTemplateId"
+        reason:
+          type: string
+    GolemErrorUnexpectedOplogEntry:
+      type: object
+      required:
+        - expected
+        - got
+      properties:
+        expected:
+          type: string
+        got:
+          type: string
+    GolemErrorUnknown:
+      type: object
+      required:
+        - details
+      properties:
+        details:
+          type: string
+    GolemErrorValueMismatch:
+      type: object
+      required:
+        - details
+      properties:
+        details:
+          type: string
+    GolemErrorWorkerAlreadyExists:
+      type: object
+      required:
+        - workerId
+      properties:
+        workerId:
+          $ref: "#/components/schemas/WorkerId"
+    GolemErrorWorkerCreationFailed:
+      type: object
+      required:
+        - workerId
+        - details
+      properties:
+        workerId:
+          $ref: "#/components/schemas/WorkerId"
+        details:
+          type: string
+    GolemErrorWorkerNotFound:
+      type: object
+      required:
+        - workerId
+      properties:
+        workerId:
+          $ref: "#/components/schemas/WorkerId"
+    GolemError_GolemErrorFailedToResumeWorker:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: FailedToResumeWorker
+        - $ref: "#/components/schemas/GolemErrorFailedToResumeWorker"
+    GolemError_GolemErrorGetLatestVersionOfTemplateFailed:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: GetLatestVersionOfTemplateFailed
+        - $ref: "#/components/schemas/GolemErrorGetLatestVersionOfTemplateFailed"
+    GolemError_GolemErrorInterrupted:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Interrupted
+        - $ref: "#/components/schemas/GolemErrorInterrupted"
+    GolemError_GolemErrorInvalidAccount:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: InvalidAccount
+        - $ref: "#/components/schemas/GolemErrorInvalidAccount"
+    GolemError_GolemErrorInvalidRequest:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: InvalidRequest
+        - $ref: "#/components/schemas/GolemErrorInvalidRequest"
+    GolemError_GolemErrorInvalidShardId:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: InvalidShardId
+        - $ref: "#/components/schemas/GolemErrorInvalidShardId"
+    GolemError_GolemErrorNoValueInMessage:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: NoValueInMessage
+        - $ref: "#/components/schemas/GolemErrorNoValueInMessage"
+    GolemError_GolemErrorParamTypeMismatch:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: ParamTypeMismatch
+        - $ref: "#/components/schemas/GolemErrorParamTypeMismatch"
+    GolemError_GolemErrorPreviousInvocationExited:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: PreviousInvocationExited
+        - $ref: "#/components/schemas/GolemErrorPreviousInvocationExited"
+    GolemError_GolemErrorPreviousInvocationFailed:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: PreviousInvocationFailed
+        - $ref: "#/components/schemas/GolemErrorPreviousInvocationFailed"
+    GolemError_GolemErrorPromiseAlreadyCompleted:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: PromiseAlreadyCompleted
+        - $ref: "#/components/schemas/GolemErrorPromiseAlreadyCompleted"
+    GolemError_GolemErrorPromiseDropped:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: PromiseDropped
+        - $ref: "#/components/schemas/GolemErrorPromiseDropped"
+    GolemError_GolemErrorPromiseNotFound:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: PromiseNotFound
+        - $ref: "#/components/schemas/GolemErrorPromiseNotFound"
+    GolemError_GolemErrorRuntimeError:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: RuntimeError
+        - $ref: "#/components/schemas/GolemErrorRuntimeError"
+    GolemError_GolemErrorTemplateDownloadFailed:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: TemplateDownloadFailed
+        - $ref: "#/components/schemas/GolemErrorTemplateDownloadFailed"
+    GolemError_GolemErrorTemplateParseFailed:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: TemplateParseFailed
+        - $ref: "#/components/schemas/GolemErrorTemplateParseFailed"
+    GolemError_GolemErrorUnexpectedOplogEntry:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: UnexpectedOplogEntry
+        - $ref: "#/components/schemas/GolemErrorUnexpectedOplogEntry"
+    GolemError_GolemErrorUnknown:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Unknown
+        - $ref: "#/components/schemas/GolemErrorUnknown"
+    GolemError_GolemErrorValueMismatch:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: ValueMismatch
+        - $ref: "#/components/schemas/GolemErrorValueMismatch"
+    GolemError_GolemErrorWorkerAlreadyExists:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: WorkerAlreadyExists
+        - $ref: "#/components/schemas/GolemErrorWorkerAlreadyExists"
+    GolemError_GolemErrorWorkerCreationFailed:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: WorkerCreationFailed
+        - $ref: "#/components/schemas/GolemErrorWorkerCreationFailed"
+    GolemError_GolemErrorWorkerNotFound:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: WorkerNotFound
+        - $ref: "#/components/schemas/GolemErrorWorkerNotFound"
+    HealthcheckResponse:
+      type: object
+    InterruptResponse:
+      type: object
+    InvocationKey:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: string
+    InvokeParameters:
+      type: object
+      required:
+        - params
+      properties:
+        params: {}
+    InvokeResponse:
+      type: object
+    InvokeResult:
+      type: object
+      required:
+        - result
+      properties:
+        result: {}
+    NameOptionTypePair:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: "#/components/schemas/Type"
+    NameTypePair:
+      type: object
+      required:
+        - name
+        - typ
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: "#/components/schemas/Type"
+    OAuth2Data:
+      type: object
+      required:
+        - url
+        - userCode
+        - expires
+        - encodedSession
+      properties:
+        url:
+          type: string
+        userCode:
+          type: string
+        expires:
+          type: string
+          format: date-time
+        encodedSession:
+          type: string
+    Plan:
+      type: object
+      required:
+        - planId
+        - planData
+      properties:
+        planId:
+          type: string
+          format: uuid
+        planData:
+          $ref: "#/components/schemas/PlanData"
+    PlanData:
+      type: object
+      required:
+        - projectLimit
+        - templateLimit
+        - workerLimit
+        - storageLimit
+        - monthlyGasLimit
+        - monthlyUploadLimit
+      properties:
+        projectLimit:
+          type: integer
+          format: int32
+        templateLimit:
+          type: integer
+          format: int32
+        workerLimit:
+          type: integer
+          format: int32
+        storageLimit:
+          type: integer
+          format: int32
+        monthlyGasLimit:
+          type: integer
+          format: int64
+        monthlyUploadLimit:
+          type: integer
+          format: int32
+    ProducerField:
+      type: object
+      required:
+        - name
+        - values
+      properties:
+        name:
+          type: string
+        values:
+          type: array
+          items:
+            $ref: "#/components/schemas/VersionedName"
+    Producers:
+      type: object
+      required:
+        - fields
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProducerField"
+    Project:
+      type: object
+      required:
+        - projectId
+        - projectData
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        projectData:
+          $ref: "#/components/schemas/ProjectData"
+    ProjectAction:
+      type: string
+      enum:
+        - ViewTemplate
+        - CreateTemplate
+        - UpdateTemplate
+        - DeleteTemplate
+        - ViewWorker
+        - CreateWorker
+        - UpdateWorker
+        - DeleteWorker
+        - ViewProjectGrants
+        - CreateProjectGrants
+        - DeleteProjectGrants
+        - ViewApiDefinition
+        - CreateApiDefinition
+        - UpdateApiDefinition
+        - DeleteApiDefinition
+    ProjectActions:
+      type: object
+      required:
+        - actions
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectAction"
+    ProjectData:
+      type: object
+      required:
+        - name
+        - ownerAccountId
+        - description
+        - defaultEnvironmentId
+        - projectType
+      properties:
+        name:
+          type: string
+        ownerAccountId:
+          type: string
+        description:
+          type: string
+        defaultEnvironmentId:
+          type: string
+        projectType:
+          $ref: "#/components/schemas/ProjectType"
+    ProjectDataRequest:
+      type: object
+      required:
+        - name
+        - ownerAccountId
+        - description
+      properties:
+        name:
+          type: string
+        ownerAccountId:
+          type: string
+        description:
+          type: string
+    ProjectGrant:
+      type: object
+      required:
+        - id
+        - data
+      properties:
+        id:
+          type: string
+          format: uuid
+        data:
+          $ref: "#/components/schemas/ProjectGrantData"
+    ProjectGrantData:
+      type: object
+      required:
+        - granteeAccountId
+        - grantorProjectId
+        - projectPolicyId
+      properties:
+        granteeAccountId:
+          type: string
+        grantorProjectId:
+          type: string
+          format: uuid
+        projectPolicyId:
+          type: string
+          format: uuid
+    ProjectGrantDataRequest:
+      type: object
+      required:
+        - granteeAccountId
+        - projectActions
+      properties:
+        granteeAccountId:
+          type: string
+        projectPolicyId:
+          type: string
+          format: uuid
+        projectActions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectAction"
+        projectPolicyName:
+          type: string
+    ProjectPolicy:
+      type: object
+      required:
+        - id
+        - name
+        - projectActions
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        projectActions:
+          $ref: "#/components/schemas/ProjectActions"
+    ProjectPolicyData:
+      type: object
+      required:
+        - name
+        - projectActions
+      properties:
+        name:
+          type: string
+        projectActions:
+          $ref: "#/components/schemas/ProjectActions"
+    ProjectType:
+      type: string
+      enum:
+        - Default
+        - NonDefault
+    PromiseId:
+      type: object
+      required:
+        - workerId
+        - oplogIdx
+      properties:
+        workerId:
+          $ref: "#/components/schemas/WorkerId"
+        oplogIdx:
+          type: integer
+          format: int32
+    ProtectedTemplateId:
+      type: object
+      required:
+        - versionedTemplateId
+      properties:
+        versionedTemplateId:
+          $ref: "#/components/schemas/VersionedTemplateId"
+    ResourceLimits:
+      type: object
+      required:
+        - availableFuel
+        - maxMemoryPerWorker
+      properties:
+        availableFuel:
+          type: integer
+          format: int64
+        maxMemoryPerWorker:
+          type: integer
+          format: int64
+    ResumeResponse:
+      type: object
+    Role:
+      type: string
+      enum:
+        - Admin
+        - MarketingAdmin
+        - ViewProject
+        - DeleteProject
+        - CreateProject
+        - InstanceServer
+    ShardId:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: integer
+          format: int64
+    Template:
+      type: object
+      required:
+        - versionedTemplateId
+        - userTemplateId
+        - protectedTemplateId
+        - templateName
+        - templateSize
+        - metadata
+        - projectId
+      properties:
+        versionedTemplateId:
+          $ref: "#/components/schemas/VersionedTemplateId"
+        userTemplateId:
+          $ref: "#/components/schemas/UserTemplateId"
+        protectedTemplateId:
+          $ref: "#/components/schemas/ProtectedTemplateId"
+        templateName:
+          type: string
+        templateSize:
+          type: integer
+          format: int32
+        metadata:
+          $ref: "#/components/schemas/TemplateMetadata"
+        projectId:
+          type: string
+          format: uuid
+    TemplateMetadata:
+      type: object
+      required:
+        - exports
+        - producers
+      properties:
+        exports:
+          type: array
+          items:
+            $ref: "#/components/schemas/Export"
+        producers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Producers"
+    TemplateQuery:
+      type: object
+      required:
+        - templateName
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        templateName:
+          type: string
+    Token:
+      type: object
+      required:
+        - id
+        - accountId
+        - createdAt
+        - expiresAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+    TokenSecret:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: string
+          format: uuid
+    Type:
+      type: object
+      oneOf:
+        - $ref: "#/components/schemas/Type_TypeVariant"
+        - $ref: "#/components/schemas/Type_TypeResult"
+        - $ref: "#/components/schemas/Type_TypeOption"
+        - $ref: "#/components/schemas/Type_TypeEnum"
+        - $ref: "#/components/schemas/Type_TypeFlags"
+        - $ref: "#/components/schemas/Type_TypeRecord"
+        - $ref: "#/components/schemas/Type_TypeTuple"
+        - $ref: "#/components/schemas/Type_TypeList"
+        - $ref: "#/components/schemas/Type_TypeStr"
+        - $ref: "#/components/schemas/Type_TypeChr"
+        - $ref: "#/components/schemas/Type_TypeF64"
+        - $ref: "#/components/schemas/Type_TypeF32"
+        - $ref: "#/components/schemas/Type_TypeU64"
+        - $ref: "#/components/schemas/Type_TypeS64"
+        - $ref: "#/components/schemas/Type_TypeU32"
+        - $ref: "#/components/schemas/Type_TypeS32"
+        - $ref: "#/components/schemas/Type_TypeU16"
+        - $ref: "#/components/schemas/Type_TypeS16"
+        - $ref: "#/components/schemas/Type_TypeU8"
+        - $ref: "#/components/schemas/Type_TypeS8"
+        - $ref: "#/components/schemas/Type_TypeBool"
+      discriminator:
+        propertyName: type
+        mapping:
+          Variant: "#/components/schemas/Type_TypeVariant"
+          Result: "#/components/schemas/Type_TypeResult"
+          Option: "#/components/schemas/Type_TypeOption"
+          Enum: "#/components/schemas/Type_TypeEnum"
+          Flags: "#/components/schemas/Type_TypeFlags"
+          Record: "#/components/schemas/Type_TypeRecord"
+          Tuple: "#/components/schemas/Type_TypeTuple"
+          List: "#/components/schemas/Type_TypeList"
+          Str: "#/components/schemas/Type_TypeStr"
+          Chr: "#/components/schemas/Type_TypeChr"
+          F64: "#/components/schemas/Type_TypeF64"
+          F32: "#/components/schemas/Type_TypeF32"
+          U64: "#/components/schemas/Type_TypeU64"
+          S64: "#/components/schemas/Type_TypeS64"
+          U32: "#/components/schemas/Type_TypeU32"
+          S32: "#/components/schemas/Type_TypeS32"
+          U16: "#/components/schemas/Type_TypeU16"
+          S16: "#/components/schemas/Type_TypeS16"
+          U8: "#/components/schemas/Type_TypeU8"
+          S8: "#/components/schemas/Type_TypeS8"
+          Bool: "#/components/schemas/Type_TypeBool"
+    TypeBool:
+      type: object
+    TypeChr:
+      type: object
+    TypeEnum:
+      type: object
+      required:
+        - cases
+      properties:
+        cases:
+          type: array
+          items:
+            type: string
+    TypeF32:
+      type: object
+    TypeF64:
+      type: object
+    TypeFlags:
+      type: object
+      required:
+        - cases
+      properties:
+        cases:
+          type: array
+          items:
+            type: string
+    TypeList:
+      type: object
+      required:
+        - inner
+      properties:
+        inner:
+          $ref: "#/components/schemas/Type"
+    TypeOption:
+      type: object
+      required:
+        - inner
+      properties:
+        inner:
+          $ref: "#/components/schemas/Type"
+    TypeRecord:
+      type: object
+      required:
+        - cases
+      properties:
+        cases:
+          type: array
+          items:
+            $ref: "#/components/schemas/NameTypePair"
+    TypeResult:
+      type: object
+      properties:
+        ok:
+          $ref: "#/components/schemas/Type"
+        err:
+          $ref: "#/components/schemas/Type"
+    TypeS16:
+      type: object
+    TypeS32:
+      type: object
+    TypeS64:
+      type: object
+    TypeS8:
+      type: object
+    TypeStr:
+      type: object
+    TypeTuple:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Type"
+    TypeU16:
+      type: object
+    TypeU32:
+      type: object
+    TypeU64:
+      type: object
+    TypeU8:
+      type: object
+    TypeVariant:
+      type: object
+      required:
+        - cases
+      properties:
+        cases:
+          type: array
+          items:
+            $ref: "#/components/schemas/NameOptionTypePair"
+    Type_TypeBool:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Bool
+        - $ref: "#/components/schemas/TypeBool"
+    Type_TypeChr:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Chr
+        - $ref: "#/components/schemas/TypeChr"
+    Type_TypeEnum:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Enum
+        - $ref: "#/components/schemas/TypeEnum"
+    Type_TypeF32:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: F32
+        - $ref: "#/components/schemas/TypeF32"
+    Type_TypeF64:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: F64
+        - $ref: "#/components/schemas/TypeF64"
+    Type_TypeFlags:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Flags
+        - $ref: "#/components/schemas/TypeFlags"
+    Type_TypeList:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: List
+        - $ref: "#/components/schemas/TypeList"
+    Type_TypeOption:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Option
+        - $ref: "#/components/schemas/TypeOption"
+    Type_TypeRecord:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Record
+        - $ref: "#/components/schemas/TypeRecord"
+    Type_TypeResult:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Result
+        - $ref: "#/components/schemas/TypeResult"
+    Type_TypeS16:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: S16
+        - $ref: "#/components/schemas/TypeS16"
+    Type_TypeS32:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: S32
+        - $ref: "#/components/schemas/TypeS32"
+    Type_TypeS64:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: S64
+        - $ref: "#/components/schemas/TypeS64"
+    Type_TypeS8:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: S8
+        - $ref: "#/components/schemas/TypeS8"
+    Type_TypeStr:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Str
+        - $ref: "#/components/schemas/TypeStr"
+    Type_TypeTuple:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Tuple
+        - $ref: "#/components/schemas/TypeTuple"
+    Type_TypeU16:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: U16
+        - $ref: "#/components/schemas/TypeU16"
+    Type_TypeU32:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: U32
+        - $ref: "#/components/schemas/TypeU32"
+    Type_TypeU64:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: U64
+        - $ref: "#/components/schemas/TypeU64"
+    Type_TypeU8:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: U8
+        - $ref: "#/components/schemas/TypeU8"
+    Type_TypeVariant:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Variant
+        - $ref: "#/components/schemas/TypeVariant"
+    UnsafeToken:
+      type: object
+      required:
+        - data
+        - secret
+      properties:
+        data:
+          $ref: "#/components/schemas/Token"
+        secret:
+          $ref: "#/components/schemas/TokenSecret"
+    UpdateResourceLimitsResponse:
+      type: object
+    UserTemplateId:
+      type: object
+      required:
+        - versionedTemplateId
+      properties:
+        versionedTemplateId:
+          $ref: "#/components/schemas/VersionedTemplateId"
+    VersionInfo:
+      type: object
+      required:
+        - version
+      properties:
+        version:
+          type: string
+    VersionedName:
+      type: object
+      required:
+        - name
+        - version
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+    VersionedTemplateId:
+      type: object
+      required:
+        - templateId
+        - version
+      properties:
+        templateId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int32
+    VersionedWorkerId:
+      type: object
+      required:
+        - workerId
+        - templateVersionUsed
+      properties:
+        workerId:
+          $ref: "#/components/schemas/WorkerId"
+        templateVersionUsed:
+          type: integer
+          format: int32
+    WorkerCreationRequest:
+      type: object
+      required:
+        - name
+        - args
+        - env
+      properties:
+        name:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+    WorkerId:
+      type: object
+      required:
+        - templateId
+        - workerName
+      properties:
+        templateId:
+          type: string
+          format: uuid
+        workerName:
+          type: string
+    WorkerMetadata:
+      type: object
+      required:
+        - workerId
+        - accountId
+        - args
+        - env
+        - status
+        - templateVersion
+        - retryCount
+      properties:
+        workerId:
+          $ref: "#/components/schemas/WorkerId"
+        accountId:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        status:
+          $ref: "#/components/schemas/WorkerStatus"
+        templateVersion:
+          type: integer
+          format: int32
+        retryCount:
+          type: integer
+          format: int32
+    WorkerStatus:
+      type: string
+      description: |-
+        Represents last known status of a worker
+
+        This is always recorded together with the current oplog index, and it can only be used
+        as a source of truth if there are no newer oplog entries since the record.
+      enum:
+        - Running
+        - Idle
+        - Suspended
+        - Interrupted
+        - Retrying
+        - Failed
+        - Exited
+  securitySchemes:
+    Cookie:
+      type: apiKey
+      name: GOLEM_SESSION
+      in: cookie
+    Token:
+      type: http
+      scheme: bearer

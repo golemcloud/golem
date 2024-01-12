@@ -9,7 +9,7 @@ const config: DocsThemeConfig = {
   banner: {
     key: "docs-launch",
     text: (
-      <div className="flex justify-center items-center gap-2">
+      <div className="flex items-center justify-center gap-2">
         Welcome to the new Golem Cloud Docs! 👋
       </div>
     ),

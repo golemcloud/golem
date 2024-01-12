@@ -1,111 +1,126 @@
 # Account API
 
-### Summary
-
 The account API allows users to query and manipulate their own account data.
 
-### Get account
+## Get account
 
-| Method | Path                        | Request | Response     |
-| ------ | --------------------------- | ------- | ------------ |
-| GET    | `/v2/accounts/{account_id}` | -       | Account JSON |
+| Path                        | Method | Protected |
+| --------------------------- | ------ | --------- |
+| `/v2/accounts/{account_id}` | GET    | Yes       |
 
-**Response format:**
+Retrieve an account for a given Account ID
 
-```json
+**Example Response JSON**
+
+```json copy
 {
-  "id": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-  "name": "User name",
-  "email": "user@email",
-  "planId": "26b3c9da-e11c-4643-9271-26c8f3d025a1"
+  "id": "string",
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d"
 }
 ```
 
-**Example cURL:**
+## Update account
 
-```bash
-curl 'https://release.api.golem.cloud/v2/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5'
-     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+| Path                        | Method | Protected |
+| --------------------------- | ------ | --------- |
+| `/v2/accounts/{account_id}` | PUT    | Yes       |
+
+Allows the user to change the account details such as name and email.
+
+Changing the planId is not allowed and the request will be rejected.
+The response is the updated account data.
+
+**Example Request JSON**
+
+```json copy
+{
+  "name": "string",
+  "email": "string"
+}
 ```
 
-### Get account's plan
+**Example Response JSON**
 
-| Method | Path                             | Request | Response  |
-| ------ | -------------------------------- | ------- | --------- |
-| GET    | `/v2/accounts/{account_id}/plan` | -       | Plan JSON |
-
-**Response format:**
-
-```json
+```json copy
 {
-  "planId": "80b56370-1ed4-4d90-864b-e8809641995d",
+  "id": "string",
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d"
+}
+```
+
+## Delete account
+
+| Path                        | Method | Protected |
+| --------------------------- | ------ | --------- |
+| `/v2/accounts/{account_id}` | DELETE | Yes       |
+
+Delete an account.
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Get account's plan
+
+| Path                             | Method | Protected |
+| -------------------------------- | ------ | --------- |
+| `/v2/accounts/{account_id}/plan` | GET    | Yes       |
+
+**Example Response JSON**
+
+```json copy
+{
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
   "planData": {
-    "projectLimit": 100,
-    "componentLimit": 100,
-    "instanceLimit": 10000,
-    "storageLimit": 500000000,
-    "monthlyGasLimit": 1000000000000,
-    "monthlyUploadLimit": 1000000000
+    "projectLimit": 0,
+    "templateLimit": 0,
+    "workerLimit": 0,
+    "storageLimit": 0,
+    "monthlyGasLimit": 0,
+    "monthlyUploadLimit": 0
   }
 }
 ```
 
-**Explanation**
+## Create account
 
-- `projectLimit` is the maximum number of **projects** for the account
-- `componentLimit` is the maximum number of **templates** for the account
-- `instanceLimit` is the maximum total number of **workers** for the account
-- `storageLimit` is the maximum space an account can consume, in bytes
-- `monthlyGasLimit` is the maximum number of processing units an account can use in a month
-- `monthlyUploadLimit` is the maximum number of bytes an account can upload via the template API
+| Path           | Method | Protected |
+| -------------- | ------ | --------- |
+| `/v2/accounts` | POST   | Yes       |
 
-**Example cURL:**
+Create a new account. The response is the created account data.
 
-```bash
-curl 'https://release.api.golem.cloud/v2/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5/plan'
-     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
-```
+**Example Request JSON**
 
-### Update account
-
-| Method | Path                        | Request      | Response     |
-| ------ | --------------------------- | ------------ | ------------ |
-| PUT    | `/v2/accounts/{account_id}` | Account JSON | Account JSON |
-
-**Request and response format:**
-
-```json
+```json copy
 {
-  "id": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-  "name": "User name",
-  "email": "user@email",
-  "planId": "26b3c9da-e11c-4643-9271-26c8f3d025a1"
+  "name": "string",
+  "email": "string"
 }
 ```
 
-**Explanation**
+**Example Response JSON**
 
-Allows the user to change the account details such as `name` and `email`. Changing the `planId` is not allowed and the request will be rejected.
-
-The response is the updated account data.
-
-**Example cURL:**
-
-```bash
-curl
-  -X PUT 'https://release.api.golem.cloud/v2/accounts/ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5'
-  -H 'Content-Type: application/json'
-  -d '{"id": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5", "name": "User name", "email": "user2@ema.il", "planId": "26b3c9da-e11c-4643-9271-26c8f3d025a1"}'
-  -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```json copy
+{
+  "id": "string",
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d"
+}
 ```
 
-### Account API errors
+## Account API Errors
 
-All account endpoints can return with the following errors:
-
-| Status | Body                              | Description                                                               |
-| ------ | --------------------------------- | ------------------------------------------------------------------------- |
-| 400    | `{ "errors": ["error1", "..."] }` | Invalid request, returning with a list of issues detected in the request. |
-| 401    | `{ "message": "..." }`            | Unauthorized                                                              |
-| 404    | `{ "message": "..." }`            | Account not found                                                         |
-| 500    | `{ "error": "..." }`              | Internal server error                                                     |
+| Status Code | Description                                                              | Body                    |
+| ----------- | ------------------------------------------------------------------------ | ----------------------- |
+| 400         | Invalid request, returning with a list of issues detected in the request | `{"errors":["string"]}` |
+| 401         | Unauthorized request                                                     | `{"error":"string"}`    |
+| 404         | Account not found                                                        | `{"error":"string"}`    |
+| 500         | Internal server error                                                    | `{"error":"string"}`    |

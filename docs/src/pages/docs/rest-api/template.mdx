@@ -1,82 +1,96 @@
 # Template API
 
-## Template API
-
-### Summary
-
 The template API provides endpoint to upload, download and find Golem templates (WASM files with associated metadata).
 
-### Get the metadata of a template's all versions
+## Get the metadata for all template versions
 
-| Method | Path                          | Request | Response               |
-| ------ | ----------------------------- | ------- | ---------------------- |
-| GET    | `/v2/templates/{template_id}` | -       | Array of Template JSON |
+| Path                          | Method | Protected |
+| ----------------------------- | ------ | --------- |
+| `/v2/templates/{template_id}` | GET    | Yes       |
 
-**Response format:**
+Each template can have multiple versions. Every time a new WASM is uploaded for a given template id, that creates a new version.
+This endpoint returns a list of all versions for the template id provided as part of the URL. Each element of the response describes a single version of a template, but does not contain the binary (WASM) itself:
 
-```json
+- `versionedTemplateId` associates a specific version with the template id
+- `userTemplateId` and protectedTemplateId are implementation details, not used elsewhere on the public API
+- `templateName` is the human-readable name of the template
+- `templateSize` is the WASM binary's size in bytes
+- `metadata` contains information extracted from the WASM itself
+- `metadata.exports` is a list of exported functions, including their parameter's and return value's types
+- `metadata.producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem template.
+
+**Example Response JSON**
+
+```json copy
 [
   {
     "versionedTemplateId": {
-      "rawTemplateId": "70ff8f69-e121-40ea-b59a-b17526f37a78",
+      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
       "version": 0
     },
     "userTemplateId": {
-      "versionedComponentId": {
-        "rawTemplateId": "70ff8f69-e121-40ea-b59a-b17526f37a78",
+      "versionedTemplateId": {
+        "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
         "version": 0
       }
     },
     "protectedTemplateId": {
-      "versionedComponentId": {
-        "rawTemplateId": "70ff8f69-e121-40ea-b59a-b17526f37a78",
+      "versionedTemplateId": {
+        "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
         "version": 0
       }
     },
-    "templateName": {
-      "value": "test-template-1"
-    },
-    "templateSize": 329006,
+    "templateName": "string",
+    "templateSize": 0,
     "metadata": {
       "exports": [
         {
-          "Function": {
-            "name": "run",
-            "parameters": [],
-            "results": []
-          }
+          "type": "Instance",
+          "name": "string",
+          "functions": [
+            {
+              "name": "string",
+              "parameters": [
+                {
+                  "name": "string",
+                  "typ": {
+                    "type": "Variant",
+                    "cases": [
+                      {
+                        "name": "string",
+                        "typ": {}
+                      }
+                    ]
+                  }
+                }
+              ],
+              "results": [
+                {
+                  "name": "string",
+                  "typ": {
+                    "type": "Variant",
+                    "cases": [
+                      {
+                        "name": "string",
+                        "typ": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
         }
       ],
       "producers": [
         {
           "fields": [
             {
-              "name": "language",
+              "name": "string",
               "values": [
                 {
-                  "name": "Rust",
-                  "version": ""
-                }
-              ]
-            },
-            {
-              "name": "processed-by",
-              "values": [
-                {
-                  "name": "rustc",
-                  "version": "1.71.0 (8ede3aae2 2023-07-12)"
-                },
-                {
-                  "name": "clang",
-                  "version": "15.0.6"
-                },
-                {
-                  "name": "wit-component",
-                  "version": "0.14.0"
-                },
-                {
-                  "name": "wit-bindgen-rust",
-                  "version": "0.11.0"
+                  "name": "string",
+                  "version": "string"
                 }
               ]
             }
@@ -84,188 +98,344 @@ The template API provides endpoint to upload, download and find Golem templates 
         }
       ]
     },
-    "projectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999"
+    "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8"
   }
 ]
 ```
 
-**Explanation**
+## Update a template
 
-Each template can have multiple **versions**. Every time a new WASM is uploaded for a given **template id**, that creates a new version.
+| Path                                 | Method | Protected |
+| ------------------------------------ | ------ | --------- |
+| `/v2/templates/{template_id}/upload` | PUT    | Yes       |
 
-This endpoint returns a list of **all versions** for the template id provided as part of the URL. Each element of the response describes a single version of a template, but does not contain the binary (WASM) itself:
+**Request Body**: `WASM Binary File`
 
-- `versionedTemplateId` associates a specific version with the template id
-- `userTemplateId` and `protectedTemplateId` are implementation details, not used elsewhere on the public API
-- `templateName` is the human-readable name of the template
-- `templateSize` is the WASM binary's size in bytes
-- `metadata` contains information extracted from the WASM itself:
-  - `exports` is a list of exported functions, including their parameter's and return value's types
-  - `producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem template.
+> Make sure to include `Content-Type: application/octet-stream` Header
 
-**Example cURL:**
+**Example Response JSON**
 
-```bash
-curl 'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78'
-     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
-```
-
-### Update a template
-
-| Method | Path                                 | Request                  | Response      |
-| ------ | ------------------------------------ | ------------------------ | ------------- |
-| PUT    | `/v2/templates/{template_id}/upload` | application/octet-stream | Template JSON |
-
-**Request format**
-
-The request body contains the new version of the template as a binary WASM stream
-
-**Response format**
-
-The response is a JSON containing the updated template metadata as described in above in the get metadata endpoint's description.
-
-**Example cURL:**
-
-```bash
-curl -X PUT
-     'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/upload'
-     -H 'Content-Type: application/octet-stream'
-     --data-binary @new-template.wasm
-     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
-```
-
-### Get all templates of a project
-
-| Method | Path                                   | Request | Response               |
-| ------ | -------------------------------------- | ------- | ---------------------- |
-| GET    | `/v2/templates?project-id={projectId}` | -       | Array of Template JSON |
-
-**Response format:**
-
-Same array of `Template` JSON as described above at the **get all template metadata by id** endpoint.
-
-**Explanation**
-
-Gets all templates belonging to the given project
-
-**Example cURL:**
-
-```bash
-curl 'https://release.api.golem.cloud/v2/templates?project-id=866e1f4a-cf1a-40aa-ad8f-77e33294e999'
-     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
-```
-
-### Get templates in a project with a given name
-
-| Method | Path                                                                | Request | Response               |
-| ------ | ------------------------------------------------------------------- | ------- | ---------------------- |
-| GET    | `/v2/templates?project-id={projectId}&template-name={templateName}` | -       | Array of Template JSON |
-
-**Response format:**
-
-Same array of `Template` JSON as described above at the **get all template metadata by id** endpoint.
-
-**Explanation**
-
-Gets all templates belonging to the given project **with a given name**. Because the uniqueness of a template's name is not enforced, the response may contain templates with different **template id**s.
-
-**Example cURL:**
-
-```bash
-curl 'https://release.api.golem.cloud/v2/templates?project-id=866e1f4a-cf1a-40aa-ad8f-77e33294e999?template-name=test'
-     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
-```
-
-### Upload a new template
-
-| Method | Path            | Request             | Response      |
-| ------ | --------------- | ------------------- | ------------- |
-| POST   | `/v2/templates` | multipart/form-data | Template JSON |
-
-**Request format**
-
-The request body is encoded as `multipart/form-data` with the following fields:
-
-- `field0` with content type `application/json` containing a `TemplateQuery` JSON (described below)
-- `template` with content type `application/octet-stream` containing the WASM
-
-The JSON passed in the `field0` field has the following format:
-
-```json
+```json copy
 {
-  "projectId": "866e1f4a-cf1a-40aa-ad8f-77e33294e999",
-  "componentName": "test-template"
+  "versionedTemplateId": {
+    "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+    "version": 0
+  },
+  "userTemplateId": {
+    "versionedTemplateId": {
+      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+      "version": 0
+    }
+  },
+  "protectedTemplateId": {
+    "versionedTemplateId": {
+      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+      "version": 0
+    }
+  },
+  "templateName": "string",
+  "templateSize": 0,
+  "metadata": {
+    "exports": [
+      {
+        "type": "Instance",
+        "name": "string",
+        "functions": [
+          {
+            "name": "string",
+            "parameters": [
+              {
+                "name": "string",
+                "typ": {
+                  "type": "Variant",
+                  "cases": [
+                    {
+                      "name": "string",
+                      "typ": {}
+                    }
+                  ]
+                }
+              }
+            ],
+            "results": [
+              {
+                "name": "string",
+                "typ": {
+                  "type": "Variant",
+                  "cases": [
+                    {
+                      "name": "string",
+                      "typ": {}
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "producers": [
+      {
+        "fields": [
+          {
+            "name": "string",
+            "values": [
+              {
+                "name": "string",
+                "version": "string"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8"
 }
 ```
 
-The `projectId` is optional, in case it is missing the **default project** is used.
+## Upload a new template
 
-**Response format**
+| Path            | Method | Protected |
+| --------------- | ------ | --------- |
+| `/v2/templates` | POST   | Yes       |
 
-The response is a JSON containing the updated template metadata as described in above in the get metadata endpoint's description.
+The request body is encoded as multipart/form-data containing metadata and the WASM binary.
 
-**Example cURL:**
+**Request Form**: `multipart/form-data`
 
-```bash
-curl -X POST
-     'https://release.api.golem.cloud/v2/templates'
-     -H 'Content-Type: multipart/form-data'
-     -F 'field0={"componentName": "test-template"}; type=application/json'
-     -F 'componentName=@new-template.wasm; type=application/octet-stream'
-     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+> Make sure to include `Content-Type: multipart/form-data` Header
+
+**Field `query`**: JSON
+
+```json copy
+{
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+  "templateName": "string"
+}
 ```
 
-### Download a template
+**Field `template`**: string binary
 
-| Method | Path                                                     | Request | Response                      |
-| ------ | -------------------------------------------------------- | ------- | ----------------------------- |
-| GET    | `/v2/templates/{template_id}/download?version={version}` | -       | application/octet-stream WASM |
+**Example Response JSON**
 
-**Response format:**
+```json copy
+{
+  "versionedTemplateId": {
+    "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+    "version": 0
+  },
+  "userTemplateId": {
+    "versionedTemplateId": {
+      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+      "version": 0
+    }
+  },
+  "protectedTemplateId": {
+    "versionedTemplateId": {
+      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+      "version": 0
+    }
+  },
+  "templateName": "string",
+  "templateSize": 0,
+  "metadata": {
+    "exports": [
+      {
+        "type": "Instance",
+        "name": "string",
+        "functions": [
+          {
+            "name": "string",
+            "parameters": [
+              {
+                "name": "string",
+                "typ": {
+                  "type": "Variant",
+                  "cases": [
+                    {
+                      "name": "string",
+                      "typ": {}
+                    }
+                  ]
+                }
+              }
+            ],
+            "results": [
+              {
+                "name": "string",
+                "typ": {
+                  "type": "Variant",
+                  "cases": [
+                    {
+                      "name": "string",
+                      "typ": {}
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "producers": [
+      {
+        "fields": [
+          {
+            "name": "string",
+            "values": [
+              {
+                "name": "string",
+                "version": "string"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8"
+}
+```
 
-Same array of `Template` JSON as described above at the **get all template metadata by id** endpoint.
+## Get all templates
 
-**Explanation**
+| Path            | Method | Protected |
+| --------------- | ------ | --------- |
+| `/v2/templates` | GET    | Yes       |
+
+Gets all templates, optionally filtered by project and/or template name.
+
+**Query Parameters**
+
+| Name          | Type   | Required | Description                |
+| ------------- | ------ | -------- | -------------------------- |
+| project-id    | string | No       | Project ID to filter by    |
+| template-name | string | No       | Template name to filter by |
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "versionedTemplateId": {
+      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+      "version": 0
+    },
+    "userTemplateId": {
+      "versionedTemplateId": {
+        "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+        "version": 0
+      }
+    },
+    "protectedTemplateId": {
+      "versionedTemplateId": {
+        "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+        "version": 0
+      }
+    },
+    "templateName": "string",
+    "templateSize": 0,
+    "metadata": {
+      "exports": [
+        {
+          "type": "Instance",
+          "name": "string",
+          "functions": [
+            {
+              "name": "string",
+              "parameters": [
+                {
+                  "name": "string",
+                  "typ": {
+                    "type": "Variant",
+                    "cases": [
+                      {
+                        "name": "string",
+                        "typ": {}
+                      }
+                    ]
+                  }
+                }
+              ],
+              "results": [
+                {
+                  "name": "string",
+                  "typ": {
+                    "type": "Variant",
+                    "cases": [
+                      {
+                        "name": "string",
+                        "typ": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "producers": [
+        {
+          "fields": [
+            {
+              "name": "string",
+              "values": [
+                {
+                  "name": "string",
+                  "version": "string"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8"
+  }
+]
+```
+
+## Download a template
+
+| Path                                   | Method | Protected |
+| -------------------------------------- | ------ | --------- |
+| `/v2/templates/{template_id}/download` | GET    | Yes       |
 
 Downloads a specific version of the template's WASM.
 
-**Example cURL:**
+**Query Parameters**
 
-```bash
-curl 'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/download'
-     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
-```
+| Name    | Type    | Required | Description |
+| ------- | ------- | -------- | ----------- |
+| version | integer | No       | -           |
 
-### Get the latest version of a given template
+**Response Body:** `WASM Binary File`
 
-| Method | Path                                 | Request | Response    |
-| ------ | ------------------------------------ | ------- | ----------- |
-| GET    | `/v2/templates/{template_id}/latest` | -       | JSON number |
+## Get the latest version of a given template
 
-**Response format:**
-
-The latest version number of the template, as a JSON number.
-
-**Explanation**
+| Path                                 | Method | Protected |
+| ------------------------------------ | ------ | --------- |
+| `/v2/templates/{template_id}/latest` | GET    | Yes       |
 
 Gets the latest version of a template.
 
-**Example cURL:**
+**Example Response JSON**
 
-```bash
-curl 'https://release.api.golem.cloud/v2/templates/70ff8f69-e121-40ea-b59a-b17526f37a78/latest'
-     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
+```json copy
+0
 ```
 
-### Template API errors
+## Template API Errors
 
-All template endpoints can return with the following errors:
-
-| Status | Body                        | Description                                                               |
-| ------ | --------------------------- | ------------------------------------------------------------------------- |
-| 400    | `{ "errors": ["error1"}`    | Invalid request, returning with a list of issues detected in the request. |
-| 401    | `{ "error": "..." }`        | Unauthorized                                                              |
-| 403    | `{ "error": "..." }`        | Maximum number of templates exceeded                                      |
-| 404    | `{ "message": "..." }`      | Template not found                                                        |
-| 409    | `{ "component_id": "..." }` | Template already exists                                                   |
-| 500    | `{ "error": "..." }`        | Internal server error                                                     |
+| Status Code | Description                                                              | Body                    |
+| ----------- | ------------------------------------------------------------------------ | ----------------------- |
+| 400         | Invalid request, returning with a list of issues detected in the request | `{"errors":["string"]}` |
+| 401         | Unauthorized                                                             | `{"error":"string"}`    |
+| 403         | Maximum number of templates exceeded                                     | `{"error":"string"}`    |
+| 404         | Template not found                                                       | `{"error":"string"}`    |
+| 409         | Template already exists                                                  | `{"error":"string"}`    |
+| 500         | Internal server error                                                    | `{"error":"string"}`    |

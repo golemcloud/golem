@@ -1,148 +1,120 @@
 # Login API
 
-### Summary
-
 The login endpoints are implementing an OAuth2 flow.
 
-### Acquire token with OAuth2 authorization
+## Acquire token with OAuth2 authorization
 
-| Method | Path                                        | Request | Response         |
-| ------ | ------------------------------------------- | ------- | ---------------- |
-| POST   | `/v2/oauth2?provider=github&access_token=Y` | -       | UnsafeToken JSON |
+| Path         | Method | Protected |
+| ------------ | ------ | --------- |
+| `/v2/oauth2` | POST   | No        |
 
-**Response format:**
-
-```json
-{
-  "data": {
-    "id": "d7746eb5-7a7f-4e40-abfa-a736a3a28ef9",
-    "accountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-    "createdAt": "2023-09-05T13:40:13.364870Z",
-    "expiresAt": "2100-01-01T01:00:00Z"
-  },
-  "secret": "03f17466-202f-43ac-86cc-52e6c6a42d2d"
-}
-```
-
-**Explanation**
-
-Gets a token by authorizing with an external OAuth2 provider. Currently only `github` is supported.
+Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
 
 In the response:
 
 - `id` is the identifier of the token itself
-- `accountId` is the account's identifier, can be used on the **account API**
-- `secret` is the secret key to be sent in the `Authorization` header as a bearer token for all the other endpoints
+- `accountId` is the account's identifier, can be used on the account API
+- `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
 
-**Example cURL:**
+**Query Parameters**
 
-```bash
-curl -X POST 'https://release.api.golem.cloud/v2/oauth2?provider=github&access_token=github-access-token'
-```
+| Name         | Type   | Required | Description                           |
+| ------------ | ------ | -------- | ------------------------------------- |
+| provider     | string | Yes      | Currently only `github` is supported. |
+| access-token | string | Yes      | OAuth2 access token                   |
 
-### Get information about a token
+**Example Response JSON**
 
-| Method | Path              | Request | Response   |
-| ------ | ----------------- | ------- | ---------- |
-| GET    | `/v2/login/token` | -       | Token JSON |
-
-**Response format:**
-
-```json
-{
-  "id": "d7746eb5-7a7f-4e40-abfa-a736a3a28ef9",
-  "accountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-  "createdAt": "2023-09-05T13:40:13.364870Z",
-  "expiresAt": "2100-01-01T01:00:00Z"
-}
-```
-
-**Explanation**
-
-Gets information about a token that is selected by the secret key passed in the `Authorization` header. The JSON is the same as the `data` object in the `oauth2` endpoint's response.
-
-**Example cURL:**
-
-```bash
-curl 'https://release.api.golem.cloud/v2/login/token'
-     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
-```
-
-### Start GitHub OAuth2 interactive flow
-
-An interactive authorization flow can be initiated with
-
-| Method | Path                   | Request | Response        |
-| ------ | ---------------------- | ------- | --------------- |
-| POST   | `/oauth2/device/start` | -       | OAuth2Data JSON |
-
-**Response format:**
-
-```json
-{
-  "url": "https://github.com/login/device",
-  "userCode": "E643-F4E1",
-  "expires": "2023-09-29T09:38:50.247009215Z",
-  "encodedSession": "..."
-}
-```
-
-**Explanation**
-
-Starts an interactive authorization flow. The user must open the returned `url` and enter the `userCode` in a form before the `expires` deadline. Then the **finish GitHub OAuth2 interactive flow** endpoint must be called with the encoded session to finish the flow.
-
-**Example cURL:**
-
-```bash
-curl -X POST 'https://release.api.golem.cloud/oauth2/device/start'
-```
-
-### Finish GitHub OAuth2 interactive flow
-
-An interactive authorization flow can be initiated with
-
-| Method | Path                      | Request                           | Response         |
-| ------ | ------------------------- | --------------------------------- | ---------------- |
-| POST   | `/oauth2/device/complete` | "..." encoded session JSON string | UnsafeToken JSON |
-
-**Request format:**
-
-A `JSON` string containing the `encodedSession` from the start endpoint's response.
-
-**Response format:**
-
-```json
+```json copy
 {
   "data": {
-    "id": "d7746eb5-7a7f-4e40-abfa-a736a3a28ef9",
-    "accountId": "ae9b9f24-cfba-4dc6-92c6-c6fecdee88b5",
-    "createdAt": "2023-09-05T13:40:13.364870Z",
-    "expiresAt": "2100-01-01T01:00:00Z"
+    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+    "accountId": "string",
+    "createdAt": "2019-08-24T14:15:22Z",
+    "expiresAt": "2019-08-24T14:15:22Z"
   },
-  "secret": "03f17466-202f-43ac-86cc-52e6c6a42d2d"
+  "secret": {
+    "value": "a860a344-d7b2-406e-828e-8d442f23f344"
+  }
 }
 ```
 
-**Explanation**
+## Get information about a token
 
-Finishes an interactive authorization flow. The returned JSON is equivalent to the `oauth2` endpoint's response.
+| Path              | Method | Protected |
+| ----------------- | ------ | --------- |
+| `/v2/login/token` | GET    | Yes       |
 
-**Example cURL:**
+Gets information about a token that is selected by the secret key passed in the Authorization header.
+The JSON is the same as the data object in the oauth2 endpoint's response.
 
-```bash
-curl
-  -X POST 'https://release.api.golem.cloud/oauth2/device/complete'
-  -H 'Content-Type: application/json'
-  -d '"..."'
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "accountId": "string",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "expiresAt": "2019-08-24T14:15:22Z"
+}
 ```
 
-### Login API errors
+## Start GitHub OAuth2 interactive flow
 
-All login endpoints can return with the following errors:
+| Path                         | Method | Protected |
+| ---------------------------- | ------ | --------- |
+| `/login/oauth2/device/start` | POST   | No        |
 
-| Status | Body                       | Description                                                               |
-| ------ | -------------------------- | ------------------------------------------------------------------------- |
-| 400    | `{ "errors": ["error1"] }` | Invalid request, returning with a list of issues detected in the request. |
-| 401    | `{ "message": "..." }`     | Failed to login                                                           |
-| 403    | `{ "message": "..." }`     | Whitelisting - Golem Cloud may temporarily restrict new account creation  |
-| 500    | `{ "error": "..." }`       | External service call failed during login                                 |
+Starts an interactive authorization flow.
+The user must open the returned url and enter the userCode in a form before the expires deadline.
+Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
+
+**Example Response JSON**
+
+```json copy
+{
+  "url": "string",
+  "userCode": "string",
+  "expires": "2019-08-24T14:15:22Z",
+  "encodedSession": "string"
+}
+```
+
+## Finish GitHub OAuth2 interactive flow
+
+| Path                            | Method | Protected |
+| ------------------------------- | ------ | --------- |
+| `/login/oauth2/device/complete` | POST   | No        |
+
+Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
+Returns a JSON string containing the encodedSession from the start endpoint's response.
+
+**Example Request JSON**
+
+```json copy
+"string"
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "data": {
+    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+    "accountId": "string",
+    "createdAt": "2019-08-24T14:15:22Z",
+    "expiresAt": "2019-08-24T14:15:22Z"
+  },
+  "secret": {
+    "value": "a860a344-d7b2-406e-828e-8d442f23f344"
+  }
+}
+```
+
+## Login API Errors
+
+| Status Code | Description                                                              | Body                    |
+| ----------- | ------------------------------------------------------------------------ | ----------------------- |
+| 400         | Invalid request, returning with a list of issues detected in the request | `{"errors":["string"]}` |
+| 401         | Failed to login                                                          | `{"error":"string"}`    |
+| 500         | External service call failed during login                                | `{"error":"string"}`    |

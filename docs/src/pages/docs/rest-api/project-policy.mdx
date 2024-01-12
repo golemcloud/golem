@@ -1,10 +1,8 @@
-# Project policy API
+# Project Policy API
 
-### Summary
+Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
 
-Project policies describe a set of actions one account can perform when it was associated with a **grant** for a project.
-
-The following actions can be used in the `projectActions` fields of this API:
+The following actions can be used in the projectActions fields of this API:
 
 - `ViewComponent` grants read access to a template
 - `CreateComponent` allows creating new templates in a project
@@ -18,80 +16,62 @@ The following actions can be used in the `projectActions` fields of this API:
 - `CreateProjectGrants` allows creating new grants for the project
 - `DeleteProjectGrants` allows deleting existing grants of the project
 
-### Get a project policy
+## Get a project policy
 
-| Method | Path                                       | Request | Response           |
-| ------ | ------------------------------------------ | ------- | ------------------ |
-| GET    | `/v2/project-policies/{project-policy-id}` | -       | ProjectPolicy JSON |
+| Path                                       | Method | Protected |
+| ------------------------------------------ | ------ | --------- |
+| `/v2/project-policies/{project_policy_id}` | GET    | Yes       |
 
-**Response format:**
+Returns a given project policy by it's ID. Project policy identifiers are used in project grants.
 
-```json
+**Example Response JSON**
+
+```json copy
 {
-  "id": "2b41858e-a327-4e63-9539-ff9b123c88a2",
-  "name": "a policy",
-  "projectActions": ["ViewComponent", "ViewInstance"]
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "name": "string",
+  "projectActions": {
+    "actions": ["ViewTemplate"]
+  }
 }
 ```
 
-**Explanation**
+## Create a project policy
 
-Returns a given project policy by it's ID. Project policy identifiers are used in **project grants**.
+| Path                   | Method | Protected |
+| ---------------------- | ------ | --------- |
+| `/v2/project-policies` | POST   | Yes       |
 
-**Example cURL:**
+Creates a new project policy and returns the object describing it, including the newly created policy's id.
 
-```bash
-curl 'https://release.api.golem.cloud/v2/project-policies/2b41858e-a327-4e63-9539-ff9b123c88a2'
-     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
-```
+**Example Request JSON**
 
-### Create project policy
-
-| Method | Path                   | Request                | Response           |
-| ------ | ---------------------- | ---------------------- | ------------------ |
-| POST   | `/v2/project-policies` | ProjectPolicyData JSON | ProjectPolicy JSON |
-
-**Request format:**
-
-```json
+```json copy
 {
-  "name": "a policy",
-  "projectActions": ["ViewComponent", "ViewInstance"]
+  "name": "string",
+  "projectActions": {
+    "actions": ["ViewTemplate"]
+  }
 }
 ```
 
-**Response format:**
+**Example Response JSON**
 
-```json
+```json copy
 {
-  "id": "2b41858e-a327-4e63-9539-ff9b123c88a2",
-  "name": "a policy",
-  "projectActions": ["ViewComponent", "ViewInstance"]
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "name": "string",
+  "projectActions": {
+    "actions": ["ViewTemplate"]
+  }
 }
 ```
 
-**Explanation**
+## Project Policy API Errors
 
-Creates a new project policy and returns the object describing it, including the newly created policy's `id`.
-
-**Example cURL:**
-
-```bash
-curl -X POST
-     'https://release.api.golem.cloud/v2/project-policies'
-     -H 'Content-Type: application/json'
-     -d '{"name": "a policy", "projectActions": ["ViewComponent", "ViewInstance"]}'
-     -H 'Authorization: Bearer 03f17466-202f-43ac-86cc-52e6c6a42d2d'
-```
-
-### Project policy API errors
-
-All project policy endpoints can return with the following errors:
-
-| Status | Body                     | Description                                                               |
-| ------ | ------------------------ | ------------------------------------------------------------------------- |
-| 400    | `{ "errors": ["error1"}` | Invalid request, returning with a list of issues detected in the request. |
-| 401    | `{ "message": "..." }`   | Unauthorized                                                              |
-| 403    | `{ "error": "..." }`     | Maximum number of projects exceeded                                       |
-| 404    | `{ "message": "..." }`   | Project not found                                                         |
-| 500    | `{ "error": "..." }`     | Internal server error                                                     |
+| Status Code | Description                                                              | Body                    |
+| ----------- | ------------------------------------------------------------------------ | ----------------------- |
+| 400         | Invalid request, returning with a list of issues detected in the request | `{"errors":["string"]}` |
+| 401         | Unauthorized                                                             | `{"error":"string"}`    |
+| 404         | Project not found                                                        | `{"error":"string"}`    |
+| 500         | Internal server error                                                    | `{"error":"string"}`    |

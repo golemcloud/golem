@@ -9,10 +9,10 @@ import { GolemLogo } from "./golem-logo"
 export function Footer() {
   const year = new Date().getFullYear()
   return (
-    <footer className="mt-auto nx-bg-gray-100 nx-pb-[env(safe-area-inset-bottom)] dark:nx-bg-neutral-900 print:nx-bg-transparent">
+    <footer className="nx-bg-gray-100 nx-pb-[env(safe-area-inset-bottom)] dark:nx-bg-neutral-900 print:nx-bg-transparent mt-auto">
       <div
         className={
-          "overflow-hidden py-10 nx-border-t dark:nx-border-neutral-800 contrast-more:nx-border-neutral-400 dark:contrast-more:nx-border-neutral-400"
+          "nx-border-t dark:nx-border-neutral-800 contrast-more:nx-border-neutral-400 dark:contrast-more:nx-border-neutral-400 overflow-hidden py-10"
         }
       >
         <div className="mx-auto max-w-7xl px-6 pb-8 pt-12 lg:px-8">
@@ -27,7 +27,7 @@ export function Footer() {
                     href={item.href}
                     target="_blank"
                     rel="noopener"
-                    className="nx-h-7 nx-rounded-md nx-transition-colors nx-text-gray-600 dark:nx-text-gray-400 nx-px-2 hover:nx-bg-gray-100 hover:nx-text-gray-900 dark:hover:nx-bg-primary-100/5 dark:hover:nx-text-gray-50 border grid place-items-center dark:nx-border-neutral-700 contrast-more:nx-border-neutral-400 dark:contrast-more:nx-border-neutral-400"
+                    className="nx-h-7 nx-rounded-md nx-transition-colors nx-text-gray-600 dark:nx-text-gray-400 nx-px-2 hover:nx-bg-gray-100 hover:nx-text-gray-900 dark:hover:nx-bg-primary-100/5 dark:hover:nx-text-gray-50 dark:nx-border-neutral-700 contrast-more:nx-border-neutral-400 dark:contrast-more:nx-border-neutral-400 grid place-items-center border"
                   >
                     <span className="sr-only">{item.name}</span>
                     <item.icon className="h-5 w-5" aria-hidden="true" />
@@ -50,7 +50,7 @@ export function Footer() {
                         href={item.href}
                         target="_blank"
                         rel="noopener"
-                        className="text-sm leading-6 nx-inline-block nx-text-gray-500 hover:nx-text-gray-900 dark:nx-text-gray-400 dark:hover:nx-text-gray-300 contrast-more:nx-text-gray-900 contrast-more:nx-underline contrast-more:dark:nx-text-gray-50 nx-w-full nx-break-words"
+                        className="nx-inline-block nx-text-gray-500 hover:nx-text-gray-900 dark:nx-text-gray-400 dark:hover:nx-text-gray-300 contrast-more:nx-text-gray-900 contrast-more:nx-underline contrast-more:dark:nx-text-gray-50 nx-w-full nx-break-words text-sm leading-6"
                       >
                         {item.name}
                       </a>
@@ -68,7 +68,7 @@ export function Footer() {
                         href={item.href}
                         target="_blank"
                         rel="noopener"
-                        className="text-sm leading-6 nx-inline-block nx-text-gray-500 hover:nx-text-gray-900 dark:nx-text-gray-400 dark:hover:nx-text-gray-300 contrast-more:nx-text-gray-900 contrast-more:nx-underline contrast-more:dark:nx-text-gray-50 nx-w-full nx-break-words"
+                        className="nx-inline-block nx-text-gray-500 hover:nx-text-gray-900 dark:nx-text-gray-400 dark:hover:nx-text-gray-300 contrast-more:nx-text-gray-900 contrast-more:nx-underline contrast-more:dark:nx-text-gray-50 nx-w-full nx-break-words text-sm leading-6"
                       >
                         {item.name}
                       </a>
