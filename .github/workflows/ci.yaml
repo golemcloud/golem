@@ -45,6 +45,7 @@ jobs:
         run: |
           awk '/FROM chef as builder/ { print; print "COPY --from=planner ~/.cargo ~/.cargo/"; next }1' golem-worker-executor-oss/docker/amd64/Dockerfile > Dockerfile1.tmp
           mv Dockerfile1.tmp golem-worker-executor-oss/docker/amd64/Dockerfile
+          cat golem-worker-executor-oss/docker/amd64/Dockerfile
           
           awk '/FROM chef as builder/ { print; print "COPY --from=planner ~/.cargo ~/.cargo/"; next }1' golem-cloud-server-oss/docker/amd64/Dockerfile > Dockerfile2.tmp
           mv Dockerfile2.tmp golem-cloud-server-oss/docker/amd64/Dockerfile
