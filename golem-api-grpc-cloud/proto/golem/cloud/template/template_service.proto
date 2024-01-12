@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package golem.template;
+package golem.cloud.template;
 
 import public "golem/common/empty.proto";
 import public "golem/cloud/project/project_id.proto";

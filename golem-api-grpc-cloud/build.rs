@@ -6,6 +6,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tonic_build::configure()
         .extern_path(".golem.common", "::golem_api_grpc::proto::golem::common")
+        .extern_path(
+            ".golem.template",
+            "::golem_api_grpc::proto::golem::template",
+        )
+        .extern_path(
+            ".golem.shardmanager",
+            "::golem_api_grpc::proto::golem::shardmanager",
+        )
+        .extern_path(".golem.worker", "::golem_api_grpc::proto::golem::worker")
+        .extern_path(
+            ".golem.workerexecutor",
+            "::golem_api_grpc::proto::golem::workerexecutor",
+        )
         .file_descriptor_set_path(out_dir.join("services.bin"))
         .type_attribute(
             ".",
