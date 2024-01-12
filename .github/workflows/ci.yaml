@@ -36,6 +36,14 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Run Cargo Build to build cache
         run: cargo build
+      - name: Move Cargo directories
+        run: |
+          mkdir -p .cargo/bin/
+          mkdir -p .cargo/registry/index/
+          mkdir -p .cargo/registry/cache/
+          cp -r ~/.cargo/bin/* .cargo/bin/
+          cp -r ~/.cargo/registry/index/* .cargo/registry/index/
+          cp -r ~/.cargo/registry/cache/* .cargo/registry/cache/
       - name: Set version
         id: set-version
         run: |
