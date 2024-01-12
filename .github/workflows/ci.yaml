@@ -36,13 +36,11 @@ jobs:
           if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
             echo "DOCKER_VERSION=${{ github.ref }}" >> $GITHUB_ENV
           else
-            echo "DOCKER_VERSION=$(git describe --tags --abbrev=0 || git rev-parse --short HEAD)" >> $GITHUB_ENV
+            COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
+            echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
           fi
       - uses: satackey/action-docker-layer-caching@v0.0.11
         continue-on-error: true
-      - name: Set version
-        id: set-version
-        run: echo "VERSION=$(git describe --tags --abbrev=0 || git rev-parse --short HEAD)" >> $GITHUB_ENV
       - name: Build docker images for all services and push to Docker Hub
         id: build-image
         run: |
