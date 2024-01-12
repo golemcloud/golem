@@ -21,6 +21,10 @@ jobs:
         with:
           submodules: true
           fetch-depth: '0'
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/cache/restore@v3
         with:
           path: |
