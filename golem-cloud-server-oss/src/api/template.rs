@@ -95,7 +95,7 @@ pub struct TemplateApi {
     pub template_service: Arc<dyn TemplateService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v1/templates", tag = ApiTags::Template)]
+#[OpenApi(prefix_path = "/v2/templates", tag = ApiTags::Template)]
 impl TemplateApi {
     #[oai(path = "/:template_id", method = "get")]
     async fn get_template_by_id(

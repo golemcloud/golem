@@ -28,7 +28,7 @@ pub fn combined_routes(services: &Services) -> Route {
         .nest("/docs", ui)
         .nest("/specs", spec)
         .at(
-            "/v1/templates/:template_id/workers/:worker_name/connect",
+            "/v2/templates/:template_id/workers/:worker_name/connect",
             get(worker_connect::ws.data(connect_services)),
         )
 }
