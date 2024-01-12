@@ -47,14 +47,14 @@ jobs:
           fi
       - name: Insert COPY command to Dockerfile (for faster build)
         run: |
-          awk '/FROM chef AS planner\nCOPY . ./ { print; print "COPY /.cargo /root/.cargo/"; next }1' golem-worker-executor-oss/docker/amd64/Dockerfile > Dockerfile1.tmp
+          awk '/FROM chef AS planner/ { print; print "COPY /.cargo /root/.cargo/"; next }1' golem-worker-executor-oss/docker/amd64/Dockerfile > Dockerfile1.tmp
           mv Dockerfile1.tmp golem-worker-executor-oss/docker/amd64/Dockerfile
           cat golem-worker-executor-oss/docker/amd64/Dockerfile
           
-          awk '/FROM chef AS planner\nCOPY . ./ { print; print "COPY /.cargo /root/.cargo"; next }1' golem-cloud-server-oss/docker/amd64/Dockerfile > Dockerfile2.tmp
+          awk '/FROM chef AS planner/ { print; print "COPY /.cargo /root/.cargo"; next }1' golem-cloud-server-oss/docker/amd64/Dockerfile > Dockerfile2.tmp
           mv Dockerfile2.tmp golem-cloud-server-oss/docker/amd64/Dockerfile
           
-          awk '/FROM chef AS planner\nCOPY . ./ { print; print "COPY /.cargo /root/.cargo"; next }1'golem-shard-manager/docker/amd64/Dockerfile > Dockerfile3.tmp
+          awk '/FROM chef AS planner/ { print; print "COPY /.cargo /root/.cargo"; next }1' golem-shard-manager/docker/amd64/Dockerfile > Dockerfile3.tmp
           mv Dockerfile3.tmp golem-shard-manager/docker/amd64/Dockerfile
 
       - uses: satackey/action-docker-layer-caching@v0.0.11
