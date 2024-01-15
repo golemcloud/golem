@@ -23,7 +23,7 @@ services:
       dockerfile: golem-cloud-server-oss/docker/amd64/Dockerfile
       args:
         - SHARD_MANAGER_HOST=golem-shard-manager
-        - SHARD_MANAGER_PORT=8081
+        - SHARD_MANAGER_PORT=9001
         - TEMPLATES__STORE__ROOT_PATH=myfile
     ports:
       - "8080:8080"
