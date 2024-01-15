@@ -1,28 +1,8 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
-WORKDIR /app
-
-FROM chef AS planner
-COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
-
-FROM chef as builder
-
-COPY --from=planner /app/recipe.json recipe.json
-COPY ./Cargo.toml ./Cargo.lock ./
-RUN cargo chef cook --release --recipe-path recipe.json
-COPY . .
-RUN apt-get update && apt-get install -y unzip \
-    && PROTOC_ZIP=protoc-3.15.0-linux-x86_64.zip \
-    && curl -OL https://github.com/google/protobuf/releases/download/v3.15.0/$PROTOC_ZIP \
-    && unzip -o $PROTOC_ZIP -d /usr/local bin/protoc \
-    && rm -f $PROTOC_ZIP
-RUN cargo build -p cloud-server-oss --release --bin cloud-server-oss
-
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim
 
 WORKDIR /app
-COPY --from=builder /app/target/release/cloud-server-oss /usr/local/bin
-COPY --from=builder /app/golem-cloud-server-oss/config/cloud-server.toml ./config/cloud-server.toml
+COPY /target/x86_64-unknown-linux-gnu/debug/cloud-server-oss ./
+COPY /golem-cloud-server-oss/config/cloud-server.toml ./config/cloud-server.toml
 
 ARG SHARD_MANAGER_HOST
 ARG SHARD_MANAGER_PORT
@@ -41,4 +21,4 @@ ENV ENVIRONMENT=$ENVIRONMENT \
 EXPOSE 8080
 EXPOSE 9090
 
-ENTRYPOINT ["/usr/local/bin/cloud-server-oss"]
+ENTRYPOINT ["./cloud-server-oss"]

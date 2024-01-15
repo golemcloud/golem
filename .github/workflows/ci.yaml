@@ -11,16 +11,29 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  BUILD_TARGET: "x86_64-unknown-linux-gnu"
+
 jobs:
   docker:
     needs: [build]
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
         uses: actions/checkout@v3
         with:
           submodules: true
           fetch-depth: '0'
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
         with:
@@ -34,6 +47,10 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install Target
+        run: rustup target add x86_64-unknown-linux-gnu
+      - name: Build Executables
+        run: cargo build --target ${{ env.BUILD_TARGET }}
       - name: Set version
         id: set-version
         run: |
@@ -45,18 +62,14 @@ jobs:
           fi
       - uses: satackey/action-docker-layer-caching@v0.0.11
         continue-on-error: true
-      - name: Build docker images for all services and push to Docker Hub
-        id: build-image
+      - name: Push docker images to Docker Hub on tag release
         run: |
           docker build -t golem-worker-executor:${{ env.DOCKER_VERSION }} -f golem-worker-executor-oss/docker/amd64/Dockerfile .
           docker build -t golem-server:${{ env.DOCKER_VERSION }} -f golem-cloud-server-oss/docker/amd64/Dockerfile .
           docker build -t golem-shard-manager:${{ env.DOCKER_VERSION }} -f golem-shard-manager/docker/amd64/Dockerfile .
-      - name: Push docker images to Docker Hub on tag release
-        if: github.event_name == 'push' && github.ref_type == 'tag'
-        run: |
           echo "${DOCKERHUB_PASSWORD}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
           docker push golem-worker-executor:${{ env.DOCKER_VERSION }}
-          ocker push golem-server:${{ env.DOCKER_VERSION }}
+          docker push golem-server:${{ env.DOCKER_VERSION }}
           docker push golem-shard-manager:${{ env.DOCKER_VERSION }}
 
   build:
