@@ -85,10 +85,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             };
 
+            dbg!("Done with this?");
+
+            dbg!("The template id is {}", template_id.clone());
+
             let versioned_worker_id = VersionedWorkerId {
                 worker_id: worker_id.clone(),
                 template_version,
             };
+
+            dbg!("Done with this?2");
 
             let worker_metadata = WorkerMetadata {
                 worker_id: versioned_worker_id.clone(),
@@ -98,9 +104,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_known_status: WorkerStatusRecord::default(),
             };
 
+            dbg!("Done with this? 3");
+
+
             this.worker_service().add(&worker_metadata).await?;
 
             let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended));
+
+            dbg!("Done with this?4");
 
             let context = Ctx::create(
                 worker_metadata.worker_id.clone(),
@@ -118,6 +129,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 execution_status.clone(),
             )
             .await?;
+
+            dbg!("Done with this?5");
+
 
             let public_state = context.get_public_state().clone();
 
@@ -148,6 +162,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
             })?;
 
+            dbg!("Here333 ??");
+
+
             let instance = instance_pre
                 .instantiate_async(&mut store)
                 .await
@@ -157,6 +174,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         format!("Failed to instantiate component: {e}"),
                     )
                 })?;
+
+            dbg!("Here??");
 
             Ctx::prepare_instance(&versioned_worker_id, &instance, &mut store).await?;
 
@@ -239,6 +258,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker_id.clone(),
                 || PendingWorker::new(config_clone),
                 |pending_worker| {
+                    dbg!("Here it is reached?");
                     let pending_worker_clone = pending_worker.clone();
                     Box::pin(async move {
                         Worker::new(
