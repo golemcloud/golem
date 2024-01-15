@@ -922,6 +922,8 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tonic",
+ "tonic-health",
+ "tonic-reflection",
  "tracing",
  "uuid",
 ]

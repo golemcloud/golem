@@ -1,10 +1,11 @@
-use cloud_server_oss::api;
+use cloud_server_oss::{api, grpcapi};
 use cloud_server_oss::config::CloudServiceConfig;
 use cloud_server_oss::db;
 use cloud_server_oss::service::Services;
 use poem::listener::TcpListener;
 use tokio::select;
 use tracing::error;
+use std::net::{Ipv4Addr, SocketAddrV4};
 
 fn main() -> Result<(), std::io::Error> {
     let config = CloudServiceConfig::new();
@@ -37,6 +38,8 @@ async fn async_main(config: &CloudServiceConfig) -> Result<(), std::io::Error> {
     })?;
 
     let http_services = services.clone();
+    let grpc_services = services.clone();
+
 
     let http_server = tokio::spawn(async move {
         let app = api::combined_routes(&http_services);
@@ -47,8 +50,18 @@ async fn async_main(config: &CloudServiceConfig) -> Result<(), std::io::Error> {
             .expect("HTTP server failed");
     });
 
+    let grpc_server = tokio::spawn(async move {
+        grpcapi::start_grpc_server(
+            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), grpc_port).into(),
+            &grpc_services,
+        )
+            .await
+            .expect("gRPC server failed");
+    });
+
     select! {
         _ = http_server => {},
+        _ = grpc_server => {},
     }
 
     Ok(())
