@@ -18,6 +18,7 @@ jobs:
   docker:
     needs: [build]
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -62,7 +63,6 @@ jobs:
       - uses: satackey/action-docker-layer-caching@v0.0.11
         continue-on-error: true
       - name: Push docker images to Docker Hub on tag release
-        if: github.event_name == 'push' && github.ref_type == 'tag'
         run: |
           docker build -t golem-worker-executor:${{ env.DOCKER_VERSION }} -f golem-worker-executor-oss/docker/amd64/Dockerfile .
           docker build -t golem-server:${{ env.DOCKER_VERSION }} -f golem-cloud-server-oss/docker/amd64/Dockerfile .
