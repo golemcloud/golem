@@ -324,7 +324,9 @@ impl WorkerService for WorkerServiceDefault {
                                 template_version: *template_version,
                                 args: args.clone(),
                                 env: env.clone(),
-                                account_id: Some(-1), //FIXME
+                                account_id: Some(golem_common::proto::golem::AccountId {
+                                    name: "-1".to_string()
+                                }),
                                 account_limits: None, //FIXME
                             }
                         )
