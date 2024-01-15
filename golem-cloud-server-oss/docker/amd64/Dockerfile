@@ -7,16 +7,15 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef as builder
 
+COPY --from=planner /app/recipe.json recipe.json
+COPY ./Cargo.toml ./Cargo.lock ./
+RUN cargo chef cook --release --recipe-path recipe.json
+COPY . .
 RUN apt-get update && apt-get install -y unzip \
     && PROTOC_ZIP=protoc-3.15.0-linux-x86_64.zip \
     && curl -OL https://github.com/google/protobuf/releases/download/v3.15.0/$PROTOC_ZIP \
     && unzip -o $PROTOC_ZIP -d /usr/local bin/protoc \
     && rm -f $PROTOC_ZIP
-
-COPY --from=planner /app/recipe.json recipe.json
-COPY ./Cargo.toml ./Cargo.lock ./
-RUN cargo chef cook --release --recipe-path recipe.json
-COPY . .
 RUN cargo build -p cloud-server-oss --release --bin cloud-server-oss
 
 FROM debian:bookworm-slim AS runtime
