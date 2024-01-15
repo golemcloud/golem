@@ -45,18 +45,15 @@ jobs:
           fi
       - uses: satackey/action-docker-layer-caching@v0.0.11
         continue-on-error: true
-      - name: Build docker images for all services and push to Docker Hub
-        id: build-image
+      - name: Push docker images to Docker Hub on tag release
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         run: |
           docker build -t golem-worker-executor:${{ env.DOCKER_VERSION }} -f golem-worker-executor-oss/docker/amd64/Dockerfile .
           docker build -t golem-server:${{ env.DOCKER_VERSION }} -f golem-cloud-server-oss/docker/amd64/Dockerfile .
           docker build -t golem-shard-manager:${{ env.DOCKER_VERSION }} -f golem-shard-manager/docker/amd64/Dockerfile .
-      - name: Push docker images to Docker Hub on tag release
-        if: github.event_name == 'push' && github.ref_type == 'tag'
-        run: |
           echo "${DOCKERHUB_PASSWORD}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
           docker push golem-worker-executor:${{ env.DOCKER_VERSION }}
-          ocker push golem-server:${{ env.DOCKER_VERSION }}
+          docker push golem-server:${{ env.DOCKER_VERSION }}
           docker push golem-shard-manager:${{ env.DOCKER_VERSION }}
 
   build:
