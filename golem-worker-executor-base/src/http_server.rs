@@ -8,7 +8,6 @@ use warp::Filter;
 
 /// The worker executor's HTTP interface provides Prometheus metrics and a healthcheck endpoint
 pub struct HttpServerImpl {
-    #[allow(dead_code)]
     handle: JoinHandle<()>,
 }
 
@@ -16,6 +15,12 @@ impl HttpServerImpl {
     pub fn new(addr: impl Into<SocketAddr> + Send + 'static, registry: Registry) -> HttpServerImpl {
         let handle = tokio::spawn(server(addr, registry));
         HttpServerImpl { handle }
+    }
+}
+
+impl Drop for HttpServerImpl {
+    fn drop(&mut self) {
+        self.handle.abort();
     }
 }
 
