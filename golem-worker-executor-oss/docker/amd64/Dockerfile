@@ -1,29 +1,8 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
-WORKDIR /app
-
-FROM chef AS planner
-COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
-
-FROM chef as builder
-
-RUN apt-get update && apt-get install -y unzip \
-    && PROTOC_ZIP=protoc-3.15.0-linux-x86_64.zip \
-    && curl -OL https://github.com/google/protobuf/releases/download/v3.15.0/$PROTOC_ZIP \
-    && unzip -o $PROTOC_ZIP -d /usr/local bin/protoc \
-    && rm -f $PROTOC_ZIP
-
-COPY --from=planner /app/recipe.json recipe.json
-COPY ./Cargo.toml ./Cargo.lock ./
-RUN cargo chef cook --release --recipe-path recipe.json
-COPY . .
-RUN cargo build -p golem-worker-executor-oss --release --bin worker-executor-oss
-
 FROM debian:bookworm-slim
 
 WORKDIR /app
-COPY --from=builder /app/target/release/worker-executor-oss ./
-COPY --from=builder /app/golem-worker-executor-oss/config/worker-executor-local.toml ./config/worker-executor.toml
+COPY /target/x86_64-unknown-linux-gnu/debug/worker-executor-oss ./
+COPY /golem-worker-executor-oss/config/worker-executor-local.toml ./config/worker-executor.toml
 
 ARG ENVIRONMENT
 ARG CLOUD_SERVICE_HOST
