@@ -20,31 +20,11 @@ use golem_common::proto::golem::{
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::auth::AccountAuthorisation;
-use crate::grpcapi::get_authorisation_token_from;
-use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::template;
-
-impl From<AuthServiceError> for TemplateError {
-    fn from(value: AuthServiceError) -> Self {
-        let error = match value {
-            AuthServiceError::InvalidToken(error) => {
-                template_error::Error::Unauthorized(ErrorBody { error })
-            }
-            AuthServiceError::Unexpected(error) => {
-                template_error::Error::Unauthorized(ErrorBody { error })
-            }
-        };
-        TemplateError { error: Some(error) }
-    }
-}
 
 impl From<template::TemplateError> for TemplateError {
     fn from(value: template::TemplateError) -> Self {
         let error = match value {
-            template::TemplateError::Unauthorized(error) => {
-                template_error::Error::Unauthorized(ErrorBody { error })
-            }
             template::TemplateError::Internal(error) => {
                 template_error::Error::InternalError(ErrorBody { error })
             }
@@ -55,9 +35,6 @@ impl From<template::TemplateError> for TemplateError {
                 template_error::Error::BadRequest(ErrorsBody {
                     errors: vec![error],
                 })
-            }
-            template::TemplateError::LimitExceeded(error) => {
-                template_error::Error::LimitExceeded(ErrorBody { error })
             }
             template::TemplateError::AlreadyExists(_) => {
                 template_error::Error::AlreadyExists(ErrorBody {
@@ -74,11 +51,6 @@ impl From<template::TemplateError> for TemplateError {
                     error: "Template not found".to_string(),
                 })
             }
-            template::TemplateError::UnknownProjectId(_) => {
-                template_error::Error::NotFound(ErrorBody {
-                    error: "Project not found".to_string(),
-                })
-            }
         };
         TemplateError { error: Some(error) }
     }
@@ -93,30 +65,10 @@ fn bad_request_error(error: &str) -> TemplateError {
 }
 
 pub struct TemplateGrpcApi {
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
 }
 
 impl TemplateGrpcApi {
-    async fn auth(
-        &self,
-        metadata: MetadataMap,
-        token: Option<TokenSecret>,
-    ) -> Result<AccountAuthorisation, TemplateError> {
-        match get_authorisation_token_from(metadata, token) {
-            Some(t) => self
-                .auth_service
-                .authorization(&t)
-                .await
-                .map_err(|e| e.into()),
-            None => Err(TemplateError {
-                error: Some(template_error::Error::Unauthorized(ErrorBody {
-                    error: "Missing token".into(),
-                })),
-            }),
-        }
-    }
-
     async fn get(
         &self,
         request: GetTemplateRequest,
@@ -127,7 +79,7 @@ impl TemplateGrpcApi {
             .template_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing template id"))?;
-        let result = self.template_service.get(&id, &auth).await?;
+        let result = self.template_service.get(&id).await?;
         Ok(result.into_iter().map(|p| p.into()).collect())
     }
 
@@ -138,9 +90,9 @@ impl TemplateGrpcApi {
     ) -> Result<Vec<Template>, TemplateError> {
         let auth = self.auth(metadata, request.token_secret).await?;
         let project_id: Option<ProjectId> = request.project_id.and_then(|id| id.try_into().ok());
-        let name: Option<cloud_servers_lib::model::TemplateName> = request
+        let name: Option<golem_cloud_server_base::model::TemplateName> = request
             .template_name
-            .map(cloud_servers_lib::model::TemplateName);
+            .map(golem_cloud_server_base::model::TemplateName);
         let result = self
             .template_service
             .find_by_project_and_name(project_id, name, &auth)
@@ -158,7 +110,7 @@ impl TemplateGrpcApi {
             .template_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing template id"))?;
-        let result = self.template_service.get_latest_version(&id, &auth).await?;
+        let result = self.template_service.get_latest_version(&id).await?;
         match result {
             Some(template) => Ok(template.versioned_template_id.version),
             None => Err(TemplateError {
@@ -180,7 +132,7 @@ impl TemplateGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing template id"))?;
         let version = request.version;
-        let result = self.template_service.download(&id, version, &auth).await?;
+        let result = self.template_service.download(&id, version).await?;
         Ok(result)
     }
 
@@ -192,10 +144,10 @@ impl TemplateGrpcApi {
     ) -> Result<Template, TemplateError> {
         let auth = self.auth(metadata, request.token_secret).await?;
         let project_id: Option<ProjectId> = request.project_id.and_then(|id| id.try_into().ok());
-        let name = cloud_servers_lib::model::TemplateName(request.template_name);
+        let name = golem_cloud_server_base::model::TemplateName(request.template_name);
         let result = self
             .template_service
-            .create(project_id, &name, data, &auth)
+            .create(&name, data)
             .await?;
         Ok(result.into())
     }
@@ -211,7 +163,7 @@ impl TemplateGrpcApi {
             .template_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing template id"))?;
-        let result = self.template_service.update(&id, data, &auth).await?;
+        let result = self.template_service.update(&id, data).await?;
         Ok(result.into())
     }
 }
