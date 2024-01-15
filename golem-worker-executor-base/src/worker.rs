@@ -255,6 +255,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 },
             )
             .await?;
+        dbg!("In here???");
         validate_worker(
             worker_details.metadata.clone(),
             worker_args,

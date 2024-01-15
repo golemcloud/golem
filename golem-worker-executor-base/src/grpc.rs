@@ -219,6 +219,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
+        dbg!("Up until here?");
+
         Worker::get_or_create(
             self,
             worker_id,
@@ -726,13 +728,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::CreateWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::CreateWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
-            "create_instance",
-            format!(
-                "worker_id={:?}, template_version={:?}, account_id={:?}",
-                request.worker_id, request.template_version, request.account_id
-            ),
-        );
         match self.create_worker_internal(request).await {
             Ok(_) => Ok(Response::new(
                 golem::workerexecutor::CreateWorkerResponse {
@@ -760,19 +755,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::GetInvocationKeyRequest>,
     ) -> Result<Response<golem::workerexecutor::GetInvocationKeyResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
-            "get_invocation_key",
-            format!("worker_id={:?}", request.worker_id),
-        );
         match self.get_invocation_key_internal(request).await {
-            Ok(result) => record.succeed(Ok(Response::new(
+            Ok(result) => Ok(Response::new(
                 golem::workerexecutor::GetInvocationKeyResponse {
                     result: Some(
                         golem::workerexecutor::get_invocation_key_response::Result::Success(result),
                     ),
                 },
-            ))),
-            Err(err) => record.fail(
+            )),
+            Err(err) =>
                 Ok(Response::new(
                     golem::workerexecutor::GetInvocationKeyResponse {
                         result: Some(
@@ -781,8 +772,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             ),
                         ),
                     },
-                )),
-                &err,
+                )
             ),
         }
     }
@@ -800,14 +790,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ),
         );
         match self.invoke_and_await_worker_internal(request).await {
-            Ok(result) => record.succeed(Ok(Response::new(
+            Ok(result) => Ok(Response::new(
                 golem::workerexecutor::InvokeAndAwaitWorkerResponse {
                     result: Some(
                         golem::workerexecutor::invoke_and_await_worker_response::Result::Success(result),
                     ),
                 },
-            ))),
-            Err(err) => record.fail(
+            )),
+            Err(err) =>
                 Ok(Response::new(
                     golem::workerexecutor::InvokeAndAwaitWorkerResponse {
                         result: Some(
@@ -816,9 +806,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             ),
                         ),
                     },
-                )),
-                &err,
-            ),
+                ))
         }
     }
 
@@ -827,15 +815,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::InvokeWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InvokeWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
-            "invoke_instance",
-            format!(
-                "worker_id={:?}, name={:?}, account_id={:?}",
-                request.worker_id, request.name, request.account_id
-            ),
-        );
         match self.invoke_worker_internal(&request).await {
-            Ok(_) => record.succeed(Ok(Response::new(
+            Ok(_) => Ok(Response::new(
                 golem::workerexecutor::InvokeWorkerResponse {
                     result: Some(
                         golem::workerexecutor::invoke_worker_response::Result::Success(
@@ -843,17 +824,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 },
-            ))),
-            Err(err) => record.fail(
+            )),
+            Err(err) =>
                 Ok(Response::new(golem::workerexecutor::InvokeWorkerResponse {
                     result: Some(
                         golem::workerexecutor::invoke_worker_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),
-                })),
-                &err,
-            ),
+                }))
         }
     }
 
@@ -1015,7 +994,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record =
             RecordedGrpcRequest::new("delete_instance", format!("worker_id={:?}", request));
         match self.delete_worker_internal(request).await {
-            Ok(_) => record.succeed(Ok(Response::new(
+            Ok(_) => Ok(Response::new(
                 golem::workerexecutor::DeleteWorkerResponse {
                     result: Some(
                         golem::workerexecutor::delete_worker_response::Result::Success(
@@ -1023,17 +1002,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 },
-            ))),
-            Err(err) => record.fail(
+            )),
+            Err(err) =>
                 Ok(Response::new(golem::workerexecutor::DeleteWorkerResponse {
                     result: Some(
                         golem::workerexecutor::delete_worker_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),
-                })),
-                &err,
-            ),
+                }))
         }
     }
 
@@ -1042,19 +1019,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::CompletePromiseRequest>,
     ) -> Result<Response<golem::workerexecutor::CompletePromiseResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
-            "complete_promise",
-            format!("promise_id={:?}", request.promise_id),
-        );
         match self.complete_promise_internal(request).await {
-            Ok(success) => record.succeed(Ok(Response::new(
+            Ok(success) => Ok(Response::new(
                 golem::workerexecutor::CompletePromiseResponse {
                     result: Some(
                         golem::workerexecutor::complete_promise_response::Result::Success(success),
                     ),
                 },
-            ))),
-            Err(err) => record.fail(
+            )),
+            Err(err) =>
                 Ok(Response::new(
                     golem::workerexecutor::CompletePromiseResponse {
                         result: Some(
@@ -1063,9 +1036,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             ),
                         ),
                     },
-                )),
-                &err,
-            ),
+                ))
         }
     }
 
@@ -1074,12 +1045,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::InterruptWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InterruptWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
-            "interrupt_instance",
-            format!("worker_id={:?}", request.worker_id),
-        );
         match self.interrupt_worker_internal(request).await {
-            Ok(_) => record.succeed(Ok(Response::new(
+            Ok(_) => Ok(Response::new(
                 golem::workerexecutor::InterruptWorkerResponse {
                     result: Some(
                         golem::workerexecutor::interrupt_worker_response::Result::Success(
@@ -1087,8 +1054,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 },
-            ))),
-            Err(err) => record.fail(
+            )),
+            Err(err) =>
                 Ok(Response::new(
                     golem::workerexecutor::InterruptWorkerResponse {
                         result: Some(
@@ -1097,9 +1064,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             ),
                         ),
                     },
-                )),
-                &err,
-            ),
+                ))
         }
     }
 
@@ -1108,12 +1073,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::RevokeShardsRequest>,
     ) -> Result<Response<golem::workerexecutor::RevokeShardsResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
-            "revoke_shards",
-            format!("shard_ids={:?}", request.shard_ids),
-        );
         match self.revoke_shards_internal(request).await {
-            Ok(_) => record.succeed(Ok(Response::new(
+            Ok(_) => Ok(Response::new(
                 golem::workerexecutor::RevokeShardsResponse {
                     result: Some(
                         golem::workerexecutor::revoke_shards_response::Result::Success(
@@ -1121,17 +1082,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 },
-            ))),
-            Err(err) => record.fail(
+            )),
+            Err(err) =>
                 Ok(Response::new(golem::workerexecutor::RevokeShardsResponse {
                     result: Some(
                         golem::workerexecutor::revoke_shards_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),
-                })),
-                &err,
-            ),
+                }))
         }
     }
 
@@ -1140,12 +1099,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::AssignShardsRequest>,
     ) -> Result<Response<golem::workerexecutor::AssignShardsResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
-            "assign_shards",
-            format!("shard_ids={:?}", request.shard_ids),
-        );
         match self.assign_shards_internal(request).await {
-            Ok(_) => record.succeed(Ok(Response::new(
+            Ok(_) => Ok(Response::new(
                 golem::workerexecutor::AssignShardsResponse {
                     result: Some(
                         golem::workerexecutor::assign_shards_response::Result::Success(
@@ -1153,17 +1108,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 },
-            ))),
-            Err(err) => record.fail(
+            )),
+            Err(err) =>
                 Ok(Response::new(golem::workerexecutor::AssignShardsResponse {
                     result: Some(
                         golem::workerexecutor::assign_shards_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),
-                })),
-                &err,
-            ),
+                }))
         }
     }
 
@@ -1172,11 +1125,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::WorkerId>,
     ) -> Result<Response<golem::workerexecutor::GetWorkerMetadataResponse>, Status> {
         let worker_id = request.into_inner();
-        let record =
-            RecordedGrpcRequest::new("get_worker_metadata", format!("worker_id={:?}", worker_id));
         let result = self.get_worker_metadata_internal(&worker_id).await;
         match result {
-            Ok(result) => record.succeed(Ok(Response::new(
+            Ok(result) => Ok(Response::new(
                 golem::workerexecutor::GetWorkerMetadataResponse {
                     result: Some(
                         golem::workerexecutor::get_worker_metadata_response::Result::Success(
@@ -1184,8 +1135,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 },
-            ))),
-            Err(err) => record.fail(
+            )),
+            Err(err) =>
                 Ok(Response::new(
                     golem::workerexecutor::GetWorkerMetadataResponse {
                         result: Some(
@@ -1194,9 +1145,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             ),
                         ),
                     },
-                )),
-                &err,
-            ),
+                ))
         }
     }
 
@@ -1205,12 +1154,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::ResumeWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::ResumeWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
-            "resume_instance",
-            format!("worker_id={:?}", request.worker_id),
-        );
         match self.resume_worker_internal(request).await {
-            Ok(_) => record.succeed(Ok(Response::new(
+            Ok(_) => Ok(Response::new(
                 golem::workerexecutor::ResumeWorkerResponse {
                     result: Some(
                         golem::workerexecutor::resume_worker_response::Result::Success(
@@ -1218,17 +1163,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 },
-            ))),
-            Err(err) => record.fail(
+            )),
+            Err(err) =>
                 Ok(Response::new(golem::workerexecutor::ResumeWorkerResponse {
                     result: Some(
                         golem::workerexecutor::resume_worker_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),
-                })),
-                &err,
-            ),
+                }))
         }
     }
 }
