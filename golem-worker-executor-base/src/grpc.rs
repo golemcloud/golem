@@ -734,7 +734,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ),
         );
         match self.create_worker_internal(request).await {
-            Ok(_) => record.succeed(Ok(Response::new(
+            Ok(_) => Ok(Response::new(
                 golem::workerexecutor::CreateWorkerResponse {
                     result: Some(
                         golem::workerexecutor::create_worker_response::Result::Success(
@@ -742,8 +742,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 },
-            ))),
-            Err(err) => record.fail(
+            )),
+            Err(err) =>
                 Ok(Response::new(golem::workerexecutor::CreateWorkerResponse {
                     result: Some(
                         golem::workerexecutor::create_worker_response::Result::Failure(
@@ -751,8 +751,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })),
-                &err,
-            ),
+
         }
     }
 
