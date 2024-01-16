@@ -2,16 +2,16 @@ use std::sync::Arc;
 
 use futures_util::stream::BoxStream;
 use futures_util::TryStreamExt;
-use golem_common::model::{ProjectId, TemplateId};
+use golem_common::model::{TemplateId};
 use golem_common::proto::golem::cloudservices::templateservice::template_service_server::TemplateService;
 use golem_common::proto::golem::cloudservices::templateservice::{
     create_template_request, create_template_response, download_template_response,
-    get_latest_template_version_response, get_template_response, get_templates_response,
+    get_latest_template_version_response, get_template_response,
     update_template_request, update_template_response, CreateTemplateRequest,
     CreateTemplateRequestHeader, CreateTemplateResponse, DownloadTemplateRequest,
     DownloadTemplateResponse, GetLatestTemplateVersionRequest, GetLatestTemplateVersionResponse,
-    GetTemplateRequest, GetTemplateResponse, GetTemplateSuccessResponse, GetTemplatesRequest,
-    GetTemplatesResponse, GetTemplatesSuccessResponse, UpdateTemplateRequest,
+    GetTemplateRequest, GetTemplateResponse, GetTemplateSuccessResponse,
+    UpdateTemplateRequest,
     UpdateTemplateRequestHeader, UpdateTemplateResponse,
 };
 use golem_common::proto::golem::{
@@ -72,9 +72,7 @@ impl TemplateGrpcApi {
     async fn get(
         &self,
         request: GetTemplateRequest,
-        metadata: MetadataMap,
     ) -> Result<Vec<Template>, TemplateError> {
-        let auth = self.auth(metadata, request.token_secret).await?;
         let id: TemplateId = request
             .template_id
             .and_then(|id| id.try_into().ok())
@@ -83,29 +81,10 @@ impl TemplateGrpcApi {
         Ok(result.into_iter().map(|p| p.into()).collect())
     }
 
-    async fn get_all(
-        &self,
-        request: GetTemplatesRequest,
-        metadata: MetadataMap,
-    ) -> Result<Vec<Template>, TemplateError> {
-        let auth = self.auth(metadata, request.token_secret).await?;
-        let project_id: Option<ProjectId> = request.project_id.and_then(|id| id.try_into().ok());
-        let name: Option<golem_cloud_server_base::model::TemplateName> = request
-            .template_name
-            .map(golem_cloud_server_base::model::TemplateName);
-        let result = self
-            .template_service
-            .find_by_project_and_name(project_id, name, &auth)
-            .await?;
-        Ok(result.into_iter().map(|p| p.into()).collect())
-    }
-
     async fn get_latest_version(
         &self,
         request: GetLatestTemplateVersionRequest,
-        metadata: MetadataMap,
     ) -> Result<i32, TemplateError> {
-        let auth = self.auth(metadata, request.token_secret).await?;
         let id: TemplateId = request
             .template_id
             .and_then(|id| id.try_into().ok())
@@ -124,9 +103,7 @@ impl TemplateGrpcApi {
     async fn download(
         &self,
         request: DownloadTemplateRequest,
-        metadata: MetadataMap,
     ) -> Result<Vec<u8>, TemplateError> {
-        let auth = self.auth(metadata, request.token_secret).await?;
         let id: TemplateId = request
             .template_id
             .and_then(|id| id.try_into().ok())
@@ -140,10 +117,7 @@ impl TemplateGrpcApi {
         &self,
         request: CreateTemplateRequestHeader,
         data: Vec<u8>,
-        metadata: MetadataMap,
     ) -> Result<Template, TemplateError> {
-        let auth = self.auth(metadata, request.token_secret).await?;
-        let project_id: Option<ProjectId> = request.project_id.and_then(|id| id.try_into().ok());
         let name = golem_cloud_server_base::model::TemplateName(request.template_name);
         let result = self
             .template_service
@@ -156,9 +130,7 @@ impl TemplateGrpcApi {
         &self,
         request: UpdateTemplateRequestHeader,
         data: Vec<u8>,
-        metadata: MetadataMap,
     ) -> Result<Template, TemplateError> {
-        let auth = self.auth(metadata, request.token_secret).await?;
         let id: TemplateId = request
             .template_id
             .and_then(|id| id.try_into().ok())
@@ -170,23 +142,6 @@ impl TemplateGrpcApi {
 
 #[async_trait::async_trait]
 impl TemplateService for TemplateGrpcApi {
-    async fn get_templates(
-        &self,
-        request: Request<GetTemplatesRequest>,
-    ) -> Result<Response<GetTemplatesResponse>, Status> {
-        let (m, _, r) = request.into_parts();
-        match self.get_all(r, m).await {
-            Ok(templates) => Ok(Response::new(GetTemplatesResponse {
-                result: Some(get_templates_response::Result::Success(
-                    GetTemplatesSuccessResponse { templates },
-                )),
-            })),
-            Err(err) => Ok(Response::new(GetTemplatesResponse {
-                result: Some(get_templates_response::Result::Error(err)),
-            })),
-        }
-    }
-
     async fn create_template(
         &self,
         request: Request<Streaming<CreateTemplateRequest>>,
@@ -214,7 +169,7 @@ impl TemplateService for TemplateGrpcApi {
                             .unwrap_or_default()
                     })
                     .collect();
-                self.create(request, data, m).await
+                self.create(request, data).await
             }
             None => Err(bad_request_error("Missing request")),
         };
@@ -236,7 +191,7 @@ impl TemplateService for TemplateGrpcApi {
         request: Request<DownloadTemplateRequest>,
     ) -> Result<Response<Self::DownloadTemplateStream>, Status> {
         let (m, _, r) = request.into_parts();
-        let res = match self.download(r, m).await {
+        let res = match self.download(r).await {
             Ok(content) => DownloadTemplateResponse {
                 result: Some(download_template_response::Result::SuccessChunk(content)),
             },
@@ -254,7 +209,7 @@ impl TemplateService for TemplateGrpcApi {
         request: Request<GetTemplateRequest>,
     ) -> Result<Response<GetTemplateResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get(r, m).await {
+        match self.get(r).await {
             Ok(templates) => Ok(Response::new(GetTemplateResponse {
                 result: Some(get_template_response::Result::Success(
                     GetTemplateSuccessResponse { templates },
@@ -271,7 +226,7 @@ impl TemplateService for TemplateGrpcApi {
         request: Request<GetLatestTemplateVersionRequest>,
     ) -> Result<Response<GetLatestTemplateVersionResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get_latest_version(r, m).await {
+        match self.get_latest_version(r).await {
             Ok(v) => Ok(Response::new(GetLatestTemplateVersionResponse {
                 result: Some(get_latest_template_version_response::Result::Success(v)),
             })),
@@ -309,7 +264,7 @@ impl TemplateService for TemplateGrpcApi {
                             .unwrap_or_default()
                     })
                     .collect();
-                self.update(request, data, m).await
+                self.update(request, data).await
             }
             None => Err(bad_request_error("Missing request")),
         };
