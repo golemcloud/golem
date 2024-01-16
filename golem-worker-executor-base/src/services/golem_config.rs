@@ -79,7 +79,7 @@ pub struct CompiledTemplateServiceS3Config {
     pub region: String,
     pub bucket: String,
     pub object_prefix: String,
-    pub aws_endpoint_url: Option<String>
+    pub aws_endpoint_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -256,7 +256,7 @@ impl Default for CompiledTemplateServiceS3Config {
             region: "us-east-1".to_string(),
             bucket: "golem-compiled-components".to_string(),
             object_prefix: "".to_string(),
-            aws_endpoint_url: None
+            aws_endpoint_url: None,
         }
     }
 }

@@ -149,7 +149,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     format!("Failed to pre-instantiate component: {e}"),
                 )
             })?;
-            
+
             let instance = instance_pre
                 .instantiate_async(&mut store)
                 .await
