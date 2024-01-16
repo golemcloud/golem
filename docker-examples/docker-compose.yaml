@@ -1,0 +1,82 @@
+version: '3'
+
+services:
+  aws-local-s3:
+    image: localstack/localstack
+    container_name: localstack
+    environment:
+      - SERVICES=s3
+    ports:
+      - "4566:4566"
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+
+  golem-shard-manager:
+    image: golemservices/golem-shard-manager:0.0.1-alpha
+    environment:
+      - REDIS_HOST=redis
+      - WASMTIME_BACKTRACE_DETAILS=1
+      - RUST_BACKTRACE=1
+      - GOLEM__REDIS__HOST=redis
+      - GOLEM__REDIS__PORT=6379
+      - GOLEM__ENABLE_JSON_LOG=true
+      - GOLEM__HTTP_PORT=8081
+      - GOLEM_SHARD_MANAGER_PORT=9001
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+
+  golem-cloud-server-oss:
+    image: golemservices/golem-cloud-server-oss:0.0.1-alpha
+    environment:
+      - ENV ENVIRONMENT=$ENVIRONMENT
+      - RUST_LOG="debug,h2=warn,hyper=warn,tower=warn"
+      - WASMTIME_BACKTRACE_DETAILS=1
+      - RUST_BACKTRACE=1
+      - GOLEM__TEMPLATES__STORE__ROOT_PATH=myfile
+      - GOLEM__ROUTING_TABLE__HOST=golem-shard-manager
+      - GOLEM__ROUTING_TABLE__PORT=9001
+      - GOLEM__GRPC_PORT=9090
+      - GOLEM__HTTP_PORT=8080
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+      - "9001:9001"
+
+  golem-worker-executor-oss:
+    image: golemservices/golem-worker-executor-oss:0.0.1-alpha
+    environment:
+      - ENV ENVIRONMENT=local
+      - RUST_LOG=info
+      - WASMTIME_BACKTRACE_DETAILS=1
+      - RUST_BACKTRACE=1
+      - GOLEM__REDIS__PORT=6379
+      - GOLEM__REDIS__HOST=redis
+      - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-cloud-server-oss
+      - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=9090
+      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX=""
+      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__AWS_ENDPOINT_URL=http://aws-s3:4566
+        # This is a dummy access id, didn't want to change the base golem-config as I am not aware of what's the implication
+      - GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
+      - GOLEM__PORT=9000
+      - GOLEM__HTTP_PORT=8082
+      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST=golem-shard-manager
+      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT=9001
+      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS="5"
+      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY="100ms"
+      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY="2s"
+      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER="2"
+      - GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION="us-east-1"
+      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION="us-east-1"
+      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__BUCKET="golem-compiled-components"
+      - GOLEM__SHARD_MANAGER_SERVICE__TYPE="Grpc"
+      - GOLEM__ENABLE_JSON_LOG=true
+      - AWS_SECRET_ACCESS_KEY=root
+      - AWS_ACCESS_KEY_ID=root
+      - AWS_DEFAULT_REGION="us-east-1"
+    ports:
+      - "9000:9000"
