@@ -55,7 +55,7 @@ jobs:
         id: set-version
         run: |
           if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
-            echo "DOCKER_VERSION=${{ github.ref }}" >> $GITHUB_ENV
+            echo "DOCKER_VERSION=${{ github.ref/refs\/tags\// }}" >> $GITHUB_ENV
           else
             COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
             echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
@@ -68,6 +68,7 @@ jobs:
           docker build -t golem-server:${{ env.DOCKER_VERSION }} -f golem-cloud-server-oss/docker/amd64/Dockerfile .
           docker build -t golem-shard-manager:${{ env.DOCKER_VERSION }} -f golem-shard-manager/docker/amd64/Dockerfile .
           echo "${DOCKERHUB_PASSWORD}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+          echo "Pushing golem services to dockerhub with version ${{ env.DOCKER_VERSION }}"
           docker push golem-worker-executor:${{ env.DOCKER_VERSION }}
           docker push golem-server:${{ env.DOCKER_VERSION }}
           docker push golem-shard-manager:${{ env.DOCKER_VERSION }}
