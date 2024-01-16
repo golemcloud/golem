@@ -48,6 +48,8 @@ RUN if [ "$ENVIRONMENT" = "local" ]; then \
     && export GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__AWS_ENDPOINT_URL=http://aws-s3:4566; \
 fi
 
+RUN echo $AWS_ACCESS_KEY
+
 EXPOSE 9000
 
 ENTRYPOINT ["./worker-executor-oss"]
