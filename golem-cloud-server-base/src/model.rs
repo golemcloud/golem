@@ -2339,7 +2339,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
     fn from(value: WorkerMetadata) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
-            account_id: Some(golem_common::proto::golem::AccountId {
+            account_id: Some(golem_api_grpc::proto::golem::common::AccountId {
                 name: "-1".to_string(),
             }),
             args: value.args,
