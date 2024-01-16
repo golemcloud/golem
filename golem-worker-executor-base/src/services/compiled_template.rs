@@ -42,8 +42,11 @@ pub async fn configured(
     match config {
         CompiledTemplateServiceConfig::S3(config) => {
             let region = config.region.clone();
+            let endpoint_url = "http://aws-s3:4566";
+
             let sdk_config = aws_config::defaults(BehaviorVersion::v2023_11_09())
                 .region(Region::new(region))
+                .endpoint_url(endpoint_url)
                 .load()
                 .await;
             Arc::new(CompiledTemplateServiceS3 {
