@@ -1,6 +1,16 @@
 version: '3'
 
 services:
+  aws-local-s3:
+    image: localstack/localstack
+    container_name: localstack
+    environment:
+      - SERVICES=s3
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+    ports:
+      - "4566:4566"
+
   redis:
     image: redis:latest
     ports:
@@ -40,5 +50,9 @@ services:
         - SHARD_MANAGER_HOST=golem-shard-manager
         - SHARD_MANAGER_PORT=9001
         - REDIS_HOST=redis
+        - AWS_ACCESS_KEY_ID=root
+        - AWS_SECRET_ACCESS_KEY=root
+        - AWS_DEFAULT_REGION=us-east-1
+        - S3_ENDPOINT=http://aws-s3:4566
     ports:
       - "9000:9000"
