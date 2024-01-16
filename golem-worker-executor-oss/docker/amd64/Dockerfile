@@ -45,8 +45,8 @@ RUN if [ "$ENVIRONMENT" = "local" ]; then \
     export AWS_ACCESS_KEY_ID=dummy \
     && export AWS_SECRET_ACCESS_KEY=dummy \
     && export AWS_DEFAULT_REGION=us-east-1 \
-    && export GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__AWS_ENDPOINT_URL=$AWS_ENDPOINT \
-    fi
+    && export GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__AWS_ENDPOINT_URL=http://aws-s3:4566; \
+fi
 
 EXPOSE 9000
 
