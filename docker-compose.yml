@@ -6,8 +6,6 @@ services:
     container_name: localstack
     environment:
       - SERVICES=s3
-      - DEBUG=1
-      - DATA_DIR=/tmp/localstack/data
     ports:
       - "4566:4566"
 

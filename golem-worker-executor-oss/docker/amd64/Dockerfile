@@ -4,6 +4,10 @@ WORKDIR /app
 COPY /target/x86_64-unknown-linux-gnu/debug/worker-executor-oss ./
 COPY /golem-worker-executor-oss/config/worker-executor.toml ./config/worker-executor.toml
 
+RUN apt-get update && apt-get install -y libssl-dev
+RUN apt-get update && apt-get install -y ca-certificates
+RUN update-ca-certificates
+
 ARG ENVIRONMENT
 ARG CLOUD_SERVICE_HOST
 ARG SHARD_MANAGER_HOST
@@ -19,7 +23,8 @@ ENV ENVIRONMENT=$ENVIRONMENT \
     GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=$CLOUD_SERVICE_HOST \
     GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=9090 \
     GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX="" \
-    GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="dummy" \
+    # This is a dummy access id, didn't want to change the base golem-config as I am not aware of what's the implication
+    GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677" \
     GOLEM__PORT=9000 \
     GOLEM__HTTP_PORT=8082 \
     GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST=$SHARD_MANAGER_HOST \
