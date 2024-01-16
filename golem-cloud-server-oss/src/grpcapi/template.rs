@@ -13,9 +13,7 @@ use golem_common::proto::golem::cloudservices::templateservice::{
     GetTemplateResponse, GetTemplateSuccessResponse, UpdateTemplateRequest,
     UpdateTemplateRequestHeader, UpdateTemplateResponse,
 };
-use golem_common::proto::golem::{
-    template_error, ErrorBody, ErrorsBody, Template, TemplateError,
-};
+use golem_common::proto::golem::{template_error, ErrorBody, ErrorsBody, Template, TemplateError};
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::service::template;
@@ -214,7 +212,7 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<GetLatestTemplateVersionRequest>,
     ) -> Result<Response<GetLatestTemplateVersionResponse>, Status> {
-        let (m, _, r) = request.into_parts();
+        let (_, _, r) = request.into_parts();
         match self.get_latest_version(r).await {
             Ok(v) => Ok(Response::new(GetLatestTemplateVersionResponse {
                 result: Some(get_latest_template_version_response::Result::Success(v)),
