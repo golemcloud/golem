@@ -63,16 +63,56 @@ jobs:
           fi
       - uses: satackey/action-docker-layer-caching@v0.0.11
         continue-on-error: true
-      - name: Push docker images to Docker Hub on tag release
-        run: |
-          echo "Pushing golem services to docker hub with version ${{ env.DOCKER_VERSION }}"
-          docker build -t golem-worker-executor:${{ env.DOCKER_VERSION }} -f golem-worker-executor-oss/docker/amd64/Dockerfile .
-          docker build -t golem-server:${{ env.DOCKER_VERSION }} -f golem-cloud-server-oss/docker/amd64/Dockerfile .
-          docker build -t golem-shard-manager:${{ env.DOCKER_VERSION }} -f golem-shard-manager/docker/amd64/Dockerfile .
-          echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -username "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
-          docker push golem-worker-executor:${{ env.DOCKER_VERSION }}
-          docker push golem-server:${{ env.DOCKER_VERSION }}
-          docker push golem-shard-manager:${{ env.DOCKER_VERSION }}
+      - name: Log in to Docker Hub
+        uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: Extract metadata (tags, labels) for worker executor
+        id: meta-worker-executor
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: golemservices/golem-worker-executor:${{ env.DOCKER_VERSION }}
+
+      - name: Build and push worker executor image
+        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
+        with:
+          context: .
+          file: ./golem-worker-executor-oss/docker/amd64/Dockerfile
+          push: true
+          tags: ${{ steps.meta-worker-executor.outputs.tags }}
+          labels: ${{ steps.meta-worker-executor.outputs.labels }}
+
+      - name: Extract metadata (tags, labels) for shard manager
+        id: meta-shard-manager
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: golemservices/golem-shard-manager:${{ env.DOCKER_VERSION }}
+
+      - name: Build and push shard manager image
+        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
+        with:
+          context: .
+          file: ./golem-shard-manager/docker/amd64/Dockerfile
+          push: true
+          tags: ${{ steps.meta-shard-manager.outputs.tags }}
+          labels: ${{ steps.meta-shard-manager.outputs.labels }}
+
+      - name: Extract metadata (tags, labels) for golem server
+        id: meta-golem-server
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: golemservices/golem-server:${{ env.DOCKER_VERSION }}
+
+      - name: Build and push cloud server image
+        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
+        with:
+          context: .
+          file: ./golem-cloud-server-oss/docker/amd64/Dockerfile
+          push: true
+          tags: ${{ steps.meta-golem-server.outputs.tags }}
+          labels: ${{ steps.meta-golem-server.outputs.labels }}
 
   build:
     runs-on: ubuntu-latest
