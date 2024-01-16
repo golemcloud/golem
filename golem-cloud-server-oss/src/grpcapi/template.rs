@@ -14,9 +14,8 @@ use golem_common::proto::golem::cloudservices::templateservice::{
     UpdateTemplateRequestHeader, UpdateTemplateResponse,
 };
 use golem_common::proto::golem::{
-    template_error, ErrorBody, ErrorsBody, Template, TemplateError, TokenSecret,
+    template_error, ErrorBody, ErrorsBody, Template, TemplateError,
 };
-use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::service::template;
@@ -136,7 +135,7 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<Streaming<CreateTemplateRequest>>,
     ) -> Result<Response<CreateTemplateResponse>, Status> {
-        let (m, _, r) = request.into_parts();
+        let (_, _, r) = request.into_parts();
         let chunks: Vec<CreateTemplateRequest> = r.into_stream().try_collect().await?;
         let header = chunks.iter().find_map(|c| {
             c.clone().data.and_then(|d| match d {
@@ -180,7 +179,7 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<DownloadTemplateRequest>,
     ) -> Result<Response<Self::DownloadTemplateStream>, Status> {
-        let (m, _, r) = request.into_parts();
+        let (_, _, r) = request.into_parts();
         let res = match self.download(r).await {
             Ok(content) => DownloadTemplateResponse {
                 result: Some(download_template_response::Result::SuccessChunk(content)),
@@ -198,7 +197,7 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<GetTemplateRequest>,
     ) -> Result<Response<GetTemplateResponse>, Status> {
-        let (m, _, r) = request.into_parts();
+        let (_, _, r) = request.into_parts();
         match self.get(r).await {
             Ok(templates) => Ok(Response::new(GetTemplateResponse {
                 result: Some(get_template_response::Result::Success(
@@ -230,7 +229,7 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<Streaming<UpdateTemplateRequest>>,
     ) -> Result<Response<UpdateTemplateResponse>, Status> {
-        let (m, _, r) = request.into_parts();
+        let (_, _, r) = request.into_parts();
         let chunks: Vec<UpdateTemplateRequest> = r.into_stream().try_collect().await?;
 
         let header = chunks.iter().find_map(|c| {
