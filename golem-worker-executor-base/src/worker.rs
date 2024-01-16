@@ -106,7 +106,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             dbg!("Done with this? 3");
 
-
             this.worker_service().add(&worker_metadata).await?;
 
             let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended));
@@ -131,7 +130,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await?;
 
             dbg!("Done with this?5");
-
 
             let public_state = context.get_public_state().clone();
 
@@ -163,7 +161,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             })?;
 
             dbg!("Here333 ??");
-
 
             let instance = instance_pre
                 .instantiate_async(&mut store)

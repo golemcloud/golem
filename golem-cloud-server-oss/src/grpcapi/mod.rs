@@ -1,12 +1,11 @@
-use std::net::SocketAddr;
+use crate::grpcapi::template::TemplateGrpcApi;
 use crate::service::Services;
-use tonic::transport::{Error, Server};
 use golem_common::proto;
 use golem_common::proto::golem::cloudservices::templateservice::template_service_server::TemplateServiceServer;
-use crate::grpcapi::template::TemplateGrpcApi;
+use std::net::SocketAddr;
+use tonic::transport::{Error, Server};
 
 mod template;
-
 
 pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<(), Error> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();

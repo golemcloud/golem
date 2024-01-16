@@ -2,16 +2,15 @@ use std::sync::Arc;
 
 use futures_util::stream::BoxStream;
 use futures_util::TryStreamExt;
-use golem_common::model::{TemplateId};
+use golem_common::model::TemplateId;
 use golem_common::proto::golem::cloudservices::templateservice::template_service_server::TemplateService;
 use golem_common::proto::golem::cloudservices::templateservice::{
     create_template_request, create_template_response, download_template_response,
-    get_latest_template_version_response, get_template_response,
-    update_template_request, update_template_response, CreateTemplateRequest,
-    CreateTemplateRequestHeader, CreateTemplateResponse, DownloadTemplateRequest,
-    DownloadTemplateResponse, GetLatestTemplateVersionRequest, GetLatestTemplateVersionResponse,
-    GetTemplateRequest, GetTemplateResponse, GetTemplateSuccessResponse,
-    UpdateTemplateRequest,
+    get_latest_template_version_response, get_template_response, update_template_request,
+    update_template_response, CreateTemplateRequest, CreateTemplateRequestHeader,
+    CreateTemplateResponse, DownloadTemplateRequest, DownloadTemplateResponse,
+    GetLatestTemplateVersionRequest, GetLatestTemplateVersionResponse, GetTemplateRequest,
+    GetTemplateResponse, GetTemplateSuccessResponse, UpdateTemplateRequest,
     UpdateTemplateRequestHeader, UpdateTemplateResponse,
 };
 use golem_common::proto::golem::{
@@ -69,10 +68,7 @@ pub struct TemplateGrpcApi {
 }
 
 impl TemplateGrpcApi {
-    async fn get(
-        &self,
-        request: GetTemplateRequest,
-    ) -> Result<Vec<Template>, TemplateError> {
+    async fn get(&self, request: GetTemplateRequest) -> Result<Vec<Template>, TemplateError> {
         let id: TemplateId = request
             .template_id
             .and_then(|id| id.try_into().ok())
@@ -100,10 +96,7 @@ impl TemplateGrpcApi {
         }
     }
 
-    async fn download(
-        &self,
-        request: DownloadTemplateRequest,
-    ) -> Result<Vec<u8>, TemplateError> {
+    async fn download(&self, request: DownloadTemplateRequest) -> Result<Vec<u8>, TemplateError> {
         let id: TemplateId = request
             .template_id
             .and_then(|id| id.try_into().ok())
@@ -119,10 +112,7 @@ impl TemplateGrpcApi {
         data: Vec<u8>,
     ) -> Result<Template, TemplateError> {
         let name = golem_cloud_server_base::model::TemplateName(request.template_name);
-        let result = self
-            .template_service
-            .create(&name, data)
-            .await?;
+        let result = self.template_service.create(&name, data).await?;
         Ok(result.into())
     }
 
