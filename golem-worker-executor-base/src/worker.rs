@@ -119,6 +119,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
 
+            dbg!("Done with this?5");
+
             let public_state = context.get_public_state().clone();
 
             let mut store = Store::new(&this.engine(), context);
@@ -239,6 +241,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker_id.clone(),
                 || PendingWorker::new(config_clone),
                 |pending_worker| {
+                    dbg!("Here it is reached?");
                     let pending_worker_clone = pending_worker.clone();
                     Box::pin(async move {
                         Worker::new(
@@ -255,6 +258,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 },
             )
             .await?;
+        dbg!("In here???");
         validate_worker(
             worker_details.metadata.clone(),
             worker_args,

@@ -1,43 +1,34 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
-WORKDIR /app
-
-FROM chef AS planner
-COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
-
-FROM chef as builder
-
-RUN apt-get update && apt-get install -y unzip \
-    && PROTOC_ZIP=protoc-3.15.0-linux-x86_64.zip \
-    && curl -OL https://github.com/google/protobuf/releases/download/v3.15.0/$PROTOC_ZIP \
-    && unzip -o $PROTOC_ZIP -d /usr/local bin/protoc \
-    && rm -f $PROTOC_ZIP
-
-COPY --from=planner /app/recipe.json recipe.json
-COPY ./Cargo.toml ./Cargo.lock ./
-RUN cargo chef cook --release --recipe-path recipe.json
-COPY . .
-RUN cargo build -p golem-worker-executor-oss --release --bin worker-executor-oss
-
 FROM debian:bookworm-slim
 
 WORKDIR /app
-COPY --from=builder /app/target/release/worker-executor-oss ./
-COPY --from=builder /app/golem-worker-executor-oss/config/worker-executor-local.toml ./config/worker-executor.toml
+COPY /target/x86_64-unknown-linux-gnu/debug/worker-executor-oss ./
+COPY /golem-worker-executor-oss/config/worker-executor.toml ./config/worker-executor.toml
+
+RUN apt-get update && apt-get install -y libssl-dev
+RUN apt-get update && apt-get install -y ca-certificates
+RUN update-ca-certificates
 
 ARG ENVIRONMENT
 ARG CLOUD_SERVICE_HOST
 ARG SHARD_MANAGER_HOST
 ARG SHARD_MANAGER_PORT
+ARG REDIS_HOST
+ARG AWS_ENDPOINT
+ARG AWS_SECRET_ACCESS_KEY
+ARG AWS_ACCESS_KEY_ID
 
 ENV ENVIRONMENT=$ENVIRONMENT \
     RUST_LOG=info \
     WASMTIME_BACKTRACE_DETAILS=1 \
     RUST_BACKTRACE=1 \
     GOLEM__REDIS__PORT=6379 \
+    GOLEM__REDIS__HOST=$REDIS_HOST \
     GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=$CLOUD_SERVICE_HOST \
     GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=9090 \
     GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX="" \
+    GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__AWS_ENDPOINT_URL=$AWS_ENDPOINT \
+    # This is a dummy access id, didn't want to change the base golem-config as I am not aware of what's the implication
+    GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677" \
     GOLEM__PORT=9000 \
     GOLEM__HTTP_PORT=8082 \
     GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST=$SHARD_MANAGER_HOST \
@@ -46,8 +37,17 @@ ENV ENVIRONMENT=$ENVIRONMENT \
     GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY="100ms" \
     GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY="2s" \
     GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER="2" \
+    GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION="us-east-1" \
+    GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION="us-east-1" \
+    GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__BUCKET="golem-compiled-components" \
+    GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX="" \
     GOLEM__SHARD_MANAGER_SERVICE__TYPE="Grpc" \
-    GOLEM__ENABLE_JSON_LOG=true
+    GOLEM__ENABLE_JSON_LOG=true \
+    AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+    AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+    AWS_DEFAULT_REGION="us-east-1"
+
+RUN echo $AWS_ACCESS_KEY
 
 EXPOSE 9000
 

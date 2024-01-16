@@ -42,10 +42,16 @@ pub async fn configured(
     match config {
         CompiledTemplateServiceConfig::S3(config) => {
             let region = config.region.clone();
-            let sdk_config = aws_config::defaults(BehaviorVersion::v2023_11_09())
-                .region(Region::new(region))
-                .load()
-                .await;
+
+            let sdk_config_base =
+                aws_config::defaults(BehaviorVersion::v2023_11_09()).region(Region::new(region));
+
+            let sdk_config = if let Some(endpoint_url) = &config.aws_endpoint_url {
+                sdk_config_base.endpoint_url(endpoint_url).load().await
+            } else {
+                sdk_config_base.load().await
+            };
+
             Arc::new(CompiledTemplateServiceS3 {
                 config: config.clone(),
                 client: s3::Client::new(&sdk_config),

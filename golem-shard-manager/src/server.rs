@@ -411,7 +411,7 @@ async fn async_main(
         .serve(addr)
         .await?;
 
-    info!("Server started on port {}", shard_manager_port);
+    dbg!("Server started on port {}", shard_manager_port);
 
     Ok(())
 }

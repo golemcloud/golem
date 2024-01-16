@@ -8,7 +8,6 @@ import public "golem/template/template_error.proto";
 import public "golem/template/template_id.proto";
 
 service TemplateService {
-  rpc GetTemplates (GetTemplatesRequest) returns (GetTemplatesResponse);
   rpc CreateTemplate (stream CreateTemplateRequest) returns (CreateTemplateResponse);
   rpc DownloadTemplate (DownloadTemplateRequest) returns (stream DownloadTemplateResponse);
   rpc GetTemplate (GetTemplateRequest) returns (GetTemplateResponse);
