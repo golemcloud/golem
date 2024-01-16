@@ -43,6 +43,10 @@ pub async fn configured(
         CompiledTemplateServiceConfig::S3(config) => {
             let region = config.region.clone();
 
+            dbg!("The endpoint url is {}", &config.aws_endpoint_url);
+            dbg!("The env variable with sys env for aws access_key is", &std::env::var("AWS_ACCESS_KEY_ID"));
+            dbg!("The env variable with sys env for aws secret is", &std::env::var("AWS_SECRET_ACCESS_KEY"));
+
             let sdk_config_base = aws_config::defaults(BehaviorVersion::v2023_11_09())
                 .region(Region::new(region));
 
