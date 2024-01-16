@@ -55,7 +55,8 @@ jobs:
         id: set-version
         run: |
           if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
-            echo "DOCKER_VERSION=${{ github.ref }}" >> $GITHUB_ENV
+            DOCKER_VERSION=$(echo "${{ github.ref }}" | sed 's|^refs/tags/v||')
+            echo "DOCKER_VERSION=${DOCKER_VERSION}" >> $GITHUB_ENV
           else
             COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
             echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
