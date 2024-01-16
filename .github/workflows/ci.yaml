@@ -63,6 +63,7 @@ jobs:
           fi
       - uses: satackey/action-docker-layer-caching@v0.0.11
         continue-on-error: true
+
       - name: Log in to Docker Hub
         uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
         with:
@@ -73,7 +74,7 @@ jobs:
         id: meta-worker-executor
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
-          images: golemservices/golem-worker-executor:${{ env.DOCKER_VERSION }}
+          images: golemservices/golem-worker-executor
 
       - name: Build and push worker executor image
         uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
@@ -88,7 +89,7 @@ jobs:
         id: meta-shard-manager
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
-          images: golemservices/golem-shard-manager:${{ env.DOCKER_VERSION }}
+          images: golemservices/golem-shard-manager
 
       - name: Build and push shard manager image
         uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
@@ -103,7 +104,7 @@ jobs:
         id: meta-golem-server
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
-          images: golemservices/golem-server:${{ env.DOCKER_VERSION }}
+          images: golemservices/golem-server
 
       - name: Build and push cloud server image
         uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
