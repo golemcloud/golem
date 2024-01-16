@@ -33,7 +33,7 @@ services:
   golem-cloud-server-oss:
     image: golemservices/golem-server:v0.0.1-alpha
     environment:
-      - ENVIRONMENT=$ENVIRONMENT
+      - ENVIRONMENT=local
       - RUST_LOG="debug,h2=warn,hyper=warn,tower=warn"
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
