@@ -1,6 +1,14 @@
 version: '3'
 
 services:
+  aws-local-s3:
+    image: localstack/localstack
+    container_name: localstack
+    environment:
+      - SERVICES=s3
+    ports:
+      - "4566:4566"
+
   redis:
     image: redis:latest
     ports:
@@ -23,7 +31,7 @@ services:
       dockerfile: golem-cloud-server-oss/docker/amd64/Dockerfile
       args:
         - SHARD_MANAGER_HOST=golem-shard-manager
-        - SHARD_MANAGER_PORT=8081
+        - SHARD_MANAGER_PORT=9001
         - TEMPLATES__STORE__ROOT_PATH=myfile
     ports:
       - "8080:8080"
@@ -39,5 +47,10 @@ services:
         - CLOUD_SERVICE_HOST=golem-cloud-server-oss
         - SHARD_MANAGER_HOST=golem-shard-manager
         - SHARD_MANAGER_PORT=9001
+        - REDIS_HOST=redis
+        - AWS_ACCESS_KEY_ID=root
+        - AWS_SECRET_ACCESS_KEY=root
+        - AWS_DEFAULT_REGION=us-east-1
+        - AWS_ENDPOINT=http://aws-s3:4566
     ports:
       - "9000:9000"

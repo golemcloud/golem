@@ -20,6 +20,8 @@ golem-cloud-server-base = { path = "../golem-cloud-server-base" }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
 tonic = { workspace = true }
+tonic-health = { workspace = true }
+tonic-reflection = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = "0.7.10"
