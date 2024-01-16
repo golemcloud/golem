@@ -367,7 +367,9 @@ impl WorkerService for WorkerServiceDefault {
                 let response = match worker_executor_client
                     .connect_worker(ConnectWorkerRequest {
                         worker_id: Some(worker_id.clone().into()),
-                        account_id: None,
+                        account_id: Some(golem_common::proto::golem::AccountId {
+                            name: "-1".to_string(),
+                        }),
                         account_limits: None,
                     })
                     .await
@@ -574,7 +576,9 @@ impl WorkerService for WorkerServiceDefault {
                             input: params_val.clone(),
                             invocation_key: Some(invocation_key.clone().into()),
                             calling_convention: calling_convention.clone().into(),
-                            account_id: None, //FIXME
+                            account_id: Some(golem_common::proto::golem::AccountId {
+                                name: "-1".to_string(),
+                            }),
                             account_limits: None
                         }
                     ).await.map_err(|err| {

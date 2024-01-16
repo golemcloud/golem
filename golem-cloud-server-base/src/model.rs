@@ -2245,7 +2245,9 @@ impl From<WorkerMetadata> for golem_common::proto::golem::WorkerMetadata {
     fn from(value: WorkerMetadata) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
-            account_id: None, //FIXME: This should be removed
+            account_id: Some(golem_common::proto::golem::AccountId {
+                name: "-1".to_string(),
+            }),
             args: value.args,
             env: value.env,
             status: value.status.into(),
