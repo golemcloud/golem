@@ -69,7 +69,7 @@ jobs:
           docker build -t golem-worker-executor:${{ env.DOCKER_VERSION }} -f golem-worker-executor-oss/docker/amd64/Dockerfile .
           docker build -t golem-server:${{ env.DOCKER_VERSION }} -f golem-cloud-server-oss/docker/amd64/Dockerfile .
           docker build -t golem-shard-manager:${{ env.DOCKER_VERSION }} -f golem-shard-manager/docker/amd64/Dockerfile .
-          echo "${DOCKERHUB_PASSWORD}" | docker login -username "${DOCKERHUB_USERNAME}" --password-stdin
+          echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -username "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
           docker push golem-worker-executor:${{ env.DOCKER_VERSION }}
           docker push golem-server:${{ env.DOCKER_VERSION }}
           docker push golem-shard-manager:${{ env.DOCKER_VERSION }}
