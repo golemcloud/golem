@@ -700,7 +700,9 @@ impl WorkerService for WorkerServiceDefault {
                             worker_id: Some(worker_id.clone().into()),
                             name: function_name.clone(),
                             input: params_val.clone(),
-                            account_id: None, // FIXME
+                            account_id: Some(golem_common::proto::golem::AccountId {
+                                name: "-1".to_string(),
+                            }), // FIXME
                             account_limits: None, // FIXME
                         })
                         .await
