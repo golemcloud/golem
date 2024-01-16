@@ -15,7 +15,7 @@ services:
       - "6379:6379"
 
   golem-shard-manager:
-    image: golemservices/golem-shard-manager:0.0.1-alpha
+    image: golemservices/golem-shard-manager:v0.0.1-alpha
     environment:
       - REDIS_HOST=redis
       - WASMTIME_BACKTRACE_DETAILS=1
@@ -31,9 +31,9 @@ services:
       - redis
 
   golem-cloud-server-oss:
-    image: golemservices/golem-cloud-server-oss:0.0.1-alpha
+    image: golemservices/golem-server:v0.0.1-alpha
     environment:
-      - ENV ENVIRONMENT=$ENVIRONMENT
+      - ENVIRONMENT=$ENVIRONMENT
       - RUST_LOG="debug,h2=warn,hyper=warn,tower=warn"
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
@@ -48,9 +48,9 @@ services:
       - "9001:9001"
 
   golem-worker-executor-oss:
-    image: golemservices/golem-worker-executor-oss:0.0.1-alpha
+    image: golemservices/golem-worker-executor:v0.0.1-alpha
     environment:
-      - ENV ENVIRONMENT=local
+      - ENVIRONMENT=local
       - RUST_LOG=info
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
@@ -66,10 +66,10 @@ services:
       - GOLEM__HTTP_PORT=8082
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST=golem-shard-manager
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT=9001
-      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS="5"
+      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS=5
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY="100ms"
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY="2s"
-      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER="2"
+      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER=2
       - GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION="us-east-1"
       - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION="us-east-1"
       - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__BUCKET="golem-compiled-components"
