@@ -256,7 +256,7 @@ impl Default for CompiledTemplateServiceS3Config {
             region: "us-east-1".to_string(),
             bucket: "golem-compiled-components".to_string(),
             object_prefix: "".to_string(),
-            endpoint_url: None
+            aws_endpoint_url: None
         }
     }
 }
