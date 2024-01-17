@@ -1,8 +1,12 @@
 use ctor::{ctor, dtor};
+use fred::clients::RedisClient;
+use fred::prelude::RedisConfig;
+use redis::{Commands, RedisResult};
 use std::ops::Deref;
 use std::panic;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 use tracing_subscriber::EnvFilter;
 
 #[allow(dead_code)]
@@ -22,8 +26,6 @@ struct Redis {
 
 impl Redis {
     pub fn new() -> Self {
-        println!("Starting redis...");
-
         let port = 6379;
         let child = Command::new("redis-server")
             .arg("--port")
@@ -34,6 +36,19 @@ impl Redis {
             .arg("no")
             .spawn()
             .expect("Failed to spawn redis server");
+
+        let start = Instant::now();
+        let mut client = redis::Client::open("redis://localhost:6379").unwrap();
+        loop {
+            let result: RedisResult<Vec<String>> = client.keys("*");
+            if result.is_ok() {
+                break;
+            }
+
+            if start.elapsed().as_secs() > 10 {
+                panic!("Failed to verify that Redis is running");
+            }
+        }
 
         Self {
             host: "localhost".to_string(),
@@ -51,7 +66,6 @@ impl Redis {
 
     pub fn kill(&mut self) {
         if let Some(mut child) = self.child.take() {
-            println!("Stopping redis...");
             self.valid.store(false, Ordering::Release);
             let _ = child.kill();
         }

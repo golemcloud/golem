@@ -76,6 +76,7 @@ assert2 = "0.3.11"
 serde_json = { workspace = true }
 tracing-subscriber = { workspace = true }
 warp = { workspace = true }
+redis = { version = "0.24.0", features = ["default"] }
 
 [[test]]
 name = "integration"
