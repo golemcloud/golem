@@ -162,24 +162,24 @@ fn get_oplog_redis_key(worker_id: &WorkerId) -> String {
     format!("instance:oplog:{}", worker_id.to_redis_key())
 }
 
-#[cfg(test)]
+#[cfg(any(feature = "mocks", test))]
 pub struct OplogServiceMock {}
 
-#[cfg(test)]
+#[cfg(any(feature = "mocks", test))]
 impl Default for OplogServiceMock {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(test)]
+#[cfg(any(feature = "mocks", test))]
 impl OplogServiceMock {
     pub fn new() -> Self {
         Self {}
     }
 }
 
-#[cfg(test)]
+#[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl OplogService for OplogServiceMock {
     async fn append(&self, _worker_id: &WorkerId, _arrays: &[OplogEntry]) {

@@ -425,17 +425,17 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(any(feature = "mocks", test))]
 pub struct RecoveryManagementMock;
 
-#[cfg(test)]
+#[cfg(any(feature = "mocks", test))]
 impl Default for RecoveryManagementMock {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(test)]
+#[cfg(any(feature = "mocks", test))]
 impl RecoveryManagementMock {
     #[allow(unused)]
     pub fn new() -> Self {
@@ -443,7 +443,7 @@ impl RecoveryManagementMock {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl RecoveryManagement for RecoveryManagementMock {
     async fn schedule_recovery_for_error(
