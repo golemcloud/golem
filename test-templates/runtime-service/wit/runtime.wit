@@ -1,0 +1,10 @@
+package golem:it;
+
+interface api {
+  get-self-uri: func(function-name: string) -> string;
+}
+
+world runtime-service {
+  import golem:api/host;
+  export api;
+}

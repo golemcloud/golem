@@ -1,0 +1,13 @@
+package golem:it;
+
+interface api {
+  create-container: func(container-name: string) -> ();
+
+  container-exists: func(container-name: string) -> bool;
+}
+
+world blob-store-service {
+  import wasi:blobstore/blobstore;
+  import wasi:blobstore/container;
+  export api;
+}

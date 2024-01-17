@@ -1,0 +1,24 @@
+package golem:it;
+
+interface api {
+
+  flags permissions {
+    read,
+    write,
+    exec,
+    close
+  }
+
+  record task {
+    name: string,
+    permissions: permissions
+  }
+
+  create-task: func(input: task) -> task;
+
+  get-tasks: func() -> list<task>;
+}
+
+world flags-service {
+  export api;
+}

@@ -1,0 +1,6 @@
+package golem:it;
+
+world promise {
+  import golem:api/host;
+  export run: func() -> list<u8>;
+}

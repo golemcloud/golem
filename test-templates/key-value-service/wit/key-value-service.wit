@@ -1,0 +1,25 @@
+package golem:it;
+
+interface api {
+  delete: func(bucket: string, key: string) -> ();
+
+  delete-many: func(bucket: string, keys: list<string>) -> ();
+
+  exists: func(bucket: string, key: string) -> bool;
+
+  get: func(bucket: string, key: string) -> option<list<u8>>;
+
+  get-keys: func(bucket: string) -> list<string>;
+
+  get-many: func(bucket: string, keys: list<string>) -> option<list<list<u8>>>;
+
+  set: func(bucket: string, key: string, value: list<u8>) -> ();
+
+  set-many: func(bucket: string, key-values: list<tuple<string, list<u8>>>) -> ();
+}
+
+world key-value-service {
+  import wasi:keyvalue/batch;
+  import wasi:keyvalue/readwrite;
+  export api;
+}

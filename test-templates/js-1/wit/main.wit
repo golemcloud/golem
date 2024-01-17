@@ -1,0 +1,6 @@
+package golem:it;
+
+world js1 {
+    import wasi:clocks/wall-clock@0.2.0-rc-2023-11-10;
+    export hello: func(name: string) -> string;
+}
