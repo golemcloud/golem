@@ -11,7 +11,7 @@ async fn interruption() {
     let mut executor = common::start().await.unwrap();
 
     let template_id = executor.store_template(Path::new(
-        "../integration-tests/src/it/wasm/interruption.wasm",
+        "../test-templates/interruption.wasm",
     ));
     let worker_id = executor.start_worker(&template_id, "interruption-1").await;
 
@@ -47,7 +47,7 @@ async fn simulated_crash() {
     let mut executor = common::start().await.unwrap();
 
     let template_id = executor.store_template(Path::new(
-        "../integration-tests/src/it/wasm/interruption.wasm",
+        "../test-templates/interruption.wasm",
     ));
     let worker_id = executor
         .start_worker(&template_id, "simulated-crash-1")
@@ -90,7 +90,7 @@ async fn shopping_cart_example() {
     let mut executor = common::start().await.unwrap();
 
     let template_id = executor.store_template(Path::new(
-        "../integration-tests/src/it/wasm/shopping-cart.wasm",
+        "../test-templates/shopping-cart.wasm",
     ));
     let worker_id = executor.start_worker(&template_id, "shopping-cart-1").await;
 
@@ -189,7 +189,7 @@ async fn stdio_cc() {
     let mut executor = common::start().await.unwrap();
 
     let template_id =
-        executor.store_template(Path::new("../integration-tests/src/it/wasm/stdio-cc.wasm"));
+        executor.store_template(Path::new("../test-templates/stdio-cc.wasm"));
     let worker_id = executor.start_worker(&template_id, "stdio-cc-1").await;
 
     let result = executor
