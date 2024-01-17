@@ -1,39 +1,9 @@
-use std::time::Duration;
-
-use figment::providers::{Env, Format, Toml};
-use figment::Figment;
-use serde::Deserialize;
-
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct AdditionalGolemConfig {
-    #[serde(with = "humantime_serde")]
-    pub promise_poll_interval: Duration,
-}
-
-impl AdditionalGolemConfig {
-    pub fn new() -> Self {
-        Figment::new()
-            .merge(Toml::file("config/worker-executor.toml"))
-            .merge(Env::prefixed("GOLEM__").split("__"))
-            .extract()
-            .expect("Failed to parse config")
-    }
-
-    pub fn from_file(path: &str) -> Self {
-        Figment::new()
-            .merge(Toml::file(path))
-            .extract()
-            .expect("Failed to parse config")
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use golem_worker_executor_base::services::golem_config::{
         GolemConfig, ShardManagerServiceConfig,
     };
-
-    use crate::services::config::AdditionalGolemConfig;
 
     #[test]
     pub fn config_is_loadable() {
@@ -70,20 +40,11 @@ mod tests {
 
         // The rest can be loaded from the toml
         let golem_config = GolemConfig::new();
-        let _ = AdditionalGolemConfig::new();
 
         let shard_manager_grpc_port = match &golem_config.shard_manager_service {
             ShardManagerServiceConfig::Grpc(config) => config.port,
             _ => panic!("Expected shard manager service to be grpc"),
         };
         assert_eq!(shard_manager_grpc_port, 4567);
-    }
-
-    // TODO; Fix this test
-    #[test]
-    #[ignore]
-    pub fn local_config_is_loadable() {
-        let _ = GolemConfig::from_file("config/worker-executor-local.toml");
-        let _ = AdditionalGolemConfig::from_file("config/worker-executor-local.toml");
     }
 }

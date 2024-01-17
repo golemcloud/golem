@@ -3,13 +3,11 @@ use std::sync::Arc;
 use golem_worker_executor_base::metrics;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_oss::run;
-use golem_worker_executor_oss::services::config::AdditionalGolemConfig;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prometheus = metrics::register_all();
     let config = GolemConfig::new();
-    let additional_golem_config = Arc::new(AdditionalGolemConfig::new());
 
     if config.enable_tracing_console {
         // NOTE: also requires RUSTFLAGS="--cfg tokio_unstable" cargo build
@@ -38,6 +36,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config,
         prometheus,
         runtime.handle().clone(),
-        additional_golem_config,
     ))
 }

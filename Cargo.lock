@@ -5032,21 +5032,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasi-tokio"
-version = "15.0.0"
-dependencies = [
- "anyhow",
- "cap-std",
- "io-extras",
- "io-lifetimes 2.0.3",
- "rustix 0.38.26",
- "tokio",
- "wasi-cap-std-sync",
- "wasi-common",
- "wiggle",
-]
-
-[[package]]
 name = "wasm-bindgen"
 version = "0.2.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5435,7 +5420,6 @@ dependencies = [
  "url",
  "wasi-cap-std-sync",
  "wasi-common",
- "wasi-tokio",
  "wasmtime",
  "wiggle",
  "windows-sys 0.48.0",

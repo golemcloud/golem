@@ -36,5 +36,5 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { version = "=15.0.0", features = ["component-model"] }
 wasmtime-runtime = { version = "=15.0.0" }
-wasmtime-wasi = { version = "=15.0.0", features = ["preview2", "tokio"] }
+wasmtime-wasi = { version = "=15.0.0" }
 wasmtime-wasi-http = { version = "=15.0.0" }
