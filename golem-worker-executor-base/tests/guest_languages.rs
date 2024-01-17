@@ -9,8 +9,7 @@ use crate::common;
 async fn zig_example_1() {
     let mut executor = common::start().await.unwrap();
 
-    let template_id =
-        executor.store_template(Path::new("../test-templates/zig-1.wasm"));
+    let template_id = executor.store_template(Path::new("../test-templates/zig-1.wasm"));
     let worker_id = executor.start_worker(&template_id, "zig-1").await;
 
     let result = executor
@@ -30,8 +29,7 @@ async fn zig_example_1() {
 async fn zig_example_2() {
     let mut executor = common::start().await.unwrap();
 
-    let template_id =
-        executor.store_template(Path::new("../test-templates/zig-2.wasm"));
+    let template_id = executor.store_template(Path::new("../test-templates/zig-2.wasm"));
     let worker_id = executor.start_worker(&template_id, "zig-2").await;
     let rx = executor.capture_output(&worker_id).await;
 

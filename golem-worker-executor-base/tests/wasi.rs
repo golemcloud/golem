@@ -36,9 +36,7 @@ async fn write_stdout() {
 async fn read_stdin() {
     let mut executor = common::start().await.unwrap();
 
-    let template_id = executor.store_template(Path::new(
-        "../test-templates/read-stdin.wasm",
-    ));
+    let template_id = executor.store_template(Path::new("../test-templates/read-stdin.wasm"));
     let worker_id = executor.start_worker(&template_id, "read-stdin-1").await;
 
     let result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
@@ -73,9 +71,7 @@ async fn http_client() {
             .await;
     });
 
-    let template_id = executor.store_template(Path::new(
-        "../test-templates/http-client.wasm",
-    ));
+    let template_id = executor.store_template(Path::new("../test-templates/http-client.wasm"));
     let worker_id = executor.start_worker(&template_id, "http-client-1").await;
     let rx = executor.capture_output(&worker_id).await;
 
@@ -128,9 +124,7 @@ async fn http_client_response_persisted_between_invocations() {
             .await;
     });
 
-    let template_id = executor.store_template(Path::new(
-        "../test-templates/http-client.wasm",
-    ));
+    let template_id = executor.store_template(Path::new("../test-templates/http-client.wasm"));
     let worker_id = executor.start_worker(&template_id, "http-client-2").await;
     let rx = executor.capture_output(&worker_id).await;
 

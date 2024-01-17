@@ -10,9 +10,7 @@ use serde_json::Value;
 async fn interruption() {
     let mut executor = common::start().await.unwrap();
 
-    let template_id = executor.store_template(Path::new(
-        "../test-templates/interruption.wasm",
-    ));
+    let template_id = executor.store_template(Path::new("../test-templates/interruption.wasm"));
     let worker_id = executor.start_worker(&template_id, "interruption-1").await;
 
     let mut executor_clone = executor.async_clone().await;
@@ -46,9 +44,7 @@ async fn interruption() {
 async fn simulated_crash() {
     let mut executor = common::start().await.unwrap();
 
-    let template_id = executor.store_template(Path::new(
-        "../test-templates/interruption.wasm",
-    ));
+    let template_id = executor.store_template(Path::new("../test-templates/interruption.wasm"));
     let worker_id = executor
         .start_worker(&template_id, "simulated-crash-1")
         .await;
@@ -89,9 +85,7 @@ async fn simulated_crash() {
 async fn shopping_cart_example() {
     let mut executor = common::start().await.unwrap();
 
-    let template_id = executor.store_template(Path::new(
-        "../test-templates/shopping-cart.wasm",
-    ));
+    let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
     let worker_id = executor.start_worker(&template_id, "shopping-cart-1").await;
 
     let _ = executor
@@ -188,8 +182,7 @@ async fn shopping_cart_example() {
 async fn stdio_cc() {
     let mut executor = common::start().await.unwrap();
 
-    let template_id =
-        executor.store_template(Path::new("../test-templates/stdio-cc.wasm"));
+    let template_id = executor.store_template(Path::new("../test-templates/stdio-cc.wasm"));
     let worker_id = executor.start_worker(&template_id, "stdio-cc-1").await;
 
     let result = executor
