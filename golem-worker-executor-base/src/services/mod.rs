@@ -12,7 +12,10 @@ pub mod compiled_template;
 pub mod golem_config;
 pub mod invocation_key;
 pub mod key_value;
+pub mod oplog;
 pub mod promise;
+pub mod recovery;
+pub mod scheduler;
 pub mod shard;
 pub mod shard_manager;
 pub mod template;
@@ -68,6 +71,18 @@ pub trait HasBlobStoreService {
     fn blob_store_service(&self) -> Arc<dyn blob_store::BlobStoreService + Send + Sync>;
 }
 
+pub trait HasOplogService {
+    fn oplog_service(&self) -> Arc<dyn oplog::OplogService + Send + Sync>;
+}
+
+pub trait HasRecoveryManagement {
+    fn recovery_management(&self) -> Arc<dyn recovery::RecoveryManagement + Send + Sync>;
+}
+
+pub trait HasSchedulerService {
+    fn scheduler_service(&self) -> Arc<dyn scheduler::SchedulerService + Send + Sync>;
+}
+
 pub trait HasExtraDeps<Ctx: WorkerCtx> {
     fn extra_deps(&self) -> Ctx::ExtraDeps;
 }
@@ -83,6 +98,9 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasWasmtimeEngine<Ctx>
     + HasKeyValueService
     + HasBlobStoreService
+    + HasOplogService
+    + HasRecoveryManagement
+    + HasSchedulerService
     + HasExtraDeps<Ctx>
     + Clone
 {
@@ -99,6 +117,9 @@ impl<
             + HasWasmtimeEngine<Ctx>
             + HasKeyValueService
             + HasBlobStoreService
+            + HasOplogService
+            + HasRecoveryManagement
+            + HasSchedulerService
             + HasExtraDeps<Ctx>
             + Clone,
     > HasAll<Ctx> for T
@@ -121,6 +142,9 @@ pub struct All<Ctx: WorkerCtx> {
     shard_service: Arc<dyn shard::ShardService + Send + Sync>,
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+    oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
+    recovery_management: Arc<dyn recovery::RecoveryManagement + Send + Sync>,
+    scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -140,6 +164,9 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             shard_service: self.shard_service.clone(),
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
+            oplog_service: self.oplog_service.clone(),
+            recovery_management: self.recovery_management.clone(),
+            scheduler_service: self.scheduler_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -160,6 +187,9 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         shard_service: Arc<dyn shard::ShardService + Send + Sync>,
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+        oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
+        recovery_management: Arc<dyn recovery::RecoveryManagement + Send + Sync>,
+        scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -176,6 +206,9 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             shard_service,
             key_value_service,
             blob_store_service,
+            oplog_service,
+            recovery_management,
+            scheduler_service,
             extra_deps,
         }
     }
@@ -199,6 +232,9 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         let shard_manager_service = Arc::new(shard_manager::ShardManagerServiceSingleShard::new());
         let key_value_service = Arc::new(key_value::KeyValueServiceInMemory::new());
         let blob_store_service = Arc::new(blob_store::BlobStoreServiceInMemory::new());
+        let oplog_service = Arc::new(oplog::OplogServiceMock::new());
+        let recovery_management = Arc::new(recovery::RecoveryManagementMock::new());
+        let scheduler_service = Arc::new(scheduler::SchedulerServiceMock::new());
         Self {
             active_workers,
             engine,
@@ -213,6 +249,9 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             shard_service,
             key_value_service,
             blob_store_service,
+            oplog_service,
+            recovery_management,
+            scheduler_service,
             extra_deps: mocked_extra_deps,
         }
     }
@@ -305,6 +344,24 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasKeyValueService for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasBlobStoreService for T {
     fn blob_store_service(&self) -> Arc<dyn blob_store::BlobStoreService + Send + Sync> {
         self.all().blob_store_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasOplogService for T {
+    fn oplog_service(&self) -> Arc<dyn oplog::OplogService + Send + Sync> {
+        self.all().oplog_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasRecoveryManagement for T {
+    fn recovery_management(&self) -> Arc<dyn recovery::RecoveryManagement + Send + Sync> {
+        self.all().recovery_management.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasSchedulerService for T {
+    fn scheduler_service(&self) -> Arc<dyn scheduler::SchedulerService + Send + Sync> {
+        self.all().scheduler_service.clone()
     }
 }
 

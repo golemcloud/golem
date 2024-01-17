@@ -77,28 +77,6 @@ impl From<host::WorkerId> for WorkerId {
     }
 }
 
-impl From<host::TemplateId> for TemplateId {
-    fn from(host: host::TemplateId) -> Self {
-        let high_bits = host.uuid.high_bits;
-        let low_bits = host.uuid.low_bits;
-
-        Self(Uuid::from_u64_pair(high_bits, low_bits))
-    }
-}
-
-impl From<TemplateId> for host::TemplateId {
-    fn from(template_id: TemplateId) -> Self {
-        let (high_bits, low_bits) = template_id.0.as_u64_pair();
-
-        host::TemplateId {
-            uuid: host::Uuid {
-                high_bits,
-                low_bits,
-            },
-        }
-    }
-}
-
 impl From<PromiseId> for host::PromiseId {
     fn from(promise_id: PromiseId) -> Self {
         host::PromiseId {

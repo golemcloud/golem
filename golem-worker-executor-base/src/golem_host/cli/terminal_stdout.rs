@@ -1,0 +1,15 @@
+use async_trait::async_trait;
+use wasmtime::component::Resource;
+
+use crate::golem_host::GolemCtx;
+use crate::metrics::wasm::record_host_function_call;
+use wasmtime_wasi::preview2::bindings::wasi::cli::terminal_stdout::{Host, TerminalOutput};
+use crate::workerctx::WorkerCtx;
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for GolemCtx<Ctx> {
+    fn get_terminal_stdout(&mut self) -> anyhow::Result<Option<Resource<TerminalOutput>>> {
+        record_host_function_call("cli::terminal_stdout", "get_terminal_stdout");
+        self.as_wasi_view().get_terminal_stdout()
+    }
+}

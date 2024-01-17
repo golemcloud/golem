@@ -22,7 +22,6 @@ async-trait = { workspace = true }
 cap-std = "2.0.0"
 console-subscriber = { workspace = true }
 figment = { workspace = true }
-flume = "0.11.0"
 humantime-serde = { workspace = true }
 prometheus = { workspace = true }
 serde = { workspace = true }

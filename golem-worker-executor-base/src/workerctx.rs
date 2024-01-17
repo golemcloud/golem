@@ -20,7 +20,10 @@ use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
-use crate::services::{HasAll, HasExtraDeps};
+use crate::services::HasAll;
+use crate::services::oplog::OplogService;
+use crate::services::recovery::RecoveryManagement;
+use crate::services::scheduler::SchedulerService;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -55,6 +58,9 @@ pub trait WorkerCtx:
     /// - `blob_store_service`: The service for storing arbitrary blobs
     /// - `event_service`: The service for publishing worker events
     /// - `active_workers`: The service for managing active workers
+    /// - `oplog_service`: The service for reading and writing the oplog
+    /// - `scheduler_service`: The scheduler implementation responsible for waking up suspended workers
+    /// - `recovery_management`: The service for deciding if a worker should be recovered
     /// - `extra_deps`: Extra dependencies that are required by this specific worker context
     /// - `config`: The shared worker configuration
     /// - `worker_config`: Configuration for this specific worker
@@ -69,6 +75,9 @@ pub trait WorkerCtx:
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         active_workers: Arc<ActiveWorkers<Self>>,
+        oplog_service: Arc<dyn OplogService + Send + Sync>,
+        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
+        recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -279,19 +288,19 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     ) -> Result<(), GolemError>;
 
     /// Records the last known resource limits of a worker without activating it
-    async fn record_last_known_limits<T: HasExtraDeps<Ctx> + Send + Sync>(
+    async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         account_id: &AccountId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), GolemError>;
 
     /// Callback called when a worker is deleted
-    async fn on_worker_deleted<T: HasExtraDeps<Ctx> + Send + Sync>(
+    async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
     ) -> Result<(), GolemError>;
 
-    /// Callback called when the executor's shard assignemtn has been changed
+    /// Callback called when the executor's shard assignment has been changed
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
     ) -> Result<(), anyhow::Error>;

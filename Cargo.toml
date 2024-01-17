@@ -13,6 +13,7 @@ members = [
 exclude = [
     "test-templates/shopping-cart",
     "test-templates/write-stdout",
+    "wasmtime"
 ]
 
 [workspace.dependencies]
@@ -54,3 +55,9 @@ url = "2.3.1"
 uuid = { version = "1.3.3", features = ["serde", "v4"] }
 warp = "0.3.5"
 webpki-roots = { version = "0.25.3" }
+
+[patch.crates-io]
+wasmtime = { path = "wasmtime/crates/wasmtime" }
+wasmtime-runtime = { path = "wasmtime/crates/runtime" }
+wasmtime-wasi = { path = "wasmtime/crates/wasi" }
+wasmtime-wasi-http = { path = "wasmtime/crates/wasi-http" }
