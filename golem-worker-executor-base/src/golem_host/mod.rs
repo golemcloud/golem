@@ -538,7 +538,9 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> Durability<Ctx, Serialize
 
 /// Trait to be implemented by the actual worker context types, allowing the base library to provide a default
 /// implementation of the various WorkerCtx traits.
-trait HasGolemCtx: WorkerCtx + Send + Sync + 'static {
+pub trait HasGolemCtx: WorkerCtx + Send + Sync + 'static {
+    type ExtraDeps: Clone + Send + Sync + 'static;
+
     fn golem_ctx(&self) -> &GolemCtx<Self>;
     fn golem_ctx_mut(&mut self) -> &mut GolemCtx<Self>;
 }
@@ -746,7 +748,7 @@ impl<T: HasGolemCtx> InvocationHooks for T {
 
 #[async_trait]
 impl<Ctx: HasGolemCtx> ExternalOperations<Ctx> for Ctx {
-    type ExtraDeps = Ctx::ExtraDeps;
+    type ExtraDeps = <Ctx as HasGolemCtx>::ExtraDeps;
 
     async fn set_worker_status<T: HasAll<Ctx> + Send + Sync>(
         this: &T,

@@ -13,9 +13,13 @@ use wasmtime_wasi::preview2::{
 pub mod helpers;
 pub mod logging;
 
-pub fn create_linker<T>(engine: &Engine) -> wasmtime::Result<Linker<T>>
+pub fn create_linker<T, U>(
+    engine: &Engine,
+    get: impl Fn(&mut T) -> &mut U + Send + Sync + Copy + 'static,
+) -> wasmtime::Result<Linker<T>>
 where
-    T: Send
+    T: Send,
+    U: Send
         + crate::preview2::wasi::blobstore::blobstore::Host
         + crate::preview2::wasi::blobstore::container::Host
         + crate::preview2::wasi::blobstore::types::Host
@@ -58,50 +62,50 @@ where
 {
     let mut linker = Linker::new(engine);
 
-    wasmtime_wasi::preview2::bindings::cli::environment::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::cli::exit::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::cli::stderr::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::cli::stdin::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::cli::stdout::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::cli::terminal_input::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::cli::terminal_output::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::cli::terminal_stderr::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::cli::terminal_stdin::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::cli::terminal_stdout::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::clocks::monotonic_clock::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::clocks::wall_clock::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::filesystem::preopens::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::filesystem::types::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::io::error::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::io::poll::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::io::streams::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::random::random::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::random::insecure::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::random::insecure_seed::add_to_linker(&mut linker, |x| x)?;
+    wasmtime_wasi::preview2::bindings::cli::environment::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::cli::exit::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::cli::stderr::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::cli::stdin::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::cli::stdout::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::cli::terminal_input::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::cli::terminal_output::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::cli::terminal_stderr::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::cli::terminal_stdin::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::cli::terminal_stdout::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::clocks::monotonic_clock::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::clocks::wall_clock::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::filesystem::preopens::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::filesystem::types::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::io::error::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::io::poll::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::io::streams::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::random::random::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::random::insecure::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::random::insecure_seed::add_to_linker(&mut linker, get)?;
     wasmtime_wasi::preview2::bindings::sockets::instance_network::add_to_linker(
         &mut linker,
-        |x| x,
+        get,
     )?;
-    wasmtime_wasi::preview2::bindings::sockets::network::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi::preview2::bindings::sockets::tcp::add_to_linker(&mut linker, |x| x)?;
+    wasmtime_wasi::preview2::bindings::sockets::network::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi::preview2::bindings::sockets::tcp::add_to_linker(&mut linker, get)?;
     wasmtime_wasi::preview2::bindings::sockets::tcp_create_socket::add_to_linker(
         &mut linker,
-        |x| x,
+        get,
     )?;
 
-    wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker(&mut linker, |x| x)?;
-    wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker(&mut linker, |x| x)?;
+    wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker(&mut linker, get)?;
+    wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker(&mut linker, get)?;
 
-    crate::preview2::wasi::blobstore::blobstore::add_to_linker(&mut linker, |x| x)?;
-    crate::preview2::wasi::blobstore::container::add_to_linker(&mut linker, |x| x)?;
-    crate::preview2::wasi::blobstore::types::add_to_linker(&mut linker, |x| x)?;
-    crate::preview2::wasi::keyvalue::atomic::add_to_linker(&mut linker, |x| x)?;
-    crate::preview2::wasi::keyvalue::batch::add_to_linker(&mut linker, |x| x)?;
-    crate::preview2::wasi::keyvalue::cache::add_to_linker(&mut linker, |x| x)?;
-    crate::preview2::wasi::keyvalue::readwrite::add_to_linker(&mut linker, |x| x)?;
-    crate::preview2::wasi::keyvalue::types::add_to_linker(&mut linker, |x| x)?;
-    crate::preview2::wasi::keyvalue::wasi_cloud_error::add_to_linker(&mut linker, |x| x)?;
-    crate::preview2::wasi::logging::logging::add_to_linker(&mut linker, |x| x)?;
+    crate::preview2::wasi::blobstore::blobstore::add_to_linker(&mut linker, get)?;
+    crate::preview2::wasi::blobstore::container::add_to_linker(&mut linker, get)?;
+    crate::preview2::wasi::blobstore::types::add_to_linker(&mut linker, get)?;
+    crate::preview2::wasi::keyvalue::atomic::add_to_linker(&mut linker, get)?;
+    crate::preview2::wasi::keyvalue::batch::add_to_linker(&mut linker, get)?;
+    crate::preview2::wasi::keyvalue::cache::add_to_linker(&mut linker, get)?;
+    crate::preview2::wasi::keyvalue::readwrite::add_to_linker(&mut linker, get)?;
+    crate::preview2::wasi::keyvalue::types::add_to_linker(&mut linker, get)?;
+    crate::preview2::wasi::keyvalue::wasi_cloud_error::add_to_linker(&mut linker, get)?;
+    crate::preview2::wasi::logging::logging::add_to_linker(&mut linker, get)?;
 
     Ok(linker)
 }

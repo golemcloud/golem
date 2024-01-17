@@ -5,7 +5,7 @@ use cloud_server_oss::{api, grpcapi};
 use poem::listener::TcpListener;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::select;
-use tracing::error;
+use tracing::{debug, error};
 
 fn main() -> Result<(), std::io::Error> {
     let config = CloudServiceConfig::new();
@@ -21,7 +21,7 @@ async fn async_main(config: &CloudServiceConfig) -> Result<(), std::io::Error> {
     let grpc_port = config.grpc_port;
     let http_port = config.http_port;
 
-    dbg!(
+    debug!(
         "Starting cloud server on ports: http: {}, grpc: {}",
         http_port,
         grpc_port
