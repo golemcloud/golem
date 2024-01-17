@@ -9,4 +9,10 @@ target/
 zig-cache/
 dump.rdb
 ./test-templates/*.wat
-
+./test-templates/**/*.wat
+./test-templates/**/*.wasm
+./test-templates/c-1/c_api*
+./test-templates/csharp-1/bin/
+./test-templates/csharp-1/obj/
+./test-templates/python-1/__pycache__/
+./test-templates/tinygo-wasi*/tinygo_wasi/
