@@ -311,8 +311,8 @@ mod tests {
     use std::time::Duration;
 
     use crate::durable_host::io::{ManagedStdIn, ManagedStdOut};
-    use crate::host::managed_stdio::ManagedStandardIo;
     use crate::services::invocation_key::InvocationKeyServiceDefault;
+    use crate::wasi_host::managed_stdio::ManagedStandardIo;
     use bytes::{BufMut, Bytes};
     use golem_common::model::{InvocationKey, TemplateId, WorkerId};
     use uuid::Uuid;
