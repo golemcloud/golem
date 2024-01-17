@@ -12,6 +12,7 @@ use wasmtime_wasi::preview2::{
 
 pub mod helpers;
 pub mod logging;
+pub mod managed_stdio;
 
 pub fn create_linker<T, U>(
     engine: &Engine,

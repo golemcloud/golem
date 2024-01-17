@@ -20,14 +20,14 @@ wasmtime::component::bindgen!({
         "wasi:io/streams/input-stream": InputStream,
         "wasi:io/streams/output-stream": OutputStream,
         "wasi:io/poll/pollable": Pollable,
-        "wasi:blobstore/container/container": super::golem_host::blobstore::types::ContainerEntry,
-        "wasi:blobstore/container/stream-object-names": super::golem_host::blobstore::types::StreamObjectNamesEntry,
-        "wasi:blobstore/types/incoming-value": super::golem_host::blobstore::types::IncomingValueEntry,
-        "wasi:blobstore/types/outgoing-value": super::golem_host::blobstore::types::OutgoingValueEntry,
-        "wasi:keyvalue/wasi-cloud-error/error": super::golem_host::keyvalue::error::ErrorEntry,
-        "wasi:keyvalue/types/bucket": super::golem_host::keyvalue::types::BucketEntry,
-        "wasi:keyvalue/types/incoming-value": super::golem_host::keyvalue::types::IncomingValueEntry,
-        "wasi:keyvalue/types/outgoing-value": super::golem_host::keyvalue::types::OutgoingValueEntry,
+        "wasi:blobstore/container/container": super::durable_host::blobstore::types::ContainerEntry,
+        "wasi:blobstore/container/stream-object-names": super::durable_host::blobstore::types::StreamObjectNamesEntry,
+        "wasi:blobstore/types/incoming-value": super::durable_host::blobstore::types::IncomingValueEntry,
+        "wasi:blobstore/types/outgoing-value": super::durable_host::blobstore::types::OutgoingValueEntry,
+        "wasi:keyvalue/wasi-cloud-error/error": super::durable_host::keyvalue::error::ErrorEntry,
+        "wasi:keyvalue/types/bucket": super::durable_host::keyvalue::types::BucketEntry,
+        "wasi:keyvalue/types/incoming-value": super::durable_host::keyvalue::types::IncomingValueEntry,
+        "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
     }
 });
 

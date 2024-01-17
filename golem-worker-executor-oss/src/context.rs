@@ -4,8 +4,10 @@ use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::{AccountId, VersionedWorkerId};
+use golem_worker_executor_base::durable_host::{
+    DurableWorkerCtx, HasDurableWorkerCtx, PublicDurableWorkerState,
+};
 use golem_worker_executor_base::error::GolemError;
-use golem_worker_executor_base::golem_host::{GolemCtx, GolemPublicState, HasGolemCtx};
 use golem_worker_executor_base::model::{ExecutionStatus, WorkerConfig};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
@@ -22,17 +24,17 @@ use golem_worker_executor_base::workerctx::{FuelManagement, WorkerCtx};
 use wasmtime::ResourceLimiterAsync;
 
 pub struct Context {
-    pub golem_ctx: GolemCtx<Context>,
+    pub golem_ctx: DurableWorkerCtx<Context>,
 }
 
-impl HasGolemCtx for Context {
+impl HasDurableWorkerCtx for Context {
     type ExtraDeps = AdditionalDeps;
 
-    fn golem_ctx(&self) -> &GolemCtx<Self> {
+    fn durable_worker_ctx(&self) -> &DurableWorkerCtx<Self> {
         &self.golem_ctx
     }
 
-    fn golem_ctx_mut(&mut self) -> &mut GolemCtx<Self> {
+    fn durable_worker_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Self> {
         &mut self.golem_ctx
     }
 }
@@ -56,7 +58,7 @@ impl FuelManagement for Context {
 
 #[async_trait]
 impl WorkerCtx for Context {
-    type PublicState = GolemPublicState;
+    type PublicState = PublicDurableWorkerState;
 
     async fn create(
         worker_id: VersionedWorkerId,
@@ -76,7 +78,7 @@ impl WorkerCtx for Context {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
     ) -> Result<Self, GolemError> {
-        let golem_ctx = GolemCtx::create(
+        let golem_ctx = DurableWorkerCtx::create(
             worker_id,
             account_id,
             promise_service,
@@ -110,7 +112,7 @@ impl WorkerCtx for Context {
     }
 
     fn is_exit(error: &Error) -> Option<i32> {
-        GolemCtx::<Context>::is_exit(error)
+        DurableWorkerCtx::<Context>::is_exit(error)
     }
 }
 

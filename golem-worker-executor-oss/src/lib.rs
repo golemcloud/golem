@@ -4,7 +4,7 @@ pub mod services;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use golem_worker_executor_base::golem_host::GolemCtx;
+use golem_worker_executor_base::durable_host::DurableWorkerCtx;
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
@@ -21,7 +21,7 @@ use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::All;
 use golem_worker_executor_base::wasi_host::create_linker;
-use golem_worker_executor_base::{golem_host, Bootstrap};
+use golem_worker_executor_base::{durable_host, Bootstrap};
 use prometheus::Registry;
 use tokio::runtime::Handle;
 use tracing::info;
@@ -97,10 +97,12 @@ impl Bootstrap<Context> for ServerBootstrap {
     }
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
-        let mut linker = create_linker::<Context, GolemCtx<Context>>(engine, |x| &mut x.golem_ctx)?;
-        golem_host::host::add_to_linker::<Context, GolemCtx<Context>>(&mut linker, |x| {
-            &mut x.golem_ctx
-        })?;
+        let mut linker =
+            create_linker::<Context, DurableWorkerCtx<Context>>(engine, |x| &mut x.golem_ctx)?;
+        durable_host::host::add_to_linker::<Context, DurableWorkerCtx<Context>>(
+            &mut linker,
+            |x| &mut x.golem_ctx,
+        )?;
         Ok(linker)
     }
 }

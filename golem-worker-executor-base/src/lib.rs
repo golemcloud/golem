@@ -1,7 +1,6 @@
+pub mod durable_host;
 pub mod error;
-pub mod golem_host;
 pub mod grpc;
-pub mod host;
 pub mod http_server;
 pub mod invocation;
 pub mod metrics;

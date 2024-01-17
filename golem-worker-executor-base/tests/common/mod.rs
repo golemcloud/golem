@@ -26,7 +26,9 @@ use golem_worker_executor_base::services::golem_config::{
     WorkersServiceConfig,
 };
 
-use golem_worker_executor_base::golem_host::{GolemCtx, GolemPublicState, HasGolemCtx};
+use golem_worker_executor_base::durable_host::{
+    DurableWorkerCtx, HasDurableWorkerCtx, PublicDurableWorkerState,
+};
 use golem_worker_executor_base::model::{ExecutionStatus, WorkerConfig};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
@@ -47,7 +49,7 @@ use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::All;
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{FuelManagement, WorkerCtx};
-use golem_worker_executor_base::{golem_host, Bootstrap};
+use golem_worker_executor_base::{durable_host, Bootstrap};
 use serde_json::Value;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -464,17 +466,17 @@ async fn run(
 }
 
 struct TestWorkerCtx {
-    golem_ctx: GolemCtx<TestWorkerCtx>,
+    golem_ctx: DurableWorkerCtx<TestWorkerCtx>,
 }
 
-impl HasGolemCtx for TestWorkerCtx {
+impl HasDurableWorkerCtx for TestWorkerCtx {
     type ExtraDeps = ();
 
-    fn golem_ctx(&self) -> &GolemCtx<Self> {
+    fn durable_worker_ctx(&self) -> &DurableWorkerCtx<Self> {
         &self.golem_ctx
     }
 
-    fn golem_ctx_mut(&mut self) -> &mut GolemCtx<Self> {
+    fn durable_worker_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Self> {
         &mut self.golem_ctx
     }
 }
@@ -500,7 +502,7 @@ struct ServerBootstrap {}
 
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
-    type PublicState = GolemPublicState;
+    type PublicState = PublicDurableWorkerState;
 
     async fn create(
         worker_id: VersionedWorkerId,
@@ -520,7 +522,7 @@ impl WorkerCtx for TestWorkerCtx {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
     ) -> Result<Self, GolemError> {
-        let golem_ctx = GolemCtx::create(
+        let golem_ctx = DurableWorkerCtx::create(
             worker_id,
             account_id,
             promise_service,
@@ -554,7 +556,7 @@ impl WorkerCtx for TestWorkerCtx {
     }
 
     fn is_exit(error: &Error) -> Option<i32> {
-        GolemCtx::<TestWorkerCtx>::is_exit(error)
+        DurableWorkerCtx::<TestWorkerCtx>::is_exit(error)
     }
 }
 
@@ -650,8 +652,10 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<TestWorkerCtx>> {
         let mut linker =
-            create_linker::<TestWorkerCtx, GolemCtx<TestWorkerCtx>>(engine, |x| &mut x.golem_ctx)?;
-        golem_host::host::add_to_linker::<TestWorkerCtx, GolemCtx<TestWorkerCtx>>(
+            create_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(engine, |x| {
+                &mut x.golem_ctx
+            })?;
+        durable_host::host::add_to_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(
             &mut linker,
             |x| &mut x.golem_ctx,
         )?;
