@@ -31,13 +31,9 @@ where
 {
     GrpcWorkerError {
         error: Some(worker_error::Error::InternalError(WorkerExecutionError {
-            error: Some(
-                worker_execution_error::Error::Unknown(
-                    UnknownError {
-                        details: error.into(),
-                    },
-                ),
-            ),
+            error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                details: error.into(),
+            })),
         })),
     }
 }
