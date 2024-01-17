@@ -22,7 +22,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          submodules: true
+          submodules: recursive
           fetch-depth: '0'
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
@@ -120,7 +120,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          submodules: true
+          submodules: recursive
       - uses: actions/cache@v3
         with:
           path: |
@@ -156,7 +156,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          submodules: true
+          submodules: recursive
       - uses: actions/cache@v3
         with:
           path: |
