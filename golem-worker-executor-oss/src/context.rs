@@ -1,30 +1,25 @@
 use std::sync::{Arc, RwLock};
 
+use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::{
-    AccountId, VersionedWorkerId,
-};
+use golem_common::model::{AccountId, VersionedWorkerId};
 use golem_worker_executor_base::error::GolemError;
-use golem_worker_executor_base::model::{ExecutionStatus, WorkerConfig,
-};
+use golem_worker_executor_base::golem_host::{GolemCtx, GolemPublicState, HasGolemCtx};
+use golem_worker_executor_base::model::{ExecutionStatus, WorkerConfig};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::invocation_key::InvocationKeyService;
 use golem_worker_executor_base::services::key_value::KeyValueService;
-use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::worker::WorkerService;
-use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::workerctx::{
-    FuelManagement, WorkerCtx,
-};
-use wasmtime::ResourceLimiterAsync;
-use golem_worker_executor_base::golem_host::{GolemCtx, GolemPublicState, HasGolemCtx};
 use golem_worker_executor_base::services::oplog::OplogService;
+use golem_worker_executor_base::services::promise::PromiseService;
 use golem_worker_executor_base::services::recovery::RecoveryManagement;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
-use crate::services::AdditionalDeps;
+use golem_worker_executor_base::services::worker::WorkerService;
+use golem_worker_executor_base::services::worker_event::WorkerEventService;
+use golem_worker_executor_base::workerctx::{FuelManagement, WorkerCtx};
+use wasmtime::ResourceLimiterAsync;
 
 pub struct Context {
     pub golem_ctx: GolemCtx<Context>,
@@ -98,7 +93,7 @@ impl WorkerCtx for Context {
             worker_config,
             execution_status,
         )
-            .await?;
+        .await?;
         Ok(Self { golem_ctx })
     }
 

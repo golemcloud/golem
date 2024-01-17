@@ -212,7 +212,6 @@ pub struct OplogConfig {
     pub debug_enabled: bool,
 }
 
-
 impl Default for GolemConfig {
     fn default() -> Self {
         Self {
@@ -355,7 +354,6 @@ impl Default for OplogConfig {
         }
     }
 }
-
 
 impl Default for SuspendConfig {
     fn default() -> Self {

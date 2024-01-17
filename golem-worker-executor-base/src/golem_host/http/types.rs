@@ -16,6 +16,7 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::golem_host::http::serialized::{
     SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
 };
+use crate::workerctx::WorkerCtx;
 use golem_common::model::{OplogEntry, WrappedFunctionType};
 use wasmtime_wasi_http::bindings::wasi::http::types::{
     Duration, ErrorCode, FieldKey, FieldValue, Fields, FutureIncomingResponse, FutureTrailers,
@@ -28,7 +29,6 @@ use wasmtime_wasi_http::bindings::wasi::http::types::{
 };
 use wasmtime_wasi_http::types::FieldMap;
 use wasmtime_wasi_http::types_impl::get_fields;
-use crate::workerctx::WorkerCtx;
 
 impl<Ctx: WorkerCtx> HostFields for GolemCtx<Ctx> {
     fn new(&mut self) -> anyhow::Result<Resource<Fields>> {

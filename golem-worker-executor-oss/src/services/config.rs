@@ -1,4 +1,3 @@
-
 #[cfg(test)]
 mod tests {
     use golem_worker_executor_base::services::golem_config::{

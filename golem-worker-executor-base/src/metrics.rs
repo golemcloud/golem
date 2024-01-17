@@ -329,7 +329,6 @@ pub mod wasm {
         .unwrap();
     }
 
-
     lazy_static! {
         static ref HOST_FUNCTION_CALL_TOTAL: CounterVec = register_counter_vec!(
             "host_function_call_total",
@@ -407,4 +406,3 @@ pub mod oplog {
         OPLOG_SVC_CALL_TOTAL.with_label_values(&[api_name]).inc();
     }
 }
-

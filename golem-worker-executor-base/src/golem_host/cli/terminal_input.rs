@@ -3,10 +3,10 @@ use wasmtime::component::Resource;
 
 use crate::golem_host::GolemCtx;
 use crate::metrics::wasm::record_host_function_call;
+use crate::workerctx::WorkerCtx;
 use wasmtime_wasi::preview2::bindings::wasi::cli::terminal_input::{
     Host, HostTerminalInput, TerminalInput,
 };
-use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostTerminalInput for GolemCtx<Ctx> {

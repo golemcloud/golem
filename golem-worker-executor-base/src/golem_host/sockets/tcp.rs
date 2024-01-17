@@ -3,12 +3,12 @@ use wasmtime::component::Resource;
 
 use crate::golem_host::GolemCtx;
 use crate::metrics::wasm::record_host_function_call;
+use crate::workerctx::WorkerCtx;
 use wasmtime_wasi::preview2::bindings::wasi::sockets::tcp::{
     Duration, Host, HostTcpSocket, InputStream, IpAddressFamily, IpSocketAddress, Network,
     OutputStream, Pollable, ShutdownType, TcpSocket,
 };
 use wasmtime_wasi::preview2::SocketError;
-use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostTcpSocket for GolemCtx<Ctx> {

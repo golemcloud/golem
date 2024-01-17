@@ -34,15 +34,15 @@ use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::invocation_key::{InvocationKeyService, InvocationKeyServiceDefault};
 use crate::services::key_value::KeyValueService;
+use crate::services::oplog::{OplogService, OplogServiceDefault};
 use crate::services::promise::PromiseService;
+use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
 use crate::services::shard_manager::ShardManagerService;
 use crate::services::template::TemplateService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_activator::{LazyWorkerActivator, WorkerActivator};
 use crate::services::{blob_store, key_value, promise, shard_manager, template, All};
-use crate::services::oplog::{OplogService, OplogServiceDefault};
-use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::workerctx::WorkerCtx;
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
@@ -73,7 +73,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
-        scheduler_service : Arc<dyn SchedulerService + Send + Sync>,
+        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration

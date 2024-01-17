@@ -3,11 +3,11 @@ use wasmtime::component::Resource;
 
 use crate::golem_host::{Durability, GolemCtx, SerializableError};
 use crate::metrics::wasm::record_host_function_call;
+use crate::workerctx::WorkerCtx;
 use golem_common::model::WrappedFunctionType;
 use wasmtime_wasi::preview2::bindings::wasi::clocks::monotonic_clock::{
     Duration, Host, Instant, Pollable,
 };
-use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for GolemCtx<Ctx> {

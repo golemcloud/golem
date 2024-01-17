@@ -16,13 +16,15 @@ use derive_more::FromStr;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON, Type};
 use poem_openapi::{Enum, Object};
-use serde::{Deserialize, Serialize, Serializer};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::newtype_uuid;
-use crate::serialization::{deserialize_with_version, SERIALIZATION_VERSION_V1, serialize, try_deserialize};
+use crate::serialization::{
+    deserialize_with_version, serialize, try_deserialize, SERIALIZATION_VERSION_V1,
+};
 
 newtype_uuid!(GrantId);
 newtype_uuid!(PlanId);
@@ -49,8 +51,8 @@ impl Display for Timestamp {
 
 impl serde::Serialize for Timestamp {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
+    where
+        S: Serializer,
     {
         self.0.serialize(serializer)
     }
@@ -58,8 +60,8 @@ impl serde::Serialize for Timestamp {
 
 impl<'de> serde::Deserialize<'de> for Timestamp {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
+    where
+        D: serde::Deserializer<'de>,
     {
         if deserializer.is_human_readable() {
             iso8601_timestamp::Timestamp::deserialize(deserializer).map(Self)
@@ -278,19 +280,19 @@ impl Display for ScheduleId {
 }
 
 #[derive(
-Clone,
-Copy,
-Debug,
-Eq,
-PartialEq,
-PartialOrd,
-Ord,
-Hash,
-Serialize,
-Deserialize,
-Encode,
-Decode,
-Object,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    Object,
 )]
 pub struct ShardId {
     value: i64,
@@ -580,18 +582,18 @@ impl From<WorkerStatus> for i32 {
 }
 
 #[derive(
-Clone,
-Debug,
-PartialOrd,
-Ord,
-FromStr,
-Eq,
-Hash,
-PartialEq,
-Serialize,
-Deserialize,
-Encode,
-Decode,
+    Clone,
+    Debug,
+    PartialOrd,
+    Ord,
+    FromStr,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
 )]
 #[serde(transparent)]
 pub struct AccountId {
@@ -645,7 +647,7 @@ impl Type for AccountId {
 
     fn raw_element_iter<'a>(
         &'a self,
-    ) -> Box<dyn Iterator<Item=&'a Self::RawElementValueType> + 'a> {
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
         Box::new(self.as_raw_value().into_iter())
     }
 }
@@ -803,9 +805,7 @@ impl OplogEntry {
         }
     }
 
-    pub fn payload_as_val_array(
-        &self,
-    ) -> Result<Option<Vec<crate::proto::golem::Val>>, String> {
+    pub fn payload_as_val_array(&self) -> Result<Option<Vec<crate::proto::golem::Val>>, String> {
         // This is a special case of a possible generic request() accessor, because in v1 the only
         // data type we serialized was Vec<Val> and it was done in a special way (every element serialized
         // via protobuf separately, then an array of byte arrays serialized into JSON)
@@ -864,12 +864,12 @@ pub enum WrappedFunctionType {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::AccountId;
+    use crate::model::{CallingConvention, InvocationKey, Timestamp};
+    use crate::model::{OplogEntry, WrappedFunctionType};
+    use crate::proto::golem::{val, Val, ValResult};
     use bincode::{Decode, Encode};
     use serde::{Deserialize, Serialize};
-    use crate::model::{CallingConvention, InvocationKey, Timestamp};
-    use crate::proto::golem::{val, Val, ValResult};
-    use crate::model::{OplogEntry, WrappedFunctionType};
-    use crate::model::AccountId;
 
     #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
     struct ExampleWithAccountId {
@@ -900,7 +900,6 @@ mod tests {
         assert_eq!(json, "{\"account_id\":\"account-1\"}");
     }
 
-
     #[test]
     fn oplog_entry_imported_function_invoked_payload_roundtrip() {
         let timestamp = Timestamp::now_utc();
@@ -910,7 +909,7 @@ mod tests {
             &("example payload".to_string()),
             WrappedFunctionType::ReadLocal,
         )
-            .unwrap();
+        .unwrap();
 
         if let OplogEntry::ImportedFunctionInvoked { response, .. } = &entry {
             assert_eq!(response.len(), 17);
@@ -959,7 +958,7 @@ mod tests {
             }),
             Some(CallingConvention::Stdio),
         )
-            .unwrap();
+        .unwrap();
 
         if let OplogEntry::ExportedFunctionInvoked { request, .. } = &entry {
             assert_eq!(request.len(), 9);
@@ -1022,7 +1021,7 @@ mod tests {
             &vec![val1.clone(), val2.clone()],
             1_000_000_000,
         )
-            .unwrap();
+        .unwrap();
 
         if let OplogEntry::ExportedFunctionCompleted { response, .. } = &entry {
             assert_eq!(response.len(), 21);

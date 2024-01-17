@@ -3,13 +3,13 @@ use wasmtime::component::Resource;
 
 use crate::golem_host::GolemCtx;
 use crate::metrics::wasm::record_host_function_call;
+use crate::workerctx::WorkerCtx;
 use wasmtime_wasi::preview2::bindings::wasi::sockets::udp::{
     Host, HostIncomingDatagramStream, HostOutgoingDatagramStream, HostUdpSocket, IncomingDatagram,
     IncomingDatagramStream, IpAddressFamily, IpSocketAddress, Network, OutgoingDatagram,
     OutgoingDatagramStream, Pollable, UdpSocket,
 };
 use wasmtime_wasi::preview2::SocketError;
-use crate::workerctx::WorkerCtx;
 
 impl<Ctx: WorkerCtx> HostUdpSocket for GolemCtx<Ctx> {
     fn start_bind(

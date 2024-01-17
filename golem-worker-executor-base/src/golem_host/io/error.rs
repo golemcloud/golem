@@ -1,9 +1,9 @@
 use crate::golem_host::GolemCtx;
 use crate::metrics::wasm::record_host_function_call;
+use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::bindings::wasi::io::error::{Error, Host, HostError};
-use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostError for GolemCtx<Ctx> {

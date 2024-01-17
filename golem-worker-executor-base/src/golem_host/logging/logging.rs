@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use crate::services::worker_event::LogLevel;
+use async_trait::async_trait;
 
 use crate::golem_host::GolemCtx;
 use crate::metrics::wasm::record_host_function_call;

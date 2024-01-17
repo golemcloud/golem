@@ -7,13 +7,13 @@ use crate::preview2::wasi::keyvalue::types::{
     Error, Host, HostBucket, HostIncomingValue, HostOutgoingValue, IncomingValue,
     IncomingValueAsyncBody, IncomingValueSyncBody, OutgoingValueBodyAsync, OutgoingValueBodySync,
 };
+use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bytes::Bytes;
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::{
     HostInputStream, HostOutputStream, InputStream, StreamResult, Subscribe, WasiView,
 };
-use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostBucket for GolemCtx<Ctx> {

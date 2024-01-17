@@ -10,23 +10,10 @@ use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use anyhow::anyhow;
-use async_trait::async_trait;
-use bincode::{Decode, Encode};
-use bytes::Bytes;
-use cap_std::ambient_authority;
-use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
-    WorkerMetadata, WorkerStatus,
-};
-use golem_common::proto::golem::Val;
-use golem_common::model::{OplogEntry, WrappedFunctionType};
 use crate::error::{is_interrupt, is_suspend, GolemError};
 use crate::host::managed_stdio::ManagedStandardIo;
 use crate::invocation::invoke_worker;
-use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig,
-};
+use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
@@ -37,9 +24,20 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::HasAll;
 use crate::workerctx::{
-    ExternalOperations, InvocationHooks, InvocationManagement, IoCapturing,
-    PublicWorkerIo, StatusManagement, WorkerCtx,
+    ExternalOperations, InvocationHooks, InvocationManagement, IoCapturing, PublicWorkerIo,
+    StatusManagement, WorkerCtx,
 };
+use anyhow::anyhow;
+use async_trait::async_trait;
+use bincode::{Decode, Encode};
+use bytes::Bytes;
+use cap_std::ambient_authority;
+use golem_common::model::{
+    AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
+    WorkerMetadata, WorkerStatus,
+};
+use golem_common::model::{OplogEntry, WrappedFunctionType};
+use golem_common::proto::golem::Val;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -57,9 +55,7 @@ use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_wo
 use crate::services::oplog::OplogService;
 use crate::services::recovery::{RecoveryDecision, RecoveryManagement};
 use crate::services::scheduler::SchedulerService;
-use crate::services::{
-    HasOplogService,
-};
+use crate::services::HasOplogService;
 use crate::wasi_host;
 
 pub mod blobstore;
@@ -107,8 +103,8 @@ impl<Ctx: WorkerCtx> GolemCtx<Ctx> {
     }
 
     async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
-        where
-            R: Decode + DeserializeOwned,
+    where
+        R: Decode + DeserializeOwned,
     {
         self.private_state
             .get_oplog_entry_imported_function_invoked()
@@ -173,9 +169,7 @@ impl<Ctx: WorkerCtx> GolemCtx<Ctx> {
         let root_dir = cap_std::fs::Dir::open_ambient_dir(temp_dir.path(), ambient_authority())
             .map_err(|e| GolemError::runtime(format!("Failed to open temporary directory: {e}")))?;
 
-        let oplog_size = oplog_service
-            .get_size(&worker_id.worker_id)
-            .await;
+        let oplog_size = oplog_service.get_size(&worker_id.worker_id).await;
 
         let stdio =
             ManagedStandardIo::new(worker_id.worker_id.clone(), invocation_key_service.clone());
@@ -227,7 +221,7 @@ impl<Ctx: WorkerCtx> GolemCtx<Ctx> {
                 }
             },
         )
-            .map_err(|e| GolemError::runtime(format!("Could not create WASI context: {e}")))
+        .map_err(|e| GolemError::runtime(format!("Could not create WASI context: {e}")))
     }
 
     pub fn get_public_state(&self) -> &GolemPublicState {
@@ -375,15 +369,15 @@ pub(crate) trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
         function_name: &str,
         function: AsyncFn,
     ) -> Result<Success, Err>
-        where
-            Success: Clone,
-            AsyncFn: for<'b> FnOnce(
-                &'b mut GolemCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output=Result<Success, Err>> + 'b + Send>>,
-            SerializedSuccess:
+    where
+        Success: Clone,
+        AsyncFn: for<'b> FnOnce(
+            &'b mut GolemCtx<Ctx>,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
+        SerializedSuccess:
             Encode + Decode + DeserializeOwned + From<Success> + Into<Success> + Debug,
-            SerializedErr: Encode
+        SerializedErr: Encode
             + Decode
             + DeserializeOwned
             + for<'b> From<&'b Err>
@@ -402,15 +396,15 @@ pub(crate) trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
         get_serializable: GetFn,
         put_serializable: PutFn,
     ) -> Result<Success, Err>
-        where
-            AsyncFn: for<'b> FnOnce(
-                &'b mut GolemCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output=Result<Success, Err>> + 'b + Send>>,
-            GetFn: FnOnce(&mut GolemCtx<Ctx>, &Success) -> Result<SerializedSuccess, Err>,
-            PutFn: FnOnce(&mut GolemCtx<Ctx>, SerializedSuccess) -> Result<Success, Err>,
-            SerializedSuccess: Encode + Decode + DeserializeOwned + Debug,
-            SerializedErr: Encode
+    where
+        AsyncFn: for<'b> FnOnce(
+            &'b mut GolemCtx<Ctx>,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
+        GetFn: FnOnce(&mut GolemCtx<Ctx>, &Success) -> Result<SerializedSuccess, Err>,
+        PutFn: FnOnce(&mut GolemCtx<Ctx>, SerializedSuccess) -> Result<Success, Err>,
+        SerializedSuccess: Encode + Decode + DeserializeOwned + Debug,
+        SerializedErr: Encode
             + Decode
             + DeserializeOwned
             + for<'b> From<&'b Err>
@@ -419,22 +413,24 @@ pub(crate) trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
             + Debug;
 }
 
-impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> Durability<Ctx, SerializedSuccess, SerializedErr> for GolemCtx<Ctx> {
+impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
+    Durability<Ctx, SerializedSuccess, SerializedErr> for GolemCtx<Ctx>
+{
     async fn wrap<Success, Err, AsyncFn>(
         &mut self,
         wrapped_function_type: WrappedFunctionType,
         function_name: &str,
         function: AsyncFn,
     ) -> Result<Success, Err>
-        where
-            Success: Clone,
-            AsyncFn: for<'b> FnOnce(
-                &'b mut GolemCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output=Result<Success, Err>> + 'b + Send>>,
-            SerializedSuccess:
+    where
+        Success: Clone,
+        AsyncFn: for<'b> FnOnce(
+            &'b mut GolemCtx<Ctx>,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
+        SerializedSuccess:
             Encode + Decode + DeserializeOwned + From<Success> + Into<Success> + Debug,
-            SerializedErr: Encode
+        SerializedErr: Encode
             + Decode
             + DeserializeOwned
             + for<'b> From<&'b Err>
@@ -455,12 +451,12 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> Durability<Ctx, Serialize
                 &serializable_result,
                 wrapped_function_type.clone(),
             )
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to serialize function response: {:?}: {err}",
-                        serializable_result
-                    )
-                });
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to serialize function response: {:?}: {err}",
+                    serializable_result
+                )
+            });
             self.set_oplog_entry(oplog_entry).await;
             if matches!(wrapped_function_type, WrappedFunctionType::WriteRemote) {
                 self.commit_oplog().await;
@@ -484,15 +480,15 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> Durability<Ctx, Serialize
         get_serializable: GetFn,
         put_serializable: PutFn,
     ) -> Result<Success, Err>
-        where
-            AsyncFn: for<'b> FnOnce(
-                &'b mut GolemCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output=Result<Success, Err>> + 'b + Send>>,
-            GetFn: FnOnce(&mut GolemCtx<Ctx>, &Success) -> Result<SerializedSuccess, Err>,
-            PutFn: FnOnce(&mut GolemCtx<Ctx>, SerializedSuccess) -> Result<Success, Err>,
-            SerializedSuccess: Encode + Decode + DeserializeOwned + Debug,
-            SerializedErr: Encode
+    where
+        AsyncFn: for<'b> FnOnce(
+            &'b mut GolemCtx<Ctx>,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
+        GetFn: FnOnce(&mut GolemCtx<Ctx>, &Success) -> Result<SerializedSuccess, Err>,
+        PutFn: FnOnce(&mut GolemCtx<Ctx>, SerializedSuccess) -> Result<Success, Err>,
+        SerializedSuccess: Encode + Decode + DeserializeOwned + Debug,
+        SerializedErr: Encode
             + Decode
             + DeserializeOwned
             + for<'b> From<&'b Err>
@@ -514,12 +510,12 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> Durability<Ctx, Serialize
                 &serializable_result,
                 wrapped_function_type.clone(),
             )
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to serialize function response: {:?}: {err}",
-                        serializable_result
-                    )
-                });
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to serialize function response: {:?}: {err}",
+                    serializable_result
+                )
+            });
             self.set_oplog_entry(oplog_entry).await;
             if matches!(wrapped_function_type, WrappedFunctionType::WriteRemote) {
                 self.commit_oplog().await;
@@ -545,11 +541,11 @@ pub trait HasGolemCtx: WorkerCtx + Send + Sync + 'static {
     fn golem_ctx_mut(&mut self) -> &mut GolemCtx<Self>;
 }
 
-
 #[async_trait]
 impl<T: HasGolemCtx> InvocationManagement for T {
     async fn set_current_invocation_key(&mut self, invocation_key: Option<InvocationKey>) {
-        self.golem_ctx_mut().private_state
+        self.golem_ctx_mut()
+            .private_state
             .set_current_invocation_key(invocation_key)
     }
 
@@ -558,11 +554,17 @@ impl<T: HasGolemCtx> InvocationManagement for T {
     }
 
     async fn interrupt_invocation_key(&mut self, key: &InvocationKey) {
-        self.golem_ctx_mut().private_state.interrupt_invocation_key(key).await
+        self.golem_ctx_mut()
+            .private_state
+            .interrupt_invocation_key(key)
+            .await
     }
 
     async fn resume_invocation_key(&mut self, key: &InvocationKey) {
-        self.golem_ctx_mut().private_state.resume_invocation_key(key).await
+        self.golem_ctx_mut()
+            .private_state
+            .resume_invocation_key(key)
+            .await
     }
 
     async fn confirm_invocation_key(
@@ -570,21 +572,26 @@ impl<T: HasGolemCtx> InvocationManagement for T {
         key: &InvocationKey,
         vals: Result<Vec<Val>, GolemError>,
     ) {
-        self.golem_ctx_mut().private_state.confirm_invocation_key(key, vals).await
+        self.golem_ctx_mut()
+            .private_state
+            .confirm_invocation_key(key, vals)
+            .await
     }
 }
 
 #[async_trait]
 impl<T: HasGolemCtx> IoCapturing for T {
     async fn start_capturing_stdout(&mut self, provided_stdin: String) {
-        self.golem_ctx_mut().public_state
+        self.golem_ctx_mut()
+            .public_state
             .managed_stdio
             .start_single_stdio_call(provided_stdin)
             .await
     }
 
     async fn finish_capturing_stdout(&mut self) -> Result<String, FromUtf8Error> {
-        self.golem_ctx_mut().public_state
+        self.golem_ctx_mut()
+            .public_state
             .managed_stdio
             .finish_single_stdio_call()
             .await
@@ -615,7 +622,8 @@ impl<T: HasGolemCtx> StatusManagement for T {
 
     async fn deactivate(&self) {
         debug!("deactivating worker {}", self.golem_ctx().worker_id);
-        self.golem_ctx().private_state
+        self.golem_ctx()
+            .private_state
             .active_workers
             .remove(&self.golem_ctx().worker_id.worker_id);
     }
@@ -636,12 +644,12 @@ impl<T: HasGolemCtx> InvocationHooks for T {
             self.get_current_invocation_key().await,
             calling_convention.cloned(),
         )
-            .unwrap_or_else(|err| {
-                panic!(
-                    "could not encode function input for {full_function_name} on {}: {err}",
-                    self.worker_id()
-                )
-            });
+        .unwrap_or_else(|err| {
+            panic!(
+                "could not encode function input for {full_function_name} on {}: {err}",
+                self.worker_id()
+            )
+        });
 
         self.golem_ctx_mut().set_oplog_entry(oplog_entry).await;
         self.golem_ctx_mut().commit_oplog().await;
@@ -656,9 +664,10 @@ impl<T: HasGolemCtx> InvocationHooks for T {
         let is_suspend = is_suspend(error);
 
         if is_live_after && !is_interrupt && !is_suspend {
-            self.golem_ctx_mut().set_oplog_entry(OplogEntry::Error {
-                timestamp: Timestamp::now_utc(),
-            })
+            self.golem_ctx_mut()
+                .set_oplog_entry(OplogEntry::Error {
+                    timestamp: Timestamp::now_utc(),
+                })
                 .await;
 
             self.golem_ctx_mut().commit_oplog().await;
@@ -682,7 +691,11 @@ impl<T: HasGolemCtx> InvocationHooks for T {
         let oplog_idx = self.golem_ctx_mut().private_state.get_oplog_size().await;
         debug!(
             "Recovery decision for {}#{} because of error {} after {} tries: {:?}",
-            self.golem_ctx().worker_id, oplog_idx, error, previous_tries, decision
+            self.golem_ctx().worker_id,
+            oplog_idx,
+            error,
+            previous_tries,
+            decision
         );
 
         let is_interrupt = is_interrupt(error);
@@ -718,18 +731,22 @@ impl<T: HasGolemCtx> InvocationHooks for T {
                 &output,
                 consumed_fuel,
             )
-                .unwrap_or_else(|err| {
-                    panic!("could not encode function result for {full_function_name}: {err}")
-                });
+            .unwrap_or_else(|err| {
+                panic!("could not encode function result for {full_function_name}: {err}")
+            });
 
             self.golem_ctx_mut().set_oplog_entry(oplog_entry).await;
-            self.golem_ctx_mut().set_oplog_entry(OplogEntry::Suspend {
-                timestamp: Timestamp::now_utc(),
-            })
+            self.golem_ctx_mut()
+                .set_oplog_entry(OplogEntry::Suspend {
+                    timestamp: Timestamp::now_utc(),
+                })
                 .await;
             self.golem_ctx_mut().commit_oplog().await;
         } else {
-            let response = self.golem_ctx_mut().get_oplog_entry_exported_function_completed().await?;
+            let response = self
+                .golem_ctx_mut()
+                .get_oplog_entry_exported_function_completed()
+                .await?;
 
             if let Some(function_output) = response {
                 let is_diverged = function_output != output;
@@ -793,7 +810,7 @@ impl<Ctx: HasGolemCtx> ExternalOperations<Ctx> for Ctx {
     async fn prepare_instance(
         worker_id: &VersionedWorkerId,
         instance: &Instance,
-        store: &mut (impl AsContextMut<Data=Self> + Send),
+        store: &mut (impl AsContextMut<Data = Self> + Send),
     ) -> Result<(), GolemError> {
         debug!("Starting prepare_instance for {}", worker_id);
         let start = Instant::now();
@@ -826,7 +843,7 @@ impl<Ctx: HasGolemCtx> ExternalOperations<Ctx> for Ctx {
                             &calling_convention.unwrap_or(CallingConvention::Component),
                             false, // we know it was not live before, because cont=true
                         )
-                            .await;
+                        .await;
 
                         if !finished {
                             break Err(GolemError::failed_to_resume_instance(
@@ -986,8 +1003,8 @@ impl<Ctx: WorkerCtx> GolemPrivateState<Ctx> {
     }
 
     async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
-        where
-            R: Decode + DeserializeOwned,
+    where
+        R: Decode + DeserializeOwned,
     {
         loop {
             let oplog_entry = self.get_oplog_entry().await;
@@ -1233,8 +1250,8 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for GolemCtxWasiHttpView<'a, Ctx> {
         &mut self,
         request: OutgoingRequest,
     ) -> anyhow::Result<Resource<HostFutureIncomingResponse>>
-        where
-            Self: Sized,
+    where
+        Self: Sized,
     {
         if self.0.is_replay() {
             // If this is a replay, we must not actually send the request, but we have to store it in the
@@ -1258,7 +1275,7 @@ struct SerializableDateTime {
 }
 
 impl From<wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime>
-for SerializableDateTime
+    for SerializableDateTime
 {
     fn from(value: wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime) -> Self {
         Self {
@@ -1269,7 +1286,7 @@ for SerializableDateTime
 }
 
 impl From<SerializableDateTime>
-for wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime
+    for wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime
 {
     fn from(value: SerializableDateTime) -> Self {
         Self {

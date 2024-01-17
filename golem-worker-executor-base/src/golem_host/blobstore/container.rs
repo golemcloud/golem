@@ -1,7 +1,7 @@
 use async_trait::async_trait;
+use golem_common::model::WrappedFunctionType;
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::WasiView;
-use golem_common::model::WrappedFunctionType;
 
 use crate::golem_host::blobstore::types::{
     ContainerEntry, IncomingValueEntry, OutgoingValueEntry, StreamObjectNamesEntry,

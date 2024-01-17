@@ -1,6 +1,6 @@
+use crate::model::InterruptKind;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
-use crate::model::InterruptKind;
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::bindings::wasi::io::poll::{Host, HostPollable, Pollable};
 

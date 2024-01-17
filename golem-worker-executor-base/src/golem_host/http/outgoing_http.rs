@@ -4,10 +4,10 @@ use wasmtime_wasi_http::bindings::http::types::ErrorCode;
 
 use crate::golem_host::GolemCtx;
 use crate::metrics::wasm::record_host_function_call;
+use crate::workerctx::WorkerCtx;
 use wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::{
     FutureIncomingResponse, Host, OutgoingRequest, RequestOptions,
 };
-use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for GolemCtx<Ctx> {

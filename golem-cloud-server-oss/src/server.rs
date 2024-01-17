@@ -23,8 +23,7 @@ async fn async_main(config: &CloudServiceConfig) -> Result<(), std::io::Error> {
 
     debug!(
         "Starting cloud server on ports: http: {}, grpc: {}",
-        http_port,
-        grpc_port
+        http_port, grpc_port
     );
 
     db::sqlite_migrate(&config.db).await.map_err(|e| {

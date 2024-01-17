@@ -82,16 +82,10 @@ where
     wasmtime_wasi::preview2::bindings::random::random::add_to_linker(&mut linker, get)?;
     wasmtime_wasi::preview2::bindings::random::insecure::add_to_linker(&mut linker, get)?;
     wasmtime_wasi::preview2::bindings::random::insecure_seed::add_to_linker(&mut linker, get)?;
-    wasmtime_wasi::preview2::bindings::sockets::instance_network::add_to_linker(
-        &mut linker,
-        get,
-    )?;
+    wasmtime_wasi::preview2::bindings::sockets::instance_network::add_to_linker(&mut linker, get)?;
     wasmtime_wasi::preview2::bindings::sockets::network::add_to_linker(&mut linker, get)?;
     wasmtime_wasi::preview2::bindings::sockets::tcp::add_to_linker(&mut linker, get)?;
-    wasmtime_wasi::preview2::bindings::sockets::tcp_create_socket::add_to_linker(
-        &mut linker,
-        get,
-    )?;
+    wasmtime_wasi::preview2::bindings::sockets::tcp_create_socket::add_to_linker(&mut linker, get)?;
 
     wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker(&mut linker, get)?;
     wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker(&mut linker, get)?;

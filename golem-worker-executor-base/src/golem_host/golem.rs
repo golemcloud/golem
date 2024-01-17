@@ -13,11 +13,11 @@ wasmtime::component::bindgen!({
     async: true,
 });
 
+use crate::metrics::wasm::record_host_function_call;
+use crate::model::InterruptKind;
+use crate::workerctx::WorkerCtx;
 pub use golem::api::host;
 use golem_common::model::{PromiseId, TemplateId, WorkerId};
-use crate::model::InterruptKind;
-use crate::metrics::wasm::record_host_function_call;
-use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> host::Host for GolemCtx<Ctx> {

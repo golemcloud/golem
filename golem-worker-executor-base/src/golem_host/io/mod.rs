@@ -1,7 +1,7 @@
+use crate::host::managed_stdio::{ManagedStandardIo, ManagedStreamStatus};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
-use crate::host::managed_stdio::{ManagedStandardIo, ManagedStreamStatus};
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -311,10 +311,10 @@ mod tests {
     use std::time::Duration;
 
     use crate::golem_host::io::{ManagedStdIn, ManagedStdOut};
-    use bytes::{BufMut, Bytes};
-    use golem_common::model::{InvocationKey, TemplateId, WorkerId};
     use crate::host::managed_stdio::ManagedStandardIo;
     use crate::services::invocation_key::InvocationKeyServiceDefault;
+    use bytes::{BufMut, Bytes};
+    use golem_common::model::{InvocationKey, TemplateId, WorkerId};
     use uuid::Uuid;
     use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, StreamError, Subscribe};
 

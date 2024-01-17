@@ -17,13 +17,13 @@ use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::invocation_key::InvocationKeyService;
 use crate::services::key_value::KeyValueService;
+use crate::services::oplog::OplogService;
 use crate::services::promise::PromiseService;
+use crate::services::recovery::RecoveryManagement;
+use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::HasAll;
-use crate::services::oplog::OplogService;
-use crate::services::recovery::RecoveryManagement;
-use crate::services::scheduler::SchedulerService;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as

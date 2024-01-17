@@ -1,6 +1,6 @@
+use crate::error::GolemError;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use crate::error::GolemError;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 use wasmtime::component::Resource;
@@ -9,12 +9,12 @@ use wasmtime_wasi::preview2::{StreamError, Table};
 use crate::golem_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::golem_host::{Durability, GolemCtx, SerializableError};
 use crate::metrics::wasm::record_host_function_call;
+use crate::workerctx::WorkerCtx;
 use golem_common::model::WrappedFunctionType;
 use wasmtime_wasi::preview2::bindings::wasi::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
 use wasmtime_wasi_http::body::{FailingStream, HostIncomingBodyStream};
-use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostInputStream for GolemCtx<Ctx> {

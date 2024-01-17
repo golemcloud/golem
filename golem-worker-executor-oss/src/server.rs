@@ -32,9 +32,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build()
             .unwrap(),
     );
-    runtime.block_on(run(
-        config,
-        prometheus,
-        runtime.handle().clone(),
-    ))
+    runtime.block_on(run(config, prometheus, runtime.handle().clone()))
 }

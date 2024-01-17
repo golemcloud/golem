@@ -2,15 +2,15 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::metrics::promises::record_scheduled_promise_completed;
+use crate::services::promise::PromiseService;
+use crate::services::shard::ShardService;
+use crate::services::worker_activator::WorkerActivator;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::{PromiseId, ScheduleId};
 use golem_common::redis::RedisPool;
-use crate::metrics::promises::record_scheduled_promise_completed;
-use crate::services::promise::PromiseService;
-use crate::services::shard::ShardService;
-use crate::services::worker_activator::WorkerActivator;
 use tokio::task::JoinHandle;
 use tracing::error;
 
@@ -254,6 +254,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use crate::services::promise::PromiseServiceMock;
+    use crate::services::shard::ShardServiceMock;
+    use crate::services::worker_activator::WorkerActivatorMock;
     use bincode::Encode;
     use bytes::Bytes;
     use chrono::DateTime;
@@ -262,9 +265,6 @@ mod tests {
     use fred::prelude::RedisValue;
     use golem_common::model::{PromiseId, TemplateId, WorkerId};
     use golem_common::redis::RedisPool;
-    use crate::services::promise::PromiseServiceMock;
-    use crate::services::shard::ShardServiceMock;
-    use crate::services::worker_activator::WorkerActivatorMock;
     use uuid::Uuid;
 
     use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};

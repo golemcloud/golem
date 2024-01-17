@@ -2,14 +2,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::model::InterruptKind;
+use crate::services::{
+    active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, scheduler,
+    template, worker, HasActiveWorkers, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps,
+    HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
+    HasRecoveryManagement, HasSchedulerService, HasTemplateService, HasWasmtimeEngine,
+    HasWorkerService,
+};
+use crate::worker::Worker;
+use crate::workerctx::WorkerCtx;
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use golem_common::model::{VersionedWorkerId, WorkerId, WorkerStatus};
 use golem_common::retries::get_delay;
-use crate::model::InterruptKind;
-use crate::services::{active_workers, blob_store, golem_config, invocation_key, key_value, promise, template, worker, HasActiveWorkers, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps, HasInvocationKeyService, HasKeyValueService, HasPromiseService, HasTemplateService, HasWasmtimeEngine, HasWorkerService, oplog, scheduler, HasSchedulerService, HasOplogService, HasRecoveryManagement};
-use crate::worker::Worker;
-use crate::workerctx::WorkerCtx;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
@@ -182,7 +188,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
-        extra_deps: Ctx::ExtraDeps
+        extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
             scheduled_recoveries: Arc::new(Mutex::new(HashMap::new())),
@@ -358,8 +364,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 
     async fn is_marked_as_interrupted(&self, worker_id: &WorkerId) -> bool {
         let worker_metadata = self.worker_service().get(worker_id).await;
-        let worker_status =
-            Ctx::get_assumed_worker_status(self, worker_id, &worker_metadata).await;
+        let worker_status = Ctx::get_assumed_worker_status(self, worker_id, &worker_metadata).await;
         worker_status == WorkerStatus::Interrupted
     }
 }
@@ -465,18 +470,8 @@ mod tests {
     use std::sync::{Arc, RwLock};
     use std::time::Duration;
 
-    use anyhow::Error;
-    use async_trait::async_trait;
-    use bytes::Bytes;
-    use golem_common::model::{
-        AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerId,
-        WorkerMetadata, WorkerStatus,
-    };
-    use golem_common::proto::golem::Val;
     use crate::error::GolemError;
-    use crate::model::{
-        CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig,
-    };
+    use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig};
     use crate::services::active_workers::ActiveWorkers;
     use crate::services::blob_store::BlobStoreService;
     use crate::services::golem_config::GolemConfig;
@@ -494,8 +489,16 @@ mod tests {
         ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
         PublicWorkerIo, StatusManagement, WorkerCtx,
     };
+    use anyhow::Error;
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use golem_common::model::{
+        AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerId,
+        WorkerMetadata, WorkerStatus,
+    };
+    use golem_common::proto::golem::Val;
     use tokio::runtime::Handle;
-    use tokio::time::{Instant, timeout};
+    use tokio::time::{timeout, Instant};
     use wasmtime::component::Instance;
     use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
@@ -763,7 +766,9 @@ mod tests {
         }
     }
 
-    async fn create_recovery_management<F>(recovery_fn: F) -> RecoveryManagementDefault<EmptyContext>
+    async fn create_recovery_management<F>(
+        recovery_fn: F,
+    ) -> RecoveryManagementDefault<EmptyContext>
     where
         F: Fn(VersionedWorkerId) + Send + Sync + 'static,
     {
