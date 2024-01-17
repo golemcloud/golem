@@ -66,7 +66,7 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl Type for $name {
+        impl poem_openapi::types::Type for $name {
             const IS_REQUIRED: bool = true;
             type RawValueType = Self;
             type RawElementValueType = Self;

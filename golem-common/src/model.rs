@@ -13,7 +13,7 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
-use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON, Type};
+use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
 use poem_openapi::{Enum, Object};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
@@ -21,15 +21,10 @@ use uuid::Uuid;
 
 use crate::newtype_uuid;
 
-// newtype_uuid!(GrantId);
-// newtype_uuid!(PlanId);
-// newtype_uuid!(ProjectId);
-// newtype_uuid!(ProjectPolicyId);
 newtype_uuid!(
     TemplateId,
     golem_api_grpc::proto::golem::template::TemplateId
 );
-// newtype_uuid!(TokenId);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
@@ -638,7 +633,7 @@ impl From<AccountId> for golem_api_grpc::proto::golem::common::AccountId {
     }
 }
 
-impl Type for AccountId {
+impl poem_openapi::types::Type for AccountId {
     const IS_REQUIRED: bool = true;
     type RawValueType = Self;
     type RawElementValueType = Self;
