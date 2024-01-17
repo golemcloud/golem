@@ -13,6 +13,29 @@ members = [
 exclude = [
     "test-templates/shopping-cart",
     "test-templates/write-stdout",
+    "wasmtime",
+    "test-templates/blob-store-service",
+    "test-templates/clock-service",
+    "test-templates/clocks",
+    "test-templates/directories",
+    "test-templates/environment-service",
+    "test-templates/failing-component",
+    "test-templates/file-service",
+    "test-templates/file-write-read-delete",
+    "test-templates/flags-service",
+    "test-templates/http-client",
+    "test-templates/http-client-2",
+    "test-templates/interruption",
+    "test-templates/key-value-service",
+    "test-templates/option-service",
+    "test-templates/promise",
+    "test-templates/read-stdin",
+    "test-templates/runtime-service",
+    "test-templates/shopping-cart",
+    "test-templates/stdio-cc",
+    "test-templates/variant-service",
+    "test-templates/write-stderr",
+    "test-templates/write-stdout",
 ]
 
 [workspace.dependencies]
@@ -54,3 +77,9 @@ url = "2.3.1"
 uuid = { version = "1.3.3", features = ["serde", "v4"] }
 warp = "0.3.5"
 webpki-roots = { version = "0.25.3" }
+
+[patch.crates-io]
+wasmtime = { path = "wasmtime/crates/wasmtime" }
+wasmtime-runtime = { path = "wasmtime/crates/runtime" }
+wasmtime-wasi = { path = "wasmtime/crates/wasi" }
+wasmtime-wasi-http = { path = "wasmtime/crates/wasi-http" }

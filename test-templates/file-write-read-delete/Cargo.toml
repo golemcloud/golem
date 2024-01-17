@@ -1,0 +1,21 @@
+[package]
+name = "golem-it-file-write-read-delete"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+opt-level = 's'
+
+[dependencies]
+cargo-component-bindings = { version = "0.5.0" }
+fs = "0.0.5"
+
+[package.metadata.component.target]
+path = "wit"
+
+[package.metadata.component.dependencies]

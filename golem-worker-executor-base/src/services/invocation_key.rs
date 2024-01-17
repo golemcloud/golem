@@ -120,7 +120,6 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
         self.cleanup();
         let key = (worker_id.clone(), key.clone());
         let state = self.state.lock().unwrap();
-        dbg!("The invocation keys are {}", &state.confirmed_keys);
         match state.confirmed_keys.get(&key) {
             Some(vals) => LookupResult::Complete(vals.clone()),
             None => match state.pending_keys.get(&key) {

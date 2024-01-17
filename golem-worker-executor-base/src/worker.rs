@@ -105,21 +105,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let context = Ctx::create(
                 worker_metadata.worker_id.clone(),
                 worker_metadata.account_id.clone(),
-                this.promise_service().clone(),
-                this.invocation_key_service().clone(),
-                this.worker_service().clone(),
-                this.key_value_service().clone(),
-                this.blob_store_service().clone(),
+                this.promise_service(),
+                this.invocation_key_service(),
+                this.worker_service(),
+                this.key_value_service(),
+                this.blob_store_service(),
                 pending_worker.event_service.clone(),
-                this.active_workers().clone(),
-                this.extra_deps().clone(),
+                this.active_workers(),
+                this.oplog_service(),
+                this.scheduler_service(),
+                this.recovery_management(),
+                this.extra_deps(),
                 this.config(),
                 WorkerConfig::new(worker_metadata.worker_id.clone(), worker_args, worker_env),
                 execution_status.clone(),
             )
             .await?;
-
-            dbg!("Done with this?5");
 
             let public_state = context.get_public_state().clone();
 
@@ -241,7 +242,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker_id.clone(),
                 || PendingWorker::new(config_clone),
                 |pending_worker| {
-                    dbg!("Here it is reached?");
                     let pending_worker_clone = pending_worker.clone();
                     Box::pin(async move {
                         Worker::new(
@@ -258,7 +258,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 },
             )
             .await?;
-        dbg!("In here???");
         validate_worker(
             worker_details.metadata.clone(),
             worker_args,

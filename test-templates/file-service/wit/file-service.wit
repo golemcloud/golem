@@ -1,0 +1,13 @@
+package golem:it;
+
+interface api {
+  read-file: func(path: string) -> result<string, string>;
+
+  write-file: func(path: string, contents: string) -> result<_, string>;
+
+  delete-file: func(path: string) -> result<_, string>;
+}
+
+world file-service {
+  export api;
+}

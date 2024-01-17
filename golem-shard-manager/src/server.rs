@@ -328,7 +328,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    dbg!("Starting shard manager");
+    debug!("Starting shard manager");
 
     let config = ShardManagerConfig::new();
 
@@ -357,14 +357,14 @@ async fn async_main(
         .build()
         .unwrap();
 
-    dbg!("Golem Shard Manager starting up...");
+    debug!("Golem Shard Manager starting up...");
 
     let _ = HttpServerImpl::new(SocketAddrV4::new(
         Ipv4Addr::new(0, 0, 0, 0),
         shard_manager_config.http_port,
     ));
 
-    dbg!("Using Redis at {}", shard_manager_config.redis.url());
+    debug!("Using Redis at {}", shard_manager_config.redis.url());
     let pool = golem_common::redis::RedisPool::configured(&shard_manager_config.redis).await?;
 
     let shard_manager_config = Arc::new(shard_manager_config.clone());
@@ -380,7 +380,7 @@ async fn async_main(
 
     let shard_manager_port_str = env::var("GOLEM_SHARD_MANAGER_PORT")?;
 
-    dbg!(
+    debug!(
         "The port read from env is {}",
         shard_manager_port_str.clone()
     );
@@ -388,7 +388,7 @@ async fn async_main(
     let shard_manager_port = shard_manager_port_str.parse::<u16>()?;
     let shard_manager_addr = format!("0.0.0.0:{}", shard_manager_port);
 
-    dbg!("Listening on port {}", shard_manager_port);
+    debug!("Listening on port {}", shard_manager_port);
 
     let addr = shard_manager_addr.parse()?;
 
@@ -411,7 +411,7 @@ async fn async_main(
         .serve(addr)
         .await?;
 
-    dbg!("Server started on port {}", shard_manager_port);
+    debug!("Server started on port {}", shard_manager_port);
 
     Ok(())
 }

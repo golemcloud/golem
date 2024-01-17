@@ -11,15 +11,20 @@ use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
+use bytes::Bytes;
 use derive_more::FromStr;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON, Type};
 use poem_openapi::{Enum, Object};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::newtype_uuid;
+use crate::serialization::{
+    deserialize_with_version, serialize, try_deserialize, SERIALIZATION_VERSION_V1,
+};
 
 newtype_uuid!(GrantId);
 newtype_uuid!(PlanId);
@@ -678,12 +683,193 @@ impl Display for AccountId {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
+pub enum OplogEntry {
+    ImportedFunctionInvoked {
+        timestamp: Timestamp,
+        function_name: String,
+        response: Vec<u8>,
+        wrapped_function_type: WrappedFunctionType,
+    },
+    ExportedFunctionInvoked {
+        timestamp: Timestamp,
+        function_name: String,
+        request: Vec<u8>,
+        invocation_key: Option<InvocationKey>,
+        calling_convention: Option<CallingConvention>,
+    },
+    ExportedFunctionCompleted {
+        timestamp: Timestamp,
+        response: Vec<u8>,
+        consumed_fuel: i64,
+    },
+    CreatePromise {
+        timestamp: Timestamp,
+        promise_id: PromiseId,
+    },
+    CompletePromise {
+        timestamp: Timestamp,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+    },
+    Suspend {
+        timestamp: Timestamp,
+    },
+    Error {
+        timestamp: Timestamp,
+    },
+    Debug {
+        timestamp: Timestamp,
+        message: String,
+    },
+}
+
+impl OplogEntry {
+    pub fn imported_function_invoked<R: Encode>(
+        timestamp: Timestamp,
+        function_name: String,
+        response: &R,
+        wrapped_function_type: WrappedFunctionType,
+    ) -> Result<OplogEntry, String> {
+        let serialized_response = serialize(response)?.to_vec();
+
+        Ok(OplogEntry::ImportedFunctionInvoked {
+            timestamp,
+            function_name,
+            response: serialized_response,
+            wrapped_function_type,
+        })
+    }
+
+    pub fn exported_function_invoked<R: Encode>(
+        timestamp: Timestamp,
+        function_name: String,
+        request: &R,
+        invocation_key: Option<InvocationKey>,
+        calling_convention: Option<CallingConvention>,
+    ) -> Result<OplogEntry, String> {
+        let serialized_request = serialize(request)?.to_vec();
+        Ok(OplogEntry::ExportedFunctionInvoked {
+            timestamp,
+            function_name,
+            request: serialized_request,
+            invocation_key,
+            calling_convention,
+        })
+    }
+
+    pub fn exported_function_completed<R: Encode>(
+        timestamp: Timestamp,
+        response: &R,
+        consumed_fuel: i64,
+    ) -> Result<OplogEntry, String> {
+        let serialized_response = serialize(response)?.to_vec();
+        Ok(OplogEntry::ExportedFunctionCompleted {
+            timestamp,
+            response: serialized_response,
+            consumed_fuel,
+        })
+    }
+
+    pub fn response<T: DeserializeOwned + Decode>(&self) -> Result<Option<T>, String> {
+        match &self {
+            OplogEntry::ImportedFunctionInvoked { response, .. } => {
+                let response_bytes: Bytes = Bytes::copy_from_slice(response);
+
+                // In the v1 serialization format we did not have version prefix in the payloads.
+                // We can assume though that if the payload starts with 2, it is serialized with the
+                // v2 format because neither JSON nor protobuf (the two payload formats used in v1 for payloads)
+                // start with 2 (This was verified with a simple test ValProtobufPrefixByteValidation).
+                // So if the first byte is not 1 or 2 we assume it is a v1 format and deserialize it as JSON.
+                match try_deserialize(&response_bytes)? {
+                    Some(result) => Ok(Some(result)),
+                    None => Ok(Some(deserialize_with_version(
+                        &response_bytes,
+                        SERIALIZATION_VERSION_V1,
+                    )?)),
+                }
+            }
+            OplogEntry::ExportedFunctionCompleted { response, .. } => {
+                let response_bytes: Bytes = Bytes::copy_from_slice(response);
+
+                // See the comment above for the explanation of this logic
+                match try_deserialize(&response_bytes)? {
+                    Some(result) => Ok(Some(result)),
+                    None => Ok(Some(deserialize_with_version(
+                        &response_bytes,
+                        SERIALIZATION_VERSION_V1,
+                    )?)),
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    pub fn payload_as_val_array(&self) -> Result<Option<Vec<crate::proto::golem::Val>>, String> {
+        // This is a special case of a possible generic request() accessor, because in v1 the only
+        // data type we serialized was Vec<Val> and it was done in a special way (every element serialized
+        // via protobuf separately, then an array of byte arrays serialized into JSON)
+        match &self {
+            OplogEntry::ExportedFunctionInvoked {
+                function_name,
+                request,
+                ..
+            } => {
+                let request_bytes: Bytes = Bytes::copy_from_slice(request);
+                self.try_decode_val_array_payload(function_name, &request_bytes)
+            }
+            OplogEntry::ExportedFunctionCompleted { response, .. } => {
+                let response_bytes: Bytes = Bytes::copy_from_slice(response);
+                self.try_decode_val_array_payload("?", &response_bytes)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn try_decode_val_array_payload(
+        &self,
+        function_name: &str,
+        payload: &Bytes,
+    ) -> Result<Option<Vec<crate::proto::golem::Val>>, String> {
+        match try_deserialize(payload)? {
+            Some(result) => Ok(Some(result)),
+            None => {
+                let deserialized_array: Vec<Vec<u8>> = serde_json::from_slice(payload)
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "Failed to deserialize oplog payload: {:?}: {err}",
+                            std::str::from_utf8(payload).unwrap_or("???")
+                        )
+                    });
+                let function_input = deserialized_array
+                    .iter()
+                    .map(|serialized_value| {
+                        <crate::proto::golem::Val as prost::Message>::decode(serialized_value.as_slice())
+                            .unwrap_or_else(|err| panic!("Failed to deserialize function input {:?} for {function_name}: {err}", serialized_value))
+                    })
+                    .collect::<Vec<crate::proto::golem::Val>>();
+                Ok(Some(function_input))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+pub enum WrappedFunctionType {
+    ReadLocal,
+    WriteLocal,
+    ReadRemote,
+    WriteRemote,
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::model::AccountId;
+    use crate::model::{CallingConvention, InvocationKey, Timestamp};
+    use crate::model::{OplogEntry, WrappedFunctionType};
+    use crate::proto::golem::{val, Val, ValResult};
     use bincode::{Decode, Encode};
     use serde::{Deserialize, Serialize};
-
-    use crate::model::AccountId;
 
     #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
     struct ExampleWithAccountId {
@@ -712,5 +898,170 @@ mod tests {
         };
         let json = serde_json::to_string(&example).unwrap();
         assert_eq!(json, "{\"account_id\":\"account-1\"}");
+    }
+
+    #[test]
+    fn oplog_entry_imported_function_invoked_payload_roundtrip() {
+        let timestamp = Timestamp::now_utc();
+        let entry = OplogEntry::imported_function_invoked(
+            timestamp,
+            "function_name".to_string(),
+            &("example payload".to_string()),
+            WrappedFunctionType::ReadLocal,
+        )
+        .unwrap();
+
+        if let OplogEntry::ImportedFunctionInvoked { response, .. } = &entry {
+            assert_eq!(response.len(), 17);
+        } else {
+            unreachable!()
+        }
+
+        let response = entry.response::<String>().unwrap().unwrap();
+
+        assert_eq!(response, "example payload");
+    }
+
+    #[test]
+    fn oplog_entry_imported_function_invoked_payload_v1() {
+        let timestamp = Timestamp::now_utc();
+        let entry = OplogEntry::ImportedFunctionInvoked {
+            timestamp,
+            function_name: "function_name".to_string(),
+            response: serde_json::to_vec("example payload").unwrap(),
+            wrapped_function_type: WrappedFunctionType::ReadLocal,
+        };
+
+        let response = entry.response::<String>().unwrap().unwrap();
+
+        assert_eq!(response, "example payload");
+    }
+
+    #[test]
+    fn oplog_entry_exported_function_invoked_payload_roundtrip() {
+        let timestamp = Timestamp::now_utc();
+
+        let val1 = Val {
+            val: Some(val::Val::Result(Box::new(ValResult {
+                discriminant: 0,
+                value: Some(Box::new(Val {
+                    val: Some(val::Val::U64(10)),
+                })),
+            }))),
+        };
+        let entry = OplogEntry::exported_function_invoked(
+            timestamp,
+            "function_name".to_string(),
+            &vec![val1.clone()],
+            Some(InvocationKey {
+                value: "invocation_key".to_string(),
+            }),
+            Some(CallingConvention::Stdio),
+        )
+        .unwrap();
+
+        if let OplogEntry::ExportedFunctionInvoked { request, .. } = &entry {
+            assert_eq!(request.len(), 9);
+        } else {
+            unreachable!()
+        }
+
+        let request = entry.payload_as_val_array().unwrap().unwrap();
+
+        assert_eq!(request, vec![val1]);
+    }
+
+    #[test]
+    fn oplog_entry_exported_function_invoked_payload_v1() {
+        let timestamp = Timestamp::now_utc();
+
+        let val1 = Val {
+            val: Some(val::Val::Result(Box::new(ValResult {
+                discriminant: 0,
+                value: Some(Box::new(Val {
+                    val: Some(val::Val::U64(10)),
+                })),
+            }))),
+        };
+        let val1_bytes = prost::Message::encode_to_vec(&val1);
+        let request_bytes = serde_json::to_vec(&vec![val1_bytes]).unwrap();
+
+        let entry = OplogEntry::ExportedFunctionInvoked {
+            timestamp,
+            function_name: "function_name".to_string(),
+            request: request_bytes,
+            invocation_key: Some(InvocationKey {
+                value: "invocation_key".to_string(),
+            }),
+            calling_convention: Some(CallingConvention::Stdio),
+        };
+
+        let request = entry.payload_as_val_array().unwrap().unwrap();
+        assert_eq!(request, vec![val1]);
+    }
+
+    #[test]
+    fn oplog_entry_exported_function_completed_roundtrip() {
+        let timestamp = Timestamp::now_utc();
+
+        let val1 = Val {
+            val: Some(val::Val::Result(Box::new(ValResult {
+                discriminant: 0,
+                value: Some(Box::new(Val {
+                    val: Some(val::Val::U64(10)),
+                })),
+            }))),
+        };
+        let val2 = Val {
+            val: Some(val::Val::String("something".to_string())),
+        };
+
+        let entry = OplogEntry::exported_function_completed(
+            timestamp,
+            &vec![val1.clone(), val2.clone()],
+            1_000_000_000,
+        )
+        .unwrap();
+
+        if let OplogEntry::ExportedFunctionCompleted { response, .. } = &entry {
+            assert_eq!(response.len(), 21);
+        } else {
+            unreachable!()
+        }
+
+        let response = entry.payload_as_val_array().unwrap().unwrap();
+
+        assert_eq!(response, vec![val1, val2]);
+    }
+
+    #[test]
+    fn oplog_entry_exported_function_completed_v1() {
+        let timestamp = Timestamp::now_utc();
+
+        let val1 = Val {
+            val: Some(val::Val::Result(Box::new(ValResult {
+                discriminant: 0,
+                value: Some(Box::new(Val {
+                    val: Some(val::Val::U64(10)),
+                })),
+            }))),
+        };
+        let val1_bytes = prost::Message::encode_to_vec(&val1);
+        let val2 = Val {
+            val: Some(val::Val::String("something".to_string())),
+        };
+        let val2_bytes = prost::Message::encode_to_vec(&val2);
+
+        let response_bytes = serde_json::to_vec(&vec![val1_bytes, val2_bytes]).unwrap();
+
+        let entry = OplogEntry::ExportedFunctionCompleted {
+            timestamp,
+            response: response_bytes,
+            consumed_fuel: 1_000_000_000,
+        };
+
+        let response = entry.payload_as_val_array().unwrap().unwrap();
+
+        assert_eq!(response, vec![val1, val2]);
     }
 }

@@ -1,0 +1,22 @@
+[package]
+name = "blob-store-service"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+opt-level = 's'
+
+[dependencies]
+cargo-component-bindings = { version = "0.5.0" }
+
+[package.metadata.component.target]
+path = "wit"
+
+[package.metadata.component.target.dependencies]
+"wasi:blobstore" = { path = "wit/deps/blobstore"}
+"wasi:io" = { path = "wit/deps/io" }

@@ -1,0 +1,11 @@
+package golem:it;
+
+interface api {
+  run: func() -> string;
+
+  start-polling: func(until: string) -> ();
+}
+
+world http-client-test {
+  export api;
+}
