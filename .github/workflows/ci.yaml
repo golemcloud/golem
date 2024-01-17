@@ -140,6 +140,11 @@ jobs:
         uses: arduino/setup-protoc@v1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.29.0
+        with:
+          redis-version: latest
+          auto-start: false
       - name: Check formatting
         run: cargo fmt -- --check
       - name: Clippy
