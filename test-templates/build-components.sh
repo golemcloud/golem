@@ -23,8 +23,8 @@ for subdir in "${rust_test_components[@]}"; do
   cargo component build --release
 
   echo "Turning the module into a WebAssembly Component..."
-  target="$subdir.wasm"
-  target_wat="$subdir.wat"
+  target="../$subdir.wasm"
+  target_wat="../$subdir.wat"
   cp -v $(find target/wasm32-wasi/release -name '*.wasm' -maxdepth 1) "$target"
   wasm-tools print "$target" >"$target_wat"
 
@@ -43,8 +43,8 @@ for subdir in "${zig_test_components[@]}"; do
   zig build
 
   echo "Turning the module into a WebAssembly Component..."
-  target="$subdir.wasm"
-  target_wat="$subdir.wat"
+  target="../$subdir.wasm"
+  target_wat="../$subdir.wat"
   wasm-tools component new zig-out/bin/main.wasm -o "$target" --adapt ../../golem-wit/adapters/tier3/wasi_snapshot_preview1.wasm
   wasm-tools print "$target" >"$target_wat"
 
@@ -64,8 +64,8 @@ for subdir in "${tinygo_test_components[@]}"; do
   tinygo build -target=wasi -tags=purego -o main.wasm main.go
 
   echo "Turning the module into a WebAssembly Component..."
-  target="$subdir.wasm"
-  target_wat="$subdir.wat"
+  target="../$subdir.wasm"
+  target_wat="../$subdir.wat"
   wasm-tools component embed ./wit main.wasm --output main.embed.wasm
   wasm-tools component new main.embed.wasm -o "$target" --adapt ../../golem-wit/adapters/tier2/wasi_snapshot_preview1.wasm
   wasm-tools print "$target" >"$target_wat"
@@ -84,8 +84,8 @@ for subdir in ${grain_test_components[@]}; do
   grain compile --release main.gr
 
   echo "Turning the module into a WebAssembly Component..."
-  target="$subdir.wasm"
-  target_wat="$subdir.wat"
+  target="../$subdir.wasm"
+  target_wat="../$subdir.wat"
   wasm-tools component new main.gr.wasm -o "$target" --adapt ../../golem-wit/adapters/tier3/wasi_snapshot_preview1.wasm
   wasm-tools print "$target" >"$target_wat"
 
@@ -104,8 +104,8 @@ for subdir in ${js_test_components[@]}; do
   npm run build
 
   echo "Turning the module into a WebAssembly Component..."
-  target="$subdir.wasm"
-  target_wat="$subdir.wat"
+  target="../$subdir.wasm"
+  target_wat="../$subdir.wat"
   cp -v "out/component.wasm" "$target"
   wasm-tools print "$target" >"$target_wat"
 
@@ -124,8 +124,8 @@ for subdir in ${java_test_components[@]}; do
   mvn prepare-package
 
   echo "Turning the module into a WebAssembly Component..."
-  target="$subdir.wasm"
-  target_wat="$subdir.wat"
+  target="../$subdir.wasm"
+  target_wat="../$subdir.wat"
   wasm-tools component new target/generated/wasm/teavm-wasm/classes.wasm -o "$target" --adapt ../../golem-wit/adapters/tier2/wasi_snapshot_preview1.wasm
   wasm-tools print "$target" >"$target_wat"
 
@@ -143,8 +143,8 @@ for subdir in ${dotnet_test_components[@]}; do
   dotnet build -p:Configuration=Release
 
   echo "Turning the module into a WebAssembly Component..."
-  target="$subdir.wasm"
-  target_wat="$subdir.wat"
+  target="../$subdir.wasm"
+  target_wat="../$subdir.wat"
   wasm-tools component new bin/Release/net7.0/$subdir.wasm -o "$target" --adapt ../../golem-wit/adapters/tier3/wasi_snapshot_preview1.wasm
   wasm-tools print "$target" >"$target_wat"
 
@@ -164,8 +164,8 @@ for subdir in ${swift_test_components[@]}; do
   wasm-opt -Os main.wasm -o main.opt.wasm
 
   echo "Turning the module into a WebAssembly Component..."
-  target="$subdir.wasm"
-  target_wat="$subdir.wat"
+  target="../$subdir.wasm"
+  target_wat="../$subdir.wat"
   wasm-tools component new main.opt.wasm -o "$target" --adapt ../../golem-wit/adapters/tier3/wasi_snapshot_preview1.wasm
   wasm-tools print "$target" >"$target_wat"
 
@@ -184,8 +184,8 @@ for subdir in "${c_test_components[@]}"; do
   ~/wasi-sdk-20.0/bin/clang --sysroot ~/wasi-sdk-20.0/share/wasi-sysroot main.c c_api1.c c_api1_component_type.o -o main.wasm
 
   echo "Turning the module into a WebAssembly Component..."
-  target="$subdir.wasm"
-  target_wat="$subdir.wat"
+  target="../$subdir.wasm"
+  target_wat="../$subdir.wat"
   wasm-tools component new main.wasm -o "$target" --adapt ../../golem-wit/adapters/tier2/wasi_snapshot_preview1.wasm
   wasm-tools print "$target" >"$target_wat"
 
@@ -206,8 +206,8 @@ for subdir in "${python_test_components[@]}"; do
   componentize-py bindings bindings
   componentize-py componentize test
 
-  target="$subdir.wasm"
-  target_wat="$subdir.wat"
+  target="../$subdir.wasm"
+  target_wat="../$subdir.wat"
   mv index.wasm $target
   wasm-tools print "$target" >"$target_wat"
 
