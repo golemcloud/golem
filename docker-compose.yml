@@ -4,9 +4,9 @@ services:
   redis:
     image: redis:latest
     volumes:
-      - ./redis-data:/data
+      - redis_data:/data
     ports:
-      - "6379:6379"
+     - "6379:6379"
 
   golem-shard-manager:
     build:
@@ -36,13 +36,13 @@ services:
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
       - GOLEM__TEMPLATES__STORE__OBJECT_PREFIX=""
-      - GOLEM__TEMPLATES__STORE__ROOT_PATH=template_store
+      - GOLEM__TEMPLATES__STORE__ROOT_PATH=/template_store
       - GOLEM__ROUTING_TABLE__HOST="golem-shard-manager"
       - GOLEM__ROUTING_TABLE__PORT=9001
       - GOLEM__GRPC_PORT=9090
       - GOLEM__HTTP_PORT=8080
     volumes:
-      - ./template_store:template_store
+      - ./template_store:/template_store
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -81,3 +81,7 @@ services:
       - AWS_DEFAULT_REGION=us-east-1
     ports:
       - "9000:9000"
+
+volumes:
+  redis_data:
+  template_store:
