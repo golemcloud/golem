@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tracing::{debug, info};
 use wasmtime::component::{Instance, Resource};
-use wasmtime::{AsContext, AsContextMut};
+use wasmtime::AsContextMut;
 use wasmtime_wasi::preview2::{FsError, I32Exit, Stderr, Subscribe, Table, WasiCtx, WasiView};
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequest,
@@ -533,39 +533,23 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
     }
 }
 
-/// Trait to be implemented by the actual worker context types, allowing the base library to provide a default
-/// implementation of the various WorkerCtx traits.
-pub trait HasDurableWorkerCtx: WorkerCtx + Send + Sync + 'static {
-    type ExtraDeps: Clone + Send + Sync + 'static;
-
-    fn durable_worker_ctx(&self) -> &DurableWorkerCtx<Self>;
-    fn durable_worker_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Self>;
-}
-
 #[async_trait]
-impl<Ctx: HasDurableWorkerCtx> InvocationManagement for Ctx {
+impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
     async fn set_current_invocation_key(&mut self, invocation_key: Option<InvocationKey>) {
-        self.durable_worker_ctx_mut()
-            .private_state
+        self.private_state
             .set_current_invocation_key(invocation_key)
     }
 
     async fn get_current_invocation_key(&self) -> Option<InvocationKey> {
-        self.durable_worker_ctx().get_current_invocation_key().await
+        self.get_current_invocation_key().await
     }
 
     async fn interrupt_invocation_key(&mut self, key: &InvocationKey) {
-        self.durable_worker_ctx_mut()
-            .private_state
-            .interrupt_invocation_key(key)
-            .await
+        self.private_state.interrupt_invocation_key(key).await
     }
 
     async fn resume_invocation_key(&mut self, key: &InvocationKey) {
-        self.durable_worker_ctx_mut()
-            .private_state
-            .resume_invocation_key(key)
-            .await
+        self.private_state.resume_invocation_key(key).await
     }
 
     async fn confirm_invocation_key(
@@ -573,26 +557,21 @@ impl<Ctx: HasDurableWorkerCtx> InvocationManagement for Ctx {
         key: &InvocationKey,
         vals: Result<Vec<Val>, GolemError>,
     ) {
-        self.durable_worker_ctx_mut()
-            .private_state
-            .confirm_invocation_key(key, vals)
-            .await
+        self.private_state.confirm_invocation_key(key, vals).await
     }
 }
 
 #[async_trait]
-impl<Ctx: HasDurableWorkerCtx> IoCapturing for Ctx {
+impl<Ctx: WorkerCtx> IoCapturing for DurableWorkerCtx<Ctx> {
     async fn start_capturing_stdout(&mut self, provided_stdin: String) {
-        self.durable_worker_ctx_mut()
-            .public_state
+        self.public_state
             .managed_stdio
             .start_single_stdio_call(provided_stdin)
             .await
     }
 
     async fn finish_capturing_stdout(&mut self) -> Result<String, FromUtf8Error> {
-        self.durable_worker_ctx_mut()
-            .public_state
+        self.public_state
             .managed_stdio
             .finish_single_stdio_call()
             .await
@@ -600,41 +579,37 @@ impl<Ctx: HasDurableWorkerCtx> IoCapturing for Ctx {
 }
 
 #[async_trait]
-impl<Ctx: HasDurableWorkerCtx> StatusManagement for Ctx {
+impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     fn check_interrupt(&self) -> Option<InterruptKind> {
-        self.durable_worker_ctx().check_interrupt()
+        self.check_interrupt()
     }
 
     fn set_suspended(&self) {
-        self.durable_worker_ctx().set_suspended()
+        self.set_suspended()
     }
 
     fn set_running(&self) {
-        self.durable_worker_ctx().set_running()
+        self.set_running()
     }
 
     async fn get_worker_status(&self) -> WorkerStatus {
-        self.durable_worker_ctx().get_worker_status().await
+        self.get_worker_status().await
     }
 
     async fn store_worker_status(&self, status: WorkerStatus) {
-        self.durable_worker_ctx().store_worker_status(status).await
+        self.store_worker_status(status).await
     }
 
     async fn deactivate(&self) {
-        debug!(
-            "deactivating worker {}",
-            self.durable_worker_ctx().worker_id
-        );
-        self.durable_worker_ctx()
-            .private_state
+        debug!("deactivating worker {}", self.worker_id);
+        self.private_state
             .active_workers
-            .remove(&self.durable_worker_ctx().worker_id.worker_id);
+            .remove(&self.worker_id.worker_id);
     }
 }
 
 #[async_trait]
-impl<Ctx: HasDurableWorkerCtx> InvocationHooks for Ctx {
+impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
@@ -655,28 +630,25 @@ impl<Ctx: HasDurableWorkerCtx> InvocationHooks for Ctx {
             )
         });
 
-        self.durable_worker_ctx_mut()
-            .set_oplog_entry(oplog_entry)
-            .await;
-        self.durable_worker_ctx_mut().commit_oplog().await;
+        self.set_oplog_entry(oplog_entry).await;
+        self.commit_oplog().await;
         Ok(())
     }
 
     async fn on_invocation_failure(&mut self, error: &anyhow::Error) -> Result<(), anyhow::Error> {
-        self.durable_worker_ctx_mut().consume_hint_entries().await;
-        let is_live_after = self.durable_worker_ctx().is_live();
+        self.consume_hint_entries().await;
+        let is_live_after = self.is_live();
 
         let is_interrupt = is_interrupt(error);
         let is_suspend = is_suspend(error);
 
         if is_live_after && !is_interrupt && !is_suspend {
-            self.durable_worker_ctx_mut()
-                .set_oplog_entry(OplogEntry::Error {
-                    timestamp: Timestamp::now_utc(),
-                })
-                .await;
+            self.set_oplog_entry(OplogEntry::Error {
+                timestamp: Timestamp::now_utc(),
+            })
+            .await;
 
-            self.durable_worker_ctx_mut().commit_oplog().await;
+            self.commit_oplog().await;
         }
 
         Ok(())
@@ -686,34 +658,17 @@ impl<Ctx: HasDurableWorkerCtx> InvocationHooks for Ctx {
         &mut self,
         error: &anyhow::Error,
     ) -> Result<WorkerStatus, anyhow::Error> {
-        let previous_tries = self
-            .durable_worker_ctx()
-            .private_state
-            .trailing_error_count()
-            .await;
+        let previous_tries = self.private_state.trailing_error_count().await;
         let decision = self
-            .durable_worker_ctx()
             .private_state
             .recovery_management
-            .schedule_recovery_for_error(
-                &self.durable_worker_ctx().worker_id,
-                previous_tries,
-                error,
-            )
+            .schedule_recovery_for_error(&self.worker_id, previous_tries, error)
             .await;
 
-        let oplog_idx = self
-            .durable_worker_ctx_mut()
-            .private_state
-            .get_oplog_size()
-            .await;
+        let oplog_idx = self.private_state.get_oplog_size().await;
         debug!(
             "Recovery decision for {}#{} because of error {} after {} tries: {:?}",
-            self.durable_worker_ctx().worker_id,
-            oplog_idx,
-            error,
-            previous_tries,
-            decision
+            self.worker_id, oplog_idx, error, previous_tries, decision
         );
 
         let is_interrupt = is_interrupt(error);
@@ -740,8 +695,8 @@ impl<Ctx: HasDurableWorkerCtx> InvocationHooks for Ctx {
         consumed_fuel: i64,
         output: Vec<Val>,
     ) -> Result<Option<Vec<Val>>, anyhow::Error> {
-        self.durable_worker_ctx_mut().consume_hint_entries().await;
-        let is_live_after = self.durable_worker_ctx().is_live();
+        self.consume_hint_entries().await;
+        let is_live_after = self.is_live();
 
         if is_live_after {
             let oplog_entry = OplogEntry::exported_function_completed(
@@ -753,20 +708,14 @@ impl<Ctx: HasDurableWorkerCtx> InvocationHooks for Ctx {
                 panic!("could not encode function result for {full_function_name}: {err}")
             });
 
-            self.durable_worker_ctx_mut()
-                .set_oplog_entry(oplog_entry)
-                .await;
-            self.durable_worker_ctx_mut()
-                .set_oplog_entry(OplogEntry::Suspend {
-                    timestamp: Timestamp::now_utc(),
-                })
-                .await;
-            self.durable_worker_ctx_mut().commit_oplog().await;
+            self.set_oplog_entry(oplog_entry).await;
+            self.set_oplog_entry(OplogEntry::Suspend {
+                timestamp: Timestamp::now_utc(),
+            })
+            .await;
+            self.commit_oplog().await;
         } else {
-            let response = self
-                .durable_worker_ctx_mut()
-                .get_oplog_entry_exported_function_completed()
-                .await?;
+            let response = self.get_oplog_entry_exported_function_completed().await?;
 
             if let Some(function_output) = response {
                 let is_diverged = function_output != output;
@@ -783,9 +732,14 @@ impl<Ctx: HasDurableWorkerCtx> InvocationHooks for Ctx {
     }
 }
 
+pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
+    fn durable_ctx(&self) -> &DurableWorkerCtx<Ctx>;
+    fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Ctx>;
+}
+
 #[async_trait]
-impl<Ctx: HasDurableWorkerCtx> ExternalOperations<Ctx> for Ctx {
-    type ExtraDeps = <Ctx as HasDurableWorkerCtx>::ExtraDeps;
+impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
+    type ExtraDeps = Ctx::ExtraDeps;
 
     async fn set_worker_status<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
@@ -830,19 +784,19 @@ impl<Ctx: HasDurableWorkerCtx> ExternalOperations<Ctx> for Ctx {
     async fn prepare_instance(
         worker_id: &VersionedWorkerId,
         instance: &Instance,
-        store: &mut (impl AsContextMut<Data = Self> + Send),
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<(), GolemError> {
         debug!("Starting prepare_instance for {}", worker_id);
         let start = Instant::now();
         let mut count = 0;
         let result = loop {
-            let store_context = store.as_context().data();
-            let cont = store_context.durable_worker_ctx().is_replay();
+            let cont = store.as_context().data().durable_ctx().is_replay();
+
             if cont {
                 let oplog_entry = store
                     .as_context_mut()
                     .data_mut()
-                    .durable_worker_ctx_mut()
+                    .durable_ctx_mut()
                     .get_oplog_entry_exported_function_invoked()
                     .await?;
                 match oplog_entry {
@@ -884,6 +838,22 @@ impl<Ctx: HasDurableWorkerCtx> ExternalOperations<Ctx> for Ctx {
         result
     }
 
+    async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
+        _this: &T,
+        _account_id: &AccountId,
+        _last_known_limits: &CurrentResourceLimits,
+    ) -> Result<(), GolemError> {
+        Ok(())
+    }
+
+    async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
+        this: &T,
+        worker_id: &WorkerId,
+    ) -> Result<(), GolemError> {
+        this.oplog_service().delete(worker_id).await;
+        Ok(())
+    }
+
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
     ) -> Result<(), anyhow::Error> {
@@ -907,22 +877,6 @@ impl<Ctx: HasDurableWorkerCtx> ExternalOperations<Ctx> for Ctx {
         }
 
         info!("Finished recovering instances");
-        Ok(())
-    }
-
-    async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
-        _this: &T,
-        _account_id: &AccountId,
-        _last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), GolemError> {
-        Ok(())
-    }
-
-    async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        worker_id: &WorkerId,
-    ) -> Result<(), GolemError> {
-        this.oplog_service().delete(worker_id).await;
         Ok(())
     }
 }
