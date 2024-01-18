@@ -158,7 +158,7 @@ impl CompiledTemplateService for CompiledTemplateServiceS3 {
         } else {
             format!("{}/", self.config.object_prefix)
         };
-        
+
         let key = format!("{}{}#{}:compiled", prefix, template_id, template_version);
 
         let bytes = component.serialize().unwrap();
