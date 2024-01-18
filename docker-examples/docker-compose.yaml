@@ -6,11 +6,19 @@ services:
     container_name: localstack
     environment:
       - SERVICES=s3
+      - PERSISTENCE=1
+      - DATA_DIR=/tmp/localstack/data
+      - PORT_WEB_UI=9002
     ports:
       - "4566:4566"
+    volumes:
+      - '/private/tmp/localstack:/tmp/localstack'
+      - '/var/run/docker.sock:/var/run/docker.sock'
 
   redis:
     image: redis:latest
+    volumes:
+      - ./redis-data:/data
     ports:
       - "6379:6379"
 
