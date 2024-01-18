@@ -8,9 +8,6 @@ use std::sync::{Arc, RwLock};
 use std::{env, panic};
 
 use crate::REDIS;
-use golem_common::model::{
-    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
-};
 use golem_api_grpc::proto::golem::worker::{
     log_event, val, CallingConvention, LogEvent, StdOutLog, Val, ValList, ValRecord,
 };
@@ -20,6 +17,9 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     invoke_and_await_worker_response, ConnectWorkerRequest, CreateWorkerRequest,
     GetInvocationKeyRequest, InterruptWorkerRequest, InterruptWorkerResponse,
     InvokeAndAwaitWorkerRequest,
+};
+use golem_common::model::{
+    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
@@ -114,7 +114,7 @@ impl TestWorkerExecutor {
                     AccountId {
                         value: "test-account".to_string(),
                     }
-                        .into(),
+                    .into(),
                 ),
                 account_limits: None,
             })
@@ -143,7 +143,7 @@ impl TestWorkerExecutor {
             params,
             CallingConvention::Component,
         )
-            .await
+        .await
     }
 
     pub async fn invoke_and_await_stdio(
@@ -253,7 +253,7 @@ impl TestWorkerExecutor {
                     AccountId {
                         value: "test-account".to_string(),
                     }
-                        .into(),
+                    .into(),
                 ),
                 account_limits: None,
             })
@@ -284,7 +284,7 @@ impl TestWorkerExecutor {
                         AccountId {
                             value: "test-account".to_string(),
                         }
-                            .into(),
+                        .into(),
                     ),
                     account_limits: None,
                 })
@@ -550,7 +550,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             account_id,
             last_known_limits,
         )
-            .await
+        .await
     }
 
     async fn on_worker_deleted<T: HasAll<TestWorkerCtx> + Send + Sync>(
@@ -716,7 +716,7 @@ impl WorkerCtx for TestWorkerCtx {
             worker_config,
             execution_status,
         )
-            .await?;
+        .await?;
         Ok(Self { durable_ctx })
     }
 
