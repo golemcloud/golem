@@ -1,20 +1,14 @@
 version: '3'
 
 services:
-  aws-local-s3:
-    image: localstack/localstack
+  localstack:
+    image: localstack/localstack:2.2.9
     container_name: localstack
     environment:
       - SERVICES=s3
-      - PERSISTENCE=1
-      - DATA_DIR=/tmp/localstack/data
-      - PORT_WEB_UI=9002
     ports:
       - "4566:4566"
-    volumes:
-      - '/private/tmp/localstack:/tmp/localstack'
-      - '/var/run/docker.sock:/var/run/docker.sock'
-
+      
   redis:
     image: redis:latest
     volumes:
@@ -67,7 +61,7 @@ services:
       - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-cloud-server-oss
       - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=9090
       - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX=""
-      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__AWS_ENDPOINT_URL=http://aws-s3:4566
+      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__AWS_ENDPOINT_URL=http://localstack:4566
         # This is a dummy access id, didn't want to change the base golem-config as I am not aware of what's the implication
       - GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
       - GOLEM__PORT=9000
@@ -88,3 +82,5 @@ services:
       - AWS_DEFAULT_REGION="us-east-1"
     ports:
       - "9000:9000"
+    depends_on:
+      - localstack
