@@ -57,8 +57,6 @@ services:
       - GOLEM__REDIS__HOST=redis
       - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-cloud-server-oss
       - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=9090
-      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX=""
-      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__AWS_ENDPOINT_URL=http://localstack:4566
         # This is a dummy access id, didn't want to change the base golem-config as I am not aware of what's the implication
       - GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
       - GOLEM__PORT=9000
@@ -79,5 +77,3 @@ services:
       - AWS_DEFAULT_REGION=us-east-1
     ports:
       - "9000:9000"
-    depends_on:
-      - localstack
