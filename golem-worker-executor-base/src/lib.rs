@@ -111,7 +111,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .build()
             .unwrap();
 
-        let _ = HttpServerImpl::new(
+        let http_server = HttpServerImpl::new(
             SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), golem_config.http_port),
             prometheus_registry,
         );
@@ -227,6 +227,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .serve(addr)
             .await?;
 
+        drop(http_server); // explicitly keeping it alive until the end
         Ok(())
     }
 }
