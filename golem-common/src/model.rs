@@ -31,6 +31,7 @@ newtype_uuid!(
     golem_api_grpc::proto::golem::template::TemplateId
 );
 
+newtype_uuid!(ProjectId, golem_api_grpc::proto::golem::common::ProjectId);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
