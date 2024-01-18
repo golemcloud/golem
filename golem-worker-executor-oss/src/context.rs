@@ -95,7 +95,7 @@ impl WorkerCtx for Context {
             worker_config,
             execution_status,
         )
-            .await?;
+        .await?;
         Ok(Self { golem_ctx })
     }
 

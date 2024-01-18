@@ -32,12 +32,12 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use cap_std::ambient_authority;
+use golem_api_grpc::proto::golem::worker::Val;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
     WorkerMetadata, WorkerStatus,
 };
 use golem_common::model::{OplogEntry, WrappedFunctionType};
-use golem_common::proto::golem::Val;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;

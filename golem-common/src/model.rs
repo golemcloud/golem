@@ -815,7 +815,9 @@ impl OplogEntry {
         }
     }
 
-    pub fn payload_as_val_array(&self) -> Result<Option<Vec<crate::proto::golem::Val>>, String> {
+    pub fn payload_as_val_array(
+        &self,
+    ) -> Result<Option<Vec<golem_api_grpc::proto::golem::worker::Val>>, String> {
         // This is a special case of a possible generic request() accessor, because in v1 the only
         // data type we serialized was Vec<Val> and it was done in a special way (every element serialized
         // via protobuf separately, then an array of byte arrays serialized into JSON)
@@ -840,7 +842,7 @@ impl OplogEntry {
         &self,
         function_name: &str,
         payload: &Bytes,
-    ) -> Result<Option<Vec<crate::proto::golem::Val>>, String> {
+    ) -> Result<Option<Vec<golem_api_grpc::proto::golem::worker::Val>>, String> {
         match try_deserialize(payload)? {
             Some(result) => Ok(Some(result)),
             None => {
@@ -854,10 +856,10 @@ impl OplogEntry {
                 let function_input = deserialized_array
                     .iter()
                     .map(|serialized_value| {
-                        <crate::proto::golem::Val as prost::Message>::decode(serialized_value.as_slice())
+                        <golem_api_grpc::proto::golem::worker::Val as prost::Message>::decode(serialized_value.as_slice())
                             .unwrap_or_else(|err| panic!("Failed to deserialize function input {:?} for {function_name}: {err}", serialized_value))
                     })
-                    .collect::<Vec<crate::proto::golem::Val>>();
+                    .collect::<Vec<golem_api_grpc::proto::golem::worker::Val>>();
                 Ok(Some(function_input))
             }
         }
@@ -877,8 +879,8 @@ mod tests {
     use crate::model::AccountId;
     use crate::model::{CallingConvention, InvocationKey, Timestamp};
     use crate::model::{OplogEntry, WrappedFunctionType};
-    use crate::proto::golem::{val, Val, ValResult};
     use bincode::{Decode, Encode};
+    use golem_api_grpc::proto::golem::worker::{val, Val, ValResult};
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
