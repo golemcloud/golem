@@ -2,13 +2,16 @@ version: '3'
 
 services:
   localstack:
-    image: localstack/localstack:2.2.9
+    image: localstack/localstack:1.0.4
     container_name: localstack
     environment:
       - SERVICES=s3
+      - HOSTNAME=localstack
+      - HOSTNAME_EXTERNAL=localstack
+      - DEFAULT_REGION=us-east-1
     ports:
       - "4566:4566"
-      
+
   redis:
     image: redis:latest
     volumes:
@@ -72,14 +75,14 @@ services:
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY="100ms"
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY="2s"
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER=2
-      - GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION="us-east-1"
-      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION="us-east-1"
+      - GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION=us-east-1
+      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION=us-east-1
       - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__BUCKET="golem-compiled-components"
       - GOLEM__SHARD_MANAGER_SERVICE__TYPE="Grpc"
       - GOLEM__ENABLE_JSON_LOG=true
       - AWS_SECRET_ACCESS_KEY=root
       - AWS_ACCESS_KEY_ID=root
-      - AWS_DEFAULT_REGION="us-east-1"
+      - AWS_DEFAULT_REGION=us-east-1
     ports:
       - "9000:9000"
     depends_on:
