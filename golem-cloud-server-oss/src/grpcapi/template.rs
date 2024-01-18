@@ -6,11 +6,12 @@ use golem_common::model::TemplateId;
 use golem_common::proto::golem::cloudservices::templateservice::template_service_server::TemplateService;
 use golem_common::proto::golem::cloudservices::templateservice::{
     create_template_request, create_template_response, download_template_response,
-    get_latest_template_version_response, get_template_response, update_template_request,
-    update_template_response, CreateTemplateRequest, CreateTemplateRequestHeader,
-    CreateTemplateResponse, DownloadTemplateRequest, DownloadTemplateResponse,
-    GetLatestTemplateVersionRequest, GetLatestTemplateVersionResponse, GetTemplateRequest,
-    GetTemplateResponse, GetTemplateSuccessResponse, UpdateTemplateRequest,
+    get_latest_template_version_response, get_template_response, get_templates_response,
+    update_template_request, update_template_response, CreateTemplateRequest,
+    CreateTemplateRequestHeader, CreateTemplateResponse, DownloadTemplateRequest,
+    DownloadTemplateResponse, GetLatestTemplateVersionRequest, GetLatestTemplateVersionResponse,
+    GetTemplateRequest, GetTemplateResponse, GetTemplateSuccessResponse, GetTemplatesRequest,
+    GetTemplatesResponse, GetTemplatesSuccessResponse, UpdateTemplateRequest,
     UpdateTemplateRequestHeader, UpdateTemplateResponse,
 };
 use golem_common::proto::golem::{template_error, ErrorBody, ErrorsBody, Template, TemplateError};
@@ -74,6 +75,14 @@ impl TemplateGrpcApi {
         Ok(result.into_iter().map(|p| p.into()).collect())
     }
 
+    async fn get_all(&self, request: GetTemplatesRequest) -> Result<Vec<Template>, TemplateError> {
+        let name: Option<golem_cloud_server_base::model::TemplateName> = request
+            .template_name
+            .map(golem_cloud_server_base::model::TemplateName);
+        let result = self.template_service.find_by_name(name).await?;
+        Ok(result.into_iter().map(|p| p.into()).collect())
+    }
+
     async fn get_latest_version(
         &self,
         request: GetLatestTemplateVersionRequest,
@@ -129,6 +138,23 @@ impl TemplateGrpcApi {
 
 #[async_trait::async_trait]
 impl TemplateService for TemplateGrpcApi {
+    async fn get_templates(
+        &self,
+        request: Request<GetTemplatesRequest>,
+    ) -> Result<Response<GetTemplatesResponse>, Status> {
+        let (_, _, r) = request.into_parts();
+        match self.get_all(r).await {
+            Ok(templates) => Ok(Response::new(GetTemplatesResponse {
+                result: Some(get_templates_response::Result::Success(
+                    GetTemplatesSuccessResponse { templates },
+                )),
+            })),
+            Err(err) => Ok(Response::new(GetTemplatesResponse {
+                result: Some(get_templates_response::Result::Error(err)),
+            })),
+        }
+    }
+
     async fn create_template(
         &self,
         request: Request<Streaming<CreateTemplateRequest>>,

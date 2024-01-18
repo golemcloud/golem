@@ -98,10 +98,10 @@ impl Bootstrap<Context> for ServerBootstrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
         let mut linker =
-            create_linker::<Context, DurableWorkerCtx<Context>>(engine, |x| &mut x.golem_ctx)?;
+            create_linker::<Context, DurableWorkerCtx<Context>>(engine, |x| &mut x.durable_ctx)?;
         durable_host::host::add_to_linker::<Context, DurableWorkerCtx<Context>>(
             &mut linker,
-            |x| &mut x.golem_ctx,
+            |x| &mut x.durable_ctx,
         )?;
         Ok(linker)
     }
