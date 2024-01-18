@@ -158,11 +158,8 @@ impl CompiledTemplateService for CompiledTemplateServiceS3 {
         } else {
             format!("{}/", self.config.object_prefix)
         };
-
-        dbg!("Sending with prefix {}", prefix.clone());
-
+        
         let key = format!("{}{}#{}:compiled", prefix, template_id, template_version);
-        dbg!("Uploading object with {}", key.clone());
 
         let bytes = component.serialize().unwrap();
 
