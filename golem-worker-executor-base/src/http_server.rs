@@ -1,8 +1,10 @@
+use std::fmt::Display;
 use std::net::SocketAddr;
 
 use http::{Response, StatusCode};
 use prometheus::{Encoder, Registry, TextEncoder};
 use tokio::task::JoinHandle;
+use tracing::info;
 use warp::hyper::Body;
 use warp::Filter;
 
@@ -12,7 +14,10 @@ pub struct HttpServerImpl {
 }
 
 impl HttpServerImpl {
-    pub fn new(addr: impl Into<SocketAddr> + Send + 'static, registry: Registry) -> HttpServerImpl {
+    pub fn new(
+        addr: impl Into<SocketAddr> + Display + Send + 'static,
+        registry: Registry,
+    ) -> HttpServerImpl {
         let handle = tokio::spawn(server(addr, registry));
         HttpServerImpl { handle }
     }
@@ -20,20 +25,22 @@ impl HttpServerImpl {
 
 impl Drop for HttpServerImpl {
     fn drop(&mut self) {
+        info!("Stopping Http server...");
         self.handle.abort();
     }
 }
 
-async fn server(addr: impl Into<SocketAddr> + Send, registry: Registry) {
+async fn server(addr: impl Into<SocketAddr> + Display + Send, registry: Registry) {
     let healthcheck = warp::path!("healthcheck").map(|| {
         Response::builder()
             .status(StatusCode::OK)
-            .body(Body::from("instance server is running"))
+            .body(Body::from("Worker executor is running"))
             .unwrap()
     });
 
     let metrics = warp::path!("metrics").map(move || prometheus_metrics(registry.clone()));
 
+    info!("Http server started on {addr}");
     warp::serve(healthcheck.or(metrics)).run(addr).await;
 }
 
