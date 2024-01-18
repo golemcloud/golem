@@ -1,6 +1,5 @@
 use ctor::{ctor, dtor};
 
-
 use redis::{Commands, RedisResult};
 use std::ops::Deref;
 use std::panic;
