@@ -2,10 +2,10 @@ syntax = "proto3";
 
 package golem.cloud.project;
 
-import "golem/cloud/project/project_id.proto";
+import "golem/common/project_id.proto";
 import "golem/cloud/project/project_data.proto";
 
 message Project {
-  golem.cloud.project.ProjectId id = 1;
+  golem.common.ProjectId id = 1;
   ProjectData data = 2;
 }

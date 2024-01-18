@@ -31,6 +31,7 @@ newtype_uuid!(
     golem_api_grpc::proto::golem::template::TemplateId
 );
 
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct Timestamp(iso8601_timestamp::Timestamp);

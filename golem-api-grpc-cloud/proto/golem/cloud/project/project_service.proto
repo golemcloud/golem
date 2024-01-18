@@ -6,7 +6,7 @@ import public "golem/common/empty.proto";
 import public "golem/cloud/project/project.proto";
 import public "golem/cloud/project/project_error.proto";
 import public "golem/cloud/project/project_data_request.proto";
-import public "golem/cloud/project/project_id.proto";
+import "golem/common/project_id.proto";
 import public "golem/cloud/projectpolicy/project_action.proto";
 
 service CloudProjectService {
@@ -59,7 +59,7 @@ message CreateProjectSuccessResponse {
 }
 
 message DeleteProjectRequest {
-  golem.cloud.project.ProjectId projectId = 1;
+  golem.common.ProjectId projectId = 1;
 }
 
 message DeleteProjectResponse {
@@ -70,7 +70,7 @@ message DeleteProjectResponse {
 }
 
 message GetProjectRequest {
-  golem.cloud.project.ProjectId projectId = 1;
+  golem.common.ProjectId projectId = 1;
 }
 
 message GetProjectResponse {
@@ -81,7 +81,7 @@ message GetProjectResponse {
 }
 
 message GetProjectActionsRequest {
-  golem.cloud.project.ProjectId projectId = 1;
+  golem.common.ProjectId projectId = 1;
 }
 
 message GetProjectActionsResponse {

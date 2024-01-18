@@ -3,7 +3,7 @@ syntax = "proto3";
 package golem.cloud.projectgrant;
 
 import public "golem/common/empty.proto";
-import public "golem/cloud/project/project_id.proto";
+import public "golem/common/project_id.proto";
 import public "golem/cloud/projectgrant/project_grant_id.proto";
 import public "golem/cloud/projectgrant/project_grant.proto";
 import public "golem/cloud/projectgrant/project_grant_error.proto";
@@ -17,7 +17,7 @@ service CloudProjectGrantService {
 }
 
 message GetProjectGrantsRequest {
-  golem.cloud.project.ProjectId projectId = 1;
+  golem.common.ProjectId projectId = 1;
 }
 
 message GetProjectGrantsResponse {
@@ -32,7 +32,7 @@ message GetProjectGrantsSuccessResponse {
 }
 
 message DeleteProjectGrantRequest {
-  golem.cloud.project.ProjectId projectId = 1;
+  golem.common.ProjectId projectId = 1;
   golem.cloud.projectgrant.ProjectGrantId grantId = 2;
 }
 
@@ -44,7 +44,7 @@ message DeleteProjectGrantResponse {
 }
 
 message GetProjectGrantRequest {
-  golem.cloud.project.ProjectId projectId = 1;
+  golem.common.ProjectId projectId = 1;
   golem.cloud.projectgrant.ProjectGrantId grantId = 2;
 }
 
@@ -56,7 +56,7 @@ message GetProjectGrantResponse {
 }
 
 message CreateProjectGrantRequest {
-  golem.cloud.project.ProjectId projectId = 1;
+  golem.common.ProjectId projectId = 1;
   golem.cloud.projectgrant.ProjectGrantDataRequest data = 2;
 }
 

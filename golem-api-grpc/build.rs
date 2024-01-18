@@ -14,6 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .compile(
             &[
                 "proto/golem/common/account_id.proto",
+                "proto/golem/common/project_id.proto",
                 "proto/golem/common/empty.proto",
                 "proto/golem/common/error_body.proto",
                 "proto/golem/common/resource_limits.proto",

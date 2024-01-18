@@ -2670,6 +2670,7 @@ impl From<Template> for golem_api_grpc::proto::golem::template::Template {
             template_name: value.template_name.0,
             template_size: value.template_size,
             metadata: Some(value.metadata.into()),
+            project_id: None,
         }
     }
 }

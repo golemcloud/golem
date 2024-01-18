@@ -2,7 +2,7 @@ syntax = "proto3";
 
 import "golem/common/uuid.proto";
 
-package golem.cloud.project;
+package golem.common;
 
 message ProjectId {
   golem.common.UUID value = 1;

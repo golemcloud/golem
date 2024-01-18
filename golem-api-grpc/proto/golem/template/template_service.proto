@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package golem.template;
 
+import public "golem/common/project_id.proto";
 import public "golem/common/empty.proto";
 import public "golem/template/template.proto";
 import public "golem/template/template_error.proto";
@@ -17,7 +18,8 @@ service TemplateService {
 }
 
 message GetTemplatesRequest {
-  optional string templateName = 1;
+  golem.common.ProjectId projectId = 1;
+  optional string templateName = 2;
 }
 
 message GetTemplatesResponse {
@@ -39,7 +41,8 @@ message CreateTemplateRequest {
 }
 
 message CreateTemplateRequestHeader {
-  string templateName = 1;
+  golem.common.ProjectId projectId = 1;
+  string templateName = 2;
 }
 
 message CreateTemplateRequestChunk {
