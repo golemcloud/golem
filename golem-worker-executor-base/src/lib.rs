@@ -1,11 +1,13 @@
+pub mod durable_host;
 pub mod error;
 pub mod grpc;
-pub mod host;
 pub mod http_server;
 pub mod invocation;
 pub mod metrics;
 pub mod model;
+pub mod preview2;
 pub mod services;
+pub mod wasi_host;
 pub mod wasm_types;
 pub mod worker;
 pub mod workerctx;
@@ -31,7 +33,9 @@ use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::invocation_key::{InvocationKeyService, InvocationKeyServiceDefault};
 use crate::services::key_value::KeyValueService;
+use crate::services::oplog::{OplogService, OplogServiceDefault};
 use crate::services::promise::PromiseService;
+use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
 use crate::services::shard_manager::ShardManagerService;
 use crate::services::template::TemplateService;
@@ -67,9 +71,11 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        oplog_service: Arc<dyn OplogService + Send + Sync>,
+        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
     ) -> anyhow::Result<All<Ctx>>;
 
-    /// Can be overridden to custommize the wasmtime configuration
+    /// Can be overridden to customize the wasmtime configuration
     fn create_wasmtime_config(&self) -> Config {
         let mut config = Config::default();
 
@@ -175,6 +181,16 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let blob_store_service = blob_store::configured(&golem_config.blob_store_service).await;
 
+        let oplog_service = Arc::new(OplogServiceDefault::new(pool.clone()));
+
+        let scheduler_service = SchedulerServiceDefault::new(
+            pool.clone(),
+            shard_service.clone(),
+            promise_service.clone(),
+            lazy_worker_activator.clone(),
+            golem_config.scheduler.refresh_interval,
+        );
+
         let services = self
             .create_services(
                 active_workers,
@@ -191,6 +207,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 key_value_service,
                 blob_store_service,
                 lazy_worker_activator.clone(),
+                oplog_service,
+                scheduler_service,
             )
             .await?;
 

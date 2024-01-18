@@ -1,0 +1,16 @@
+package golem:it;
+
+interface api {
+  record task {
+    name: string,
+    description: option<string>
+  }
+
+  echo: func(input: option<string>) -> option<string>;
+
+  todo: func(input: task) -> string;
+}
+
+world option-service {
+  export api;
+}

@@ -155,9 +155,6 @@ impl WorkerApi {
         let WorkerCreationRequest { name, args, env } = request.0;
 
         let worker_id = make_worker_id(template_id, name)?;
-
-        dbg!("the worker-id is {}", worker_id.clone());
-
         let worker = self
             .worker_service
             .create(

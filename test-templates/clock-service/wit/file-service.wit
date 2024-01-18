@@ -1,0 +1,9 @@
+package golem:it;
+
+interface api {
+  sleep: func(secs: u64) -> result<_, string>;
+}
+
+world clock-service {
+  export api;
+}

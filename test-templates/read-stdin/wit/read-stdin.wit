@@ -1,0 +1,5 @@
+package golem:it;
+
+world read-stdin {
+  export run: func() -> result<string, string>;
+}

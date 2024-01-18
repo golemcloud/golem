@@ -1,7 +1,10 @@
 enable_tracing_console = false
 enable_json_log = false
 
-promise_poll_interval = "1s"
+[oplog]
+max_operations_before_commit = 128
+operations_to_load = 128
+debug_enabled = false
 
 [limits]
 max_active_instances = 1024
@@ -91,6 +94,16 @@ max_attempts = 5
 min_delay = "100ms"
 max_delay = "2s"
 multiplier = 2
+
+[scheduler]
+refresh_interval = "2s"
+
+[suspend]
+suspend_after = "10s"
+
+[active_workers]
+drop_when_full = 0.25
+ttl = "8h"
 
 [promises]
 type = "Redis"

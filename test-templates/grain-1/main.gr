@@ -1,0 +1,12 @@
+import Random from "random"
+import Result from "result"
+import Time from "sys/time"
+
+
+let rnd = Result.unwrap(Random.makeUnseeded())
+let epoch = Result.unwrap(Time.realTime())
+
+print("hello world")
+print(Random.nextInt64(rnd))
+print(epoch)
+

@@ -1,0 +1,5 @@
+package golem:it;
+
+world file-write-read-delete {
+  export run: func() -> tuple<option<string>, option<string>, option<string>>;
+}

@@ -292,6 +292,7 @@ pub mod wasm {
 
     use lazy_static::lazy_static;
     use prometheus::*;
+    use tracing::debug;
 
     use crate::error::GolemError;
 
@@ -328,6 +329,42 @@ pub mod wasm {
         .unwrap();
     }
 
+    lazy_static! {
+        static ref HOST_FUNCTION_CALL_TOTAL: CounterVec = register_counter_vec!(
+            "host_function_call_total",
+            "Number of calls to specific host functions",
+            &["interface", "name"]
+        )
+        .unwrap();
+        static ref RESUME_WORKER_SECONDS: Histogram = register_histogram!(
+            "resume_instance_seconds",
+            "Time taken to resume a worker",
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref REPLAYED_FUNCTIONS_COUNT: Histogram = register_histogram!(
+            "replayed_functions_count",
+            "Number of functions replayed per worker resumption",
+            golem_common::metrics::DEFAULT_COUNT_BUCKETS.to_vec()
+        )
+        .unwrap();
+    }
+
+    pub fn record_host_function_call(iface: &'static str, name: &'static str) {
+        debug!("golem {iface}::{name} called");
+        HOST_FUNCTION_CALL_TOTAL
+            .with_label_values(&[iface, name])
+            .inc();
+    }
+
+    pub fn record_resume_worker(duration: Duration) {
+        RESUME_WORKER_SECONDS.observe(duration.as_secs_f64());
+    }
+
+    pub fn record_number_of_replayed_functions(count: usize) {
+        REPLAYED_FUNCTIONS_COUNT.observe(count as f64);
+    }
+
     pub fn record_create_worker(duration: Duration) {
         CREATE_WORKER_SECONDS.observe(duration.as_secs_f64());
     }
@@ -349,5 +386,23 @@ pub mod wasm {
 
     pub fn record_allocated_memory(amount: usize) {
         ALLOCATED_MEMORY_BYTES.observe(amount as f64);
+    }
+}
+
+pub mod oplog {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    lazy_static! {
+        static ref OPLOG_SVC_CALL_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_svc_call_total",
+            "Number of calls to the oplog service",
+            &["api"]
+        )
+        .unwrap();
+    }
+
+    pub fn record_oplog_call(api_name: &'static str) {
+        OPLOG_SVC_CALL_TOTAL.with_label_values(&[api_name]).inc();
     }
 }

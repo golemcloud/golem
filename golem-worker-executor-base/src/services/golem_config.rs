@@ -22,6 +22,10 @@ pub struct GolemConfig {
     pub shard_manager_service: ShardManagerServiceConfig,
     pub workers: WorkersServiceConfig,
     pub redis: RedisConfig,
+    pub oplog: OplogConfig,
+    pub suspend: SuspendConfig,
+    pub active_workers: ActiveWorkersConfig,
+    pub scheduler: SchedulerConfig,
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
     pub port: u16,
@@ -182,6 +186,32 @@ impl ShardManagerServiceGrpcConfig {
     }
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct SuspendConfig {
+    #[serde(with = "humantime_serde")]
+    pub suspend_after: Duration,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ActiveWorkersConfig {
+    pub drop_when_full: f64,
+    #[serde(with = "humantime_serde")]
+    pub ttl: Duration,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SchedulerConfig {
+    #[serde(with = "humantime_serde")]
+    pub refresh_interval: Duration,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct OplogConfig {
+    pub max_operations_before_commit: i32,
+    pub operations_to_load: i32,
+    pub debug_enabled: bool,
+}
+
 impl Default for GolemConfig {
     fn default() -> Self {
         Self {
@@ -196,6 +226,10 @@ impl Default for GolemConfig {
             shard_manager_service: ShardManagerServiceConfig::default(),
             workers: WorkersServiceConfig::default(),
             redis: RedisConfig::default(),
+            oplog: OplogConfig::default(),
+            suspend: SuspendConfig::default(),
+            scheduler: SchedulerConfig::default(),
+            active_workers: ActiveWorkersConfig::default(),
             enable_tracing_console: false,
             enable_json_log: false,
             port: 9000,
@@ -308,5 +342,40 @@ impl Default for PromisesConfig {
 impl Default for WorkersServiceConfig {
     fn default() -> Self {
         Self::Redis
+    }
+}
+
+impl Default for OplogConfig {
+    fn default() -> Self {
+        Self {
+            debug_enabled: false,
+            operations_to_load: 128,
+            max_operations_before_commit: 128,
+        }
+    }
+}
+
+impl Default for SuspendConfig {
+    fn default() -> Self {
+        Self {
+            suspend_after: Duration::from_secs(10),
+        }
+    }
+}
+
+impl Default for ActiveWorkersConfig {
+    fn default() -> Self {
+        Self {
+            drop_when_full: 0.25,
+            ttl: Duration::from_secs(60 * 60 * 8),
+        }
+    }
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            refresh_interval: Duration::from_secs(2),
+        }
     }
 }

@@ -318,7 +318,6 @@ impl WorkerService for WorkerServiceDefault {
             &(worker_id.clone(), template_version, arguments, environment_variables),
             |worker_executor_client, (worker_id, template_version, args, env)| {
                 Box::pin(async move {
-                    dbg!("Creating worker");
                     let response: tonic::Response<workerexecutor::CreateWorkerResponse> = worker_executor_client
                         .create_worker(
                             CreateWorkerRequest {
@@ -339,7 +338,6 @@ impl WorkerService for WorkerServiceDefault {
                             })
                         })?;
 
-                    dbg!("The response of creating hte worker");
                     match response.into_inner() {
                         workerexecutor::CreateWorkerResponse {
                             result:
@@ -356,7 +354,6 @@ impl WorkerService for WorkerServiceDefault {
                 })
             }).await?;
 
-        dbg!("Created worker");
         Ok(VersionedWorkerId {
             worker_id: worker_id.clone(),
             template_version_used: template_version,
