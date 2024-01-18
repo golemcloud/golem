@@ -1,6 +1,6 @@
 use ctor::{ctor, dtor};
-use fred::clients::RedisClient;
-use fred::prelude::RedisConfig;
+
+
 use redis::{Commands, RedisResult};
 use std::ops::Deref;
 use std::panic;

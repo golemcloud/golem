@@ -3,11 +3,14 @@ use async_trait::async_trait;
 use prometheus::Registry;
 use std::collections::HashMap;
 use std::path::Path;
+use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock};
 use std::{env, panic};
 
 use crate::REDIS;
-use golem_common::model::{AccountId, TemplateId, VersionedWorkerId, WorkerId};
+use golem_common::model::{
+    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
+};
 use golem_common::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::proto::golem::workerexecutor::{
     create_worker_response, get_invocation_key_response, interrupt_worker_response,
@@ -27,9 +30,11 @@ use golem_worker_executor_base::services::golem_config::{
 };
 
 use golem_worker_executor_base::durable_host::{
-    DurableWorkerCtx, HasDurableWorkerCtx, PublicDurableWorkerState,
+    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
-use golem_worker_executor_base::model::{ExecutionStatus, WorkerConfig};
+use golem_worker_executor_base::model::{
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig,
+};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::invocation_key::InvocationKeyService;
@@ -46,9 +51,12 @@ use golem_worker_executor_base::services::template::TemplateService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::All;
+use golem_worker_executor_base::services::{All, HasAll};
 use golem_worker_executor_base::wasi_host::create_linker;
-use golem_worker_executor_base::workerctx::{FuelManagement, WorkerCtx};
+use golem_worker_executor_base::workerctx::{
+    ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
+    StatusManagement, WorkerCtx,
+};
 use golem_worker_executor_base::{durable_host, Bootstrap};
 use serde_json::Value;
 use tokio::runtime::Handle;
@@ -57,8 +65,8 @@ use tokio::task::JoinHandle;
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use uuid::Uuid;
-use wasmtime::component::Linker;
-use wasmtime::{Engine, ResourceLimiterAsync};
+use wasmtime::component::{Instance, Linker};
+use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 
 pub struct TestWorkerExecutor {
     pub client: WorkerExecutorClient<Channel>,
@@ -466,18 +474,16 @@ async fn run(
 }
 
 struct TestWorkerCtx {
-    golem_ctx: DurableWorkerCtx<TestWorkerCtx>,
+    durable_ctx: DurableWorkerCtx<TestWorkerCtx>,
 }
 
-impl HasDurableWorkerCtx for TestWorkerCtx {
-    type ExtraDeps = ();
-
-    fn durable_worker_ctx(&self) -> &DurableWorkerCtx<Self> {
-        &self.golem_ctx
+impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
+    fn durable_ctx(&self) -> &DurableWorkerCtx<TestWorkerCtx> {
+        &self.durable_ctx
     }
 
-    fn durable_worker_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Self> {
-        &mut self.golem_ctx
+    fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<TestWorkerCtx> {
+        &mut self.durable_ctx
     }
 }
 
@@ -495,6 +501,177 @@ impl FuelManagement for TestWorkerCtx {
 
     async fn return_fuel(&mut self, current_level: i64) -> Result<i64, GolemError> {
         Ok(current_level)
+    }
+}
+
+#[async_trait]
+impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
+    type ExtraDeps = ();
+
+    async fn set_worker_status<T: HasAll<TestWorkerCtx> + Send + Sync>(
+        this: &T,
+        worker_id: &WorkerId,
+        status: WorkerStatus,
+    ) {
+        DurableWorkerCtx::<TestWorkerCtx>::set_worker_status(this, worker_id, status).await
+    }
+
+    async fn get_worker_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
+        this: &T,
+        worker_id: &WorkerId,
+    ) -> u32 {
+        DurableWorkerCtx::<TestWorkerCtx>::get_worker_retry_count(this, worker_id).await
+    }
+
+    async fn get_assumed_worker_status<T: HasAll<TestWorkerCtx> + Send + Sync>(
+        this: &T,
+        worker_id: &WorkerId,
+        metadata: &Option<WorkerMetadata>,
+    ) -> WorkerStatus {
+        DurableWorkerCtx::<TestWorkerCtx>::get_assumed_worker_status(this, worker_id, metadata)
+            .await
+    }
+
+    async fn prepare_instance(
+        worker_id: &VersionedWorkerId,
+        instance: &Instance,
+        store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
+    ) -> Result<(), GolemError> {
+        DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(worker_id, instance, store).await
+    }
+
+    async fn record_last_known_limits<T: HasAll<TestWorkerCtx> + Send + Sync>(
+        this: &T,
+        account_id: &AccountId,
+        last_known_limits: &CurrentResourceLimits,
+    ) -> Result<(), GolemError> {
+        DurableWorkerCtx::<TestWorkerCtx>::record_last_known_limits(
+            this,
+            account_id,
+            last_known_limits,
+        )
+        .await
+    }
+
+    async fn on_worker_deleted<T: HasAll<TestWorkerCtx> + Send + Sync>(
+        this: &T,
+        worker_id: &WorkerId,
+    ) -> Result<(), GolemError> {
+        DurableWorkerCtx::<TestWorkerCtx>::on_worker_deleted(this, worker_id).await
+    }
+
+    async fn on_shard_assignment_changed<T: HasAll<TestWorkerCtx> + Send + Sync>(
+        this: &T,
+    ) -> Result<(), Error> {
+        DurableWorkerCtx::<TestWorkerCtx>::on_shard_assignment_changed(this).await
+    }
+}
+
+#[async_trait]
+impl InvocationManagement for TestWorkerCtx {
+    async fn set_current_invocation_key(&mut self, invocation_key: Option<InvocationKey>) {
+        self.durable_ctx
+            .set_current_invocation_key(invocation_key)
+            .await
+    }
+
+    async fn get_current_invocation_key(&self) -> Option<InvocationKey> {
+        self.durable_ctx.get_current_invocation_key().await
+    }
+
+    async fn interrupt_invocation_key(&mut self, key: &InvocationKey) {
+        self.durable_ctx.interrupt_invocation_key(key).await
+    }
+
+    async fn resume_invocation_key(&mut self, key: &InvocationKey) {
+        self.durable_ctx.resume_invocation_key(key).await
+    }
+
+    async fn confirm_invocation_key(
+        &mut self,
+        key: &InvocationKey,
+        vals: Result<Vec<Val>, GolemError>,
+    ) {
+        self.durable_ctx.confirm_invocation_key(key, vals).await
+    }
+}
+
+#[async_trait]
+impl IoCapturing for TestWorkerCtx {
+    async fn start_capturing_stdout(&mut self, provided_stdin: String) {
+        self.durable_ctx
+            .start_capturing_stdout(provided_stdin)
+            .await
+    }
+
+    async fn finish_capturing_stdout(&mut self) -> Result<String, FromUtf8Error> {
+        self.durable_ctx.finish_capturing_stdout().await
+    }
+}
+
+#[async_trait]
+impl StatusManagement for TestWorkerCtx {
+    fn check_interrupt(&self) -> Option<InterruptKind> {
+        self.durable_ctx.check_interrupt()
+    }
+
+    fn set_suspended(&self) {
+        self.durable_ctx.set_suspended()
+    }
+
+    fn set_running(&self) {
+        self.durable_ctx.set_running()
+    }
+
+    async fn get_worker_status(&self) -> WorkerStatus {
+        self.durable_ctx.get_worker_status().await
+    }
+
+    async fn store_worker_status(&self, status: WorkerStatus) {
+        self.durable_ctx.store_worker_status(status).await
+    }
+
+    async fn deactivate(&self) {
+        self.durable_ctx.deactivate().await
+    }
+}
+
+#[async_trait]
+impl InvocationHooks for TestWorkerCtx {
+    async fn on_exported_function_invoked(
+        &mut self,
+        full_function_name: &str,
+        function_input: &Vec<Val>,
+        calling_convention: Option<&golem_common::model::CallingConvention>,
+    ) -> anyhow::Result<()> {
+        self.durable_ctx
+            .on_exported_function_invoked(full_function_name, function_input, calling_convention)
+            .await
+    }
+
+    async fn on_invocation_failure(&mut self, error: &Error) -> Result<(), Error> {
+        self.durable_ctx.on_invocation_failure(error).await
+    }
+
+    async fn on_invocation_failure_deactivated(
+        &mut self,
+        error: &Error,
+    ) -> Result<WorkerStatus, Error> {
+        self.durable_ctx
+            .on_invocation_failure_deactivated(error)
+            .await
+    }
+
+    async fn on_invocation_success(
+        &mut self,
+        full_function_name: &str,
+        function_input: &Vec<Val>,
+        consumed_fuel: i64,
+        output: Vec<Val>,
+    ) -> Result<Option<Vec<Val>>, Error> {
+        self.durable_ctx
+            .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
+            .await
     }
 }
 
@@ -522,7 +699,7 @@ impl WorkerCtx for TestWorkerCtx {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
     ) -> Result<Self, GolemError> {
-        let golem_ctx = DurableWorkerCtx::create(
+        let durable_ctx = DurableWorkerCtx::create(
             worker_id,
             account_id,
             promise_service,
@@ -540,11 +717,11 @@ impl WorkerCtx for TestWorkerCtx {
             execution_status,
         )
         .await?;
-        Ok(Self { golem_ctx })
+        Ok(Self { durable_ctx })
     }
 
     fn get_public_state(&self) -> &Self::PublicState {
-        self.golem_ctx.get_public_state()
+        self.durable_ctx.get_public_state()
     }
 
     fn resource_limiter(&mut self) -> &mut dyn ResourceLimiterAsync {
@@ -552,7 +729,7 @@ impl WorkerCtx for TestWorkerCtx {
     }
 
     fn worker_id(&self) -> &VersionedWorkerId {
-        self.golem_ctx.worker_id()
+        self.durable_ctx.worker_id()
     }
 
     fn is_exit(error: &Error) -> Option<i32> {
@@ -653,11 +830,11 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<TestWorkerCtx>> {
         let mut linker =
             create_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(engine, |x| {
-                &mut x.golem_ctx
+                &mut x.durable_ctx
             })?;
         durable_host::host::add_to_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(
             &mut linker,
-            |x| &mut x.golem_ctx,
+            |x| &mut x.durable_ctx,
         )?;
         Ok(linker)
     }

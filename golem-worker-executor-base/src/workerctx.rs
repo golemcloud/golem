@@ -284,7 +284,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn prepare_instance(
         worker_id: &VersionedWorkerId,
         instance: &wasmtime::component::Instance,
-        store: &mut (impl AsContextMut<Data = Self> + Send),
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<(), GolemError>;
 
     /// Records the last known resource limits of a worker without activating it
