@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use http::{Response, StatusCode};
 use prometheus::{Encoder, Registry, TextEncoder};
 use tokio::task::JoinHandle;
-use tracing::{info};
+use tracing::info;
 use warp::hyper::Body;
 use warp::Filter;
 
