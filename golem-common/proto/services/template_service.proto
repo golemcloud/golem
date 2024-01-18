@@ -10,6 +10,7 @@ import public "models/template_id.proto";
 import public "models/token_secret.proto";
 
 service TemplateService {
+  rpc GetTemplates (GetTemplatesRequest) returns (GetTemplatesResponse);
   rpc CreateTemplate (stream CreateTemplateRequest) returns (CreateTemplateResponse);
   rpc DownloadTemplate (DownloadTemplateRequest) returns (stream DownloadTemplateResponse);
   rpc GetTemplate (GetTemplateRequest) returns (GetTemplateResponse);
