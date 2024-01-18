@@ -1,7 +1,7 @@
 version: '3'
 
 services:
-  aws-local-s3:
+  localstack:
     image: localstack/localstack:1.0.4
     container_name: localstack
     environment:
@@ -90,3 +90,5 @@ services:
       - AWS_DEFAULT_REGION=us-east-1
     ports:
       - "9000:9000"
+    depends_on:
+      - localstack
