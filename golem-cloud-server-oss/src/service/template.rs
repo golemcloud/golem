@@ -631,14 +631,14 @@ mod wasm_converter {
     fn convert_function_param(param: AnalysedFunctionParameter) -> FunctionParameter {
         FunctionParameter {
             name: param.name,
-            tpe: convert_type(param.typ),
+            typ: convert_type(param.typ),
         }
     }
 
     fn convert_function_result(result: AnalysedFunctionResult) -> FunctionResult {
         FunctionResult {
             name: result.name,
-            tpe: convert_type(result.typ),
+            typ: convert_type(result.typ),
         }
     }
 
