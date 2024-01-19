@@ -14,6 +14,7 @@ mod common;
 pub mod api;
 pub mod blobstore;
 pub mod guest_languages;
+pub mod keyvalue;
 pub mod wasi;
 
 #[allow(dead_code)]
