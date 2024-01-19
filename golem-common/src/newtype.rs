@@ -1,6 +1,6 @@
 #[macro_export]
 macro_rules! newtype_uuid {
-    ($name:ident) => {
+    ($name:ident, $proto_type:path) => {
         #[derive(
             Clone, Debug, PartialOrd, Ord, FromStr, Eq, Hash, PartialEq, Serialize, Deserialize,
         )]
@@ -45,10 +45,10 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl TryFrom<$crate::proto::golem::$name> for $name {
+        impl TryFrom<$proto_type> for $name {
             type Error = String;
 
-            fn try_from(value: $crate::proto::golem::$name) -> Result<Self, Self::Error> {
+            fn try_from(value: $proto_type) -> Result<Self, Self::Error> {
                 Ok(Self(
                     value
                         .value
@@ -58,15 +58,15 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl From<$name> for $crate::proto::golem::$name {
+        impl From<$name> for $proto_type {
             fn from(value: $name) -> Self {
-                $crate::proto::golem::$name {
+                $proto_type {
                     value: Some(value.0.into()),
                 }
             }
         }
 
-        impl Type for $name {
+        impl poem_openapi::types::Type for $name {
             const IS_REQUIRED: bool = true;
             type RawValueType = Self;
             type RawElementValueType = Self;

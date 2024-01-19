@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-package golem;
-
-import public "models/val.proto";
-
-message InvokeParameters {
-  repeated Val params = 1;
-}

@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use bigdecimal::BigDecimal;
-use golem_common::model::CallingConvention;
-use golem_common::proto::golem::r#type::Type;
-use golem_common::proto::golem::val::Val;
-use golem_common::proto::golem::{
-    FunctionParameter, FunctionResult, PrimitiveType, Val as VVal, ValEnum, ValFlags, ValList,
-    ValOption, ValRecord, ValResult, ValTuple, ValVariant,
+use golem_api_grpc::proto::golem::template::r#type::Type;
+use golem_api_grpc::proto::golem::template::{FunctionParameter, FunctionResult, PrimitiveType};
+use golem_api_grpc::proto::golem::worker::val::Val;
+use golem_api_grpc::proto::golem::worker::{
+    Val as VVal, ValEnum, ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple, ValVariant,
 };
+use golem_common::model::CallingConvention;
 use num_traits::cast::FromPrimitive;
 use num_traits::ToPrimitive;
 use serde_json::{Number, Value};
@@ -1019,7 +1019,7 @@ mod tests {
 
     use std::collections::HashSet;
 
-    use golem_common::proto::golem::TypePrimitive;
+    use golem_api_grpc::proto::golem::template::TypePrimitive;
     use proptest::prelude::*;
     use serde::Serialize;
     use serde_json::{Number, Value};
@@ -1043,74 +1043,84 @@ mod tests {
 
     impl RandomData {
         fn get_type() -> Type {
-            Type::Record(golem_common::proto::golem::TypeRecord {
+            Type::Record(golem_api_grpc::proto::golem::template::TypeRecord {
                 fields: vec![
-                    golem_common::proto::golem::NameTypePair {
+                    golem_api_grpc::proto::golem::template::NameTypePair {
                         name: "string".to_string(),
-                        typ: Some(golem_common::proto::golem::Type {
+                        typ: Some(golem_api_grpc::proto::golem::template::Type {
                             r#type: Some(Type::Primitive(TypePrimitive {
                                 primitive: PrimitiveType::Str as i32,
                             })),
                         }),
                     },
-                    golem_common::proto::golem::NameTypePair {
+                    golem_api_grpc::proto::golem::template::NameTypePair {
                         name: "number".to_string(),
-                        typ: Some(golem_common::proto::golem::Type {
+                        typ: Some(golem_api_grpc::proto::golem::template::Type {
                             r#type: Some(Type::Primitive(TypePrimitive {
                                 primitive: PrimitiveType::F64 as i32,
                             })),
                         }),
                     },
-                    golem_common::proto::golem::NameTypePair {
+                    golem_api_grpc::proto::golem::template::NameTypePair {
                         name: "nullable".to_string(),
-                        typ: Some(golem_common::proto::golem::Type {
+                        typ: Some(golem_api_grpc::proto::golem::template::Type {
                             r#type: Some(Type::Option(Box::new(
-                                golem_common::proto::golem::TypeOption {
-                                    elem: Some(Box::new(golem_common::proto::golem::Type {
-                                        r#type: Some(Type::Primitive(TypePrimitive {
-                                            primitive: PrimitiveType::Str as i32,
-                                        })),
-                                    })),
+                                golem_api_grpc::proto::golem::template::TypeOption {
+                                    elem: Some(Box::new(
+                                        golem_api_grpc::proto::golem::template::Type {
+                                            r#type: Some(Type::Primitive(TypePrimitive {
+                                                primitive: PrimitiveType::Str as i32,
+                                            })),
+                                        },
+                                    )),
                                 },
                             ))),
                         }),
                     },
-                    golem_common::proto::golem::NameTypePair {
+                    golem_api_grpc::proto::golem::template::NameTypePair {
                         name: "collection".to_string(),
-                        typ: Some(golem_common::proto::golem::Type {
+                        typ: Some(golem_api_grpc::proto::golem::template::Type {
                             r#type: Some(Type::List(Box::new(
-                                golem_common::proto::golem::TypeList {
-                                    elem: Some(Box::new(golem_common::proto::golem::Type {
-                                        r#type: Some(Type::Primitive(TypePrimitive {
-                                            primitive: PrimitiveType::Str as i32,
-                                        })),
-                                    })),
+                                golem_api_grpc::proto::golem::template::TypeList {
+                                    elem: Some(Box::new(
+                                        golem_api_grpc::proto::golem::template::Type {
+                                            r#type: Some(Type::Primitive(TypePrimitive {
+                                                primitive: PrimitiveType::Str as i32,
+                                            })),
+                                        },
+                                    )),
                                 },
                             ))),
                         }),
                     },
-                    golem_common::proto::golem::NameTypePair {
+                    golem_api_grpc::proto::golem::template::NameTypePair {
                         name: "boolean".to_string(),
-                        typ: Some(golem_common::proto::golem::Type {
+                        typ: Some(golem_api_grpc::proto::golem::template::Type {
                             r#type: Some(Type::Primitive(TypePrimitive {
                                 primitive: PrimitiveType::Bool as i32,
                             })),
                         }),
                     },
                     // one field is missing
-                    golem_common::proto::golem::NameTypePair {
+                    golem_api_grpc::proto::golem::template::NameTypePair {
                         name: "object".to_string(),
-                        typ: Some(golem_common::proto::golem::Type {
-                            r#type: Some(Type::Record(golem_common::proto::golem::TypeRecord {
-                                fields: vec![golem_common::proto::golem::NameTypePair {
-                                    name: "nested".to_string(),
-                                    typ: Some(golem_common::proto::golem::Type {
-                                        r#type: Some(Type::Primitive(TypePrimitive {
-                                            primitive: PrimitiveType::Str as i32,
-                                        })),
-                                    }),
-                                }],
-                            })),
+                        typ: Some(golem_api_grpc::proto::golem::template::Type {
+                            r#type: Some(Type::Record(
+                                golem_api_grpc::proto::golem::template::TypeRecord {
+                                    fields: vec![
+                                        golem_api_grpc::proto::golem::template::NameTypePair {
+                                            name: "nested".to_string(),
+                                            typ: Some(
+                                                golem_api_grpc::proto::golem::template::Type {
+                                                    r#type: Some(Type::Primitive(TypePrimitive {
+                                                        primitive: PrimitiveType::Str as i32,
+                                                    })),
+                                                },
+                                            ),
+                                        },
+                                    ],
+                                },
+                            )),
                         }),
                     },
                 ],
@@ -1287,13 +1297,15 @@ mod tests {
                                 0
                             },
                         }),
-                        expected_type: Type::Enum(golem_common::proto::golem::TypeEnum {
-                            names: if unique_values.is_empty() {
-                                vec!["const_name".to_string()]
-                            } else {
-                                unique_values.iter().map(|name| name.to_string()).collect()
+                        expected_type: Type::Enum(
+                            golem_api_grpc::proto::golem::template::TypeEnum {
+                                names: if unique_values.is_empty() {
+                                    vec!["const_name".to_string()]
+                                } else {
+                                    unique_values.iter().map(|name| name.to_string()).collect()
+                                },
                             },
-                        }),
+                        ),
                     }
                 }),
                 any::<Vec<String>>().prop_map(|values| {
@@ -1308,9 +1320,11 @@ mod tests {
                                 .map(|(index, _)| index as i32)
                                 .collect(),
                         }),
-                        expected_type: Type::Flags(golem_common::proto::golem::TypeFlags {
-                            names: unique_values.iter().map(|name| name.to_string()).collect(),
-                        }),
+                        expected_type: Type::Flags(
+                            golem_api_grpc::proto::golem::template::TypeFlags {
+                                names: unique_values.iter().map(|name| name.to_string()).collect(),
+                            },
+                        ),
                     }
                 }),
                 any::<Vec<PrimitiveVal>>().prop_map(|values| {
@@ -1337,11 +1351,15 @@ mod tests {
                                 })
                                 .collect(),
                         }),
-                        expected_type: Type::List(Box::new(golem_common::proto::golem::TypeList {
-                            elem: Some(Box::new(golem_common::proto::golem::Type {
-                                r#type: expected_type.into(),
-                            })),
-                        })),
+                        expected_type: Type::List(Box::new(
+                            golem_api_grpc::proto::golem::template::TypeList {
+                                elem: Some(Box::new(
+                                    golem_api_grpc::proto::golem::template::Type {
+                                        r#type: expected_type.into(),
+                                    },
+                                )),
+                            },
+                        )),
                     }
                 }),
                 any::<Vec<PrimitiveVal>>().prop_map(|values| FunctionOutputTestResult {
@@ -1353,10 +1371,10 @@ mod tests {
                             })
                             .collect()
                     }),
-                    expected_type: Type::Tuple(golem_common::proto::golem::TypeTuple {
+                    expected_type: Type::Tuple(golem_api_grpc::proto::golem::template::TypeTuple {
                         elems: values
                             .iter()
-                            .map(|x| golem_common::proto::golem::Type {
+                            .map(|x| golem_api_grpc::proto::golem::template::Type {
                                 r#type: Some(x.expected_type.clone())
                             })
                             .collect()
@@ -1376,17 +1394,23 @@ mod tests {
                                     .collect(),
                             })
                         },
-                        expected_type: Type::Record(golem_common::proto::golem::TypeRecord {
-                            fields: new_values
-                                .iter()
-                                .map(|(name, val)| golem_common::proto::golem::NameTypePair {
-                                    name: name.to_string(),
-                                    typ: Some(golem_common::proto::golem::Type {
-                                        r#type: Some(val.expected_type.clone()),
-                                    }),
-                                })
-                                .collect(),
-                        }),
+                        expected_type: Type::Record(
+                            golem_api_grpc::proto::golem::template::TypeRecord {
+                                fields: new_values
+                                    .iter()
+                                    .map(|(name, val)| {
+                                        golem_api_grpc::proto::golem::template::NameTypePair {
+                                            name: name.to_string(),
+                                            typ: Some(
+                                                golem_api_grpc::proto::golem::template::Type {
+                                                    r#type: Some(val.expected_type.clone()),
+                                                },
+                                            ),
+                                        }
+                                    })
+                                    .collect(),
+                            },
+                        ),
                     }
                 }),
                 any::<PrimitiveVal>().prop_map(|val| FunctionOutputTestResult {
@@ -1396,24 +1420,28 @@ mod tests {
                             val: Some(val.val.clone())
                         }))
                     })),
-                    expected_type: Type::Option(Box::new(golem_common::proto::golem::TypeOption {
-                        elem: Some(Box::new(golem_common::proto::golem::Type {
-                            r#type: Some(val.expected_type.clone())
-                        }))
-                    }))
+                    expected_type: Type::Option(Box::new(
+                        golem_api_grpc::proto::golem::template::TypeOption {
+                            elem: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
+                                r#type: Some(val.expected_type.clone())
+                            }))
+                        }
+                    ))
                 }),
                 Just(FunctionOutputTestResult {
                     val: Val::Option(Box::new(ValOption {
                         discriminant: 0,
                         value: None
                     })),
-                    expected_type: Type::Option(Box::new(golem_common::proto::golem::TypeOption {
-                        elem: Some(Box::new(golem_common::proto::golem::Type {
-                            r#type: Some(Type::Primitive(TypePrimitive {
-                                primitive: PrimitiveType::Str as i32
+                    expected_type: Type::Option(Box::new(
+                        golem_api_grpc::proto::golem::template::TypeOption {
+                            elem: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
+                                r#type: Some(Type::Primitive(TypePrimitive {
+                                    primitive: PrimitiveType::Str as i32
+                                }))
                             }))
-                        }))
-                    }))
+                        }
+                    ))
                 }),
                 any::<PrimitiveVal>().prop_map(|val| FunctionOutputTestResult {
                     val: Val::Result(Box::new(ValResult {
@@ -1422,16 +1450,18 @@ mod tests {
                             val: Some(val.val.clone())
                         }))
                     })),
-                    expected_type: Type::Result(Box::new(golem_common::proto::golem::TypeResult {
-                        ok: Some(Box::new(golem_common::proto::golem::Type {
-                            r#type: Some(val.expected_type.clone())
-                        })),
-                        err: Some(Box::new(golem_common::proto::golem::Type {
-                            r#type: Some(Type::Primitive(TypePrimitive {
-                                primitive: PrimitiveType::Str as i32
+                    expected_type: Type::Result(Box::new(
+                        golem_api_grpc::proto::golem::template::TypeResult {
+                            ok: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
+                                r#type: Some(val.expected_type.clone())
+                            })),
+                            err: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
+                                r#type: Some(Type::Primitive(TypePrimitive {
+                                    primitive: PrimitiveType::Str as i32
+                                }))
                             }))
-                        }))
-                    }))
+                        }
+                    ))
                 }),
                 any::<PrimitiveVal>().prop_map(|val| FunctionOutputTestResult {
                     val: Val::Result(Box::new(ValResult {
@@ -1440,16 +1470,18 @@ mod tests {
                             val: Some(val.val.clone())
                         }))
                     })),
-                    expected_type: Type::Result(Box::new(golem_common::proto::golem::TypeResult {
-                        ok: Some(Box::new(golem_common::proto::golem::Type {
-                            r#type: Some(Type::Primitive(TypePrimitive {
-                                primitive: PrimitiveType::Str as i32
+                    expected_type: Type::Result(Box::new(
+                        golem_api_grpc::proto::golem::template::TypeResult {
+                            ok: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
+                                r#type: Some(Type::Primitive(TypePrimitive {
+                                    primitive: PrimitiveType::Str as i32
+                                }))
+                            })),
+                            err: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
+                                r#type: Some(val.expected_type.clone())
                             }))
-                        })),
-                        err: Some(Box::new(golem_common::proto::golem::Type {
-                            r#type: Some(val.expected_type.clone())
-                        }))
-                    }))
+                        }
+                    ))
                 }),
                 any::<PrimitiveVal>().prop_map(|val| FunctionOutputTestResult {
                     val: val.val.clone(),
@@ -1717,7 +1749,7 @@ mod tests {
         let res = str_val.validate_function_result(
             vec![FunctionResult {
                 name: Some("a".to_string()),
-                tpe: Some(golem_common::proto::golem::Type {
+                tpe: Some(golem_api_grpc::proto::golem::template::Type {
                     r#type: Some(Type::Primitive(TypePrimitive {
                         primitive: PrimitiveType::Str as i32,
                     })),
@@ -1735,7 +1767,7 @@ mod tests {
         let res = num_val.validate_function_result(
             vec![FunctionResult {
                 name: Some("a".to_string()),
-                tpe: Some(golem_common::proto::golem::Type {
+                tpe: Some(golem_api_grpc::proto::golem::template::Type {
                     r#type: Some(Type::Primitive(TypePrimitive {
                         primitive: PrimitiveType::F64 as i32,
                     })),
@@ -1753,7 +1785,7 @@ mod tests {
         let res = bool_val.validate_function_result(
             vec![FunctionResult {
                 name: Some("a".to_string()),
-                tpe: Some(golem_common::proto::golem::Type {
+                tpe: Some(golem_api_grpc::proto::golem::template::Type {
                     r#type: Some(Type::Primitive(TypePrimitive {
                         primitive: PrimitiveType::Bool as i32,
                     })),

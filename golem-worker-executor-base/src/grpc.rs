@@ -6,14 +6,14 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use golem_api_grpc::proto::golem;
+use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
+use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
 use golem_common::cache::PendingOrFinal;
 use golem_common::model as common_model;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, ShardId, WorkerMetadata, WorkerStatus,
 };
-use golem_common::proto::golem;
-use golem_common::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
-use golem_common::proto::golem::ResourceLimits as GrpcResourceLimits;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -116,7 +116,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 }
 
 type ResponseResult<T> = Result<Response<T>, Status>;
-type ResponseStream = ReceiverStream<Result<golem::LogEvent, Status>>;
+type ResponseStream = ReceiverStream<Result<golem::worker::LogEvent, Status>>;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -291,7 +291,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(success)
     }
 
-    async fn delete_worker_internal(&self, inner: golem::WorkerId) -> Result<(), GolemError> {
+    async fn delete_worker_internal(
+        &self,
+        inner: golem::worker::WorkerId,
+    ) -> Result<(), GolemError> {
         let worker_id = common_model::WorkerId::from_proto(inner);
 
         self.validate_worker_id(&worker_id)?;
@@ -509,10 +512,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn invoke_worker_internal<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<Option<Result<Vec<golem::Val>, GolemError>>, GolemError> {
+    ) -> Result<Option<Result<Vec<golem::worker::Val>, GolemError>>, GolemError> {
         let full_function_name = request.name();
 
-        let function_input: Vec<golem::Val> = request.input();
+        let function_input: Vec<golem::worker::Val> = request.input();
         let worker_id = request.worker_id()?;
         let account_id: AccountId = request.account_id()?;
 
@@ -566,7 +569,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         let public_state = &worker_details.public_state;
 
                         let bytes = match function_input.first().unwrap().val.as_ref() {
-                            Some(golem::val::Val::String(value)) => {
+                            Some(golem::worker::val::Val::String(value)) => {
                                 Ok(Bytes::from(format!("{}\n", value).to_string()))
                             }
                             _ => Err(GolemError::invalid_request(
@@ -684,8 +687,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn get_worker_metadata_internal(
         &self,
-        worker_id: &golem::WorkerId,
-    ) -> Result<golem::WorkerMetadata, GolemError> {
+        worker_id: &golem::worker::WorkerId,
+    ) -> Result<golem::worker::WorkerMetadata, GolemError> {
         let worker_id = common_model::WorkerId::from_proto(worker_id.clone());
         let metadata = self
             .worker_service()
@@ -695,13 +698,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let retry_count = Ctx::get_worker_retry_count(self, &worker_id).await as i32;
 
-        Ok(golem::WorkerMetadata {
+        Ok(golem::worker::WorkerMetadata {
             worker_id: Some(worker_id.into_proto()),
             args: metadata.args.clone(),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             account_id: Some(metadata.account_id.into()),
             template_version: metadata.worker_id.template_version,
-            status: Into::<golem::WorkerStatus>::into(metadata.last_known_status.status).into(),
+            status: Into::<golem::worker::WorkerStatus>::into(metadata.last_known_status.status)
+                .into(),
             retry_count,
         })
     }
@@ -738,7 +742,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::CreateWorkerResponse {
                     result: Some(
                         golem::workerexecutor::create_worker_response::Result::Success(
-                            golem::Empty {},
+                            golem::common::Empty {},
                         ),
                     ),
                 },
@@ -840,7 +844,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::InvokeWorkerResponse {
                     result: Some(
                         golem::workerexecutor::invoke_worker_response::Result::Success(
-                            golem::Empty {},
+                            golem::common::Empty {},
                         ),
                     ),
                 },
@@ -923,9 +927,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
                         worker_event::WorkerEvent::StdOut(line) => {
                             match tx
-                                .send(Result::<_, Status>::Ok(golem::LogEvent {
-                                    event: Some(golem::log_event::Event::Stdout(
-                                        golem::StdOutLog {
+                                .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
+                                    event: Some(golem::worker::log_event::Event::Stdout(
+                                        golem::worker::StdOutLog {
                                             message: String::from_utf8(line).unwrap(),
                                         },
                                     )),
@@ -943,9 +947,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
                         worker_event::WorkerEvent::StdErr(line) => {
                             match tx
-                                .send(Result::<_, Status>::Ok(golem::LogEvent {
-                                    event: Some(golem::log_event::Event::Stderr(
-                                        golem::StdErrLog {
+                                .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
+                                    event: Some(golem::worker::log_event::Event::Stderr(
+                                        golem::worker::StdErrLog {
                                             message: String::from_utf8(line).unwrap(),
                                         },
                                     )),
@@ -966,19 +970,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             context,
                             message,
                         } => match tx
-                            .send(Result::<_, Status>::Ok(golem::LogEvent {
-                                event: Some(golem::log_event::Event::Log(golem::Log {
-                                    level: match level {
-                                        LogLevel::Trace => golem::Level::Trace.into(),
-                                        LogLevel::Debug => golem::Level::Debug.into(),
-                                        LogLevel::Info => golem::Level::Info.into(),
-                                        LogLevel::Warn => golem::Level::Warn.into(),
-                                        LogLevel::Error => golem::Level::Error.into(),
-                                        LogLevel::Critical => golem::Level::Critical.into(),
+                            .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
+                                event: Some(golem::worker::log_event::Event::Log(
+                                    golem::worker::Log {
+                                        level: match level {
+                                            LogLevel::Trace => golem::worker::Level::Trace.into(),
+                                            LogLevel::Debug => golem::worker::Level::Debug.into(),
+                                            LogLevel::Info => golem::worker::Level::Info.into(),
+                                            LogLevel::Warn => golem::worker::Level::Warn.into(),
+                                            LogLevel::Error => golem::worker::Level::Error.into(),
+                                            LogLevel::Critical => {
+                                                golem::worker::Level::Critical.into()
+                                            }
+                                        },
+                                        context,
+                                        message,
                                     },
-                                    context,
-                                    message,
-                                })),
+                                )),
                             }))
                             .await
                         {
@@ -1010,7 +1018,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn delete_worker(
         &self,
-        request: Request<golem::WorkerId>,
+        request: Request<golem::worker::WorkerId>,
     ) -> Result<Response<golem::workerexecutor::DeleteWorkerResponse>, Status> {
         let request = request.into_inner();
         let record =
@@ -1020,7 +1028,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::DeleteWorkerResponse {
                     result: Some(
                         golem::workerexecutor::delete_worker_response::Result::Success(
-                            golem::Empty {},
+                            golem::common::Empty {},
                         ),
                     ),
                 },
@@ -1084,7 +1092,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::InterruptWorkerResponse {
                     result: Some(
                         golem::workerexecutor::interrupt_worker_response::Result::Success(
-                            golem::Empty {},
+                            golem::common::Empty {},
                         ),
                     ),
                 },
@@ -1118,7 +1126,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::RevokeShardsResponse {
                     result: Some(
                         golem::workerexecutor::revoke_shards_response::Result::Success(
-                            golem::Empty {},
+                            golem::common::Empty {},
                         ),
                     ),
                 },
@@ -1150,7 +1158,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::AssignShardsResponse {
                     result: Some(
                         golem::workerexecutor::assign_shards_response::Result::Success(
-                            golem::Empty {},
+                            golem::common::Empty {},
                         ),
                     ),
                 },
@@ -1170,7 +1178,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn get_worker_metadata(
         &self,
-        request: Request<golem::WorkerId>,
+        request: Request<golem::worker::WorkerId>,
     ) -> Result<Response<golem::workerexecutor::GetWorkerMetadataResponse>, Status> {
         let worker_id = request.into_inner();
         let record =
@@ -1215,7 +1223,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::ResumeWorkerResponse {
                     result: Some(
                         golem::workerexecutor::resume_worker_response::Result::Success(
-                            golem::Empty {},
+                            golem::common::Empty {},
                         ),
                     ),
                 },
@@ -1238,7 +1246,7 @@ trait GrpcInvokeRequest {
     fn account_id(&self) -> Result<AccountId, GolemError>;
     fn account_limits(&self) -> Option<GrpcResourceLimits>;
     fn calling_convention(&self) -> CallingConvention;
-    fn input(&self) -> Vec<golem::Val>;
+    fn input(&self) -> Vec<golem::worker::Val>;
     fn worker_id(&self) -> Result<common_model::WorkerId, GolemError>;
     fn invocation_key(&self) -> Result<Option<InvocationKey>, GolemError>;
     fn name(&self) -> String;
@@ -1261,7 +1269,7 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeWorkerRequest {
         CallingConvention::Component
     }
 
-    fn input(&self) -> Vec<golem::Val> {
+    fn input(&self) -> Vec<golem::worker::Val> {
         self.input.clone()
     }
 
@@ -1297,13 +1305,13 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
 
     fn calling_convention(&self) -> CallingConvention {
         match self.calling_convention() {
-            golem::CallingConvention::Component => CallingConvention::Component,
-            golem::CallingConvention::Stdio => CallingConvention::Stdio,
-            golem::CallingConvention::StdioEventloop => CallingConvention::StdioEventloop,
+            golem::worker::CallingConvention::Component => CallingConvention::Component,
+            golem::worker::CallingConvention::Stdio => CallingConvention::Stdio,
+            golem::worker::CallingConvention::StdioEventloop => CallingConvention::StdioEventloop,
         }
     }
 
-    fn input(&self) -> Vec<golem::Val> {
+    fn input(&self) -> Vec<golem::worker::Val> {
         self.input.clone()
     }
 

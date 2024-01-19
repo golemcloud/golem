@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-package golem;
-
-
-message Pod {
-  string host = 1;
-  uint32 port = 2;
-}

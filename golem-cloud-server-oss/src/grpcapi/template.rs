@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use futures_util::stream::BoxStream;
 use futures_util::TryStreamExt;
-use golem_common::model::TemplateId;
-use golem_common::proto::golem::cloudservices::templateservice::template_service_server::TemplateService;
-use golem_common::proto::golem::cloudservices::templateservice::{
+use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::template::template_service_server::TemplateService;
+use golem_api_grpc::proto::golem::template::{
     create_template_request, create_template_response, download_template_response,
     get_latest_template_version_response, get_template_response, get_templates_response,
     update_template_request, update_template_response, CreateTemplateRequest,
@@ -14,7 +14,8 @@ use golem_common::proto::golem::cloudservices::templateservice::{
     GetTemplatesResponse, GetTemplatesSuccessResponse, UpdateTemplateRequest,
     UpdateTemplateRequestHeader, UpdateTemplateResponse,
 };
-use golem_common::proto::golem::{template_error, ErrorBody, ErrorsBody, Template, TemplateError};
+use golem_api_grpc::proto::golem::template::{template_error, Template, TemplateError};
+use golem_common::model::TemplateId;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::service::template;
@@ -142,8 +143,7 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<GetTemplatesRequest>,
     ) -> Result<Response<GetTemplatesResponse>, Status> {
-        let (_, _, r) = request.into_parts();
-        match self.get_all(r).await {
+        match self.get_all(request.into_inner()).await {
             Ok(templates) => Ok(Response::new(GetTemplatesResponse {
                 result: Some(get_templates_response::Result::Success(
                     GetTemplatesSuccessResponse { templates },
@@ -159,8 +159,8 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<Streaming<CreateTemplateRequest>>,
     ) -> Result<Response<CreateTemplateResponse>, Status> {
-        let (_, _, r) = request.into_parts();
-        let chunks: Vec<CreateTemplateRequest> = r.into_stream().try_collect().await?;
+        let chunks: Vec<CreateTemplateRequest> =
+            request.into_inner().into_stream().try_collect().await?;
         let header = chunks.iter().find_map(|c| {
             c.clone().data.and_then(|d| match d {
                 create_template_request::Data::Header(d) => Some(d),
@@ -203,8 +203,7 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<DownloadTemplateRequest>,
     ) -> Result<Response<Self::DownloadTemplateStream>, Status> {
-        let (_, _, r) = request.into_parts();
-        let res = match self.download(r).await {
+        let res = match self.download(request.into_inner()).await {
             Ok(content) => DownloadTemplateResponse {
                 result: Some(download_template_response::Result::SuccessChunk(content)),
             },
@@ -221,8 +220,7 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<GetTemplateRequest>,
     ) -> Result<Response<GetTemplateResponse>, Status> {
-        let (_, _, r) = request.into_parts();
-        match self.get(r).await {
+        match self.get(request.into_inner()).await {
             Ok(templates) => Ok(Response::new(GetTemplateResponse {
                 result: Some(get_template_response::Result::Success(
                     GetTemplateSuccessResponse { templates },
@@ -238,8 +236,7 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<GetLatestTemplateVersionRequest>,
     ) -> Result<Response<GetLatestTemplateVersionResponse>, Status> {
-        let (_, _, r) = request.into_parts();
-        match self.get_latest_version(r).await {
+        match self.get_latest_version(request.into_inner()).await {
             Ok(v) => Ok(Response::new(GetLatestTemplateVersionResponse {
                 result: Some(get_latest_template_version_response::Result::Success(v)),
             })),
@@ -253,8 +250,8 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<Streaming<UpdateTemplateRequest>>,
     ) -> Result<Response<UpdateTemplateResponse>, Status> {
-        let (_, _, r) = request.into_parts();
-        let chunks: Vec<UpdateTemplateRequest> = r.into_stream().try_collect().await?;
+        let chunks: Vec<UpdateTemplateRequest> =
+            request.into_inner().into_stream().try_collect().await?;
 
         let header = chunks.iter().find_map(|c| {
             c.clone().data.and_then(|d| match d {

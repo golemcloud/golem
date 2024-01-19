@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-package golem;
-
-import public "models/val.proto";
-
-message InvokeResult {
-  repeated Val result = 1;
-}

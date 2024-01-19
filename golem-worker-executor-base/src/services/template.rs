@@ -4,19 +4,20 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
+use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
+use golem_api_grpc::proto::golem::template::TemplateError;
+use golem_api_grpc::proto::golem::template::{
+    download_template_response, get_latest_template_version_response, DownloadTemplateRequest,
+    GetLatestTemplateVersionRequest,
+};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::TemplateId;
-use golem_common::proto::golem::cloudservices::templateservice::template_service_client::TemplateServiceClient;
-use golem_common::proto::golem::cloudservices::templateservice::{
-    download_template_response, get_latest_template_version_response, DownloadTemplateRequest,
-    GetLatestTemplateVersionRequest,
-};
-use golem_common::proto::golem::{TemplateError, TokenSecret};
 use golem_common::retries::with_retries;
 use http::Uri;
 use prost::Message;
+use tonic::Request;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 use wasmtime::component::Component;
@@ -235,16 +236,15 @@ async fn download_via_grpc(
                     .await?
                     .max_decoding_message_size(50 * 1024 * 1024);
 
-                let response = client
-                    .download_template(DownloadTemplateRequest {
+                let request = authorised_request(
+                    DownloadTemplateRequest {
                         template_id: Some(template_id.clone().into()),
                         version: Some(template_version),
-                        token_secret: Some(TokenSecret {
-                            value: Some((*access_token).into()),
-                        }),
-                    })
-                    .await?
-                    .into_inner();
+                    },
+                    access_token,
+                );
+
+                let response = client.download_template(request).await?.into_inner();
 
                 let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
                 let bytes = chunks
@@ -292,13 +292,16 @@ async fn get_latest_version_via_grpc(
         |(endpoint, template_id, access_token)| {
             Box::pin(async move {
                 let mut client = TemplateServiceClient::connect(endpoint.clone()).await?;
-                let response = client
-                    .get_latest_template_version(GetLatestTemplateVersionRequest {
+
+                let request = authorised_request(
+                    GetLatestTemplateVersionRequest {
                         template_id: Some(template_id.clone().into()),
-                        token_secret: Some(TokenSecret {
-                            value: Some((*access_token).into()),
-                        }),
-                    })
+                    },
+                    access_token,
+                );
+
+                let response = client
+                    .get_latest_template_version(request)
                     .await?
                     .into_inner();
 
@@ -359,6 +362,15 @@ fn create_template_cache(
         },
         "component",
     )
+}
+
+fn authorised_request<T>(request: T, access_token: &Uuid) -> Request<T> {
+    let mut req = Request::new(request);
+    req.metadata_mut().insert(
+        "authorization",
+        format!("Bearer {}", access_token).parse().unwrap(),
+    );
+    req
 }
 
 impl From<std::io::Error> for GolemError {

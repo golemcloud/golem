@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package golem.common;
+
+message UUID {
+  uint64 high_bits = 1;
+  uint64 low_bits = 2;
+}

@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package golem.worker;
+
+import "golem/worker/worker_id.proto";
+
+message VersionedWorkerId {
+  WorkerId worker_id = 1;
+  int32 template_version = 2;
+}

@@ -1,0 +1,189 @@
+syntax = "proto3";
+
+package golem.worker;
+
+import public "golem/common/empty.proto";
+import public "golem/worker/calling_convention.proto";
+import public "golem/worker/complete_parameters.proto";
+import public "golem/worker/invocation_key.proto";
+import public "golem/worker/invoke_parameters.proto";
+import public "golem/worker/invoke_result.proto";
+import public "golem/worker/invoke_result_json.proto";
+import public "golem/worker/versioned_worker_id.proto";
+import public "golem/worker/worker_error.proto";
+import public "golem/worker/worker_metadata.proto";
+import public "golem/worker/log_event.proto";
+import public "golem/worker/worker_id.proto";
+import public "golem/template/template_id.proto";
+
+service WorkerService {
+  rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
+  rpc CompletePromise (CompletePromiseRequest) returns (CompletePromiseResponse);
+  rpc DeleteWorker (DeleteWorkerRequest) returns (DeleteWorkerResponse);
+  rpc GetWorkerMetadata (GetWorkerMetadataRequest) returns (GetWorkerMetadataResponse);
+  rpc InterruptWorker (InterruptWorkerRequest) returns (InterruptWorkerResponse);
+  rpc InvokeAndAwait (InvokeAndAwaitRequest) returns (InvokeAndAwaitResponse);
+  rpc Invoke (InvokeRequest) returns (InvokeResponse);
+  rpc GetInvocationKey (GetInvocationKeyRequest) returns (GetInvocationKeyResponse);
+  rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
+  rpc GetWorkerById (GetWorkerByIdRequest) returns (GetWorkerByIdResponse);
+  rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
+
+
+  // Temporary for proxying the REST API
+  rpc InvokeJson (InvokeRequestJson) returns (InvokeResponse);
+  // Temporary for proxying the REST API
+  rpc InvokeAndAwaitJson (InvokeAndAwaitRequestJson) returns (InvokeAndAwaitResponseJson);
+}
+
+message LaunchNewWorkerRequest {
+  golem.template.TemplateId templateId = 1;
+  string name = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+}
+
+message LaunchNewWorkerResponse {
+  oneof result {
+    golem.worker.VersionedWorkerId success = 1;
+    golem.worker.WorkerError error = 2;
+  }
+}
+
+message CompletePromiseRequest {
+  golem.worker.WorkerId workerId = 1;
+  golem.worker.CompleteParameters completeParameters = 2;
+}
+
+message CompletePromiseResponse {
+  oneof result {
+    bool success = 1;
+    golem.worker.WorkerError error = 2;
+  }
+}
+
+message DeleteWorkerRequest {
+  golem.worker.WorkerId workerId = 1;
+}
+
+message DeleteWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.WorkerError error = 2;
+  }
+}
+
+message GetWorkerMetadataRequest {
+  golem.worker.WorkerId workerId = 1;
+}
+
+message GetWorkerMetadataResponse {
+  oneof result {
+    golem.worker.WorkerMetadata success = 1;
+    golem.worker.WorkerError error = 2;
+  }
+}
+
+message InterruptWorkerRequest {
+  golem.worker.WorkerId workerId = 1;
+  bool recoverImmediately = 2;
+}
+
+message InterruptWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.WorkerError error = 2;
+  }
+}
+
+message InvokeAndAwaitRequest {
+  golem.worker.WorkerId workerId = 1;
+  golem.worker.InvocationKey invocationKey = 2;
+  string function = 3;
+  golem.worker.InvokeParameters invokeParameters = 4;
+  golem.worker.CallingConvention callingConvention = 5;
+}
+
+message InvokeAndAwaitResponse {
+  oneof result {
+    golem.worker.InvokeResult success = 1;
+    golem.worker.WorkerError error = 2;
+  }
+}
+
+message InvokeRequest {
+  golem.worker.WorkerId workerId = 1;
+  string function = 2;
+  golem.worker.InvokeParameters invokeParameters = 3;
+}
+
+message InvokeResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.WorkerError error = 2;
+  }
+}
+
+message GetInvocationKeyRequest {
+  golem.worker.WorkerId workerId = 1;
+}
+
+message GetInvocationKeyResponse {
+  oneof result {
+    golem.worker.InvocationKey success = 1;
+    golem.worker.WorkerError error = 2;
+  }
+}
+
+message ResumeWorkerRequest {
+  golem.worker.WorkerId workerId = 1;
+}
+
+message ResumeWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.WorkerError error = 2;
+  }
+}
+
+message GetWorkerByIdRequest {
+  golem.worker.WorkerId workerId = 1;
+}
+
+message GetWorkerByIdResponse {
+  oneof result {
+    golem.worker.VersionedWorkerId success = 1;
+    golem.worker.WorkerError error = 2;
+  }
+}
+
+message ConnectWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+}
+
+
+
+// Temporary
+message InvokeRequestJson {
+  WorkerId workerId = 1;
+  string function = 2;
+  string invokeParametersJson = 3;
+}
+
+// Temporary
+message InvokeAndAwaitRequestJson {
+  WorkerId workerId = 1;
+  InvocationKey invocationKey = 2;
+  string function = 3;
+  string invokeParametersJson = 4;
+  CallingConvention callingConvention = 5;
+}
+
+
+message InvokeAndAwaitResponseJson {
+  oneof result {
+    InvokeResultJson success = 1;
+    WorkerError error = 2;
+  }
+}
+

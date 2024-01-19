@@ -17,6 +17,7 @@ mocks = []
 
 [dependencies]
 golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 
 anyhow = { workspace = true }
 async-mutex = "1.4.0"

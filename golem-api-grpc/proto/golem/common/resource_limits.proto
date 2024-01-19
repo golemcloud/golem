@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package golem.common;
+
+
+message ResourceLimits {
+  int64 available_fuel = 1;
+  int64 max_memory_per_worker = 2;
+}

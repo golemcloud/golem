@@ -8,18 +8,18 @@ use std::sync::{Arc, RwLock};
 use std::{env, panic};
 
 use crate::REDIS;
-use golem_common::model::{
-    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
+use golem_api_grpc::proto::golem::worker::{
+    log_event, val, CallingConvention, LogEvent, StdOutLog, Val, ValList, ValRecord,
 };
-use golem_common::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
-use golem_common::proto::golem::workerexecutor::{
+use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::{
     create_worker_response, get_invocation_key_response, interrupt_worker_response,
     invoke_and_await_worker_response, ConnectWorkerRequest, CreateWorkerRequest,
     GetInvocationKeyRequest, InterruptWorkerRequest, InterruptWorkerResponse,
     InvokeAndAwaitWorkerRequest,
 };
-use golem_common::proto::golem::{
-    log_event, val, CallingConvention, LogEvent, StdOutLog, Val, ValList, ValRecord,
+use golem_common::model::{
+    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{

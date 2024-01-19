@@ -1,0 +1,183 @@
+syntax = "proto3";
+
+import public "golem/common/account_id.proto";
+import public "golem/worker/calling_convention.proto";
+import public "golem/common/empty.proto";
+import public "golem/worker/invocation_key.proto";
+import public "golem/worker/log_event.proto";
+import public "golem/worker/promise_id.proto";
+import public "golem/common/resource_limits.proto";
+import public "golem/shardmanager/shard_id.proto";
+import public "golem/template/template_id.proto";
+//import public "golem/common/type.proto";
+import public "golem/worker/val.proto";
+import public "golem/worker/worker_id.proto";
+import public "golem/worker/worker_metadata.proto";
+import public "golem/worker/worker_status.proto";
+import public "golem/worker/worker_execution_error.proto";
+
+package golem.workerexecutor;
+
+service WorkerExecutor {
+  rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
+  rpc GetInvocationKey(GetInvocationKeyRequest) returns (GetInvocationKeyResponse);
+  rpc InvokeAndAwaitWorker(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponse);
+  rpc InvokeWorker(InvokeWorkerRequest) returns (InvokeWorkerResponse);
+  rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
+  rpc DeleteWorker(golem.worker.WorkerId) returns (DeleteWorkerResponse);
+  rpc CompletePromise(CompletePromiseRequest) returns (CompletePromiseResponse);
+  rpc InterruptWorker(InterruptWorkerRequest) returns (InterruptWorkerResponse);
+  rpc RevokeShards(RevokeShardsRequest) returns (RevokeShardsResponse);
+  rpc AssignShards(AssignShardsRequest) returns (AssignShardsResponse);
+  rpc GetWorkerMetadata(golem.worker.WorkerId) returns (GetWorkerMetadataResponse);
+  rpc ResumeWorker(ResumeWorkerRequest) returns (ResumeWorkerResponse);
+}
+
+message InvokeWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message DeleteWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message CompletePromiseRequest {
+  golem.worker.PromiseId promise_id = 1;
+  bytes data = 2;
+}
+
+message CompletePromiseResponse {
+  oneof result {
+    CompletePromiseSuccess success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message CompletePromiseSuccess {
+  bool completed = 1;
+}
+
+message InterruptWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message CreateWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  int32 template_version = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  golem.common.AccountId account_id = 5;
+  golem.common.ResourceLimits account_limits = 6;
+}
+
+message CreateWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetInvocationKeyRequest {
+  golem.worker.WorkerId worker_id = 1;
+}
+
+message GetInvocationKeyResponse {
+  oneof result {
+    GetInvocationKeySuccess success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetInvocationKeySuccess {
+  golem.worker.InvocationKey invocation_key = 1;
+}
+
+message InvokeAndAwaitWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string name = 2;
+  repeated golem.worker.Val input = 3;
+  golem.worker.InvocationKey invocation_key = 4;
+  golem.worker.CallingConvention calling_convention = 5;
+  golem.common.AccountId account_id = 6;
+  golem.common.ResourceLimits account_limits = 7;
+}
+
+message InvokeAndAwaitWorkerResponse {
+  oneof result {
+    InvokeAndAwaitWorkerSuccess success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message InvokeAndAwaitWorkerSuccess {
+  repeated golem.worker.Val output = 1;
+}
+
+message InvokeWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string name = 2;
+  repeated golem.worker.Val input = 3;
+  golem.common.AccountId account_id = 4;
+  golem.common.ResourceLimits account_limits = 5;
+}
+
+message ConnectWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  golem.common.ResourceLimits account_limits = 3;
+}
+
+message InterruptWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  bool recover_immediately = 2;
+}
+
+message RevokeShardsRequest {
+  repeated golem.shardmanager.ShardId shard_ids = 1;
+}
+
+message RevokeShardsResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message AssignShardsRequest {
+  repeated golem.shardmanager.ShardId shard_ids = 1;
+}
+
+message AssignShardsResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetWorkerMetadataResponse {
+  oneof result {
+    golem.worker.WorkerMetadata success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message ResumeWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string name = 2;
+}
+
+message ResumeWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}

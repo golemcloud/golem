@@ -1,6 +1,6 @@
 use anyhow::anyhow;
+use golem_api_grpc::proto::golem;
 use golem_common::model::{CallingConvention, VersionedWorkerId, WorkerStatus};
-use golem_common::proto::golem;
 use tracing::{debug, error, warn};
 use wasmtime::component::{Func, Val};
 use wasmtime::AsContextMut;
@@ -25,7 +25,7 @@ use crate::workerctx::{FuelManagement, WorkerCtx};
 /// - `was_live_before`: whether the worker was live before the invocation, or this invocation is part of a recovery
 pub async fn invoke_worker<Ctx: WorkerCtx>(
     full_function_name: String,
-    function_input: Vec<golem::Val>,
+    function_input: Vec<golem::worker::Val>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     calling_convention: &CallingConvention,
@@ -120,12 +120,12 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
 async fn invoke_or_fail<Ctx: WorkerCtx>(
     worker_id: &VersionedWorkerId,
     full_function_name: String,
-    function_input: Vec<golem::Val>,
+    function_input: Vec<golem::worker::Val>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     calling_convention: &CallingConvention,
     was_live_before: bool,
-) -> anyhow::Result<Option<Vec<golem::Val>>> {
+) -> anyhow::Result<Option<Vec<golem::worker::Val>>> {
     let mut store = store.as_context_mut();
 
     let (interface_name, function_name) = parse_function_name(&full_function_name);
@@ -226,7 +226,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 async fn invoke<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function: Func,
-    function_input: &Vec<golem::Val>,
+    function_input: &Vec<golem::worker::Val>,
     calling_convention: InternalCallingConvention,
     context: &str,
 ) -> Result<InvokeResult, anyhow::Error> {
@@ -244,7 +244,7 @@ async fn invoke<Ctx: WorkerCtx>(
                 call_exported_function(&mut store, function, params, context).await?;
             let results = results?;
 
-            let mut output: Vec<golem::Val> = Vec::new();
+            let mut output: Vec<golem::worker::Val> = Vec::new();
             for result in results.iter() {
                 let result = wasm_types::encode_output(result)?;
                 output.push(result);
@@ -275,7 +275,7 @@ async fn invoke<Ctx: WorkerCtx>(
                 panic!("unexpected parameter count for stdio calling convention for {context}")
             }
             let stdin = match function_input.first().unwrap().val.as_ref().unwrap() {
-                golem::val::Val::String(value) => value.clone(),
+                golem::worker::val::Val::String(value) => value.clone(),
                 _ => panic!("unexpected function input for stdio calling convention for {context}"),
             };
 
@@ -297,8 +297,10 @@ async fn invoke<Ctx: WorkerCtx>(
 
             let stdout = store.data_mut().finish_capturing_stdout().await.ok();
 
-            let output: Vec<golem::Val> = vec![golem::Val {
-                val: Some(golem::val::Val::String(stdout.unwrap_or("".to_string()))),
+            let output: Vec<golem::worker::Val> = vec![golem::worker::Val {
+                val: Some(golem::worker::val::Val::String(
+                    stdout.unwrap_or("".to_string()),
+                )),
             }];
 
             if let Some(invocation_key) = store.data().get_current_invocation_key().await {
@@ -366,7 +368,7 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
 struct InvokeResult {
     pub exited: bool,
     pub consumed_fuel: i64,
-    pub output: Vec<golem::Val>,
+    pub output: Vec<golem::worker::Val>,
 }
 
 #[derive(Clone, Debug)]

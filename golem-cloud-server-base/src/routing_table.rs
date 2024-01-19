@@ -1,8 +1,8 @@
 use crate::model::RoutingTable;
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem::shardmanager;
+use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client;
 use golem_common::cache::*;
-use golem_common::proto::golem::shardmanager;
-use golem_common::proto::golem::shardmanager::shard_manager_service_client;
 use serde::Deserialize;
 use url::Url;
 

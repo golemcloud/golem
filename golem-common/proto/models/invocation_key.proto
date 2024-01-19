@@ -1,8 +1,0 @@
-syntax = "proto3";
-
-package golem;
-
-
-message InvocationKey {
-  string value = 1;
-}

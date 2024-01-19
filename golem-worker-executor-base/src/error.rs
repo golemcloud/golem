@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use golem_api_grpc::proto::golem;
 use golem_common::model::{PromiseId, ShardId, TemplateId, WorkerId};
-use golem_common::proto::golem;
 use tonic::Status;
 
 use crate::model::InterruptKind;
@@ -335,251 +335,297 @@ impl From<GolemError> for Status {
     }
 }
 
-impl From<GolemError> for golem::GolemError {
+impl From<GolemError> for golem::worker::WorkerExecutionError {
     fn from(value: GolemError) -> Self {
         match value {
-            GolemError::InvalidRequest { details } => golem::GolemError {
-                error: Some(golem::golem_error::Error::InvalidRequest(
-                    golem::InvalidRequest { details },
-                )),
+            GolemError::InvalidRequest { details } => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::InvalidRequest(
+                        golem::worker::InvalidRequest { details },
+                    ),
+                ),
             },
-            GolemError::WorkerAlreadyExists { worker_id } => golem::GolemError {
-                error: Some(golem::golem_error::Error::WorkerAlreadyExists(
-                    golem::WorkerAlreadyExists {
-                        worker_id: Some(worker_id.into_proto()),
-                    },
-                )),
+            GolemError::WorkerAlreadyExists { worker_id } => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::WorkerAlreadyExists(
+                        golem::worker::WorkerAlreadyExists {
+                            worker_id: Some(worker_id.into_proto()),
+                        },
+                    ),
+                ),
             },
-            GolemError::WorkerNotFound { worker_id } => golem::GolemError {
-                error: Some(golem::golem_error::Error::WorkerNotFound(
-                    golem::WorkerNotFound {
-                        worker_id: Some(worker_id.into_proto()),
-                    },
-                )),
+            GolemError::WorkerNotFound { worker_id } => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::WorkerNotFound(
+                        golem::worker::WorkerNotFound {
+                            worker_id: Some(worker_id.into_proto()),
+                        },
+                    ),
+                ),
             },
-            GolemError::WorkerCreationFailed { worker_id, details } => golem::GolemError {
-                error: Some(golem::golem_error::Error::WorkerCreationFailed(
-                    golem::WorkerCreationFailed {
-                        worker_id: Some(worker_id.into_proto()),
-                        details,
-                    },
-                )),
-            },
-            GolemError::FailedToResumeWorker { worker_id } => golem::GolemError {
-                error: Some(golem::golem_error::Error::FailedToResumeWorker(
-                    golem::FailedToResumeWorker {
-                        worker_id: Some(worker_id.into_proto()),
-                    },
-                )),
+            GolemError::WorkerCreationFailed { worker_id, details } => {
+                golem::worker::WorkerExecutionError {
+                    error: Some(
+                        golem::worker::worker_execution_error::Error::WorkerCreationFailed(
+                            golem::worker::WorkerCreationFailed {
+                                worker_id: Some(worker_id.into_proto()),
+                                details,
+                            },
+                        ),
+                    ),
+                }
+            }
+            GolemError::FailedToResumeWorker { worker_id } => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::FailedToResumeWorker(
+                        golem::worker::FailedToResumeWorker {
+                            worker_id: Some(worker_id.into_proto()),
+                        },
+                    ),
+                ),
             },
             GolemError::TemplateDownloadFailed {
                 template_id,
                 template_version,
                 reason,
-            } => golem::GolemError {
-                error: Some(golem::golem_error::Error::TemplateDownloadFailed(
-                    golem::TemplateDownloadFailed {
-                        template_id: Some(template_id.into()),
-                        template_version,
-                        reason,
-                    },
-                )),
+            } => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::TemplateDownloadFailed(
+                        golem::worker::TemplateDownloadFailed {
+                            template_id: Some(template_id.into()),
+                            template_version,
+                            reason,
+                        },
+                    ),
+                ),
             },
             GolemError::TemplateParseFailed {
                 template_id,
                 template_version,
                 reason,
-            } => golem::GolemError {
-                error: Some(golem::golem_error::Error::TemplateParseFailed(
-                    golem::TemplateParseFailed {
-                        template_id: Some(template_id.into()),
-                        template_version,
-                        reason,
-                    },
-                )),
+            } => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::TemplateParseFailed(
+                        golem::worker::TemplateParseFailed {
+                            template_id: Some(template_id.into()),
+                            template_version,
+                            reason,
+                        },
+                    ),
+                ),
             },
             GolemError::GetLatestVersionOfTemplateFailed {
                 template_id,
                 reason,
-            } => golem::GolemError {
-                error: Some(golem::golem_error::Error::GetLatestVersionOfTemplateFailed(
-                    golem::GetLatestVersionOfTemplateFailed {
-                        template_id: Some(template_id.into()),
-                        reason,
+            } => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(
+                        golem::worker::GetLatestVersionOfTemplateFailed {
+                            template_id: Some(template_id.into()),
+                            reason,
+                        },
+                    ),
+                ),
+            },
+            GolemError::PromiseNotFound { promise_id } => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::PromiseNotFound(
+                        golem::worker::PromiseNotFound {
+                            promise_id: Some(promise_id.into()),
+                        },
+                    ),
+                ),
+            },
+            GolemError::PromiseDropped { promise_id } => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::PromiseDropped(
+                        golem::worker::PromiseDropped {
+                            promise_id: Some(promise_id.into()),
+                        },
+                    ),
+                ),
+            },
+            GolemError::PromiseAlreadyCompleted { promise_id } => {
+                golem::worker::WorkerExecutionError {
+                    error: Some(
+                        golem::worker::worker_execution_error::Error::PromiseAlreadyCompleted(
+                            golem::worker::PromiseAlreadyCompleted {
+                                promise_id: Some(promise_id.into()),
+                            },
+                        ),
+                    ),
+                }
+            }
+            GolemError::Interrupted { kind } => golem::worker::WorkerExecutionError {
+                error: Some(golem::worker::worker_execution_error::Error::Interrupted(
+                    golem::worker::Interrupted {
+                        recover_immediately: kind == InterruptKind::Restart,
                     },
                 )),
             },
-            GolemError::PromiseNotFound { promise_id } => golem::GolemError {
-                error: Some(golem::golem_error::Error::PromiseNotFound(
-                    golem::PromiseNotFound {
-                        promise_id: Some(promise_id.into()),
-                    },
+            GolemError::ParamTypeMismatch => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::ParamTypeMismatch(
+                        golem::worker::ParamTypeMismatch {},
+                    ),
+                ),
+            },
+            GolemError::NoValueInMessage => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::NoValueInMessage(
+                        golem::worker::NoValueInMessage {},
+                    ),
+                ),
+            },
+            GolemError::ValueMismatch { details } => golem::worker::WorkerExecutionError {
+                error: Some(golem::worker::worker_execution_error::Error::ValueMismatch(
+                    golem::worker::ValueMismatch { details },
                 )),
             },
-            GolemError::PromiseDropped { promise_id } => golem::GolemError {
-                error: Some(golem::golem_error::Error::PromiseDropped(
-                    golem::PromiseDropped {
-                        promise_id: Some(promise_id.into()),
-                    },
-                )),
-            },
-            GolemError::PromiseAlreadyCompleted { promise_id } => golem::GolemError {
-                error: Some(golem::golem_error::Error::PromiseAlreadyCompleted(
-                    golem::PromiseAlreadyCompleted {
-                        promise_id: Some(promise_id.into()),
-                    },
-                )),
-            },
-            GolemError::Interrupted { kind } => golem::GolemError {
-                error: Some(golem::golem_error::Error::Interrupted(golem::Interrupted {
-                    recover_immediately: kind == InterruptKind::Restart,
-                })),
-            },
-            GolemError::ParamTypeMismatch => golem::GolemError {
-                error: Some(golem::golem_error::Error::ParamTypeMismatch(
-                    golem::ParamTypeMismatch {},
-                )),
-            },
-            GolemError::NoValueInMessage => golem::GolemError {
-                error: Some(golem::golem_error::Error::NoValueInMessage(
-                    golem::NoValueInMessage {},
-                )),
-            },
-            GolemError::ValueMismatch { details } => golem::GolemError {
-                error: Some(golem::golem_error::Error::ValueMismatch(
-                    golem::ValueMismatch { details },
-                )),
-            },
-            GolemError::UnexpectedOplogEntry { expected, got } => golem::GolemError {
-                error: Some(golem::golem_error::Error::UnexpectedOplogEntry(
-                    golem::UnexpectedOplogEntry { expected, got },
-                )),
-            },
-            GolemError::Runtime { details } => golem::GolemError {
-                error: Some(golem::golem_error::Error::RuntimeError(
-                    golem::RuntimeError { details },
+            GolemError::UnexpectedOplogEntry { expected, got } => {
+                golem::worker::WorkerExecutionError {
+                    error: Some(
+                        golem::worker::worker_execution_error::Error::UnexpectedOplogEntry(
+                            golem::worker::UnexpectedOplogEntry { expected, got },
+                        ),
+                    ),
+                }
+            }
+            GolemError::Runtime { details } => golem::worker::WorkerExecutionError {
+                error: Some(golem::worker::worker_execution_error::Error::RuntimeError(
+                    golem::worker::RuntimeError { details },
                 )),
             },
             GolemError::InvalidShardId {
                 shard_id,
                 shard_ids,
-            } => golem::GolemError {
-                error: Some(golem::golem_error::Error::InvalidShardId(
-                    golem::InvalidShardId {
-                        shard_id: Some(shard_id.into()),
-                        shard_ids: shard_ids
-                            .into_iter()
-                            .map(|shard_id| shard_id.into())
-                            .collect(),
-                    },
-                )),
+            } => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::InvalidShardId(
+                        golem::worker::InvalidShardId {
+                            shard_id: Some(shard_id.into()),
+                            shard_ids: shard_ids
+                                .into_iter()
+                                .map(|shard_id| shard_id.into())
+                                .collect(),
+                        },
+                    ),
+                ),
             },
-            GolemError::InvalidAccount => golem::GolemError {
-                error: Some(golem::golem_error::Error::InvalidAccount(
-                    golem::InvalidAccount {},
-                )),
+            GolemError::InvalidAccount => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::InvalidAccount(
+                        golem::worker::InvalidAccount {},
+                    ),
+                ),
             },
-            GolemError::PreviousInvocationFailed => golem::GolemError {
-                error: Some(golem::golem_error::Error::PreviousInvocationFailed(
-                    golem::PreviousInvocationFailed {},
-                )),
+            GolemError::PreviousInvocationFailed => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::PreviousInvocationFailed(
+                        golem::worker::PreviousInvocationFailed {},
+                    ),
+                ),
             },
-            GolemError::PreviousInvocationExited => golem::GolemError {
-                error: Some(golem::golem_error::Error::PreviousInvocationExited(
-                    golem::PreviousInvocationExited {},
-                )),
+            GolemError::PreviousInvocationExited => golem::worker::WorkerExecutionError {
+                error: Some(
+                    golem::worker::worker_execution_error::Error::PreviousInvocationExited(
+                        golem::worker::PreviousInvocationExited {},
+                    ),
+                ),
             },
-            GolemError::Unknown { details } => golem::GolemError {
-                error: Some(golem::golem_error::Error::Unknown(golem::UnknownError {
-                    details,
-                })),
+            GolemError::Unknown { details } => golem::worker::WorkerExecutionError {
+                error: Some(golem::worker::worker_execution_error::Error::Unknown(
+                    golem::worker::UnknownError { details },
+                )),
             },
         }
     }
 }
 
-impl TryFrom<golem::GolemError> for GolemError {
+impl TryFrom<golem::worker::WorkerExecutionError> for GolemError {
     type Error = String;
 
-    fn try_from(value: golem::GolemError) -> Result<Self, Self::Error> {
+    fn try_from(value: golem::worker::WorkerExecutionError) -> Result<Self, Self::Error> {
         match value.error {
             None => Err("Unknown error".to_string()),
-            Some(golem::golem_error::Error::InvalidRequest(invalid_request)) => {
+            Some(golem::worker::worker_execution_error::Error::InvalidRequest(invalid_request)) => {
                 Ok(GolemError::InvalidRequest {
                     details: invalid_request.details,
                 })
             }
-            Some(golem::golem_error::Error::WorkerAlreadyExists(worker_already_exists)) => {
-                Ok(GolemError::WorkerAlreadyExists {
-                    worker_id: worker_already_exists
-                        .worker_id
-                        .ok_or("Missing worker_id")?
-                        .try_into()?,
-                })
-            }
-            Some(golem::golem_error::Error::WorkerNotFound(worker_not_found)) => {
-                Ok(GolemError::WorkerNotFound {
-                    worker_id: worker_not_found
-                        .worker_id
-                        .ok_or("Missing worker_id")?
-                        .try_into()?,
-                })
-            }
-            Some(golem::golem_error::Error::WorkerCreationFailed(worker_creation_failed)) => {
-                Ok(GolemError::WorkerCreationFailed {
-                    worker_id: worker_creation_failed
-                        .worker_id
-                        .ok_or("Missing worker_id")?
-                        .try_into()?,
-                    details: worker_creation_failed.details,
-                })
-            }
-            Some(golem::golem_error::Error::FailedToResumeWorker(failed_to_resume_worker)) => {
-                Ok(GolemError::FailedToResumeWorker {
-                    worker_id: failed_to_resume_worker
-                        .worker_id
-                        .ok_or("Missing worker_id")?
-                        .try_into()?,
-                })
-            }
-            Some(golem::golem_error::Error::TemplateDownloadFailed(template_download_failed)) => {
-                Ok(GolemError::TemplateDownloadFailed {
-                    template_id: template_download_failed
-                        .template_id
-                        .ok_or("Missing template_id")?
-                        .try_into()?,
-                    template_version: template_download_failed.template_version,
-                    reason: template_download_failed.reason,
-                })
-            }
-            Some(golem::golem_error::Error::TemplateParseFailed(template_parse_failed)) => {
-                Ok(GolemError::TemplateParseFailed {
-                    template_id: template_parse_failed
-                        .template_id
-                        .ok_or("Missing template_id")?
-                        .try_into()?,
-                    template_version: template_parse_failed.template_version,
-                    reason: template_parse_failed.reason,
-                })
-            }
-            Some(golem::golem_error::Error::GetLatestVersionOfTemplateFailed(
-                get_latest_version_of_template_failed,
-            )) => Ok(GolemError::GetLatestVersionOfTemplateFailed {
+            Some(golem::worker::worker_execution_error::Error::WorkerAlreadyExists(
+                worker_already_exists,
+            )) => Ok(GolemError::WorkerAlreadyExists {
+                worker_id: worker_already_exists
+                    .worker_id
+                    .ok_or("Missing worker_id")?
+                    .try_into()?,
+            }),
+            Some(golem::worker::worker_execution_error::Error::WorkerNotFound(
+                worker_not_found,
+            )) => Ok(GolemError::WorkerNotFound {
+                worker_id: worker_not_found
+                    .worker_id
+                    .ok_or("Missing worker_id")?
+                    .try_into()?,
+            }),
+            Some(golem::worker::worker_execution_error::Error::WorkerCreationFailed(
+                worker_creation_failed,
+            )) => Ok(GolemError::WorkerCreationFailed {
+                worker_id: worker_creation_failed
+                    .worker_id
+                    .ok_or("Missing worker_id")?
+                    .try_into()?,
+                details: worker_creation_failed.details,
+            }),
+            Some(golem::worker::worker_execution_error::Error::FailedToResumeWorker(
+                failed_to_resume_worker,
+            )) => Ok(GolemError::FailedToResumeWorker {
+                worker_id: failed_to_resume_worker
+                    .worker_id
+                    .ok_or("Missing worker_id")?
+                    .try_into()?,
+            }),
+            Some(golem::worker::worker_execution_error::Error::TemplateDownloadFailed(
+                template_download_failed,
+            )) => Ok(GolemError::TemplateDownloadFailed {
+                template_id: template_download_failed
+                    .template_id
+                    .ok_or("Missing template_id")?
+                    .try_into()?,
+                template_version: template_download_failed.template_version,
+                reason: template_download_failed.reason,
+            }),
+            Some(golem::worker::worker_execution_error::Error::TemplateParseFailed(
+                template_parse_failed,
+            )) => Ok(GolemError::TemplateParseFailed {
+                template_id: template_parse_failed
+                    .template_id
+                    .ok_or("Missing template_id")?
+                    .try_into()?,
+                template_version: template_parse_failed.template_version,
+                reason: template_parse_failed.reason,
+            }),
+            Some(
+                golem::worker::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(
+                    get_latest_version_of_template_failed,
+                ),
+            ) => Ok(GolemError::GetLatestVersionOfTemplateFailed {
                 template_id: get_latest_version_of_template_failed
                     .template_id
                     .ok_or("Missing template_id")?
                     .try_into()?,
                 reason: get_latest_version_of_template_failed.reason,
             }),
-            Some(golem::golem_error::Error::PromiseNotFound(promise_not_found)) => {
-                Ok(GolemError::PromiseNotFound {
-                    promise_id: promise_not_found
-                        .promise_id
-                        .ok_or("Missing promise_id")?
-                        .try_into()?,
-                })
-            }
-            Some(golem::golem_error::Error::PromiseDropped(promise_dropped)) => {
+            Some(golem::worker::worker_execution_error::Error::PromiseNotFound(
+                promise_not_found,
+            )) => Ok(GolemError::PromiseNotFound {
+                promise_id: promise_not_found
+                    .promise_id
+                    .ok_or("Missing promise_id")?
+                    .try_into()?,
+            }),
+            Some(golem::worker::worker_execution_error::Error::PromiseDropped(promise_dropped)) => {
                 Ok(GolemError::PromiseDropped {
                     promise_id: promise_dropped
                         .promise_id
@@ -587,15 +633,15 @@ impl TryFrom<golem::GolemError> for GolemError {
                         .try_into()?,
                 })
             }
-            Some(golem::golem_error::Error::PromiseAlreadyCompleted(promise_already_completed)) => {
-                Ok(GolemError::PromiseAlreadyCompleted {
-                    promise_id: promise_already_completed
-                        .promise_id
-                        .ok_or("Missing promise_id")?
-                        .try_into()?,
-                })
-            }
-            Some(golem::golem_error::Error::Interrupted(interrupted)) => {
+            Some(golem::worker::worker_execution_error::Error::PromiseAlreadyCompleted(
+                promise_already_completed,
+            )) => Ok(GolemError::PromiseAlreadyCompleted {
+                promise_id: promise_already_completed
+                    .promise_id
+                    .ok_or("Missing promise_id")?
+                    .try_into()?,
+            }),
+            Some(golem::worker::worker_execution_error::Error::Interrupted(interrupted)) => {
                 Ok(GolemError::Interrupted {
                     kind: if interrupted.recover_immediately {
                         InterruptKind::Restart
@@ -604,48 +650,52 @@ impl TryFrom<golem::GolemError> for GolemError {
                     },
                 })
             }
-            Some(golem::golem_error::Error::ParamTypeMismatch(_)) => {
+            Some(golem::worker::worker_execution_error::Error::ParamTypeMismatch(_)) => {
                 Ok(GolemError::ParamTypeMismatch)
             }
-            Some(golem::golem_error::Error::NoValueInMessage(_)) => {
+            Some(golem::worker::worker_execution_error::Error::NoValueInMessage(_)) => {
                 Ok(GolemError::NoValueInMessage)
             }
-            Some(golem::golem_error::Error::ValueMismatch(value_mismatch)) => {
+            Some(golem::worker::worker_execution_error::Error::ValueMismatch(value_mismatch)) => {
                 Ok(GolemError::ValueMismatch {
                     details: value_mismatch.details,
                 })
             }
-            Some(golem::golem_error::Error::UnexpectedOplogEntry(unexpected_oplog_entry)) => {
-                Ok(GolemError::UnexpectedOplogEntry {
-                    expected: unexpected_oplog_entry.expected,
-                    got: unexpected_oplog_entry.got,
-                })
+            Some(golem::worker::worker_execution_error::Error::UnexpectedOplogEntry(
+                unexpected_oplog_entry,
+            )) => Ok(GolemError::UnexpectedOplogEntry {
+                expected: unexpected_oplog_entry.expected,
+                got: unexpected_oplog_entry.got,
+            }),
+            Some(golem::worker::worker_execution_error::Error::InvalidShardId(
+                invalid_shard_id,
+            )) => Ok(GolemError::InvalidShardId {
+                shard_id: invalid_shard_id.shard_id.ok_or("Missing shard_id")?.into(),
+                shard_ids: invalid_shard_id
+                    .shard_ids
+                    .into_iter()
+                    .map(|id| id.into())
+                    .collect(),
+            }),
+            Some(golem::worker::worker_execution_error::Error::InvalidAccount(_)) => {
+                Ok(GolemError::InvalidAccount)
             }
-            Some(golem::golem_error::Error::InvalidShardId(invalid_shard_id)) => {
-                Ok(GolemError::InvalidShardId {
-                    shard_id: invalid_shard_id.shard_id.ok_or("Missing shard_id")?.into(),
-                    shard_ids: invalid_shard_id
-                        .shard_ids
-                        .into_iter()
-                        .map(|id| id.into())
-                        .collect(),
-                })
-            }
-            Some(golem::golem_error::Error::InvalidAccount(_)) => Ok(GolemError::InvalidAccount),
-            Some(golem::golem_error::Error::RuntimeError(runtime_error)) => {
+            Some(golem::worker::worker_execution_error::Error::RuntimeError(runtime_error)) => {
                 Ok(GolemError::Runtime {
                     details: runtime_error.details,
                 })
             }
-            Some(golem::golem_error::Error::PreviousInvocationFailed(_)) => {
+            Some(golem::worker::worker_execution_error::Error::PreviousInvocationFailed(_)) => {
                 Ok(GolemError::PreviousInvocationFailed)
             }
-            Some(golem::golem_error::Error::PreviousInvocationExited(_)) => {
+            Some(golem::worker::worker_execution_error::Error::PreviousInvocationExited(_)) => {
                 Ok(GolemError::PreviousInvocationExited)
             }
-            Some(golem::golem_error::Error::Unknown(unknown_error)) => Ok(GolemError::Unknown {
-                details: unknown_error.details,
-            }),
+            Some(golem::worker::worker_execution_error::Error::Unknown(unknown_error)) => {
+                Ok(GolemError::Unknown {
+                    details: unknown_error.details,
+                })
+            }
         }
     }
 }

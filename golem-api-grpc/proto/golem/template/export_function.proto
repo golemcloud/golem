@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package golem.template;
+
+import "golem/template/function_parameter.proto";
+import "golem/template/function_result.proto";
+
+message ExportFunction {
+  string name = 1;
+  repeated FunctionParameter parameters = 2;
+  repeated FunctionResult results = 3;
+}

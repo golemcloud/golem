@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use golem_common::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use tonic::transport::Channel;
 
 use crate::model::Pod;

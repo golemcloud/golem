@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package golem.worker;
+
+message LogEvent {
+  oneof event {
+    StdOutLog stdout = 1;
+    StdErrLog stderr = 2;
+    Log log = 3;
+  }
+}
+
+message StdOutLog {
+  string message = 1;
+}
+
+message StdErrLog {
+  string message = 1;
+}
+
+enum Level {
+  TRACE = 0;
+  DEBUG = 1;
+  INFO = 2;
+  WARN = 3;
+  ERROR = 4;
+  CRITICAL = 5;
+}
+
+message Log {
+  Level level = 1;
+  string context = 2;
+  string message = 3;
+}

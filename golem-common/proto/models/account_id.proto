@@ -1,7 +1,0 @@
-syntax = "proto3";
-
-package golem;
-
-message AccountId {
-  string name = 1;
-}

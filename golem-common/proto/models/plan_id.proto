@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-import public "models/uuid.proto";
-
-package golem;
-
-message PlanId {
-  UUID value = 1;
-}

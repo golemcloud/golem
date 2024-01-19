@@ -12,12 +12,12 @@ use std::sync::Arc;
 
 use async_rwlock::RwLock;
 use error::ShardManagerError;
-use golem_common::model::{ShardAssignment, ShardId};
-use golem_common::proto;
-use golem_common::proto::golem;
-use golem_common::proto::golem::shardmanager::shard_manager_service_server::{
+use golem_api_grpc::proto;
+use golem_api_grpc::proto::golem;
+use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_server::{
     ShardManagerService, ShardManagerServiceServer,
 };
+use golem_common::model::{ShardAssignment, ShardId};
 use model::{Assignments, Pod, RoutingTable, Unassignments};
 use persistence::{PersistenceService, PersistenceServiceDefault};
 use shard_manager_config::ShardManagerConfig;

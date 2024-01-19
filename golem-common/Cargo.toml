@@ -9,7 +9,9 @@ description = "Shared code between Golem services"
 
 [lib]
 
+
 [dependencies]
+golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
