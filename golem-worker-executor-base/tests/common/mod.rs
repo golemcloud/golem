@@ -602,14 +602,25 @@ impl TestWorkerExecutor {
     }
 
     pub async fn async_clone(&self) -> Self {
+        let clone_info = self.clone_info();
+        Self::from_clone_info(clone_info).await
+    }
+
+    pub fn clone_info(&self) -> TestWorkerExecutorClone {
+        TestWorkerExecutorClone {
+            grpc_port: self.grpc_port,
+        }
+    }
+
+    pub async fn from_clone_info(clone_info: TestWorkerExecutorClone) -> Self {
         let new_client =
-            WorkerExecutorClient::connect(format!("http://127.0.0.1:{}", self.grpc_port))
+            WorkerExecutorClient::connect(format!("http://127.0.0.1:{}", clone_info.grpc_port))
                 .await
                 .expect("Failed to connect to worker executor");
         Self {
             client: new_client,
             handle: None,
-            grpc_port: self.grpc_port,
+            grpc_port: clone_info.grpc_port,
         }
     }
 }
@@ -1206,4 +1217,9 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         )?;
         Ok(linker)
     }
+}
+
+#[derive(Copy, Clone)]
+pub struct TestWorkerExecutorClone {
+    grpc_port: u16,
 }
