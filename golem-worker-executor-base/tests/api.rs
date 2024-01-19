@@ -18,7 +18,7 @@ use serde_json::Value;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::sleep;
 use tonic::transport::Body;
-use tracing::{debug, warn};
+use tracing::debug;
 use warp::Filter;
 use wasmtime_wasi::preview2::spawn;
 
@@ -1159,7 +1159,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
         .start_worker(&template_id, "poll-loop-template-2")
         .await;
 
-    let mut rx = executor.capture_output_with_termination(&worker_id).await;
+    let rx = executor.capture_output_with_termination(&worker_id).await;
 
     executor
         .invoke(
@@ -1244,7 +1244,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     let _ = drain_connection(rx).await;
     let status1 = executor.get_worker_metadata(&worker_id).await.unwrap();
 
-    let rx = executor.capture_output_with_termination(&worker_id).await;
+    let _rx = executor.capture_output_with_termination(&worker_id).await;
     sleep(Duration::from_secs(2)).await;
     let status2 = executor.get_worker_metadata(&worker_id).await.unwrap();
 
@@ -1320,7 +1320,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
     drop(executor);
     http_server.abort();
 
-    let events: Vec<LogEvent> = events.into_iter().filter_map(|x| x).collect();
+    let events: Vec<LogEvent> = events.into_iter().flatten().collect();
 
     check!(status1.last_known_status.status == WorkerStatus::Running);
     check!(status2.last_known_status.status == WorkerStatus::Interrupted);

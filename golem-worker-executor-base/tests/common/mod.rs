@@ -13,7 +13,13 @@ use golem_api_grpc::proto::golem::worker::{
     ValList, ValOption, ValRecord, ValResult, ValTuple, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
-use golem_api_grpc::proto::golem::workerexecutor::{create_worker_response, get_invocation_key_response, get_worker_metadata_response, interrupt_worker_response, invoke_and_await_worker_response, invoke_worker_response, ConnectWorkerRequest, CreateWorkerRequest, GetInvocationKeyRequest, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitWorkerRequest, InvokeWorkerRequest, ResumeWorkerRequest, resume_worker_response};
+use golem_api_grpc::proto::golem::workerexecutor::{
+    create_worker_response, get_invocation_key_response, get_worker_metadata_response,
+    interrupt_worker_response, invoke_and_await_worker_response, invoke_worker_response,
+    resume_worker_response, ConnectWorkerRequest, CreateWorkerRequest, GetInvocationKeyRequest,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitWorkerRequest,
+    InvokeWorkerRequest, ResumeWorkerRequest,
+};
 use golem_common::model::{
     AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
 };
@@ -53,12 +59,12 @@ use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
     StatusManagement, WorkerCtx,
 };
-use golem_worker_executor_base::{durable_host, error, Bootstrap};
+use golem_worker_executor_base::{durable_host, Bootstrap};
 use serde_json::Value;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
-use tonic::include_file_descriptor_set;
+
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -468,7 +474,10 @@ impl TestWorkerExecutor {
         rx
     }
 
-    pub async fn capture_output_with_termination(&self, worker_id: &WorkerId) -> UnboundedReceiver<Option<LogEvent>> {
+    pub async fn capture_output_with_termination(
+        &self,
+        worker_id: &WorkerId,
+    ) -> UnboundedReceiver<Option<LogEvent>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut cloned_client = self.client.clone();
         let worker_id = worker_id.clone();
@@ -480,7 +489,7 @@ impl TestWorkerExecutor {
                         AccountId {
                             value: "test-account".to_string(),
                         }
-                            .into(),
+                        .into(),
                     ),
                     account_limits: None,
                 })
@@ -530,7 +539,7 @@ impl TestWorkerExecutor {
             .client
             .resume_worker(ResumeWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
-                name: "".to_string()
+                name: "".to_string(),
             })
             .await
             .expect("Failed to resume worker")
