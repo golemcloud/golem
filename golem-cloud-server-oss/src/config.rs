@@ -52,6 +52,9 @@ mod tests {
         std::env::set_var("GOLEM__ROUTING_TABLE__HOST", "localhost");
         std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
         std::env::set_var("GOLEM__TEMPLATES__STORE__ROOT_PATH", "template_store");
+        std::env::set_var("GOLEM__TEMPLATES__STORE__OBJECT_PREFIX", "");
+        std::env::set_var("GOLEM__HTTP_PORT", "9001");
+        std::env::set_var("GOLEM__GRPC_PORT", "9002");
 
         // The rest can be loaded from the toml
         let _ = super::CloudServiceConfig::new();
