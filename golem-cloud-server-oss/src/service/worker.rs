@@ -871,7 +871,6 @@ impl WorkerService for WorkerServiceDefault {
                     let response = worker_executor_client
                         .resume_worker(ResumeWorkerRequest {
                             worker_id: Some(worker_id.clone().into()),
-                            name: "".to_string(),
                         })
                         .await
                         .map_err(|err| {
