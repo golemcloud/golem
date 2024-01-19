@@ -542,7 +542,6 @@ impl TestWorkerExecutor {
             .client
             .resume_worker(ResumeWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
-                name: "".to_string(),
             })
             .await
             .expect("Failed to resume worker")
