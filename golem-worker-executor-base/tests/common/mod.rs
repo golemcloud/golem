@@ -697,6 +697,12 @@ pub fn val_float64(f: f64) -> Val {
     }
 }
 
+pub fn val_bool(b: bool) -> Val {
+    Val {
+        val: Some(val::Val::Bool(b)),
+    }
+}
+
 pub fn val_u8(i: u8) -> Val {
     Val {
         val: Some(val::Val::U8(i as i32)),

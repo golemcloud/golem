@@ -12,6 +12,7 @@ use tracing_subscriber::EnvFilter;
 mod common;
 
 pub mod api;
+pub mod blobstore;
 pub mod guest_languages;
 pub mod wasi;
 
