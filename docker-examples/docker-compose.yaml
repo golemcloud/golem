@@ -16,7 +16,6 @@ services:
       - RUST_BACKTRACE=1
       - GOLEM__REDIS__HOST=redis
       - GOLEM__REDIS__PORT=6379
-      - GOLEM__ENABLE_JSON_LOG=true
       - GOLEM__HTTP_PORT=8081
       - GOLEM_SHARD_MANAGER_PORT=9001
     ports:
@@ -71,7 +70,6 @@ services:
       - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT="data/templates"
       - GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE="Local"
       - GOLEM__SHARD_MANAGER_SERVICE__TYPE="Grpc"
-      - GOLEM__ENABLE_JSON_LOG=true
       - AWS_SECRET_ACCESS_KEY=root
       - AWS_ACCESS_KEY_ID=root
       - AWS_DEFAULT_REGION=us-east-1
