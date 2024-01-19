@@ -8,10 +8,9 @@ use http::{Response, StatusCode};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::mpsc::UnboundedReceiver;
+
 use tonic::transport::Body;
 use warp::Filter;
-use golem_api_grpc::proto::golem::worker::LogEvent;
 
 use crate::common;
 
@@ -191,7 +190,7 @@ async fn grain_example_1() {
 
     let mut rx = executor.capture_output(&worker_id).await;
 
-    let result = executor
+    let _result = executor
         .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0-rc-2023-11-10/run", vec![])
         .await
         .unwrap();
@@ -368,7 +367,7 @@ async fn javascript_example_1() {
     drop(executor);
 
     let first_line = common::log_event_to_string(&events[0]);
-    let parts = first_line.split(" ").collect::<Vec<_>>();
+    let parts = first_line.split(' ').collect::<Vec<_>>();
     let now = chrono::Local::now();
 
     check!(parts[0] == "Hello");
@@ -428,7 +427,7 @@ async fn csharp_example_1() {
 
     let mut rx = executor.capture_output(&worker_id).await;
 
-    let result = executor
+    let _result = executor
         .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0-rc-2023-11-10/run", vec![])
         .await
         .unwrap();
@@ -462,11 +461,7 @@ async fn c_example_1() {
     let mut rx = executor.capture_output(&worker_id).await;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "run",
-            vec![],
-        )
+        .invoke_and_await(&worker_id, "run", vec![])
         .await
         .unwrap();
 
@@ -492,11 +487,7 @@ async fn c_example_2() {
     let mut rx = executor.capture_output(&worker_id).await;
 
     let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "print",
-            vec![common::val_string("Hello C!")],
-        )
+        .invoke_and_await(&worker_id, "print", vec![common::val_string("Hello C!")])
         .await
         .unwrap();
 
@@ -523,11 +514,7 @@ async fn swift_example_1() {
     let mut rx = executor.capture_output(&worker_id).await;
 
     let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "wasi:cli/run@0.2.0-rc-2023-11-10/run",
-            vec![],
-        )
+        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0-rc-2023-11-10/run", vec![])
         .await
         .unwrap();
 

@@ -152,7 +152,8 @@ impl TestWorkerExecutor {
         template_id: &TemplateId,
         name: &str,
     ) -> Result<WorkerId, worker_execution_error::Error> {
-        self.try_start_worker_versioned(template_id, 0, name, vec![], HashMap::new()).await
+        self.try_start_worker_versioned(template_id, 0, name, vec![], HashMap::new())
+            .await
     }
 
     pub async fn start_worker_versioned(
@@ -172,7 +173,7 @@ impl TestWorkerExecutor {
         template_version: i32,
         name: &str,
         args: Vec<String>,
-        env: HashMap<String, String>
+        env: HashMap<String, String>,
     ) -> Result<WorkerId, worker_execution_error::Error> {
         let worker_id = WorkerId {
             template_id: template_id.clone(),
@@ -712,7 +713,7 @@ pub async fn events_to_lines(rx: &mut UnboundedReceiver<LogEvent>) -> Vec<String
     rx.recv_many(&mut events, 100).await;
     let full_output = events
         .iter()
-        .map(|e| common::log_event_to_string(e))
+        .map(common::log_event_to_string)
         .collect::<Vec<_>>()
         .join("");
     let lines = full_output
@@ -721,7 +722,6 @@ pub async fn events_to_lines(rx: &mut UnboundedReceiver<LogEvent>) -> Vec<String
         .collect::<Vec<_>>();
     lines
 }
-
 
 pub fn val_string(s: &str) -> Val {
     Val {

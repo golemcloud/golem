@@ -15,7 +15,7 @@ use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;
 use golem_common::model::{AccountId, InvocationKey, PromiseId, WorkerId, WorkerStatus};
 use golem_worker_executor_base::error::GolemError;
 use serde_json::Value;
-use tokio::sync::mpsc::UnboundedReceiver;
+
 use tokio::time::sleep;
 use tonic::transport::Body;
 use tracing::debug;
