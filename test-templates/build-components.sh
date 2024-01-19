@@ -100,6 +100,7 @@ for subdir in ${js_test_components[@]}; do
   if [ "$1" == "rebuild" ]; then
     rm *.wasm
   fi
+  mkdir -pv out
   npm install
   npm run build
 

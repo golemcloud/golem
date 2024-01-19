@@ -1174,30 +1174,13 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
 
     executor.interrupt(&worker_id).await;
 
-    let events = drain_connection(rx).await;
+    let events = common::drain_connection(rx).await;
 
     drop(executor);
     http_server.abort();
 
     check!(events.contains(&Some(common::stdout_event("Calling the poll endpoint\n"))));
     check!(events.contains(&Some(common::stdout_event("Received initial\n"))));
-}
-
-async fn drain_connection(rx: UnboundedReceiver<Option<LogEvent>>) -> Vec<Option<LogEvent>> {
-    let mut rx = rx;
-    let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
-
-    if !events.contains(&None) {
-        loop {
-            match rx.recv().await {
-                Some(Some(event)) => events.push(Some(event)),
-                Some(None) => break,
-                None => break,
-            }
-        }
-    }
-    events
 }
 
 #[tokio::test]
@@ -1241,7 +1224,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
 
     executor.interrupt(&worker_id).await;
 
-    let _ = drain_connection(rx).await;
+    let _ = common::drain_connection(rx).await;
     let status1 = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     let _rx = executor.capture_output_with_termination(&worker_id).await;
@@ -1297,7 +1280,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
 
     executor.interrupt(&worker_id).await;
 
-    let mut events = drain_connection(rx).await;
+    let mut events = common::drain_connection(rx).await;
     let status2 = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.resume(&worker_id).await;
@@ -1372,7 +1355,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
 
     executor.interrupt(&worker_id).await;
 
-    let _ = drain_connection(rx).await;
+    let _ = common::drain_connection(rx).await;
 
     executor.delete_worker(&worker_id).await;
     let metadata = executor.get_worker_metadata(&worker_id).await;

@@ -7,7 +7,7 @@ use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock};
 use std::{env, panic};
 
-use crate::REDIS;
+use crate::{common, REDIS};
 use golem_api_grpc::proto::golem::worker::{
     log_event, val, worker_execution_error, CallingConvention, LogEvent, StdOutLog, Val, ValFlags,
     ValList, ValOption, ValRecord, ValResult, ValTuple, WorkerExecutionError,
@@ -152,7 +152,7 @@ impl TestWorkerExecutor {
         template_id: &TemplateId,
         name: &str,
     ) -> Result<WorkerId, worker_execution_error::Error> {
-        self.try_start_worker_versioned(template_id, 0, name).await
+        self.try_start_worker_versioned(template_id, 0, name, vec![], HashMap::new()).await
     }
 
     pub async fn start_worker_versioned(
@@ -161,7 +161,7 @@ impl TestWorkerExecutor {
         template_version: i32,
         name: &str,
     ) -> WorkerId {
-        self.try_start_worker_versioned(template_id, template_version, name)
+        self.try_start_worker_versioned(template_id, template_version, name, vec![], HashMap::new())
             .await
             .expect("Failed to start worker")
     }
@@ -171,6 +171,8 @@ impl TestWorkerExecutor {
         template_id: &TemplateId,
         template_version: i32,
         name: &str,
+        args: Vec<String>,
+        env: HashMap<String, String>
     ) -> Result<WorkerId, worker_execution_error::Error> {
         let worker_id = WorkerId {
             template_id: template_id.clone(),
@@ -181,8 +183,8 @@ impl TestWorkerExecutor {
             .create_worker(CreateWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
                 template_version,
-                args: vec![],
-                env: HashMap::new(),
+                args,
+                env,
                 account_id: Some(
                     AccountId {
                         value: "test-account".to_string(),
@@ -679,6 +681,48 @@ pub fn stdout_event(s: &str) -> LogEvent {
     }
 }
 
+pub fn log_event_to_string(event: &LogEvent) -> String {
+    match &event.event {
+        Some(log_event::Event::Stdout(stdout)) => stdout.message.clone(),
+        Some(log_event::Event::Stderr(stderr)) => stderr.message.clone(),
+        Some(log_event::Event::Log(log)) => log.message.clone(),
+        _ => panic!("Unexpected event type"),
+    }
+}
+
+pub async fn drain_connection(rx: UnboundedReceiver<Option<LogEvent>>) -> Vec<Option<LogEvent>> {
+    let mut rx = rx;
+    let mut events = vec![];
+    rx.recv_many(&mut events, 100).await;
+
+    if !events.contains(&None) {
+        loop {
+            match rx.recv().await {
+                Some(Some(event)) => events.push(Some(event)),
+                Some(None) => break,
+                None => break,
+            }
+        }
+    }
+    events
+}
+
+pub async fn events_to_lines(rx: &mut UnboundedReceiver<LogEvent>) -> Vec<String> {
+    let mut events = vec![];
+    rx.recv_many(&mut events, 100).await;
+    let full_output = events
+        .iter()
+        .map(|e| common::log_event_to_string(e))
+        .collect::<Vec<_>>()
+        .join("");
+    let lines = full_output
+        .lines()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    lines
+}
+
+
 pub fn val_string(s: &str) -> Val {
     Val {
         val: Some(val::Val::String(s.to_string())),
@@ -706,6 +750,12 @@ pub fn val_bool(b: bool) -> Val {
 pub fn val_u8(i: u8) -> Val {
     Val {
         val: Some(val::Val::U8(i as i32)),
+    }
+}
+
+pub fn val_i32(i: i32) -> Val {
+    Val {
+        val: Some(val::Val::S32(i)),
     }
 }
 
