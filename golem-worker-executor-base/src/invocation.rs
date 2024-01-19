@@ -234,6 +234,10 @@ async fn invoke<Ctx: WorkerCtx>(
     match calling_convention {
         InternalCallingConvention::Component => {
             let param_types = function.params(&store);
+            if function_input.len() != param_types.len() {
+                return Err(GolemError::ParamTypeMismatch.into());
+            }
+
             let params = function_input
                 .iter()
                 .zip(param_types.iter())

@@ -593,6 +593,29 @@ impl From<WorkerStatus> for i32 {
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::WorkerMetadata,
+    ) -> Result<Self, Self::Error> {
+        let worker_id: WorkerId = value.worker_id.ok_or("Missing worker_id")?.try_into()?;
+        Ok(Self {
+            worker_id: VersionedWorkerId {
+                worker_id,
+                template_version: value.template_version,
+            },
+            args: value.args,
+            env: value.env.into_iter().collect(),
+            account_id: value.account_id.ok_or("Missing account_id")?.into(),
+            last_known_status: WorkerStatusRecord {
+                status: value.status.try_into()?,
+                oplog_idx: -1,
+            },
+        })
+    }
+}
+
 #[derive(
     Clone,
     Debug,

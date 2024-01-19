@@ -419,6 +419,7 @@ impl TemplateServiceLocalFileSystem {
         let engine = engine.clone();
         let compiled_template_service = self.compiled_template_service.clone();
         let path = path.to_path_buf();
+        debug!("Loading template from {:?}", path);
         self.template_cache
             .get_or_insert_simple(&key.clone(), || {
                 Box::pin(async move {
