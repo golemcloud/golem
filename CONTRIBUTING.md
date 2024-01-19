@@ -8,7 +8,7 @@ To spin up services using the latest code
 cd golem-services
 # Find more info below if you are having issues running this command(example: Running from MAC may fail)
 # Target has to be x86_64-unknown-linux-gnu 
-cargo build --target x86_64-unknown-linux-gnu
+cargo build --release --target x86_64-unknown-linux-gnu
 
 docker-compose up --build
 ```
