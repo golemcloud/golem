@@ -2599,12 +2599,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerExecutionError> for Gol
     }
 }
 
-#[derive(Object)]
+#[derive(Object, serde::Serialize)]
 pub struct ErrorsBody {
     pub errors: Vec<String>,
 }
 
-#[derive(Object)]
+#[derive(Object, serde::Serialize)]
 pub struct ErrorBody {
     pub error: String,
 }
