@@ -579,7 +579,6 @@ dependencies = [
  "futures-util",
  "golem-client",
  "golem-examples",
- "golem-gateway-client",
  "http 1.0.0",
  "indoc",
  "itertools",
@@ -601,9 +600,9 @@ dependencies = [
 
 [[package]]
 name = "golem-client"
-version = "0.0.52"
+version = "0.0.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "864ef2692b92b3657521a7a12d6540eacd764a9acd7e204786f43403965045ed"
+checksum = "16bfded1bc6ac54bcf9f10bf9c5d3c2533d6479f08d219a57072153b09020ba7"
 dependencies = [
  "async-trait",
  "bytes",
@@ -632,24 +631,6 @@ dependencies = [
  "serde_json",
  "strum",
  "strum_macros",
-]
-
-[[package]]
-name = "golem-gateway-client"
-version = "0.0.52"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72f744be873e4c0fcfb462526f74baa627d9f66e5ad7c8f5134f1c47a2abaa5a"
-dependencies = [
- "async-trait",
- "bytes",
- "chrono",
- "futures-core",
- "http 1.0.0",
- "reqwest",
- "serde",
- "serde_json",
- "tracing",
- "uuid",
 ]
 
 [[package]]

@@ -1,6 +1,8 @@
 # golem-cli
 
-Command line interface for [Golem Cloud](https://golem.cloud).
+Command line interface for [Golem OSS](https://golem.cloud).
+
+For Golem Cloud version client see [Golem Cloud CLI](https://github.com/golemcloud/golem-cloud-cli).
 
 
 ## Installation

@@ -6,7 +6,7 @@ license = "Apache-2.0"
 homepage = "https://www.golem.cloud/"
 authors = ["Simon Popugaev <simon.popugaev@ziverge.com>"]
 readme = "README.md"
-description = "Command line interface for Golem Cloud"
+description = "Command line interface for OSS version of Golem"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -17,8 +17,7 @@ clap = { version = "4.4.12", features = ["derive"] }
 clap-verbosity-flag = "2.1.1"
 derive_more = "0.99.17"
 futures-util = "0.3.30"
-golem-client = "0.0.52"
-golem-gateway-client = "0.0.52"
+golem-client = "0.0.54"
 golem-examples = "0.1.10"
 http = "1.0.0"
 indoc = "2.0.4"
