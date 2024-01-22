@@ -1,0 +1,29 @@
+[package]
+name = "cloud-common"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+
+[dependencies]
+golem-common = { path = "../golem-services/golem-common" }
+golem-api-grpc = { path = "../golem-services/golem-api-grpc" }
+
+golem-api-grpc-cloud = { path = "../golem-api-grpc-cloud" }
+
+poem-openapi = { workspace = true }
+serde = { workspace = true }
+url = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+hyper = { workspace = true }
+tonic = { workspace = true }
+http = { workspace = true }
+num-traits = "0.2"
+bigdecimal = "0.4.2"
+proptest = "1.4.0"
+uuid = { workspace = true }
+poem = { workspace = true, features = [ "test" ] }
+tokio = { workspace = true }
+bincode = { workspace = true }
+derive_more = "0.99.17"
