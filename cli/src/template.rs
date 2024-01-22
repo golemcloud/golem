@@ -4,11 +4,9 @@ use indoc::formatdoc;
 use itertools::Itertools;
 use uuid::Uuid;
 
-use crate::clients::project::ProjectClient;
 use crate::clients::template::{TemplateClient, TemplateView};
 use crate::model::{
-    GolemError, GolemResult, PathBufOrStdin, ProjectId, ProjectRef, RawTemplateId,
-    TemplateIdOrName, TemplateName,
+    GolemError, GolemResult, PathBufOrStdin, RawTemplateId, TemplateIdOrName, TemplateName,
 };
 
 #[derive(Subcommand, Debug)]
@@ -16,9 +14,6 @@ use crate::model::{
 pub enum TemplateSubcommand {
     #[command()]
     Add {
-        #[command(flatten)]
-        project_ref: ProjectRef,
-
         #[arg(short, long)]
         template_name: TemplateName,
 
@@ -37,9 +32,6 @@ pub enum TemplateSubcommand {
 
     #[command()]
     List {
-        #[command(flatten)]
-        project_ref: ProjectRef,
-
         #[arg(short, long)]
         template_name: Option<TemplateName>,
     },
@@ -52,28 +44,19 @@ pub trait TemplateHandler {
     async fn resolve_id(&self, reference: TemplateIdOrName) -> Result<RawTemplateId, GolemError>;
 }
 
-pub struct TemplateHandlerLive<'p, C: TemplateClient + Send + Sync, P: ProjectClient + Sync + Send>
-{
+pub struct TemplateHandlerLive<C: TemplateClient + Send + Sync> {
     pub client: C,
-    pub projects: &'p P,
 }
 
 #[async_trait]
-impl<'p, C: TemplateClient + Send + Sync, P: ProjectClient + Sync + Send> TemplateHandler
-    for TemplateHandlerLive<'p, C, P>
-{
+impl<C: TemplateClient + Send + Sync> TemplateHandler for TemplateHandlerLive<C> {
     async fn handle(&self, subcommand: TemplateSubcommand) -> Result<GolemResult, GolemError> {
         match subcommand {
             TemplateSubcommand::Add {
-                project_ref,
                 template_name,
                 template_file,
             } => {
-                let project_id = self.projects.resolve_id(project_ref).await?;
-                let template = self
-                    .client
-                    .add(project_id, template_name, template_file)
-                    .await?;
+                let template = self.client.add(template_name, template_file).await?;
 
                 Ok(GolemResult::Ok(Box::new(template)))
             }
@@ -86,12 +69,8 @@ impl<'p, C: TemplateClient + Send + Sync, P: ProjectClient + Sync + Send> Templa
 
                 Ok(GolemResult::Ok(Box::new(template)))
             }
-            TemplateSubcommand::List {
-                project_ref,
-                template_name,
-            } => {
-                let project_id = self.projects.resolve_id(project_ref).await?;
-                let templates = self.client.find(project_id, template_name).await?;
+            TemplateSubcommand::List { template_name } => {
+                let templates = self.client.find(template_name).await?;
 
                 Ok(GolemResult::Ok(Box::new(templates)))
             }
@@ -101,12 +80,8 @@ impl<'p, C: TemplateClient + Send + Sync, P: ProjectClient + Sync + Send> Templa
     async fn resolve_id(&self, reference: TemplateIdOrName) -> Result<RawTemplateId, GolemError> {
         match reference {
             TemplateIdOrName::Id(id) => Ok(id),
-            TemplateIdOrName::Name(name, project_ref) => {
-                let project_id = self.projects.resolve_id(project_ref).await?;
-                let templates = self
-                    .client
-                    .find(project_id.clone(), Some(name.clone()))
-                    .await?;
+            TemplateIdOrName::Name(name) => {
+                let templates = self.client.find(Some(name.clone())).await?;
                 let templates: Vec<TemplateView> = templates
                     .into_iter()
                     .group_by(|c| c.template_id.clone())
@@ -115,13 +90,11 @@ impl<'p, C: TemplateClient + Send + Sync, P: ProjectClient + Sync + Send> Templa
                     .collect();
 
                 if templates.len() > 1 {
-                    let project_str =
-                        project_id.map_or("default".to_string(), |ProjectId(id)| id.to_string());
                     let template_name = name.0;
                     let ids: Vec<String> = templates.into_iter().map(|c| c.template_id).collect();
                     Err(GolemError(formatdoc!(
                         "
-                        Multiple templates found for name {template_name} in project {project_str}:
+                        Multiple templates found for name {template_name}:
                         {}
                         Use explicit --template-id
                     ",
@@ -130,12 +103,8 @@ impl<'p, C: TemplateClient + Send + Sync, P: ProjectClient + Sync + Send> Templa
                 } else {
                     match templates.first() {
                         None => {
-                            let project_str = project_id
-                                .map_or("default".to_string(), |ProjectId(id)| id.to_string());
                             let template_name = name.0;
-                            Err(GolemError(format!(
-                                "Can't find template ${template_name} in {project_str}"
-                            )))
+                            Err(GolemError(format!("Can't find template ${template_name}")))
                         }
                         Some(template) => {
                             let parsed = Uuid::parse_str(&template.template_id);

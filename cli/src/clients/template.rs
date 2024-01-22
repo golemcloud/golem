@@ -9,7 +9,6 @@ use golem_client::model::FunctionResult;
 use golem_client::model::NameOptionTypePair;
 use golem_client::model::NameTypePair;
 use golem_client::model::Template;
-use golem_client::model::TemplateQuery;
 use golem_client::model::Type;
 use golem_client::model::TypeEnum;
 use golem_client::model::TypeFlags;
@@ -21,18 +20,13 @@ use tokio::fs::File;
 use tracing::info;
 
 use crate::model::{GolemError, PathBufOrStdin, TemplateName};
-use crate::{ProjectId, RawTemplateId};
+use crate::RawTemplateId;
 
 #[async_trait]
 pub trait TemplateClient {
-    async fn find(
-        &self,
-        project_id: Option<ProjectId>,
-        name: Option<TemplateName>,
-    ) -> Result<Vec<TemplateView>, GolemError>;
+    async fn find(&self, name: Option<TemplateName>) -> Result<Vec<TemplateView>, GolemError>;
     async fn add(
         &self,
-        project_id: Option<ProjectId>,
         name: TemplateName,
         file: PathBufOrStdin,
     ) -> Result<TemplateView, GolemError>;
@@ -159,8 +153,8 @@ fn render_type(typ: &Type) -> String {
 
 fn render_result(r: &FunctionResult) -> String {
     match &r.name {
-        None => render_type(&r.typ),
-        Some(name) => format!("{name}: {}", render_type(&r.typ)),
+        None => render_type(&r.tpe),
+        Some(name) => format!("{name}: {}", render_type(&r.tpe)),
     }
 }
 
@@ -172,7 +166,7 @@ fn show_exported_function(
 ) -> String {
     let params = parameters
         .iter()
-        .map(|p| format!("{}: {}", p.name, render_type(&p.typ)))
+        .map(|p| format!("{}: {}", p.name, render_type(&p.tpe)))
         .collect::<Vec<String>>()
         .join(", ");
     let res_str = results
@@ -185,36 +179,22 @@ fn show_exported_function(
 
 #[async_trait]
 impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for TemplateClientLive<C> {
-    async fn find(
-        &self,
-        project_id: Option<ProjectId>,
-        name: Option<TemplateName>,
-    ) -> Result<Vec<TemplateView>, GolemError> {
+    async fn find(&self, name: Option<TemplateName>) -> Result<Vec<TemplateView>, GolemError> {
         info!("Getting templates");
 
-        let project_id = project_id.map(|p| p.0);
         let name = name.map(|n| n.0);
 
-        let templates: Vec<Template> = self
-            .client
-            .get(project_id.as_ref(), name.as_deref())
-            .await?;
+        let templates: Vec<Template> = self.client.get(name.as_deref()).await?;
         let views = templates.iter().map(|c| c.into()).collect();
         Ok(views)
     }
 
     async fn add(
         &self,
-        project_id: Option<ProjectId>,
         name: TemplateName,
         path: PathBufOrStdin,
     ) -> Result<TemplateView, GolemError> {
         info!("Adding template {name:?} from {path:?}");
-
-        let query = TemplateQuery {
-            project_id: project_id.map(|ProjectId(id)| id),
-            template_name: name.0,
-        };
 
         let template = match path {
             PathBufOrStdin::Path(path) => {
@@ -222,7 +202,7 @@ impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for Temp
                     .await
                     .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
 
-                self.client.post(&query, file).await?
+                self.client.post(&name.0, file).await?
             }
             PathBufOrStdin::Stdin => {
                 let mut bytes = Vec::new();
@@ -231,7 +211,7 @@ impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for Temp
                     .read_to_end(&mut bytes) // TODO: steaming request from stdin
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
-                self.client.post(&query, bytes).await?
+                self.client.post(&name.0, bytes).await?
             }
         };
 
