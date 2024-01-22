@@ -11,6 +11,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  checks: write
+
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
 
