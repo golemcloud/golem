@@ -1024,20 +1024,20 @@ components:
       type: object
       required:
       - name
-      - tpe
+      - typ
       properties:
         name:
           type: string
-        tpe:
+        typ:
           $ref: '#/components/schemas/Type'
     FunctionResult:
       type: object
       required:
-      - tpe
+      - typ
       properties:
         name:
           type: string
-        tpe:
+        typ:
           $ref: '#/components/schemas/Type'
     GolemError:
       type: object
@@ -1092,9 +1092,9 @@ components:
     GolemErrorBody:
       type: object
       required:
-      - golem_error
+      - golemError
       properties:
-        golem_error:
+        golemError:
           $ref: '#/components/schemas/GolemError'
     GolemErrorFailedToResumeWorker:
       type: object
