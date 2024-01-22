@@ -80,8 +80,8 @@ async fn spawning_many_instances_that_sleep() {
 
     let mut sorted = results
         .into_iter()
-        .filter_map(|r| match r {
-            Ok((_, duration)) => Some(duration.as_millis()),
+        .map(|r| match r {
+            Ok((_, duration)) => duration.as_millis(),
             Err(err) => panic!("Error: {:?}", err),
         })
         .collect::<Vec<_>>();
@@ -164,7 +164,7 @@ async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
 
     let mut sorted1 = results
         .iter()
-        .filter_map(|r| match r {
+        .map(|r| match r {
             Ok((r, _)) => {
                 let Val {
                     val: Some(val::Val::F64(seconds)),
@@ -172,7 +172,7 @@ async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
                 else {
                     panic!("Unexpected result")
                 };
-                Some((seconds * 1000.0) as u64)
+                (seconds * 1000.0) as u64
             }
             Err(err) => panic!("Error: {:?}", err),
         })
@@ -183,8 +183,8 @@ async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
 
     let mut sorted2 = results
         .into_iter()
-        .filter_map(|r| match r {
-            Ok((_, duration)) => Some(duration.as_millis()),
+        .map(|r| match r {
+            Ok((_, duration)) => duration.as_millis(),
             Err(err) => panic!("Error: {:?}", err),
         })
         .collect::<Vec<_>>();
