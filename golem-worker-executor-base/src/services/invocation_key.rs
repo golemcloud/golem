@@ -151,12 +151,6 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
             state.pending_keys.remove(&key);
             state.confirmed_keys.insert(key.clone(), vals);
 
-            warn!(
-                "CONFIRMED KEYS: {} PENDING KEYS: {}",
-                state.confirmed_keys.len(),
-                state.pending_keys.len()
-            );
-
             record_pending_invocation_keys_count(state.pending_keys.len());
             record_confirmed_invocation_keys_count(state.confirmed_keys.len());
         }
