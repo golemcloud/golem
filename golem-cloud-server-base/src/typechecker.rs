@@ -1019,7 +1019,7 @@ mod tests {
 
     use std::collections::HashSet;
 
-    use golem_api_grpc::proto::golem::template::TypePrimitive;
+    use golem_api_grpc::proto::golem::template::{NameTypePair, TypePrimitive, TypeRecord};
     use proptest::prelude::*;
     use serde::Serialize;
     use serde_json::{Number, Value};
@@ -1682,6 +1682,11 @@ mod tests {
         }
 
         #[test]
+        fn test_s8(data in -127..=127) {
+            test_type_checker_s8(data);
+        }
+
+        #[test]
         fn test4(data in -32768..=32767) {
             test_type_checker_s16(data);
         }
@@ -1737,6 +1742,11 @@ mod tests {
             );
 
             assert_eq!(validated_input, Ok(fun_output.val.clone()));
+        }
+
+        #[test]
+        fn test_string(data in any::<String>()) {
+            test_type_checker_string(data);
         }
     }
 
@@ -1795,5 +1805,85 @@ mod tests {
         );
 
         assert!(res.is_ok_and(|r| r == Value::Bool(true)));
+    }
+
+    #[test]
+    fn json_null_works_as_none() {
+        let json = Value::Null;
+        let result = validate_function_parameters(
+            &json,
+            Type::Option(Box::new(
+                golem_api_grpc::proto::golem::template::TypeOption {
+                    elem: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
+                        r#type: Some(Type::Primitive(TypePrimitive {
+                            primitive: PrimitiveType::Str as i32,
+                        })),
+                    })),
+                },
+            )),
+        );
+        assert_eq!(
+            result,
+            Ok(Val::Option(Box::new(ValOption {
+                discriminant: 0,
+                value: None
+            })))
+        );
+    }
+
+    #[test]
+    fn missing_field_works_as_none() {
+        let json = Value::Object(
+            vec![("x".to_string(), Value::String("a".to_string()))]
+                .into_iter()
+                .collect(),
+        );
+        let result = validate_function_parameters(
+            &json,
+            Type::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "x".to_string(),
+                        typ: Some(golem_api_grpc::proto::golem::template::Type {
+                            r#type: Some(Type::Primitive(TypePrimitive {
+                                primitive: PrimitiveType::Str as i32,
+                            })),
+                        }),
+                    },
+                    NameTypePair {
+                        name: "y".to_string(),
+                        typ: Some(golem_api_grpc::proto::golem::template::Type {
+                            r#type: Some(Type::Option(Box::new(
+                                golem_api_grpc::proto::golem::template::TypeOption {
+                                    elem: Some(Box::new(
+                                        golem_api_grpc::proto::golem::template::Type {
+                                            r#type: Some(Type::Primitive(TypePrimitive {
+                                                primitive: PrimitiveType::Str as i32,
+                                            })),
+                                        },
+                                    )),
+                                },
+                            ))),
+                        }),
+                    },
+                ],
+            }),
+        );
+        assert_eq!(
+            result,
+            Ok(Val::Record(ValRecord {
+                values: vec![
+                    VVal {
+                        val: Some(Val::String("a".to_string()))
+                    },
+                    VVal {
+                        val: Some(Val::Option(Box::new(ValOption {
+                            discriminant: 0,
+                            value: None
+                        })))
+                    }
+                ]
+            }))
+        );
     }
 }

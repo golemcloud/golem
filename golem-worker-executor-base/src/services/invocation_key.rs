@@ -193,15 +193,15 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
         worker_id: &WorkerId,
         key: &InvocationKey,
     ) -> LookupResult {
-        debug!("wait_for_confirmation");
-        match self.lookup_key(worker_id, key) {
-            LookupResult::Invalid => LookupResult::Invalid,
-            LookupResult::Interrupted => LookupResult::Interrupted,
-            LookupResult::Pending => {
-                let expected_key: Option<(WorkerId, InvocationKey)> =
-                    Some((worker_id.clone(), key.clone()));
-                let mut receiver = self.confirm_sender.subscribe();
-                loop {
+        debug!("wait_for_confirmation {key:?}");
+        loop {
+            match self.lookup_key(worker_id, key) {
+                LookupResult::Invalid => break LookupResult::Invalid,
+                LookupResult::Interrupted => break LookupResult::Interrupted,
+                LookupResult::Pending => {
+                    let expected_key: Option<(WorkerId, InvocationKey)> =
+                        Some((worker_id.clone(), key.clone()));
+                    let mut receiver = self.confirm_sender.subscribe();
                     let confirmed_key = receiver.recv().await.ok();
                     if confirmed_key == expected_key {
                         break self.lookup_key(worker_id, key);
@@ -209,8 +209,8 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
                         continue;
                     }
                 }
+                LookupResult::Complete(result) => break LookupResult::Complete(result),
             }
-            LookupResult::Complete(result) => LookupResult::Complete(result),
         }
     }
 }

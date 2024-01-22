@@ -2002,6 +2002,7 @@ dependencies = [
  "cap-std",
  "cap-time-ext",
  "chrono",
+ "console-subscriber",
  "ctor",
  "dashmap",
  "figment",

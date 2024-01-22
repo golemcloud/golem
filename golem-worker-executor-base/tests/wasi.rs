@@ -1,15 +1,18 @@
 use crate::common;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::AtomicU8;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
-use crate::common::val_string;
 use assert2::{assert, check};
-
+use golem_api_grpc::proto::golem::worker::{val, Val};
 use http::{Response, StatusCode};
+use tokio::spawn;
+use tokio::time::Instant;
 use tonic::transport::Body;
+use tracing::info;
 use warp::Filter;
 
 #[tokio::test]
@@ -33,6 +36,31 @@ async fn write_stdout() {
 }
 
 #[tokio::test]
+async fn write_stderr() {
+    let mut executor = common::start().await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/write-stderr.wasm"));
+    let worker_id = executor.start_worker(&template_id, "write-stderr-1").await;
+
+    let mut rx = executor.capture_output(&worker_id).await;
+
+    let _result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mut events = vec![];
+    rx.recv_many(&mut events, 100).await;
+
+    drop(executor);
+
+    check!(
+        events
+            == vec![common::stderr_event(
+                "Sample text written to the error output\n"
+            )]
+    );
+}
+
+#[tokio::test]
 async fn read_stdin() {
     let mut executor = common::start().await.unwrap();
 
@@ -44,6 +72,178 @@ async fn read_stdin() {
     drop(executor);
 
     assert!(result.is_err()); // stdin is disabled in component calling convention
+}
+
+#[tokio::test]
+async fn clocks() {
+    let mut executor = common::start().await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/clocks.wasm"));
+    let worker_id = executor.start_worker(&template_id, "clocks-1").await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "run", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    check!(result.len() == 1);
+    let Val {
+        val: Some(val::Val::Tuple(tuple)),
+    } = &result[0]
+    else {
+        panic!("expected tuple")
+    };
+    check!(tuple.values.len() == 3);
+
+    let Val {
+        val: Some(val::Val::F64(elapsed1)),
+    } = &tuple.values[0]
+    else {
+        panic!("expected f64")
+    };
+    let Val {
+        val: Some(val::Val::F64(elapsed2)),
+    } = &tuple.values[1]
+    else {
+        panic!("expected f64")
+    };
+    let Val {
+        val: Some(val::Val::String(odt)),
+    } = &tuple.values[2]
+    else {
+        panic!("expected string")
+    };
+
+    let epoch_seconds = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    let diff1 = (epoch_seconds - *elapsed1).abs();
+    let parsed_odt = chrono::DateTime::parse_from_rfc3339(odt.as_str()).unwrap();
+    let odt_diff = epoch_seconds - parsed_odt.timestamp() as f64;
+
+    check!(diff1 < 5.0);
+    check!(*elapsed2 >= 2.0);
+    check!(*elapsed2 < 3.0);
+    check!(odt_diff < 5.0);
+}
+
+#[tokio::test]
+async fn file_write_read_delete() {
+    let mut executor = common::start().await.unwrap();
+
+    let template_id =
+        executor.store_template(Path::new("../test-templates/file-write-read-delete.wasm"));
+    let worker_id = executor
+        .start_worker(&template_id, "file-write-read-delete-1")
+        .await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "run", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    check!(
+        result
+            == vec![common::val_triple(
+                common::val_option(None),
+                common::val_option(Some(common::val_string("hello world"))),
+                common::val_option(None)
+            )]
+    );
+}
+
+#[tokio::test]
+async fn directories() {
+    let mut executor = common::start().await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/directories.wasm"));
+    let worker_id = executor.start_worker(&template_id, "directories-1").await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "run", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    let Val {
+        val: Some(val::Val::Tuple(tuple)),
+    } = &result[0]
+    else {
+        panic!("expected tuple")
+    };
+    check!(tuple.values.len() == 4); //  tuple<u32, list<tuple<string, bool>>, list<tuple<string, bool>>, u32>;
+
+    check!(tuple.values[0] == common::val_u32(0)); // initial number of entries
+    check!(
+        tuple.values[1]
+            == common::val_list(vec![common::val_pair(
+                common::val_string("/test"),
+                common::val_bool(true)
+            )])
+    ); // contents of /
+
+    // contents of /test
+    let Val {
+        val: Some(val::Val::List(list)),
+    } = &tuple.values[2]
+    else {
+        panic!("expected list")
+    };
+    check!(list.values.len() == 3);
+    check!(list.values.contains(&common::val_pair(
+        common::val_string("/test/dir1"),
+        common::val_bool(true)
+    )));
+    check!(list.values.contains(&common::val_pair(
+        common::val_string("/test/dir2"),
+        common::val_bool(true)
+    )));
+    check!(list.values.contains(&common::val_pair(
+        common::val_string("/test/hello.txt"),
+        common::val_bool(false)
+    )));
+
+    check!(tuple.values[3] == common::val_u32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+}
+
+#[tokio::test]
+async fn file_service() {
+    let mut executor = common::start().await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-1").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/write-file",
+            vec![
+                common::val_string("/testfile.txt"),
+                common::val_string("hello world"),
+            ],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start().await.unwrap();
+
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/read-file",
+            vec![common::val_string("/testfile.txt")],
+        )
+        .await
+        .unwrap();
+
+    check!(result == vec![common::val_result(Ok(common::val_string("hello world")))]);
 }
 
 #[tokio::test]
@@ -88,6 +288,113 @@ async fn http_client() {
             == Ok(vec![common::val_string(
                 "200 response is test-header test-body"
             )])
+    );
+}
+
+#[tokio::test]
+async fn http_client_using_reqwest() {
+    let mut executor = common::start().await.unwrap();
+    let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let captured_body_clone = captured_body.clone();
+    let http_server = tokio::spawn(async move {
+        let route = warp::path("post-example")
+            .and(warp::post())
+            .and(warp::header::optional::<String>("X-Test"))
+            .and(warp::body::bytes())
+            .map(move |header: Option<String>, body: bytes::Bytes| {
+                let body_str = String::from_utf8(body.to_vec()).unwrap();
+                {
+                    let mut capture = captured_body_clone.lock().unwrap();
+                    *capture = Some(body_str.clone());
+                }
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .body(Body::from(format!(
+                        "{{ \"percentage\" : 0.25, \"message\": \"response message {}\" }}",
+                        header.unwrap_or("no X-Test header".to_string()),
+                    )))
+                    .unwrap()
+            });
+
+        warp::serve(route)
+            .run("0.0.0.0:9999".parse::<SocketAddr>().unwrap())
+            .await;
+    });
+
+    let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let worker_id = executor
+        .start_worker(&template_id, "http-client-reqwest-1")
+        .await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api/run", vec![])
+        .await
+        .unwrap();
+    let captured_body = captured_body.lock().unwrap().clone().unwrap();
+
+    drop(executor);
+    http_server.abort();
+
+    check!(result == vec![common::val_string("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }")]);
+    check!(
+        captured_body
+            == "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
+                .to_string()
+    );
+}
+
+#[tokio::test]
+async fn environment_service() {
+    let mut executor = common::start().await.unwrap();
+
+    let template_id =
+        executor.store_template(Path::new("../test-templates/environment-service.wasm"));
+    let args = vec!["test-arg".to_string()];
+    let mut env = HashMap::new();
+    env.insert("TEST_ENV".to_string(), "test-value".to_string());
+    let worker_id = executor
+        .try_start_worker_versioned(&template_id, 0, "environment-service-1", args, env)
+        .await
+        .unwrap();
+
+    let args_result = executor
+        .invoke_and_await(&worker_id, "golem:it/api/get-arguments", vec![])
+        .await
+        .unwrap();
+
+    let env_result = executor
+        .invoke_and_await(&worker_id, "golem:it/api/get-environment", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    check!(
+        args_result
+            == vec![common::val_result(Ok(common::val_list(vec![
+                common::val_string("test-arg")
+            ])))]
+    );
+    check!(
+        env_result
+            == vec![common::val_result(Ok(common::val_list(vec![
+                common::val_pair(
+                    common::val_string("TEST_ENV"),
+                    common::val_string("test-value")
+                ),
+                common::val_pair(
+                    common::val_string("GOLEM_WORKER_NAME"),
+                    common::val_string("environment-service-1")
+                ),
+                common::val_pair(
+                    common::val_string("GOLEM_TEMPLATE_ID"),
+                    common::val_string(&template_id.to_string())
+                ),
+                common::val_pair(
+                    common::val_string("GOLEM_TEMPLATE_VERSION"),
+                    common::val_string("0")
+                ),
+            ])))]
     );
 }
 
@@ -145,5 +452,128 @@ async fn http_client_response_persisted_between_invocations() {
 
     http_server.abort();
 
-    check!(result == Ok(vec![val_string("200 response is test-header test-body")]));
+    check!(
+        result
+            == Ok(vec![common::val_string(
+                "200 response is test-header test-body"
+            )])
+    );
+}
+
+#[tokio::test]
+async fn sleep() {
+    let mut executor = common::start().await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/clock-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "clock-service-1").await;
+
+    let _ = executor
+        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![common::val_u64(10)])
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start().await.unwrap();
+
+    let start = Instant::now();
+    let _ = executor
+        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![common::val_u64(0)])
+        .await
+        .unwrap();
+    let duration = start.elapsed();
+
+    check!(duration.as_secs() < 2);
+}
+
+#[tokio::test]
+async fn resuming_sleep() {
+    let mut executor = common::start().await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/clock-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "clock-service-2").await;
+
+    let mut executor_clone = executor.async_clone().await;
+    let worker_id_clone = worker_id.clone();
+    let fiber = spawn(async move {
+        executor_clone
+            .invoke_and_await(
+                &worker_id_clone,
+                "golem:it/api/sleep",
+                vec![common::val_u64(10)],
+            )
+            .await
+            .unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    drop(executor);
+    let _ = fiber.await;
+
+    info!("Restarting worker...");
+
+    let mut executor = common::start().await.unwrap();
+
+    info!("Worker restarted");
+
+    let start = Instant::now();
+    let _ = executor
+        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![common::val_u64(10)])
+        .await
+        .unwrap();
+    let duration = start.elapsed();
+
+    check!(duration.as_secs() < 20);
+    check!(duration.as_secs() >= 10);
+}
+
+#[tokio::test]
+async fn failing_worker() {
+    let mut executor = common::start().await.unwrap();
+
+    let template_id =
+        executor.store_template(Path::new("../test-templates/failing-component.wasm"));
+    let worker_id = executor
+        .start_worker(&template_id, "failing-worker-1")
+        .await;
+
+    let result1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api/add",
+            vec![common::val_u64(5)],
+        )
+        .await;
+
+    let result2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api/add",
+            vec![common::val_u64(50)],
+        )
+        .await;
+
+    let result3 = executor
+        .invoke_and_await(&worker_id, "golem:component/api/get", vec![])
+        .await;
+
+    drop(executor);
+
+    check!(result1.is_ok());
+    check!(result2.is_err());
+    check!(result3.is_err());
+    check!(result2
+        .clone()
+        .err()
+        .unwrap()
+        .to_string()
+        .starts_with("Runtime error: error while executing at wasm backtrace:"));
+    check!(result2
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("<unknown>!golem:component/api#add"));
+    check!(
+        result3.err().unwrap().to_string() == "The previously invoked function failed".to_string()
+    );
 }
