@@ -163,6 +163,8 @@ jobs:
         if: success() || failure() # always run even if the previous step fails
         with:
           report_paths: 'results*.xml'
+          detailed_summary: true
+          include_passed: true
   publish:
     needs: [build]
     if: "startsWith(github.ref, 'refs/tags/v')"
