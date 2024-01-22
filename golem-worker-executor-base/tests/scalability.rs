@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::spawn;
 use tracing::info;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread")]
 async fn spawning_many_instances_that_sleep() {
     fn worker_name(n: i32) -> String {
         format!("sleeping-worker-{}", n)

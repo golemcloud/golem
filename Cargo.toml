@@ -66,13 +66,13 @@ rustls = { version = "0.21.5" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 thiserror = "1.0.15"
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "sync", "io-std", "net"] }
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "sync", "io-std", "net", "tracing"] }
 tokio-rustls = { version = "0.24.1" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tonic = "0.10.2"
 tonic-reflection = "0.10.2"
 tonic-health = "0.10.2"
-tracing = { version = "0.1.37", features = ["log"] }
+tracing = { version = "0.1.40", features = ["log"] }
 tracing-opentelemetry = "0.22.0"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter", "fmt", "std", "json"] }
 url = "2.3.1"
