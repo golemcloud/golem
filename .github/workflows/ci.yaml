@@ -150,7 +150,7 @@ jobs:
           redis-version: latest
           auto-start: false
       - name: Setup cargo2junit
-        run: cargo install cargo2junit
+        run: cargo install cargo2junit --force
       - name: Check formatting
         run: cargo fmt -- --check
       - name: Clippy
