@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem;
 use golem_common::model::{InvocationKey, WorkerId};
 use tokio::sync::broadcast::{Receiver, Sender};
-use tracing::{debug, warn};
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::error::GolemError;

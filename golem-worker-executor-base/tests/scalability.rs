@@ -48,7 +48,6 @@ async fn spawning_many_instances_that_sleep() {
 
     let start = tokio::time::Instant::now();
     let input: Vec<(i32, TemplateId, TestWorkerExecutorClone)> = (1..N)
-        .into_iter()
         .map(|i| (i, template_id.clone(), executor.clone_info()))
         .collect();
     let fibers: Vec<_> = input
@@ -133,7 +132,6 @@ async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
 
     let start = tokio::time::Instant::now();
     let input: Vec<(i32, TemplateId, TestWorkerExecutorClone)> = (1..N)
-        .into_iter()
         .map(|i| (i, template_id.clone(), executor.clone_info()))
         .collect();
     let fibers: Vec<_> = input

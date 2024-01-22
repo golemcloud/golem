@@ -8,7 +8,10 @@ use std::sync::{Arc, RwLock};
 use std::{env, panic};
 
 use crate::{common, REDIS};
-use golem_api_grpc::proto::golem::worker::{log_event, val, worker_execution_error, CallingConvention, LogEvent, StdOutLog, Val, ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple, WorkerExecutionError, StdErrLog};
+use golem_api_grpc::proto::golem::worker::{
+    log_event, val, worker_execution_error, CallingConvention, LogEvent, StdErrLog, StdOutLog, Val,
+    ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple, WorkerExecutionError,
+};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
     create_worker_response, get_invocation_key_response, get_worker_metadata_response,
