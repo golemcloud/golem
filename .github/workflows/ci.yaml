@@ -145,14 +145,21 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
+      - name: Setup cargo2junit
+        run: cargo install cargo2junit
       - name: Check formatting
         run: cargo fmt -- --check
       - name: Clippy
         run: cargo clippy -- -Dwarnings
       - name: Unit tests
-        run: cargo test --lib --bins --all-features
+        run: RUSTC_BOOTSTRAP=1 cargo test --lib --bins --all-features -- -Z unstable-options --format json --report-time | cargo2junit > results1.xml
       - name: "Worker Executor integration tests"
-        run: WASMTIME_BACKTRACE_DETAILS=1 cargo test --package golem-worker-executor-base --test '*' -- --nocapture --test-threads=1
+        run: RUSTC_BOOTSTRAP=1 WASMTIME_BACKTRACE_DETAILS=1 cargo test --package golem-worker-executor-base --test '*' -- --nocapture --test-threads=1 -Z unstable-options --format json --report-time | cargo2junit > results2.xml
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v4
+        if: success() || failure() # always run even if the previous step fails
+        with:
+          report_paths: 'results*.xml'
   publish:
     needs: [build]
     if: "startsWith(github.ref, 'refs/tags/v')"
