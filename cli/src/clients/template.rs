@@ -153,8 +153,8 @@ fn render_type(typ: &Type) -> String {
 
 fn render_result(r: &FunctionResult) -> String {
     match &r.name {
-        None => render_type(&r.tpe),
-        Some(name) => format!("{name}: {}", render_type(&r.tpe)),
+        None => render_type(&r.typ),
+        Some(name) => format!("{name}: {}", render_type(&r.typ)),
     }
 }
 
@@ -166,7 +166,7 @@ fn show_exported_function(
 ) -> String {
     let params = parameters
         .iter()
-        .map(|p| format!("{}: {}", p.name, render_type(&p.tpe)))
+        .map(|p| format!("{}: {}", p.name, render_type(&p.typ)))
         .collect::<Vec<String>>()
         .join(", ");
     let res_str = results
