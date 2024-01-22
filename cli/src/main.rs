@@ -65,7 +65,10 @@ enum Command {
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None, rename_all = "kebab-case")]
+#[command(author, version, about, long_about, rename_all = "kebab-case")]
+/// Command line interface for OSS version of Golem.
+///
+/// For Golem Cloud client see golem-cloud-cli instead: https://github.com/golemcloud/golem-cloud-cli
 struct GolemCommand {
     #[command(flatten)]
     verbosity: Verbosity,
