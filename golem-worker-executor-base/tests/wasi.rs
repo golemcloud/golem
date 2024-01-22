@@ -29,7 +29,7 @@ async fn write_stdout() {
 
     drop(executor);
 
-    check!(events == vec![common::stdout_event("Sample text written to the output\n")]);
+    check!(events == vec![common::stdout_event("Sample text written to the output NOT GOOD\n")]);
 }
 
 #[tokio::test]
