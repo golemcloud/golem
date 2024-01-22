@@ -6,7 +6,6 @@ members = [
     "golem-worker-executor-oss",
     "golem-common",
     "golem-api-grpc",
-    "golem-api-grpc-cloud",
     "golem-cloud-server-base",
     "golem-cloud-server-oss",
     "golem-shard-manager"

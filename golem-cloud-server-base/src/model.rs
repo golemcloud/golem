@@ -1133,7 +1133,9 @@ impl From<Type> for golem_api_grpc::proto::golem::template::Type {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 pub struct FunctionParameter {
     pub name: String,
-    pub tpe: Type,
+    //  TODO: Fix this in DB. Temp fix for now.
+    #[serde(rename = "tpe")]
+    pub typ: Type,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::template::FunctionParameter> for FunctionParameter {
@@ -1144,7 +1146,7 @@ impl TryFrom<golem_api_grpc::proto::golem::template::FunctionParameter> for Func
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
-            tpe: value.tpe.ok_or("Missing tpe")?.try_into()?,
+            typ: value.tpe.ok_or("Missing tpe")?.try_into()?,
         })
     }
 }
@@ -1153,7 +1155,7 @@ impl From<FunctionParameter> for golem_api_grpc::proto::golem::template::Functio
     fn from(value: FunctionParameter) -> Self {
         Self {
             name: value.name,
-            tpe: Some(value.tpe.into()),
+            tpe: Some(value.typ.into()),
         }
     }
 }
@@ -1161,7 +1163,9 @@ impl From<FunctionParameter> for golem_api_grpc::proto::golem::template::Functio
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 pub struct FunctionResult {
     pub name: Option<String>,
-    pub tpe: Type,
+    // TODO: Fix this in DB. Temp fix for now.
+    #[serde(rename = "tpe")]
+    pub typ: Type,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::template::FunctionResult> for FunctionResult {
@@ -1172,7 +1176,7 @@ impl TryFrom<golem_api_grpc::proto::golem::template::FunctionResult> for Functio
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
-            tpe: value.tpe.ok_or("Missing tpe")?.try_into()?,
+            typ: value.tpe.ok_or("Missing tpe")?.try_into()?,
         })
     }
 }
@@ -1181,7 +1185,7 @@ impl From<FunctionResult> for golem_api_grpc::proto::golem::template::FunctionRe
     fn from(value: FunctionResult) -> Self {
         Self {
             name: value.name,
-            tpe: Some(value.tpe.into()),
+            tpe: Some(value.typ.into()),
         }
     }
 }
@@ -2583,6 +2587,7 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::WorkerExecutionE
 }
 
 #[derive(Object)]
+#[oai(rename_all = "camelCase")]
 pub struct GolemErrorBody {
     pub golem_error: GolemError,
 }
@@ -2599,12 +2604,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerExecutionError> for Gol
     }
 }
 
-#[derive(Object)]
+#[derive(Object, serde::Serialize)]
 pub struct ErrorsBody {
     pub errors: Vec<String>,
 }
 
-#[derive(Object)]
+#[derive(Object, serde::Serialize)]
 pub struct ErrorBody {
     pub error: String,
 }

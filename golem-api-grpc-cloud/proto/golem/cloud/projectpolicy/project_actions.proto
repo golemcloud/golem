@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-package golem.cloud.projectpolicy;
-
-import "golem/cloud/projectpolicy/project_action.proto";
-
-message ProjectActions {
-  repeated ProjectAction actions = 1;
-}
