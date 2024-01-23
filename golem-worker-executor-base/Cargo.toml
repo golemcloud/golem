@@ -20,38 +20,39 @@ golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 
 anyhow = { workspace = true }
+async-fs = "2.1.0"
 async-mutex = "1.4.0"
 async-stream = { version = "0.3", optional = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
-bitflags = "2.4.1"
+bitflags = "2.4.2"
 bytes = { workspace = true }
-cap-std = "2.0.0"
-cap-time-ext = "2.0.0"
+cap-std = "2.0.0" # keep in sync with wasmtime
+cap-time-ext = "2.0.0" # keep in sync with wasmtime
 chrono = { workspace = true }
-dashmap = "5.5.0"
+dashmap = { workspace = true }
 figment = { workspace = true }
 flume = "0.11.0"
 fred = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
-http-body = "1.0.0-rc.2"
+http-body = "1.0.0-rc.2" # keep in sync with wasmtime
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
 io-extras = "0.18.0"
-iso8601-timestamp = "0.2.11"
+iso8601-timestamp = { workspace = true }
 lazy_static = { workspace = true }
-log = "0.4.17"
+log = "0.4.20"
 prometheus = { workspace = true }
 prost = { workspace = true }
 ringbuf = "0.3.3"
 rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tempfile = "3.8.1"
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
@@ -62,7 +63,6 @@ tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-value-bag = "1.4.2"
 warp = { workspace = true }
 wasmtime = { version = "=15.0.0", features = ["component-model"] }
 wasmtime-runtime = { version = "=15.0.0" }

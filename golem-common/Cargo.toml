@@ -15,12 +15,12 @@ golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
-dashmap = "5.5.0"
+dashmap = { workspace = true }
 derive_more = "0.99.17"
 fred = { workspace = true }
 futures-core = { workspace = true }
 humantime-serde = { workspace = true }
-iso8601-timestamp = "0.2.11"
+iso8601-timestamp = { workspace = true }
 lazy_static = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
@@ -34,6 +34,3 @@ tonic = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-
-[build-dependencies]
-tonic-build = "0.9"

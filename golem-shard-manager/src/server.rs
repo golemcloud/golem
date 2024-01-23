@@ -20,10 +20,12 @@ use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_server::{
 use golem_common::model::{ShardAssignment, ShardId};
 use model::{Assignments, Pod, RoutingTable, Unassignments};
 use persistence::{PersistenceService, PersistenceServiceDefault};
+use prometheus::{default_registry, Registry};
 use shard_manager_config::ShardManagerConfig;
 use tonic::transport::Server;
 use tonic::Response;
 use tracing::{debug, info, warn};
+use tracing_subscriber::EnvFilter;
 use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
 
 use crate::http_server::HttpServerImpl;
@@ -328,9 +330,22 @@ impl ShardManagerService for ShardManagerServiceImpl {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    debug!("Starting shard manager");
-
     let config = ShardManagerConfig::new();
+    let registry = default_registry().clone();
+
+    if config.enable_json_log {
+        tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            // .with_span_events(FmtSpan::FULL) // NOTE: enable to see span events
+            .with_env_filter(EnvFilter::from_default_env())
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::from_default_env())
+            .with_ansi(true)
+            .init();
+    }
 
     // NOTE: to enable tokio-console, comment the lines above and uncomment the lines below,
     // and compile with RUSTFLAGS="--cfg tokio_unstable" cargo build
@@ -341,11 +356,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(async_main(&config))
+        .block_on(async_main(&config, registry))
 }
 
 async fn async_main(
     shard_manager_config: &ShardManagerConfig,
+    registry: Registry,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
@@ -357,14 +373,14 @@ async fn async_main(
         .build()
         .unwrap();
 
-    debug!("Golem Shard Manager starting up...");
+    info!("Golem Shard Manager starting up...");
 
-    let _ = HttpServerImpl::new(SocketAddrV4::new(
-        Ipv4Addr::new(0, 0, 0, 0),
-        shard_manager_config.http_port,
-    ));
+    let _ = HttpServerImpl::new(
+        SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), shard_manager_config.http_port),
+        registry,
+    );
 
-    debug!("Using Redis at {}", shard_manager_config.redis.url());
+    info!("Using Redis at {}", shard_manager_config.redis.url());
     let pool = golem_common::redis::RedisPool::configured(&shard_manager_config.redis).await?;
 
     let shard_manager_config = Arc::new(shard_manager_config.clone());
@@ -373,22 +389,16 @@ async fn async_main(
         &pool,
         &shard_manager_config.number_of_shards,
     ));
-
     let instance_server_service = Arc::new(WorkerExecutorServiceDefault::new(
         shard_manager_config.instance_server_service.clone(),
     ));
 
     let shard_manager_port_str = env::var("GOLEM_SHARD_MANAGER_PORT")?;
-
-    debug!(
-        "The port read from env is {}",
-        shard_manager_port_str.clone()
-    );
-
+    info!("The port read from env is {}", shard_manager_port_str);
     let shard_manager_port = shard_manager_port_str.parse::<u16>()?;
     let shard_manager_addr = format!("0.0.0.0:{}", shard_manager_port);
 
-    debug!("Listening on port {}", shard_manager_port);
+    info!("Listening on port {}", shard_manager_port);
 
     let addr = shard_manager_addr.parse()?;
 
@@ -411,7 +421,7 @@ async fn async_main(
         .serve(addr)
         .await?;
 
-    debug!("Server started on port {}", shard_manager_port);
+    info!("Server started on port {}", shard_manager_port);
 
     Ok(())
 }

@@ -9,14 +9,20 @@ edition = "2021"
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 
+async-trait = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+bigdecimal = "0.4.2"
+http = { workspace = true }
+hyper = { workspace = true }
+num-traits = "0.2"
 poem-openapi = { workspace = true }
 serde = { workspace = true }
-url = { workspace = true }
-async-trait = { workspace = true }
 serde_json = { workspace = true }
-hyper = { workspace = true }
+tokio = { workspace = true }
 tonic = { workspace = true }
-http = { workspace = true }
-num-traits = "0.2"
-bigdecimal = "0.4.2"
+tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
 proptest = "1.4.0"
