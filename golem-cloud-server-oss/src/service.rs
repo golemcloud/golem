@@ -1,7 +1,8 @@
 pub mod template;
-pub mod template_object_store;
 pub mod worker;
 
+use golem_cloud_server_base::config::TemplateStoreConfig;
+use golem_cloud_server_base::service::template_object_store;
 use std::sync::Arc;
 
 use crate::config::CloudServiceConfig;
@@ -24,9 +25,14 @@ impl Services {
             Arc::new(DbTemplateRepo::new(db_pool.clone().into()));
 
         let object_store: Arc<dyn template_object_store::TemplateObjectStore + Sync + Send> =
-            Arc::new(template_object_store::FsTemplateObjectStore::new(
-                &config.templates.store,
-            )?);
+            match config.templates.store.clone() {
+                TemplateStoreConfig::S3(c) => {
+                    Arc::new(template_object_store::AwsS3TemplateObjectStore::new(&c).await)
+                }
+                TemplateStoreConfig::Local(c) => {
+                    Arc::new(template_object_store::FsTemplateObjectStore::new(&c)?)
+                }
+            };
 
         let template_service: Arc<dyn template::TemplateService + Sync + Send> = Arc::new(
             template::TemplateServiceDefault::new(template_repo.clone(), object_store.clone()),

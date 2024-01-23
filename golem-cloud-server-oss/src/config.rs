@@ -1,17 +1,12 @@
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
+use golem_cloud_server_base::config::TemplateStoreConfig;
 use golem_cloud_server_base::routing_table::RoutingTableConfig;
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct TemplateStoreLocalConfig {
-    pub root_path: String,
-    pub object_prefix: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
 pub struct TemplatesConfig {
-    pub store: TemplateStoreLocalConfig,
+    pub store: TemplateStoreConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -48,11 +43,15 @@ impl Default for CloudServiceConfig {
 #[cfg(test)]
 mod tests {
     #[test]
-    pub fn config_is_loadable1() {
+    pub fn config_is_loadable() {
         std::env::set_var("GOLEM__ROUTING_TABLE__HOST", "localhost");
         std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
-        std::env::set_var("GOLEM__TEMPLATES__STORE__ROOT_PATH", "template_store");
-        std::env::set_var("GOLEM__TEMPLATES__STORE__OBJECT_PREFIX", "");
+        std::env::set_var("GOLEM__TEMPLATES__STORE__TYPE", "Local");
+        std::env::set_var(
+            "GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH",
+            "template_store",
+        );
+        std::env::set_var("GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX", "");
         std::env::set_var("GOLEM__HTTP_PORT", "9001");
         std::env::set_var("GOLEM__GRPC_PORT", "9002");
 
