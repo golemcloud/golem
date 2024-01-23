@@ -13,19 +13,13 @@ description = "GRPC API for Golem services"
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
-dashmap = "5.5.0"
-derive_more = "0.99.17"
 futures-core = { workspace = true }
-humantime-serde = { workspace = true }
-iso8601-timestamp = "0.2.11"
 prost = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
-url = { workspace = true }
 uuid = { workspace = true }
 
 [build-dependencies]
-tonic-build = "0.9"
+tonic-build = "0.10.2"
