@@ -984,23 +984,21 @@ mod tests {
         let account1 = AccountId {
             value: "account1".to_string(),
         };
-        assert_eq!(
-            blob_store
+        assert!(
+            !blob_store
                 .container_exists(account1.clone(), "container1".to_string())
                 .await
-                .unwrap(),
-            false
+                .unwrap()
         );
         blob_store
             .create_container(account1.clone(), "container1".to_string())
             .await
             .unwrap();
-        assert_eq!(
+        assert!(
             blob_store
                 .container_exists(account1.clone(), "container1".to_string())
                 .await
-                .unwrap(),
-            true
+                .unwrap()
         );
     }
 
@@ -1016,12 +1014,11 @@ mod tests {
             .delete_container(account1.clone(), "container1".to_string())
             .await
             .unwrap();
-        assert_eq!(
-            blob_store
+        assert!(
+            !blob_store
                 .container_exists(account1.clone(), "container1".to_string())
                 .await
-                .unwrap(),
-            false
+                .unwrap()
         );
     }
 
@@ -1034,16 +1031,15 @@ mod tests {
             .create_container(account1.clone(), "container1".to_string())
             .await
             .unwrap();
-        assert_eq!(
-            blob_store
+        assert!(
+            !blob_store
                 .has_object(
                     account1.clone(),
                     "container1".to_string(),
                     "obj1".to_string()
                 )
                 .await
-                .unwrap(),
-            false
+                .unwrap()
         );
 
         let original_data = vec![1, 2, 3, 4];
@@ -1069,7 +1065,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(original_data, read_data);
-        assert_eq!(
+        assert!(
             blob_store
                 .has_object(
                     account1.clone(),
@@ -1077,8 +1073,7 @@ mod tests {
                     "obj1".to_string()
                 )
                 .await
-                .unwrap(),
-            true
+                .unwrap()
         );
     }
 
