@@ -99,6 +99,7 @@ pub struct CompiledTemplateServiceDisabledConfig {}
 pub enum BlobStoreServiceConfig {
     S3(BlobStoreServiceS3Config),
     InMemory(BlobStoreServiceInMemoryConfig),
+    Local(BlobStoreServiceLocalConfig),
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -110,6 +111,11 @@ pub struct BlobStoreServiceS3Config {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct BlobStoreServiceInMemoryConfig {}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct BlobStoreServiceLocalConfig {
+    pub root: PathBuf,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
