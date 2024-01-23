@@ -2,15 +2,87 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::config::TemplateStoreLocalConfig;
+use crate::config::{TemplateStoreLocalConfig, TemplateStoreS3Config};
 use async_trait::async_trait;
-use tracing::info;
+use aws_config::BehaviorVersion;
+use aws_sdk_s3::primitives::ByteStream;
+use tracing::{debug, info};
 
 #[async_trait]
 pub trait TemplateObjectStore {
     async fn get(&self, object_key: &str) -> Result<Vec<u8>, Box<dyn Error>>;
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error>>;
+}
+
+
+pub struct AwsS3TemplateObjectStore {
+    client: aws_sdk_s3::Client,
+    bucket_name: String,
+    object_prefix: String,
+}
+
+impl AwsS3TemplateObjectStore {
+    pub async fn new(config: &TemplateStoreS3Config) -> Self {
+        info!(
+            "S3 Template Object Store bucket: {}, prefix: {}",
+            config.bucket_name, config.object_prefix
+        );
+        let sdk_config = aws_config::load_defaults(BehaviorVersion::v2023_11_09()).await;
+        let client = aws_sdk_s3::Client::new(&sdk_config);
+        Self {
+            client,
+            bucket_name: config.bucket_name.clone(),
+            object_prefix: config.object_prefix.clone(),
+        }
+    }
+
+    fn get_key(&self, object_key: &str) -> String {
+        if self.object_prefix.is_empty() {
+            object_key.to_string()
+        } else {
+            format!("{}/{}", self.object_prefix, object_key)
+        }
+    }
+}
+
+
+#[async_trait]
+impl TemplateObjectStore for AwsS3TemplateObjectStore {
+    async fn get(&self, object_key: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+        let key = self.get_key(object_key);
+
+        info!("Getting object: {}/{}", self.bucket_name, key);
+
+        let response = self
+            .client
+            .get_object()
+            .bucket(&self.bucket_name)
+            .key(key)
+            .send()
+            .await?;
+
+        let data = response.body.collect().await?;
+        Ok(data.to_vec())
+    }
+
+    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error>> {
+        let key = self.get_key(object_key);
+
+        info!("Putting object: {}/{}", self.bucket_name, key);
+
+        let body = ByteStream::from(data);
+
+        self.client
+            .put_object()
+            .bucket(&self.bucket_name)
+            .key(key)
+            .body(body)
+            .send()
+            .await?;
+
+        Ok(())
+    }
 }
 
 pub struct FsTemplateObjectStore {
@@ -51,7 +123,7 @@ impl TemplateObjectStore for FsTemplateObjectStore {
     async fn get(&self, object_key: &str) -> Result<Vec<u8>, Box<dyn Error>> {
         let dir_path = self.get_dir_path();
 
-        info!("Getting object: {}/{}", dir_path.display(), object_key);
+        debug!("Getting object: {}/{}", dir_path.display(), object_key);
 
         let file_path = dir_path.join(object_key);
 
@@ -65,7 +137,7 @@ impl TemplateObjectStore for FsTemplateObjectStore {
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error>> {
         let dir_path = self.get_dir_path();
 
-        info!("Putting object: {}/{}", dir_path.display(), object_key);
+        debug!("Putting object: {}/{}", dir_path.display(), object_key);
 
         if !dir_path.exists() {
             fs::create_dir_all(dir_path.clone())?;
