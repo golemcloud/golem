@@ -20,14 +20,14 @@ golem-worker-executor-base = { path = "../golem-worker-executor-base", version =
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-cap-std = "2.0.0"
+cap-std = "2.0.0" # keep in sync with wasmtime
 console-subscriber = { workspace = true }
 figment = { workspace = true }
 humantime-serde = { workspace = true }
 prometheus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tempfile = "3.5.0"
+tempfile = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }

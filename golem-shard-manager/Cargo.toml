@@ -21,7 +21,6 @@ fred = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
-hyper = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 serde = { workspace = true }
