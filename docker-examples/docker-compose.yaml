@@ -9,7 +9,7 @@ services:
       - "6379:6379"
 
   golem-shard-manager:
-    image: golemservices/golem-shard-manager:v0.0.3-alpha
+    image: golemservices/golem-shard-manager:latest
     environment:
       - REDIS_HOST=redis
       - WASMTIME_BACKTRACE_DETAILS=1
@@ -24,7 +24,7 @@ services:
       - redis
 
   golem-cloud-server-oss:
-    image: golemservices/golem-server:v0.0.3-alpha
+    image: golemservices/golem-server:latest
     environment:
       - ENVIRONMENT=local
       - RUST_LOG="debug,h2=warn,hyper=warn,tower=warn"
@@ -47,7 +47,7 @@ services:
       - "9001:9001"
 
   golem-worker-executor-oss:
-    image: golemservices/golem-worker-executor:v0.0.3-alpha
+    image: golemservices/golem-worker-executor:latest
     environment:
       - ENVIRONMENT=local
       - RUST_LOG=info
