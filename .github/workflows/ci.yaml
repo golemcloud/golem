@@ -210,6 +210,8 @@ jobs:
           cargo build
           ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-cloud-server-oss.yaml --output-directory ../golem-client --name "golem-client" --client-version "${VERSION}"
       - name: Publish Golem client
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         working-directory: golem-client
         run: cargo publish --all-features --allow-dirty
       - name: Publish crate
