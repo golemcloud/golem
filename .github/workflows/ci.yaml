@@ -11,6 +11,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  checks: write
+  pull-requests: write
+
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
 
@@ -145,14 +149,23 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
+      - name: Setup cargo2junit
+        run: cargo install cargo2junit --force
       - name: Check formatting
         run: cargo fmt -- --check
       - name: Clippy
         run: cargo clippy -- -Dwarnings
       - name: Unit tests
-        run: cargo test --lib --bins --all-features
+        run: RUSTC_BOOTSTRAP=1 cargo test --lib --bins --all-features -- -Z unstable-options --format json --report-time | cargo2junit > results1.xml
       - name: "Worker Executor integration tests"
-        run: WASMTIME_BACKTRACE_DETAILS=1 cargo test --package golem-worker-executor-base --test '*' -- --nocapture --test-threads=1
+        run: RUSTC_BOOTSTRAP=1 WASMTIME_BACKTRACE_DETAILS=1 cargo test --package golem-worker-executor-base --test '*' -- --nocapture --test-threads=1 -Z unstable-options --format json --report-time | cargo2junit > results2.xml
+      - name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: |
+            results1.xml
+            results2.xml
   publish:
     needs: [build]
     if: "startsWith(github.ref, 'refs/tags/v')"
