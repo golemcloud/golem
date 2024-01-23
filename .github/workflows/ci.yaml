@@ -149,6 +149,30 @@ jobs:
         run: cargo test --lib --bins --all-features
       - name: "Worker Executor integration tests"
         run: WASMTIME_BACKTRACE_DETAILS=1 cargo test --package golem-worker-executor-base --test '*' -- --nocapture --test-threads=1
+      - name: Generate Golem OpenAPI yaml
+        working-directory: golem-cloud-server-oss
+        run: |
+          cargo build
+          ../target/debug/cloud-server-oss-yaml > ../target/golem-cloud-server-oss.yaml
+      - name: Check Golem OpenAPI yaml latest
+        shell: bash
+        run: |
+          if diff openapi/golem-cloud-server-oss.yaml target/golem-cloud-server-oss.yaml  >/dev/null 2>&1
+            then
+              echo "Latest Golem OpenAPI spec version detected."
+            else
+              echo "openapi/golem-cloud-server-oss.yaml is not the same as produced by cloud-server-oss-yaml." 1>&2
+              echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec." 1>&2
+              exit 1
+          fi
+      - name: Generate Golem client
+        working-directory: golem-openapi-client-generator
+        run: |
+          cargo build
+          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-cloud-server-oss.yaml --output-directory ../golem-client --name "golem-client" --client-version "0.0.0"
+      - name: Compile Golem client
+        working-directory: golem-client
+        run: cargo build
   publish:
     needs: [build]
     if: "startsWith(github.ref, 'refs/tags/v')"
@@ -190,3 +214,12 @@ jobs:
           cargo publish -p golem-common --all-features --allow-dirty
           cargo publish -p golem-worker-executor-base --all-features --allow-dirty
           cargo publish -p golem-worker-executor-oss --all-features --allow-dirty
+      - name: Generate Golem client
+        working-directory: golem-openapi-client-generator
+        run: |
+          export VERSION="${{ steps.get_version.outputs.version-without-v }}"
+          cargo build
+          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-cloud-server-oss.yaml --output-directory ../golem-client --name "golem-client" --client-version "${VERSION}"
+      - name: Publish Golem client
+        working-directory: golem-client
+        run: cargo publish --all-features --allow-dirty

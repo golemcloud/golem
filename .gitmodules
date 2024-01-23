@@ -4,3 +4,6 @@
 [submodule "wasmtime"]
 	path = wasmtime
 	url = https://github.com/golemcloud/wasmtime
+[submodule "golem-openapi-client-generator"]
+	path = golem-openapi-client-generator
+	url = git@github.com:golemcloud/golem-openapi-client-generator.git
