@@ -1109,13 +1109,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            blob_store
-                .list_objects(account1.clone(), "container1".to_string(),)
-                .await
-                .unwrap(),
-            vec!["obj1", "obj2"]
-        );
+        let mut result = blob_store
+            .list_objects(account1.clone(), "container1".to_string())
+            .await
+            .unwrap();
+
+        result.sort();
+
+        assert_eq!(result, vec!["obj1", "obj2"]);
 
         blob_store
             .move_object(
