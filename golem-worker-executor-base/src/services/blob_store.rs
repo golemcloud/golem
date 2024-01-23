@@ -984,22 +984,18 @@ mod tests {
         let account1 = AccountId {
             value: "account1".to_string(),
         };
-        assert!(
-            !blob_store
-                .container_exists(account1.clone(), "container1".to_string())
-                .await
-                .unwrap()
-        );
+        assert!(!blob_store
+            .container_exists(account1.clone(), "container1".to_string())
+            .await
+            .unwrap());
         blob_store
             .create_container(account1.clone(), "container1".to_string())
             .await
             .unwrap();
-        assert!(
-            blob_store
-                .container_exists(account1.clone(), "container1".to_string())
-                .await
-                .unwrap()
-        );
+        assert!(blob_store
+            .container_exists(account1.clone(), "container1".to_string())
+            .await
+            .unwrap());
     }
 
     async fn test_container_delete(blob_store: &impl BlobStoreService) {
@@ -1014,12 +1010,10 @@ mod tests {
             .delete_container(account1.clone(), "container1".to_string())
             .await
             .unwrap();
-        assert!(
-            !blob_store
-                .container_exists(account1.clone(), "container1".to_string())
-                .await
-                .unwrap()
-        );
+        assert!(!blob_store
+            .container_exists(account1.clone(), "container1".to_string())
+            .await
+            .unwrap());
     }
 
     async fn test_container_has_write_read_has(blob_store: &impl BlobStoreService) {
@@ -1031,16 +1025,14 @@ mod tests {
             .create_container(account1.clone(), "container1".to_string())
             .await
             .unwrap();
-        assert!(
-            !blob_store
-                .has_object(
-                    account1.clone(),
-                    "container1".to_string(),
-                    "obj1".to_string()
-                )
-                .await
-                .unwrap()
-        );
+        assert!(!blob_store
+            .has_object(
+                account1.clone(),
+                "container1".to_string(),
+                "obj1".to_string()
+            )
+            .await
+            .unwrap());
 
         let original_data = vec![1, 2, 3, 4];
         blob_store
@@ -1065,16 +1057,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(original_data, read_data);
-        assert!(
-            blob_store
-                .has_object(
-                    account1.clone(),
-                    "container1".to_string(),
-                    "obj1".to_string()
-                )
-                .await
-                .unwrap()
-        );
+        assert!(blob_store
+            .has_object(
+                account1.clone(),
+                "container1".to_string(),
+                "obj1".to_string()
+            )
+            .await
+            .unwrap());
     }
 
     async fn test_container_list_copy_move_list(blob_store: &impl BlobStoreService) {
