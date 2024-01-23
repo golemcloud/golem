@@ -15,7 +15,6 @@ pub trait TemplateObjectStore {
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error>>;
 }
 
-
 pub struct AwsS3TemplateObjectStore {
     client: aws_sdk_s3::Client,
     bucket_name: String,
@@ -45,7 +44,6 @@ impl AwsS3TemplateObjectStore {
         }
     }
 }
-
 
 #[async_trait]
 impl TemplateObjectStore for AwsS3TemplateObjectStore {

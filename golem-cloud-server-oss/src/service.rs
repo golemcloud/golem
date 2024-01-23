@@ -1,9 +1,9 @@
 pub mod template;
 pub mod worker;
 
-use std::sync::Arc;
 use golem_cloud_server_base::config::TemplateStoreConfig;
 use golem_cloud_server_base::service::template_object_store;
+use std::sync::Arc;
 
 use crate::config::CloudServiceConfig;
 use crate::db;
