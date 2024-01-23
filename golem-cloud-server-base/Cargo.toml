@@ -19,4 +19,6 @@ tonic = { workspace = true }
 http = { workspace = true }
 num-traits = "0.2"
 bigdecimal = "0.4.2"
+
+[dev-dependencies]
 proptest = "1.4.0"
