@@ -80,3 +80,4 @@ volumes:
   redis_data:
     driver: local
   template_store:
+  golem_db:
