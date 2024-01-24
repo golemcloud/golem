@@ -662,7 +662,13 @@ fn validate_function_parameters(
 fn get_bool(json: &Value) -> Result<Val, Vec<String>> {
     match json {
         Value::Bool(bool_val) => Ok(Val::Bool(*bool_val)),
-        _ => Err(vec![format!("{:?} is not of the type boolean", json)]),
+        _ => {
+            let type_description = type_description(json);
+            Err(vec![format!(
+                "Expected function parameter type is Boolean. But found {}",
+                type_description
+            )])
+        }
     }
 }
 
@@ -763,7 +769,13 @@ fn get_i64(value: &Value) -> Result<i64, Vec<String>> {
                 Err(vec![format!("Cannot convert {} to i64", num)])
             }
         }
-        _ => Err(vec!["value is not a number".to_string()]),
+        _ => {
+            let type_description = type_description(value);
+            Err(vec![format!(
+                "Expected function parameter type is i64. But found {}",
+                type_description
+            )])
+        }
     }
 }
 
@@ -776,28 +788,64 @@ fn bigdecimal(value: &Value) -> Result<BigDecimal, Vec<String>> {
                 Err(vec![format!("Cannot convert {} to f64", num)])
             }
         }
-        _ => Err(vec!["value is not a number".to_string()]),
+        _ => {
+            let type_description = type_description(value);
+            Err(vec![format!(
+                "Expected function parameter type is BigDecimal. But found {}",
+                type_description
+            )])
+        }
     }
 }
 
 fn get_char(json: &Value) -> Result<i32, Vec<String>> {
-    let result = if let Some(num_u64) = json.as_u64() {
+    if let Some(num_u64) = json.as_u64() {
         if num_u64 > u32::MAX as u64 {
-            None
+            Err(vec![format!(
+                "The value {} is too large to be converted to a char",
+                num_u64
+            )])
         } else {
-            char::from_u32(num_u64 as u32).map(|char| char as u32 as i32)
+            char::from_u32(num_u64 as u32)
+                .map(|char| char as u32 as i32)
+                .ok_or(vec![format!(
+                    "The value {} is not a valid unicode character",
+                    num_u64
+                )])
         }
     } else {
-        None
-    };
+        let type_description = type_description(json);
 
-    result.ok_or(vec!["Input is not a character".to_string()])
+        Err(vec![format!(
+            "Expected function parameter type is Char. But found {}",
+            type_description
+        )])
+    }
 }
 
 fn get_string(input_json: &Value) -> Result<String, Vec<String>> {
-    let result = input_json.as_str().map(|x| x.to_string());
+    if let Some(str_value) = input_json.as_str() {
+        // If the JSON value is a string, return it
+        Ok(str_value.to_string())
+    } else {
+        // If the JSON value is not a string, return an error with type information
+        let type_description = type_description(input_json);
+        Err(vec![format!(
+            "Expected function parameter type is String. But found {}",
+            type_description
+        )])
+    }
+}
 
-    result.ok_or(vec!["Value is not a string".to_string()])
+fn type_description(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "Null",
+        Value::Bool(_) => "Boolean",
+        Value::Number(_) => "Number",
+        Value::String(_) => "String",
+        Value::Array(_) => "Array",
+        Value::Object(_) => "Object",
+    }
 }
 
 fn get_result(
