@@ -956,19 +956,19 @@ fn get_record(
         input_json
     )])?;
 
-   let mut errors: Vec<String> = vec![];
-   let mut vals: Vec<VVal> = vec![];
+    let mut errors: Vec<String> = vec![];
+    let mut vals: Vec<VVal> = vec![];
 
-   for (name, tpe) in name_type_pairs {
-      if let Some(json_value) = json_map.get(name) {
-        match validate_function_parameters(json_value, tpe.clone()) {
-            Ok(result) => vals.push(VVal { val: Some(result) }),
-            Err(errs) => errors.extend(errs),
+    for (name, tpe) in name_type_pairs {
+        if let Some(json_value) = json_map.get(name) {
+            match validate_function_parameters(json_value, tpe.clone()) {
+                Ok(result) => vals.push(VVal { val: Some(result) }),
+                Err(errs) => errors.extend(errs),
+            }
+        } else {
+            errors.push(format!("Key '{}' not found in json_map", name));
         }
-    } else {
-        errors.push(format!("Key '{}' not found in json_map", name));
     }
-   }
 
     Ok(ValRecord { values: vals })
 }
