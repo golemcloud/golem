@@ -57,7 +57,12 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
       - name: Build ${{ matrix.platform.platform }} Executables
-        run: cargo build --release --target ${{ matrix.platform.target }} --out-dir target/${{ matrix.platform.platform }}/release
+        run: |
+          cargo build --release --target ${{ matrix.platform.target }}
+          mkdir -p target/${{ matrix.platform.platform }}/release
+          cp target/${{ matrix.platform.target }}/release/golem-shard-manager target/${{ matrix.platform.platform }}/release
+          cp target/${{ matrix.platform.target }}/release/worker-executor-oss target/${{ matrix.platform.platform }}/release
+          cp target/${{ matrix.platform.target }}/release/cloud-server-oss target/${{ matrix.platform.platform }}/release
       - name: Targets
         run: ls -la target/${{ matrix.platform.platform }}/release
       - name: Set version
