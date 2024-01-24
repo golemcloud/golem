@@ -12,7 +12,6 @@ use num_traits::cast::FromPrimitive;
 use num_traits::ToPrimitive;
 use serde_json::{Number, Value};
 use std::str::FromStr;
-use tracing::error;
 
 pub trait TypeCheckIn {
     fn validate_function_parameters(
@@ -968,7 +967,7 @@ fn get_record(
                     value_errors
                         .iter()
                         .map(|err| format!("Invalid value for the key {}. Error: {}", name, err))
-                        .collect(),
+                        .collect::<Vec<_>>(),
                 ),
             }
         } else {
@@ -1965,22 +1964,25 @@ mod tests {
             "key2": "value2",
         });
 
+        let key1 = "key1".to_string();
+        let key2 = "key2".to_string();
+
         let name_type_pairs: Vec<(&String, &Type)> = vec![
             (
-                &"key1".to_string(),
+                &key1,
                 &Type::Primitive(TypePrimitive {
                     primitive: PrimitiveType::Str as i32,
                 }),
             ),
             (
-                &"key2".to_string(),
+                &key2,
                 &Type::Primitive(TypePrimitive {
                     primitive: PrimitiveType::Str as i32,
                 }),
             ),
         ];
 
-        let result = get_record(&input_json, name_type_pairs);
+        let result = get_record(&input_json, name_type_pairs.clone());
         let expected_result = Ok(ValRecord {
             values: vec![
                 VVal {
@@ -1998,7 +2000,7 @@ mod tests {
             "key1": "value1",
         });
 
-        let result = get_record(&input_json, name_type_pairs);
+        let result = get_record(&input_json, name_type_pairs.clone());
         assert_eq!(result.is_err(), true);
     }
 }
