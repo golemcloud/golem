@@ -57,9 +57,19 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
       - name: Build ${{ matrix.platform.platform }} Executables
-        run: cargo build --release --target ${{ matrix.platform.target }} --output-dir target/${{ matrix.platform.platform }}/release
+        run: cargo build --release --target ${{ matrix.platform.target }} --out-dir target/${{ matrix.platform.platform }}/release
       - name: Targets
         run: ls -la target/${{ matrix.platform.platform }}/release
+      - name: Set version
+        id: set-version
+        run: |
+          if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
+            DOCKER_VERSION=$(echo "${{ github.ref }}" | sed 's|^refs/tags/v||')
+            echo "DOCKER_VERSION=${DOCKER_VERSION}" >> $GITHUB_ENV
+          else
+            COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
+            echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
+          fi
       - name: Log in to Docker Hub
         uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
         with:
