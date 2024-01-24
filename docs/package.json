@@ -5,7 +5,7 @@
   "scripts": {
     "postinstall": "lefthook install",
     "dev": "next dev",
-    "build": "next build",
+    "build": "lefthook run pre-build && next build",
     "start": "next start",
     "lint": "next lint",
     "fix": "next lint --fix . && prettier --log-level silent --write .",
