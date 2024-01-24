@@ -42,8 +42,8 @@ services:
       - GOLEM__GRPC_PORT=9090
       - GOLEM__HTTP_PORT=8080
     volumes:
-      - ./template_store:/template_store
-      - ./golem_db:/app/golem_db
+      - template_store:/template_store
+      - golem_db:/app/golem_db
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -84,4 +84,8 @@ services:
 
 volumes:
   redis_data:
+    driver: local
   template_store:
+    driver: local
+  golem_db:
+    driver: local
