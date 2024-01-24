@@ -972,7 +972,17 @@ fn get_record(
                 ),
             }
         } else {
-            errors.push(format!("Key '{}' not found in json_map", name));
+            match tpe {
+                Type::Option(_) => {
+                    vals.push(VVal {
+                        val: Some(Val::Option(Box::new(ValOption {
+                            discriminant: 0,
+                            value: None,
+                        }))),
+                    });
+                }
+                _ => errors.push(format!("Key '{}' not found in json_map", name)),
+            }
         }
     }
 
