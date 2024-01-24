@@ -964,7 +964,12 @@ fn get_record(
         if let Some(json_value) = json_map.get(name) {
             match validate_function_parameters(json_value, tpe.clone()) {
                 Ok(result) => vals.push(VVal { val: Some(result) }),
-                Err(value_errors) => errors.extend(value_errors.iter().map(|err| format!("Invalid value for the key {}. Error: {}", name, err)).collect())
+                Err(value_errors) => errors.extend(
+                    value_errors
+                        .iter()
+                        .map(|err| format!("Invalid value for the key {}. Error: {}", name, err))
+                        .collect(),
+                ),
             }
         } else {
             errors.push(format!("Key '{}' not found in json_map", name));
@@ -1951,19 +1956,29 @@ mod tests {
         });
 
         let name_type_pairs: Vec<(&String, &Type)> = vec![
-            (&"key1".to_string(), &Type::Primitive(TypePrimitive {
-                primitive: PrimitiveType::Str as i32,
-            })),
-            (&"key2".to_string(), &Type::Primitive(TypePrimitive {
-                primitive: PrimitiveType::Str as i32,
-            })),
+            (
+                &"key1".to_string(),
+                &Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::Str as i32,
+                }),
+            ),
+            (
+                &"key2".to_string(),
+                &Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::Str as i32,
+                }),
+            ),
         ];
 
         let result = get_record(&input_json, name_type_pairs);
         let expected_result = Ok(ValRecord {
             values: vec![
-                VVal { val: Some(Val::String("value1".to_string())) },
-                VVal { val: Some(Val::String("value2".to_string())) },
+                VVal {
+                    val: Some(Val::String("value1".to_string())),
+                },
+                VVal {
+                    val: Some(Val::String("value2".to_string())),
+                },
             ],
         });
         assert_eq!(result, expected_result);
@@ -1972,7 +1987,6 @@ mod tests {
         let input_json = json!({
             "key1": "value1",
         });
-
 
         let result = get_record(&input_json, name_type_pairs);
         assert_eq!(result.is_err(), true);
