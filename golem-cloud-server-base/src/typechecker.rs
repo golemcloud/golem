@@ -12,6 +12,7 @@ use num_traits::cast::FromPrimitive;
 use num_traits::ToPrimitive;
 use serde_json::{Number, Value};
 use std::str::FromStr;
+use tracing::error;
 
 pub trait TypeCheckIn {
     fn validate_function_parameters(
@@ -963,14 +964,18 @@ fn get_record(
         if let Some(json_value) = json_map.get(name) {
             match validate_function_parameters(json_value, tpe.clone()) {
                 Ok(result) => vals.push(VVal { val: Some(result) }),
-                Err(errs) => errors.extend(errs),
+                Err(value_errors) => errors.extend(value_errors.iter().map(|err| format!("Invalid value for the key {}. Error: {}", name, err)).collect())
             }
         } else {
             errors.push(format!("Key '{}' not found in json_map", name));
         }
     }
 
-    Ok(ValRecord { values: vals })
+    if errors.is_empty() {
+        Ok(ValRecord { values: vals })
+    } else {
+        Err(errors)
+    }
 }
 
 fn get_enum(input_json: &Value, names: Vec<String>) -> Result<ValEnum, Vec<String>> {
@@ -1066,7 +1071,7 @@ fn get_variant(
 
 #[cfg(test)]
 mod tests {
-
+    use serde_json::json;
     use std::collections::HashSet;
 
     use golem_api_grpc::proto::golem::template::{NameTypePair, TypePrimitive, TypeRecord};
@@ -1935,5 +1940,41 @@ mod tests {
                 ]
             }))
         );
+    }
+
+    #[test]
+    fn test_get_record() {
+        // Test case where all keys are present
+        let input_json = json!({
+            "key1": "value1",
+            "key2": "value2",
+        });
+
+        let name_type_pairs: Vec<(&String, &Type)> = vec![
+            (&"key1".to_string(), &Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::Str as i32,
+            })),
+            (&"key2".to_string(), &Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::Str as i32,
+            })),
+        ];
+
+        let result = get_record(&input_json, name_type_pairs);
+        let expected_result = Ok(ValRecord {
+            values: vec![
+                VVal { val: Some(Val::String("value1".to_string())) },
+                VVal { val: Some(Val::String("value2".to_string())) },
+            ],
+        });
+        assert_eq!(result, expected_result);
+
+        // Test case where a key is missing
+        let input_json = json!({
+            "key1": "value1",
+        });
+
+
+        let result = get_record(&input_json, name_type_pairs);
+        assert_eq!(result.is_err(), true);
     }
 }
