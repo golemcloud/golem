@@ -132,8 +132,16 @@ pub fn decode_param(param: &golem::worker::Val, param_type: &Type) -> Result<Val
                             Ok((field.name, decoded_param))
                         })
                         .collect::<Result<Vec<(&str, Val)>, GolemError>>()?;
-                    let record =
-                        Record::new(ty, record_values).expect("Type mismatch in decode_param");
+
+                    let record = Record::new(ty, record_values).map_err(|err| {
+                        GolemError::ValueMismatch {
+                            details: format!(
+                                "Invalid record data in function parameters {}",
+                                err.to_string()
+                            ),
+                        }
+                    })?;
+
                     Ok(Val::Record(record))
                 }
                 _ => Err(GolemError::ParamTypeMismatch),
