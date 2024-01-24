@@ -26,7 +26,7 @@ export function Footer() {
                     key={item.href}
                     href={item.href}
                     target="_blank"
-                    rel="noopener"
+                    rel="noopener noreferrer"
                     className="nx-h-7 nx-rounded-md nx-transition-colors nx-text-gray-600 dark:nx-text-gray-400 nx-px-2 hover:nx-bg-gray-100 hover:nx-text-gray-900 dark:hover:nx-bg-primary-100/5 dark:hover:nx-text-gray-50 dark:nx-border-neutral-700 contrast-more:nx-border-neutral-400 dark:contrast-more:nx-border-neutral-400 grid place-items-center border"
                   >
                     <span className="sr-only">{item.name}</span>
@@ -43,13 +43,13 @@ export function Footer() {
             <div className="mt-16 grid grid-cols-2 gap-8 lg:col-span-2 lg:mt-0">
               <nav>
                 <h3 className="text-sm font-semibold leading-6">Golem</h3>
-                <ul role="list" className="mt-6 space-y-4">
+                <ul className="mt-6 space-y-4">
                   {golem.map(item => (
                     <li key={item.name}>
                       <a
                         href={item.href}
                         target="_blank"
-                        rel="noopener"
+                        rel="noopener noreferrer"
                         className="nx-inline-block nx-text-gray-500 hover:nx-text-gray-900 dark:nx-text-gray-400 dark:hover:nx-text-gray-300 contrast-more:nx-text-gray-900 contrast-more:nx-underline contrast-more:dark:nx-text-gray-50 nx-w-full nx-break-words text-sm leading-6"
                       >
                         {item.name}
@@ -61,13 +61,13 @@ export function Footer() {
 
               <nav>
                 <h3 className="text-sm font-semibold leading-6">Support</h3>
-                <ul role="list" className="mt-6 space-y-4">
+                <ul className="mt-6 space-y-4">
                   {support.map(item => (
                     <li key={item.name}>
                       <a
                         href={item.href}
                         target="_blank"
-                        rel="noopener"
+                        rel="noopener noreferrer"
                         className="nx-inline-block nx-text-gray-500 hover:nx-text-gray-900 dark:nx-text-gray-400 dark:hover:nx-text-gray-300 contrast-more:nx-text-gray-900 contrast-more:nx-underline contrast-more:dark:nx-text-gray-50 nx-w-full nx-break-words text-sm leading-6"
                       >
                         {item.name}

@@ -1,0 +1,12 @@
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      glob: "*.{js,jsx,ts,tsx,cjs,mjs}"
+      run: bunx eslint --fix {staged_files} && git add {staged_files}
+    prettier:
+      glob: "*.{js,ts,cjs,mjs,d.cts,d.mts,jsx,tsx,json,jsonc,md,mdx}"
+      run: bunx prettier --log-level silent --write {staged_files} && git add {staged_files}
+    typecheck:
+      glob: "*.{ts,tsx}"
+      run: bunx tsc
