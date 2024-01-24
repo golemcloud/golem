@@ -135,10 +135,7 @@ pub fn decode_param(param: &golem::worker::Val, param_type: &Type) -> Result<Val
 
                     let record = Record::new(ty, record_values).map_err(|err| {
                         GolemError::ValueMismatch {
-                            details: format!(
-                                "Invalid record data in function parameters {}",
-                                err.to_string()
-                            ),
+                            details: format!("Invalid record data in function parameters {}", err),
                         }
                     })?;
 
