@@ -28,6 +28,8 @@ docker-compose up -d
 
 If you have issues running the above cargo build command, then read on:
 
+Make sure to do `docker-compose pull` next time to make sure you are pulling the latest images than the cached ones
+
 ### Cargo Build
 
 ### MAC
