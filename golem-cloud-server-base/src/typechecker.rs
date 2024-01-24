@@ -960,15 +960,36 @@ fn get_record(
     let mut vals: Vec<VVal> = vec![];
 
     for (name, tpe) in name_type_pairs {
-        let json_value = json_map.get(name).unwrap_or(&Value::Null);
-
-        match validate_function_parameters(json_value, tpe.clone()) {
-            Ok(result) => vals.push(VVal { val: Some(result) }),
-            Err(errs) => errors.extend(errs),
+        if let Some(json_value) = json_map.get(name) {
+            match validate_function_parameters(json_value, tpe.clone()) {
+                Ok(result) => vals.push(VVal { val: Some(result) }),
+                Err(value_errors) => errors.extend(
+                    value_errors
+                        .iter()
+                        .map(|err| format!("Invalid value for the key {}. Error: {}", name, err))
+                        .collect::<Vec<_>>(),
+                ),
+            }
+        } else {
+            match tpe {
+                Type::Option(_) => {
+                    vals.push(VVal {
+                        val: Some(Val::Option(Box::new(ValOption {
+                            discriminant: 0,
+                            value: None,
+                        }))),
+                    });
+                }
+                _ => errors.push(format!("Key '{}' not found in json_map", name)),
+            }
         }
     }
 
-    Ok(ValRecord { values: vals })
+    if errors.is_empty() {
+        Ok(ValRecord { values: vals })
+    } else {
+        Err(errors)
+    }
 }
 
 fn get_enum(input_json: &Value, names: Vec<String>) -> Result<ValEnum, Vec<String>> {
@@ -1064,7 +1085,7 @@ fn get_variant(
 
 #[cfg(test)]
 mod tests {
-
+    use serde_json::json;
     use std::collections::HashSet;
 
     use golem_api_grpc::proto::golem::template::{NameTypePair, TypePrimitive, TypeRecord};
@@ -1933,5 +1954,53 @@ mod tests {
                 ]
             }))
         );
+    }
+
+    #[test]
+    fn test_get_record() {
+        // Test case where all keys are present
+        let input_json = json!({
+            "key1": "value1",
+            "key2": "value2",
+        });
+
+        let key1 = "key1".to_string();
+        let key2 = "key2".to_string();
+
+        let name_type_pairs: Vec<(&String, &Type)> = vec![
+            (
+                &key1,
+                &Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::Str as i32,
+                }),
+            ),
+            (
+                &key2,
+                &Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::Str as i32,
+                }),
+            ),
+        ];
+
+        let result = get_record(&input_json, name_type_pairs.clone());
+        let expected_result = Ok(ValRecord {
+            values: vec![
+                VVal {
+                    val: Some(Val::String("value1".to_string())),
+                },
+                VVal {
+                    val: Some(Val::String("value2".to_string())),
+                },
+            ],
+        });
+        assert_eq!(result, expected_result);
+
+        // Test case where a key is missing
+        let input_json = json!({
+            "key1": "value1",
+        });
+
+        let result = get_record(&input_json, name_type_pairs.clone());
+        assert_eq!(result.is_err(), true);
     }
 }
