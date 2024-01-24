@@ -37,6 +37,8 @@ jobs:
           toolchain: stable
           target: ${{ matrix.platform.target }}
           override: true
+      - name: Install Rust Target
+        run: rustup target add ${{ matrix.platform.target }}
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
         with:
