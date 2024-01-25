@@ -25,6 +25,8 @@ impl Guest for Component {
     fn run() -> String {
         println!("Hello reqwest-wasi!");
 
+        let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
         let client = Client::builder().build().unwrap();
         println!("{:?}", client);
 
@@ -36,7 +38,7 @@ impl Guest for Component {
 
         println!("Sending {:?}", request_body);
 
-        let response: Response = client.post("http://localhost:9999/post-example")
+        let response: Response = client.post(&format!("http://localhost:{port}/post-example"))
             .json(&request_body)
             .header("X-Test", "Golem")
             .basic_auth("some", Some("body"))
@@ -52,12 +54,14 @@ impl Guest for Component {
     }
 
     fn start_polling(until: String) {
+        let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
         println!("Polling until receiving {until}");
 
         let client = Client::builder().build().unwrap();
         loop {
             println!("Calling the poll endpoint");
-            match client.get("http://localhost:9999/poll").send() {
+            match client.get(format!("http://localhost:{port}/poll")).send() {
                 Ok(response) => {
                     let s = response.text().unwrap();
                     println!("Received {s}");

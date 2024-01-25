@@ -1,4 +1,5 @@
 use crate::common;
+use std::collections::HashMap;
 use std::env;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -24,7 +25,8 @@ use wasmtime_wasi::preview2::spawn;
 
 #[tokio::test]
 async fn interruption() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/interruption.wasm"));
     let worker_id = executor.start_worker(&template_id, "interruption-1").await;
@@ -58,7 +60,8 @@ async fn interruption() {
 
 #[tokio::test]
 async fn simulated_crash() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/interruption.wasm"));
     let worker_id = executor
@@ -99,7 +102,8 @@ async fn simulated_crash() {
 
 #[tokio::test]
 async fn shopping_cart_example() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
     let worker_id = executor.start_worker(&template_id, "shopping-cart-1").await;
@@ -196,7 +200,8 @@ async fn shopping_cart_example() {
 
 #[tokio::test]
 async fn stdio_cc() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/stdio-cc.wasm"));
     let worker_id = executor.start_worker(&template_id, "stdio-cc-1").await;
@@ -212,7 +217,8 @@ async fn stdio_cc() {
 
 #[tokio::test]
 async fn dynamic_instance_creation() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id =
         executor.store_template(Path::new("../test-templates/environment-service.wasm"));
@@ -253,7 +259,8 @@ async fn dynamic_instance_creation() {
 
 #[tokio::test]
 async fn promise() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/promise.wasm"));
     let worker_id = executor.start_worker(&template_id, "promise-1").await;
@@ -293,7 +300,8 @@ async fn promise() {
 
 #[tokio::test]
 async fn get_self_uri() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
     let worker_id = executor
@@ -321,7 +329,8 @@ async fn get_self_uri() {
 
 #[tokio::test]
 async fn invoking_with_same_invocation_key_is_idempotent() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
     let worker_id = executor.start_worker(&template_id, "shopping-cart-2").await;
@@ -377,7 +386,8 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
 
 #[tokio::test]
 async fn invoking_with_invalid_invocation_key_is_failure() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
     let worker_id = executor.start_worker(&template_id, "shopping-cart-3").await;
@@ -406,7 +416,8 @@ async fn invoking_with_invalid_invocation_key_is_failure() {
 
 #[tokio::test]
 async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
     let worker_id = executor.start_worker(&template_id, "shopping-cart-4").await;
@@ -428,7 +439,7 @@ async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start().await.unwrap();
+    let mut executor = common::start(&context).await.unwrap();
 
     let _result2 = executor
         .invoke_and_await_with_key(
@@ -465,7 +476,8 @@ async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
 
 #[tokio::test]
 async fn optional_parameters() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/option-service.wasm"));
     let worker_id = executor
@@ -524,7 +536,8 @@ async fn optional_parameters() {
 
 #[tokio::test]
 async fn flags_parameters() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/flags-service.wasm"));
     let worker_id = executor.start_worker(&template_id, "flags-service-1").await;
@@ -569,7 +582,8 @@ async fn flags_parameters() {
 
 #[tokio::test]
 async fn variants_with_no_payloads() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/variant-service.wasm"));
     let worker_id = executor
@@ -587,7 +601,8 @@ async fn variants_with_no_payloads() {
 
 #[tokio::test]
 async fn delete_instance() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/option-service.wasm"));
     let worker_id = executor
@@ -613,7 +628,8 @@ async fn delete_instance() {
 
 #[tokio::test]
 async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_parameters() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/option-service.wasm"));
     let worker_id = executor
@@ -629,7 +645,8 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
 
 #[tokio::test]
 async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameters() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/option-service.wasm"));
     let worker_id = executor
@@ -653,7 +670,8 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
 
 #[tokio::test]
 async fn get_instance_metadata() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/clock-service.wasm"));
     let worker_id = executor
@@ -700,7 +718,8 @@ async fn get_instance_metadata() {
 
 #[tokio::test]
 async fn create_invoke_delete_create_invoke() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
     let worker_id = executor
@@ -747,7 +766,8 @@ async fn create_invoke_delete_create_invoke() {
 
 #[tokio::test]
 async fn recovering_an_old_instance_after_updating_a_template() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
     let worker_id = executor
@@ -797,7 +817,7 @@ async fn recovering_an_old_instance_after_updating_a_template() {
 
     // Restarting the server to force worker recovery
     drop(executor);
-    let mut executor = common::start().await.unwrap();
+    let mut executor = common::start(&context).await.unwrap();
 
     // Call the first worker again to check if it is still working
     let r3 = executor
@@ -821,7 +841,8 @@ async fn recovering_an_old_instance_after_updating_a_template() {
 
 #[tokio::test]
 async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
     let worker_id = executor
@@ -880,9 +901,10 @@ async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() 
 
 #[tokio::test]
 async fn trying_to_use_an_old_wasm_provides_good_error_message() {
+    let context = common::TestContext::new();
     // case: WASM is an old version, rejected by protector
 
-    let mut executor = common::start().await.unwrap();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/old-component.wasm"));
     let result = executor
@@ -902,8 +924,9 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message() {
 
 #[tokio::test]
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message() {
+    let context = common::TestContext::new();
     // case: WASM can be parsed but wasmtime does not support it
-    let mut executor = common::start().await.unwrap();
+    let mut executor = common::start(&context).await.unwrap();
     let template_id = executor.store_template(Path::new("../test-templates/write-stdout.wasm"));
 
     let cwd = env::current_dir().expect("Failed to get current directory");
@@ -938,7 +961,8 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 #[tokio::test]
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message_after_recovery()
 {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
     let template_id = executor.store_template(Path::new("../test-templates/write-stdout.wasm"));
 
     let worker_id = executor
@@ -948,7 +972,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 
     // worker is idle. if we restart the server it won't get recovered
     drop(executor);
-    let mut executor = common::start().await.unwrap();
+    let mut executor = common::start(&context).await.unwrap();
 
     // corrupting the uploaded WASM
     let cwd = env::current_dir().expect("Failed to get current directory");
@@ -988,12 +1012,14 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 
 #[tokio::test]
 async fn long_running_poll_loop_works_as_expected() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
+    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async {
+    let http_server = tokio::spawn(async move {
         let route = warp::path::path("poll").and(warp::get()).map(move || {
             let body = response_clone.lock().unwrap();
             Response::builder()
@@ -1003,14 +1029,22 @@ async fn long_running_poll_loop_works_as_expected() {
         });
 
         warp::serve(route)
-            .run("0.0.0.0:9999".parse::<SocketAddr>().unwrap())
+            .run(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
             .await;
     });
 
     let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
     let worker_id = executor
-        .start_worker(&template_id, "poll-loop-template-0")
-        .await;
+        .try_start_worker_versioned(&template_id, 0, "poll-loop-template-0", vec![], env)
+        .await
+        .unwrap();
 
     executor.log_output(&worker_id).await;
 
@@ -1044,12 +1078,14 @@ async fn long_running_poll_loop_works_as_expected() {
 
 #[tokio::test]
 async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
+    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async {
+    let http_server = tokio::spawn(async move {
         let route = warp::path::path("poll").and(warp::get()).map(move || {
             let body = response_clone.lock().unwrap();
             Response::builder()
@@ -1059,14 +1095,21 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
         });
 
         warp::serve(route)
-            .run("0.0.0.0:9999".parse::<SocketAddr>().unwrap())
+            .run(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
             .await;
     });
 
     let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_worker(&template_id, "poll-loop-template-1")
-        .await;
+        .try_start_worker_versioned(&template_id, 0, "poll-loop-template-1", vec![], env)
+        .await
+        .unwrap();
 
     executor.log_output(&worker_id).await;
 
@@ -1135,12 +1178,14 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
 
 #[tokio::test]
 async fn long_running_poll_loop_connection_breaks_on_interrupt() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
+    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async {
+    let http_server = tokio::spawn(async move {
         let route = warp::path::path("poll").and(warp::get()).map(move || {
             let body = response_clone.lock().unwrap();
             Response::builder()
@@ -1150,14 +1195,21 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
         });
 
         warp::serve(route)
-            .run("0.0.0.0:9999".parse::<SocketAddr>().unwrap())
+            .run(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
             .await;
     });
 
     let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_worker(&template_id, "poll-loop-template-2")
-        .await;
+        .try_start_worker_versioned(&template_id, 0, "poll-loop-template-2", vec![], env)
+        .await
+        .unwrap();
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
 
@@ -1185,12 +1237,14 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
 
 #[tokio::test]
 async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_worker() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
+    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async {
+    let http_server = tokio::spawn(async move {
         let route = warp::path::path("poll").and(warp::get()).map(move || {
             let body = response_clone.lock().unwrap();
             Response::builder()
@@ -1200,14 +1254,22 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
         });
 
         warp::serve(route)
-            .run("0.0.0.0:9999".parse::<SocketAddr>().unwrap())
+            .run(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
             .await;
     });
 
     let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
     let worker_id = executor
-        .start_worker(&template_id, "poll-loop-template-3")
-        .await;
+        .try_start_worker_versioned(&template_id, 0, "poll-loop-template-3", vec![], env)
+        .await
+        .unwrap();
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
 
@@ -1240,12 +1302,14 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
 
 #[tokio::test]
 async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
+    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async {
+    let http_server = tokio::spawn(async move {
         let route = warp::path::path("poll").and(warp::get()).map(move || {
             let body = response_clone.lock().unwrap();
             Response::builder()
@@ -1255,14 +1319,22 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
         });
 
         warp::serve(route)
-            .run("0.0.0.0:9999".parse::<SocketAddr>().unwrap())
+            .run(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
             .await;
     });
 
     let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
     let worker_id = executor
-        .start_worker(&template_id, "poll-loop-template-4")
-        .await;
+        .try_start_worker_versioned(&template_id, 0, "poll-loop-template-4", vec![], env)
+        .await
+        .unwrap();
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
 
@@ -1316,12 +1388,14 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
 
 #[tokio::test]
 async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
+    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async {
+    let http_server = tokio::spawn(async move {
         let route = warp::path::path("poll").and(warp::get()).map(move || {
             let body = response_clone.lock().unwrap();
             Response::builder()
@@ -1331,14 +1405,22 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
         });
 
         warp::serve(route)
-            .run("0.0.0.0:9999".parse::<SocketAddr>().unwrap())
+            .run(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
             .await;
     });
 
     let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
     let worker_id = executor
-        .start_worker(&template_id, "poll-loop-template-5")
-        .await;
+        .try_start_worker_versioned(&template_id, 0, "poll-loop-template-5", vec![], env)
+        .await
+        .unwrap();
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
 

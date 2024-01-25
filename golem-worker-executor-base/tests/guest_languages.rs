@@ -16,7 +16,8 @@ use crate::common;
 
 #[tokio::test]
 async fn zig_example_1() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/zig-1.wasm"));
     let worker_id = executor.start_worker(&template_id, "zig-1").await;
@@ -36,7 +37,8 @@ async fn zig_example_1() {
 
 #[tokio::test]
 async fn zig_example_2() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/zig-2.wasm"));
     let worker_id = executor.start_worker(&template_id, "zig-2").await;
@@ -83,7 +85,8 @@ async fn zig_example_2() {
 
 #[tokio::test]
 async fn tinygo_example() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/tinygo-wasi.wasm"));
     let worker_id = executor.start_worker(&template_id, "tinygo-wasi-1").await;
@@ -119,10 +122,12 @@ async fn tinygo_example() {
 
 #[tokio::test]
 async fn tinygo_http_client() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
+    let http_host_port = context.host_http_port();
     let http_server = tokio::spawn(async move {
         let route = warp::path("post-example")
             .and(warp::post())
@@ -145,14 +150,22 @@ async fn tinygo_http_client() {
             });
 
         warp::serve(route)
-            .run("0.0.0.0:9999".parse::<SocketAddr>().unwrap())
+            .run(
+                format!("0.0.0.0:{}", http_host_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
             .await;
     });
 
     let template_id = executor.store_template(Path::new("../test-templates/tinygo-wasi-http.wasm"));
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), context.host_http_port().to_string());
+
     let worker_id = executor
-        .start_worker(&template_id, "tinygo-wasi-http-1")
-        .await;
+        .try_start_worker_versioned(&template_id, 0, "tinygo-wasi-http-1", vec![], env)
+        .await
+        .unwrap();
 
     let result = executor
         .invoke_and_await(
@@ -183,7 +196,8 @@ async fn tinygo_http_client() {
 
 #[tokio::test]
 async fn grain_example_1() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/grain-1.wasm"));
     let worker_id = executor.start_worker(&template_id, "grain-1").await;
@@ -217,7 +231,8 @@ async fn grain_example_1() {
 
 #[tokio::test]
 async fn java_example_1() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/java-1.wasm"));
     let worker_id = executor.start_worker(&template_id, "java-1").await;
@@ -247,7 +262,8 @@ async fn java_example_1() {
 
 #[tokio::test]
 async fn java_shopping_cart() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/java-2.wasm"));
     let worker_id = executor.start_worker(&template_id, "java-2").await;
@@ -344,7 +360,8 @@ async fn java_shopping_cart() {
 
 #[tokio::test]
 async fn javascript_example_1() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/js-1.wasm"));
     let worker_id = executor.start_worker(&template_id, "js-1").await;
@@ -382,7 +399,8 @@ async fn javascript_example_1() {
 
 #[tokio::test]
 async fn javascript_example_2() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/js-2.wasm"));
     let worker_id = executor.start_worker(&template_id, "js-2").await;
@@ -409,7 +427,8 @@ async fn javascript_example_2() {
 
 #[tokio::test]
 async fn csharp_example_1() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/csharp-1.wasm"));
     let mut env = HashMap::new();
@@ -453,7 +472,8 @@ async fn csharp_example_1() {
 
 #[tokio::test]
 async fn c_example_1() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/c-1.wasm"));
     let worker_id = executor.start_worker(&template_id, "c-1").await;
@@ -479,7 +499,8 @@ async fn c_example_1() {
 
 #[tokio::test]
 async fn c_example_2() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/c-1.wasm"));
     let worker_id = executor.start_worker(&template_id, "c-2").await;
@@ -506,7 +527,8 @@ async fn c_example_2() {
 
 #[tokio::test]
 async fn swift_example_1() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/swift-1.wasm"));
     let worker_id = executor.start_worker(&template_id, "swift-1").await;
@@ -532,7 +554,8 @@ async fn swift_example_1() {
 
 #[tokio::test]
 async fn python_example_1() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/python-1.wasm"));
     let worker_id = executor.start_worker(&template_id, "python-1").await;

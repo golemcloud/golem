@@ -148,7 +148,7 @@ jobs:
       - name: Unit tests
         run: cargo test --lib --bins --all-features
       - name: "Worker Executor integration tests"
-        run: WASMTIME_BACKTRACE_DETAILS=1 cargo test --package golem-worker-executor-base --test '*' -- --nocapture --test-threads=1
+        run: WASMTIME_BACKTRACE_DETAILS=1 cargo test --package golem-worker-executor-base --test '*' -- --nocapture
       - name: Generate Golem OpenAPI yaml
         working-directory: golem-cloud-server-oss
         run: |

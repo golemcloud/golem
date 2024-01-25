@@ -1,13 +1,15 @@
 use anyhow::Error;
 use async_trait::async_trait;
+use ctor::ctor;
 use prometheus::Registry;
 use std::collections::HashMap;
 use std::path::Path;
 use std::string::FromUtf8Error;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, RwLock};
 use std::{env, panic};
 
-use crate::{common, REDIS};
+use crate::REDIS;
 use golem_api_grpc::proto::golem::worker::{
     log_event, val, worker_execution_error, CallingConvention, LogEvent, StdErrLog, StdOutLog, Val,
     ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple, WorkerExecutionError,
@@ -65,6 +67,7 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 
+use golem_common::config::RedisConfig;
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -632,12 +635,45 @@ impl Drop for TestWorkerExecutor {
     }
 }
 
-pub async fn start() -> Result<TestWorkerExecutor, anyhow::Error> {
+pub struct TestContext {
+    unique_id: u16,
+}
+
+#[ctor]
+pub static LAST_UNIQUE_ID: AtomicU16 = AtomicU16::new(0);
+
+impl TestContext {
+    pub fn new() -> Self {
+        Self {
+            unique_id: LAST_UNIQUE_ID.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+
+    pub fn redis_prefix(&self) -> String {
+        format!("test-{}", self.unique_id)
+    }
+
+    pub fn grpc_port(&self) -> u16 {
+        9000 + (self.unique_id * 3)
+    }
+
+    pub fn http_port(&self) -> u16 {
+        9001 + (self.unique_id * 3)
+    }
+
+    pub fn host_http_port(&self) -> u16 {
+        9002 + (self.unique_id * 3)
+    }
+}
+
+pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> {
     REDIS.assert_valid();
     println!("Using Redis on port {}", REDIS.port);
 
     let prometheus = golem_worker_executor_base::metrics::register_all();
     let config = GolemConfig {
+        port: context.grpc_port(),
+        http_port: context.http_port(),
         template_service: TemplateServiceConfig::Local(TemplateServiceLocalConfig {
             root: Path::new("data/templates").to_path_buf(),
         }),
@@ -651,6 +687,11 @@ pub async fn start() -> Result<TestWorkerExecutor, anyhow::Error> {
         shard_manager_service: ShardManagerServiceConfig::SingleShard,
         promises: PromisesConfig::Redis,
         workers: WorkersServiceConfig::Redis,
+        redis: RedisConfig {
+            port: REDIS.port,
+            key_prefix: context.redis_prefix(),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -731,7 +772,7 @@ pub async fn events_to_lines(rx: &mut UnboundedReceiver<LogEvent>) -> Vec<String
     rx.recv_many(&mut events, 100).await;
     let full_output = events
         .iter()
-        .map(common::log_event_to_string)
+        .map(log_event_to_string)
         .collect::<Vec<_>>()
         .join("");
     let lines = full_output
