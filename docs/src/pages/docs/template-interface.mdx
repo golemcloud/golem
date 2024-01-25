@@ -46,7 +46,7 @@ In this `world` you can either export
 The following example demonstrates both:
 
 ```rust
-package golem:component
+package golem:component;
 
 interface api {
   record product-item {
@@ -56,13 +56,13 @@ interface api {
     quantity: u32,
   }
 
-  add-item: func(item: product-item) -> ()
-  remove-item: func(product-id: string) -> ()
+  add-item: func(item: product-item) -> ();
+  remove-item: func(product-id: string) -> ();
 }
 
 world my-component-world {
-  export api
-  export dump: func() -> result<string, string>
+  export api;
+  export dump: func() -> result<string, string>;
 }
 ```
 
@@ -116,7 +116,7 @@ For **Tier 3 languages** you cannot define more than one function to be exported
 
 The function name for **tier 3** languages that you need to pass to the `--function` parameter of [Golem CLI](/docs/golem-cli) is always:
 
-- `wasi:cli/run/run`
+- `wasi:cli/run@0.2.0-rc-2023-11-10`
 
 ### Parameters and results
 

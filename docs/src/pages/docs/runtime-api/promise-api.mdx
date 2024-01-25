@@ -3,7 +3,7 @@
 See [the documentation on promises](/docs/promises) for an example of using the Runtime API to create and wait on promises to coordinate between Golem workers or with external systems.
 
 ```
-package golem:api
+package golem:api;
 
 interface host {
 
@@ -30,12 +30,12 @@ interface host {
 	    account-name: string
 	}
 
-	golem-create-promise: func() -> promise-id
+	golem-create-promise: func() -> promise-id;
 
-	golem-await-promise: func(promise-id: promise-id) -> list<u8>
+	golem-await-promise: func(promise-id: promise-id) -> list<u8>;
 
-	golem-complete-promise: func(promise-id: promise-id, data: list<u8>) -> bool
+	golem-complete-promise: func(promise-id: promise-id, data: list<u8>) -> bool;
 
-	golem-delete-promise: func(promise-id: promise-id) -> ()
+	golem-delete-promise: func(promise-id: promise-id) -> ();
 }
 ```

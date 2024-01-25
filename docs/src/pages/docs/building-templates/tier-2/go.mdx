@@ -24,15 +24,15 @@ go mod init golem.com/tinygo_example
 Then create a `wit` directory with a `main.wit` describing your template, optionally importing WASI or Golem specific extra interfaces (put them in `wit/deps`, copied from `golem-cli`'s package):
 
 ```go
-package my:template
+package my:template;
 
 world tinygo-example {
-    import wasi:poll/poll
-    import wasi:io/streams
-    import wasi:http/types
-    import wasi:http/outgoing-handler
+    import wasi:poll/poll;
+    import wasi:io/streams;
+    import wasi:http/types;
+    import wasi:http/outgoing-handler;
 
-    export example1: func(s: string) -> s32
+    export example1: func(s: string) -> s32;
 }
 ```
 
@@ -84,7 +84,7 @@ It's important to have an (empty) `main` function as well.
 Finally compile the go source to a core WASM module:
 
 ```go
-tinygo build -target=wasi -o main.wasm main.go
+tinygo build -target=wasi -tags=purego -o main.wasm main.go
 ```
 
 The resulting WASM file in `main.wasm` is just a WASM **module**, not ready to be used with **Golem.**

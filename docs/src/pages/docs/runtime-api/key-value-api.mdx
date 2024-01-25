@@ -17,17 +17,17 @@ Let's see what this looks like with an example. For this example we will create 
 Our WIT file will look like this:
 
 ```
-package golem:examples
+package golem:examples;
 
 interface api {
-  get: func(bucket: string, key: string) -> option<list<u8>>
+  get: func(bucket: string, key: string) -> option<list<u8>>;
 
-  set: func(bucket: string, key: string, value: list<u8>) -> ()
+  set: func(bucket: string, key: string, value: list<u8>) -> ();
 }
 
 world key-value-example {
-  import wasi:keyvalue/readwrite
-  export api
+  import wasi:keyvalue/readwrite;
+  export api;
 }
 ```
 
@@ -57,14 +57,14 @@ struct Component;
 
 impl Guest for Component {
     fn get(bucket: String, key: String) -> Option<Vec<u8>> {
-        let bucket = open_bucket(&bucket).unwrap();
+        let bucket = Bucket::open_bucket(&bucket).unwrap();
         match get(bucket, &key) {
             Ok(incoming_value) => {
-                let value = incoming_value_consume_sync(incoming_value).unwrap();
+                let value = incoming_value.incoming_value_consume_sync().unwrap();
                 Some(value)
             }
             Err(error) => {
-                let trace = trace(error);
+                let trace = error.trace();
                 if trace == "Key not found" {
                     None
                 } else {
@@ -75,9 +75,9 @@ impl Guest for Component {
     }
 
     fn set(bucket: String, key: String, value: Vec<u8>) {
-        let bucket = open_bucket(&bucket).unwrap();
-        let outgoing_value = new_outgoing_value();
-        outgoing_value_write_body_sync(outgoing_value, &value).unwrap();
+        let bucket = Bucket::open_bucket(&bucket).unwrap();
+        let outgoing_value = OutgoingValue::new_outgoing_value();
+        outgoing_value.outgoing_value_write_body_sync(&value).unwrap();
         set(bucket, &key, outgoing_value).unwrap()
     }
 }
