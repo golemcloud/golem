@@ -1,11 +1,11 @@
 FROM debian:bookworm-slim
 
-ARG TARGETPLATFORM
+ARG TARGETARCH
 
 WORKDIR /app
 
 COPY /golem-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
-COPY /target/build_release/golem-shard-manager ./
+COPY /target/$TARGETARCH/release/golem-shard-manager ./
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates

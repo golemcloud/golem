@@ -17,16 +17,6 @@ env:
 jobs:
   docker-build: # WIP
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-#          - platform: linux/amd64
-#            target: x86_64-unknown-linux-gnu
-#            config: ""
-          - platform: linux/arm64
-            target: aarch64-unknown-linux-gnu
-            config: "--config \"target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'\" "
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -37,10 +27,11 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          target: ${{ matrix.platform.target }}
           override: true
-      - name: Install Rust Target
-        run: rustup target add ${{ matrix.platform.target }}
+      - name: Install Rust Targets
+        run: |
+          rustup target add x86_64-unknown-linux-gnu
+          rustup target add aarch64-unknown-linux-gnu
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
         with:
@@ -58,18 +49,23 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-      - name: Build ${{ matrix.platform.platform }} Executables
+      - name: Build amd64 Executables
         run: |
-          cargo build --release --target ${{ matrix.platform.target }} ${{ matrix.platform.config }}     
-          mkdir -p target/build_release
-          cp target/${{ matrix.platform.target }}/release/golem-shard-manager target/build_release
-          cp target/${{ matrix.platform.target }}/release/worker-executor-oss target/build_release
-          cp target/${{ matrix.platform.target }}/release/cloud-server-oss target/build_release
-      - name: Targets
+          cargo build --release --target x86_64-unknown-linux-gnu     
+          mkdir -p target/amd64/release
+          cp target/x86_64-unknown-linux-gnu/release/golem-shard-manager target/amd64/release
+          cp target/x86_64-unknown-linux-gnu/release/worker-executor-oss target/amd64/release
+          cp target/x86_64-unknown-linux-gnu/release/cloud-server-oss target/amd64/release
+          ls -la target/amd64/release
+      - name: Build arm64 Executables
         run: |
-          pwd
-          ls -la target/build_release
-      - name: Set version
+          cargo build --release --target aarch64-unknown-linux-gnu --config "target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'"      
+          mkdir -p target/arm64/release
+          cp target/aarch64-unknown-linux-gnu/release/golem-shard-manager target/arm64/release
+          cp target/aarch64-unknown-linux-gnu/release/worker-executor-oss target/arm64/release
+          cp target/aarch64-unknown-linux-gnu/release/cloud-server-oss target/arm64/release
+          ls -la target/arm64/release
+      - name: Set Docker version
         id: set-version
         run: |
           if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
@@ -95,9 +91,93 @@ jobs:
           context: .
           file: ./golem-shard-manager/docker/Dockerfile
           push: false
-          platforms: ${{ matrix.platform.platform }}
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta-shard-manager.outputs.tags }}
           labels: ${{ steps.meta-shard-manager.outputs.labels }}
+
+#  docker-build: # WIP
+#    runs-on: ubuntu-latest
+#    strategy:
+#      fail-fast: false
+#      matrix:
+#        platform:
+##          - platform: linux/amd64
+##            target: x86_64-unknown-linux-gnu
+##            config: ""
+#          - platform: linux/arm64
+#            target: aarch64-unknown-linux-gnu
+#            config: "--config \"target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'\" "
+#    steps:
+#      - name: Checkout
+#        uses: actions/checkout@v3
+#        with:
+#          submodules: recursive
+#          fetch-depth: '0'
+#      - name: Setup Rust
+#        uses: actions-rs/toolchain@v1
+#        with:
+#          toolchain: stable
+#          target: ${{ matrix.platform.target }}
+#          override: true
+#      - name: Install Rust Target
+#        run: rustup target add ${{ matrix.platform.target }}
+#      - name: Install Protoc
+#        uses: arduino/setup-protoc@v1
+#        with:
+#          repo-token: ${{ secrets.GITHUB_TOKEN }}
+#      - name: Install gcc-aarch64-linux-gnu
+#        run: |
+#          sudo apt-get update
+#          sudo apt-get install gcc-aarch64-linux-gnu
+#      - uses: actions/cache@v3
+#        with:
+#          path: |
+#            ~/.cargo/bin/
+#            ~/.cargo/registry/index/
+#            ~/.cargo/registry/cache/
+#            ~/.cargo/git/db/
+#            target/
+#          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+#      - name: Build ${{ matrix.platform.platform }} Executables
+#        run: |
+#          cargo build --release --target ${{ matrix.platform.target }} ${{ matrix.platform.config }}
+#          mkdir -p target/build_release
+#          cp target/${{ matrix.platform.target }}/release/golem-shard-manager target/build_release
+#          cp target/${{ matrix.platform.target }}/release/worker-executor-oss target/build_release
+#          cp target/${{ matrix.platform.target }}/release/cloud-server-oss target/build_release
+#      - name: Targets
+#        run: |
+#          pwd
+#          ls -la target/build_release
+#      - name: Set version
+#        id: set-version
+#        run: |
+#          if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
+#            DOCKER_VERSION=$(echo "${{ github.ref }}" | sed 's|^refs/tags/v||')
+#            echo "DOCKER_VERSION=${DOCKER_VERSION}" >> $GITHUB_ENV
+#          else
+#            COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
+#            echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
+#          fi
+#      - name: Log in to Docker Hub
+#        uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
+#        with:
+#          username: ${{ secrets.DOCKERHUB_USERNAME }}
+#          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+#      - name: Extract metadata (tags, labels) for shard manager
+#        id: meta-shard-manager
+#        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+#        with:
+#          images: golemservices/golem-shard-manager
+#      - name: Build and push shard manager image
+#        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
+#        with:
+#          context: .
+#          file: ./golem-shard-manager/docker/Dockerfile
+#          push: false
+#          platforms: ${{ matrix.platform.platform }}
+#          tags: ${{ steps.meta-shard-manager.outputs.tags }}
+#          labels: ${{ steps.meta-shard-manager.outputs.labels }}
 
 #  docker:
 #    runs-on: ubuntu-latest
