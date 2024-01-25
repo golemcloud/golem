@@ -56,6 +56,11 @@ jobs:
           cp target/x86_64-unknown-linux-gnu/release/golem-shard-manager target/amd64/release
           cp target/x86_64-unknown-linux-gnu/release/worker-executor-oss target/amd64/release
           cp target/x86_64-unknown-linux-gnu/release/cloud-server-oss target/amd64/release
+          echo "pwd"
+          pwd
+          echo "ls golem-shard-manager/config"
+          ls -la golem-shard-manager/config
+          echo "ls target/amd64/release"
           ls -la target/amd64/release
       - name: Build arm64 Executables
         run: |
@@ -64,6 +69,11 @@ jobs:
           cp target/aarch64-unknown-linux-gnu/release/golem-shard-manager target/arm64/release
           cp target/aarch64-unknown-linux-gnu/release/worker-executor-oss target/arm64/release
           cp target/aarch64-unknown-linux-gnu/release/cloud-server-oss target/arm64/release
+          echo "pwd"
+          pwd
+          echo "ls golem-shard-manager/config"
+          ls -la golem-shard-manager/config
+          echo "ls target/arm64/release"
           ls -la target/arm64/release
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

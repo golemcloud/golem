@@ -2,6 +2,8 @@ FROM debian:bookworm-slim
 
 ARG TARGETARCH
 
+RUN echo ${TARGETARCH} && echo ${PWD} && ls -lR
+
 WORKDIR /app
 
 COPY /golem-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
