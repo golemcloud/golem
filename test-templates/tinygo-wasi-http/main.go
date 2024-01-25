@@ -8,6 +8,7 @@ import (
 	"golem.com/tinygo_wasi/tinygo_wasi"
 	"io"
 	"net/http"
+	"os"
 )
 
 func init() {
@@ -32,12 +33,17 @@ type ExampleResponse struct {
 func (e TinygoWasiImpl) Example1(s string) string {
 	http.DefaultClient.Transport = roundtrip.WasiHttpTransport{}
 
+	port := "9999"
+	if p := os.Getenv("PORT"); p != "" {
+		port = p
+	}
+
 	postBody, _ := json.Marshal(ExampleRequest{
 		Name:     "Something",
 		Amount:   42,
 		Comments: []string{"Hello", "World"},
 	})
-	resp, err := http.Post("http://localhost:9999/post-example", "application/json", bytes.NewBuffer(postBody))
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%s/post-example", port), "application/json", bytes.NewBuffer(postBody))
 	if err != nil {
 		return fmt.Sprintln(err)
 	}

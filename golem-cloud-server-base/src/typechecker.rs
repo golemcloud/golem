@@ -2001,6 +2001,6 @@ mod tests {
         });
 
         let result = get_record(&input_json, name_type_pairs.clone());
-        assert_eq!(result.is_err(), true);
+        assert!(result.is_err());
     }
 }
