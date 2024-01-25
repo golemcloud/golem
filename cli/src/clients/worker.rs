@@ -2,12 +2,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
-use golem_client::model::CallingConvention;
-use golem_client::model::InvokeParameters;
-use golem_client::model::InvokeResult;
-use golem_client::model::VersionedWorkerId;
-use golem_client::model::WorkerCreationRequest;
-use golem_client::model::WorkerMetadata;
+use golem_client::model::{
+    CallingConvention, InvokeParameters, InvokeResult, VersionedWorkerId, WorkerCreationRequest,
+    WorkerMetadata,
+};
 use golem_client::Context;
 use native_tls::TlsConnector;
 use serde::Deserialize;
@@ -249,12 +247,13 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .into_client_request()
             .map_err(|e| GolemError(format!("Can't create request: {e}")))?;
         let headers = request.headers_mut();
-        headers.insert(
-            "Authorization",
-            format!("Bearer {}", self.context.bearer_token().unwrap())
-                .parse()
-                .unwrap(),
-        );
+
+        if let Some(token) = self.context.bearer_token() {
+            headers.insert(
+                "Authorization",
+                format!("Bearer {}", token).parse().unwrap(),
+            );
+        }
 
         let connector = if self.allow_insecure {
             Some(Connector::NativeTls(

@@ -1,20 +1,10 @@
 use std::io::Read;
 
 use async_trait::async_trait;
-use golem_client::model::Export;
-use golem_client::model::ExportFunction;
-use golem_client::model::ExportInstance;
-use golem_client::model::FunctionParameter;
-use golem_client::model::FunctionResult;
-use golem_client::model::NameOptionTypePair;
-use golem_client::model::NameTypePair;
-use golem_client::model::Template;
-use golem_client::model::Type;
-use golem_client::model::TypeEnum;
-use golem_client::model::TypeFlags;
-use golem_client::model::TypeRecord;
-use golem_client::model::TypeTuple;
-use golem_client::model::TypeVariant;
+use golem_client::model::{
+    Export, ExportFunction, ExportInstance, FunctionParameter, FunctionResult, NameOptionTypePair,
+    NameTypePair, Template, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
+};
 use serde::Serialize;
 use tokio::fs::File;
 use tracing::info;

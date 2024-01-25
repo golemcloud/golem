@@ -1,5 +1,4 @@
-use golem_client::api::TemplateError;
-use golem_client::api::WorkerError;
+use golem_client::api::{TemplateError, WorkerError};
 
 pub trait ResponseContentErrorMapper {
     fn map(self) -> String;
