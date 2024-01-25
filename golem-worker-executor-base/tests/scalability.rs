@@ -13,6 +13,7 @@ use tracing::info;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn spawning_many_instances_that_sleep() {
+    let context = common::TestContext::new();
     fn worker_name(n: i32) -> String {
         format!("sleeping-worker-{}", n)
     }
@@ -27,7 +28,7 @@ async fn spawning_many_instances_that_sleep() {
         (result, duration)
     }
 
-    let mut executor = common::start().await.unwrap();
+    let mut executor = common::start(&context).await.unwrap();
     let template_id = executor.store_template(Path::new("../test-templates/clocks.wasm"));
 
     let warmup_worker = executor.start_worker(&template_id, &worker_name(0)).await;
@@ -97,6 +98,7 @@ async fn spawning_many_instances_that_sleep() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
+    let context = common::TestContext::new();
     fn worker_name(n: i32) -> String {
         format!("sleeping-suspending-worker-{}", n)
     }
@@ -111,7 +113,7 @@ async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
         (result, duration)
     }
 
-    let mut executor = common::start().await.unwrap();
+    let mut executor = common::start(&context).await.unwrap();
     let template_id = executor.store_template(Path::new("../test-templates/clocks.wasm"));
 
     let warmup_worker = executor.start_worker(&template_id, &worker_name(0)).await;

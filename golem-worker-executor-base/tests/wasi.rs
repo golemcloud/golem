@@ -17,7 +17,8 @@ use warp::Filter;
 
 #[tokio::test]
 async fn write_stdout() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/write-stdout.wasm"));
     let worker_id = executor.start_worker(&template_id, "write-stdout-1").await;
@@ -37,7 +38,8 @@ async fn write_stdout() {
 
 #[tokio::test]
 async fn write_stderr() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/write-stderr.wasm"));
     let worker_id = executor.start_worker(&template_id, "write-stderr-1").await;
@@ -62,7 +64,8 @@ async fn write_stderr() {
 
 #[tokio::test]
 async fn read_stdin() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/read-stdin.wasm"));
     let worker_id = executor.start_worker(&template_id, "read-stdin-1").await;
@@ -76,7 +79,8 @@ async fn read_stdin() {
 
 #[tokio::test]
 async fn clocks() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/clocks.wasm"));
     let worker_id = executor.start_worker(&template_id, "clocks-1").await;
@@ -132,7 +136,8 @@ async fn clocks() {
 
 #[tokio::test]
 async fn file_write_read_delete() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id =
         executor.store_template(Path::new("../test-templates/file-write-read-delete.wasm"));
@@ -159,7 +164,8 @@ async fn file_write_read_delete() {
 
 #[tokio::test]
 async fn directories() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/directories.wasm"));
     let worker_id = executor.start_worker(&template_id, "directories-1").await;
@@ -214,7 +220,8 @@ async fn directories() {
 
 #[tokio::test]
 async fn file_service() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
     let worker_id = executor.start_worker(&template_id, "file-service-1").await;
@@ -232,7 +239,7 @@ async fn file_service() {
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start().await.unwrap();
+    let mut executor = common::start(&context).await.unwrap();
 
     let result = executor
         .invoke_and_await(
@@ -248,9 +255,11 @@ async fn file_service() {
 
 #[tokio::test]
 async fn http_client() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
-    let http_server = tokio::spawn(async {
+    let host_http_port = context.host_http_port();
+    let http_server = tokio::spawn(async move {
         let route = warp::path::end()
             .and(warp::post())
             .and(warp::header::<String>("X-Test"))
@@ -267,12 +276,22 @@ async fn http_client() {
             });
 
         warp::serve(route)
-            .run("0.0.0.0:9999".parse::<SocketAddr>().unwrap())
+            .run(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
             .await;
     });
 
     let template_id = executor.store_template(Path::new("../test-templates/http-client.wasm"));
-    let worker_id = executor.start_worker(&template_id, "http-client-1").await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .try_start_worker_versioned(&template_id, 0, "http-client-1", vec![], env)
+        .await
+        .unwrap();
     let rx = executor.capture_output(&worker_id).await;
 
     let result = executor
@@ -293,9 +312,11 @@ async fn http_client() {
 
 #[tokio::test]
 async fn http_client_using_reqwest() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
+    let host_http_port = context.host_http_port();
     let http_server = tokio::spawn(async move {
         let route = warp::path("post-example")
             .and(warp::post())
@@ -317,14 +338,22 @@ async fn http_client_using_reqwest() {
             });
 
         warp::serve(route)
-            .run("0.0.0.0:9999".parse::<SocketAddr>().unwrap())
+            .run(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
             .await;
     });
 
     let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
     let worker_id = executor
-        .start_worker(&template_id, "http-client-reqwest-1")
-        .await;
+        .try_start_worker_versioned(&template_id, 0, "http-client-reqwest-1", vec![], env)
+        .await
+        .unwrap();
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api/run", vec![])
@@ -345,7 +374,8 @@ async fn http_client_using_reqwest() {
 
 #[tokio::test]
 async fn environment_service() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id =
         executor.store_template(Path::new("../test-templates/environment-service.wasm"));
@@ -400,9 +430,11 @@ async fn environment_service() {
 
 #[tokio::test]
 async fn http_client_response_persisted_between_invocations() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+    let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async {
+    let http_server = tokio::spawn(async move {
         let call_count = Arc::new(AtomicU8::new(0));
         let route = warp::path::end()
             .and(warp::post())
@@ -427,12 +459,22 @@ async fn http_client_response_persisted_between_invocations() {
             });
 
         warp::serve(route)
-            .run("0.0.0.0:9999".parse::<SocketAddr>().unwrap())
+            .run(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
             .await;
     });
 
     let template_id = executor.store_template(Path::new("../test-templates/http-client.wasm"));
-    let worker_id = executor.start_worker(&template_id, "http-client-2").await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .try_start_worker_versioned(&template_id, 0, "http-client-2", vec![], env)
+        .await
+        .unwrap();
     let rx = executor.capture_output(&worker_id).await;
 
     let _ = executor
@@ -443,7 +485,7 @@ async fn http_client_response_persisted_between_invocations() {
     drop(executor);
     drop(rx);
 
-    let mut executor = common::start().await.unwrap();
+    let mut executor = common::start(&context).await.unwrap();
     let _rx = executor.capture_output(&worker_id).await;
 
     let result = executor
@@ -462,7 +504,8 @@ async fn http_client_response_persisted_between_invocations() {
 
 #[tokio::test]
 async fn sleep() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/clock-service.wasm"));
     let worker_id = executor.start_worker(&template_id, "clock-service-1").await;
@@ -473,7 +516,7 @@ async fn sleep() {
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start().await.unwrap();
+    let mut executor = common::start(&context).await.unwrap();
 
     let start = Instant::now();
     let _ = executor
@@ -487,7 +530,8 @@ async fn sleep() {
 
 #[tokio::test]
 async fn resuming_sleep() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/clock-service.wasm"));
     let worker_id = executor.start_worker(&template_id, "clock-service-2").await;
@@ -512,7 +556,7 @@ async fn resuming_sleep() {
 
     info!("Restarting worker...");
 
-    let mut executor = common::start().await.unwrap();
+    let mut executor = common::start(&context).await.unwrap();
 
     info!("Worker restarted");
 
@@ -529,7 +573,8 @@ async fn resuming_sleep() {
 
 #[tokio::test]
 async fn failing_worker() {
-    let mut executor = common::start().await.unwrap();
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
     let template_id =
         executor.store_template(Path::new("../test-templates/failing-component.wasm"));

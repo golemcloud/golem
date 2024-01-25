@@ -64,6 +64,8 @@ impl Guest for Component {
 }
 
 fn send_request() -> types::FutureIncomingResponse {
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
     let headers =
         types::Fields::from_list(&[("X-Test".to_string(), "test-header".to_string().into())])
             .unwrap();
@@ -71,7 +73,7 @@ fn send_request() -> types::FutureIncomingResponse {
     request.set_method(&types::Method::Post).unwrap();
     request.set_path_with_query(Some("/")).unwrap();
     request.set_scheme(Some(&types::Scheme::Http)).unwrap();
-    request.set_authority(Some("localhost:9999")).unwrap();
+    request.set_authority(Some(&format!("localhost:{port}"))).unwrap();
 
     let request_body = request.body().unwrap();
     let request_body_stream = request_body.write().unwrap();
@@ -116,6 +118,8 @@ fn process_response(incoming_response: types::IncomingResponse, body: Vec<u8>) -
 }
 
 fn send_restart_request() {
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
     let headers =
         types::Fields::from_list(&[("X-Test".to_string(), "test-header".to_string().into())])
             .unwrap();
@@ -123,7 +127,7 @@ fn send_restart_request() {
     request.set_method(&types::Method::Post).unwrap();
     request.set_path_with_query(Some("/restart")).unwrap();
     request.set_scheme(Some(&types::Scheme::Http)).unwrap();
-    request.set_authority(Some("localhost:9999")).unwrap();
+    request.set_authority(Some(&format!("localhost:{port}"))).unwrap();
 
     let request_body = request.body().unwrap();
     let request_body_stream = request_body.write().unwrap();
