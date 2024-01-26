@@ -126,7 +126,7 @@ async fn validate_worker_id(
     req: &Request,
     Data(service): Data<&ConnectService>,
 ) -> Result<VersionedWorkerId, ConnectError> {
-    let (template_id, worker_name) = req.path_params::<(String, String)>().map_err(|err| {
+    let (template_id, worker_name) = req.path_params::<(String, String)>().map_err(|_| {
         ConnectError(
             "Valid path parameters (template_id and worker_name) are required ".to_string(),
         )
