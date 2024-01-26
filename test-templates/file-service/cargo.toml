@@ -19,4 +19,7 @@ cargo-component-bindings = { version = "0.5.0" }
 [package.metadata.component.target]
 path = "wit"
 
-[package.metadata.component.dependencies]
+[package.metadata.component.target.dependencies]
+"wasi:clocks" = { path = "wit/deps/clocks"}
+"wasi:filesystem" = { path = "wit/deps/filesystem"}
+"wasi:io" = { path = "wit/deps/io"}

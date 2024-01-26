@@ -219,7 +219,7 @@ async fn directories() {
 }
 
 #[tokio::test]
-async fn file_service() {
+async fn file_write_read() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
 
@@ -621,4 +621,562 @@ async fn failing_worker() {
     check!(
         result3.err().unwrap().to_string() == "The previously invoked function failed".to_string()
     );
+}
+
+#[tokio::test]
+async fn file_service_write_direct() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-2").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/write-file-direct",
+            vec![
+                common::val_string("testfile.txt"),
+                common::val_string("hello world"),
+            ],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/read-file",
+            vec![common::val_string("/testfile.txt")],
+        )
+        .await
+        .unwrap();
+
+    check!(result == vec![common::val_result(Ok(common::val_string("hello world")))]);
+}
+
+#[tokio::test]
+async fn filesystem_write_replay_restores_file_times() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-3").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/write-file-direct",
+            vec![
+                common::val_string("testfile.txt"),
+                common::val_string("hello world"),
+            ],
+        )
+        .await
+        .unwrap();
+    let times1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-file-info",
+            vec![common::val_string("/testfile.txt")],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let times2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-file-info",
+            vec![common::val_string("/testfile.txt")],
+        )
+        .await
+        .unwrap();
+
+    check!(times1 == times2);
+}
+
+#[tokio::test]
+async fn filesystem_create_dir_replay_restores_file_times() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-4").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-directory",
+            vec![common::val_string("/test")],
+        )
+        .await
+        .unwrap();
+    let times1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/")],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let times2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/")],
+        )
+        .await
+        .unwrap();
+
+    check!(times1 == times2);
+}
+
+#[tokio::test]
+async fn file_hard_link() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-5").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/write-file",
+            vec![
+                common::val_string("/testfile.txt"),
+                common::val_string("hello world"),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-link",
+            vec![
+                common::val_string("/testfile.txt"),
+                common::val_string("/link.txt"),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/read-file",
+            vec![common::val_string("/link.txt")],
+        )
+        .await
+        .unwrap();
+
+    check!(result == vec![common::val_result(Ok(common::val_string("hello world")))]);
+}
+
+#[tokio::test]
+async fn filesystem_link_replay_restores_file_times() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-6").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-directory",
+            vec![common::val_string("/test")],
+        )
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-directory",
+            vec![common::val_string("/test2")],
+        )
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/write-file",
+            vec![
+                common::val_string("/test/testfile.txt"),
+                common::val_string("hello world"),
+            ],
+        )
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-link",
+            vec![
+                common::val_string("/test/testfile.txt"),
+                common::val_string("/test2/link.txt"),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let times_file_1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test2/link.txt")],
+        )
+        .await
+        .unwrap();
+    let times_dir_1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test2")],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let times_dir_2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test2")],
+        )
+        .await
+        .unwrap();
+    let times_file_2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test2/link.txt")],
+        )
+        .await
+        .unwrap();
+
+    check!(times_dir_1 == times_dir_2);
+    check!(times_file_1 == times_file_2);
+}
+
+#[tokio::test]
+async fn filesystem_remove_dir_replay_restores_file_times() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-4").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-directory",
+            vec![common::val_string("/test")],
+        )
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-directory",
+            vec![common::val_string("/test/a")],
+        )
+        .await
+        .unwrap();
+    _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/remove-directory",
+            vec![common::val_string("/test/a")],
+        )
+        .await
+        .unwrap();
+    let times1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test")],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let times2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test")],
+        )
+        .await
+        .unwrap();
+
+    check!(times1 == times2);
+}
+
+#[tokio::test]
+async fn filesystem_symlink_replay_restores_file_times() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-6").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-directory",
+            vec![common::val_string("/test")],
+        )
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-directory",
+            vec![common::val_string("/test2")],
+        )
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/write-file",
+            vec![
+                common::val_string("/test/testfile.txt"),
+                common::val_string("hello world"),
+            ],
+        )
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-sym-link",
+            vec![
+                common::val_string("../test/testfile.txt"),
+                common::val_string("/test2/link.txt"),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let times_file_1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test2/link.txt")],
+        )
+        .await
+        .unwrap();
+    let times_dir_1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test2")],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let times_dir_2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test2")],
+        )
+        .await
+        .unwrap();
+    let times_file_2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test2/link.txt")],
+        )
+        .await
+        .unwrap();
+
+    check!(times_dir_1 == times_dir_2);
+    check!(times_file_1 == times_file_2);
+}
+
+#[tokio::test]
+async fn filesystem_rename_replay_restores_file_times() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-6").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-directory",
+            vec![common::val_string("/test")],
+        )
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-directory",
+            vec![common::val_string("/test2")],
+        )
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/write-file",
+            vec![
+                common::val_string("/test/testfile.txt"),
+                common::val_string("hello world"),
+            ],
+        )
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/rename-file",
+            vec![
+                common::val_string("/test/testfile.txt"),
+                common::val_string("/test2/link.txt"),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let times_srcdir_1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test")],
+        )
+        .await
+        .unwrap();
+    let times_destdir_1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test2")],
+        )
+        .await
+        .unwrap();
+    let times_file_1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test2/link.txt")],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let times_srcdir_2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test")],
+        )
+        .await
+        .unwrap();
+    let times_destdir_2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test2")],
+        )
+        .await
+        .unwrap();
+    let times_file_2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test2/link.txt")],
+        )
+        .await
+        .unwrap();
+
+    check!(times_srcdir_1 == times_srcdir_2);
+    check!(times_destdir_1 == times_destdir_2);
+    check!(times_file_1 == times_file_2);
+}
+
+#[tokio::test]
+async fn filesystem_remove_file_replay_restores_file_times() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-4").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/create-directory",
+            vec![common::val_string("/test")],
+        )
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/write-file",
+            vec![
+                common::val_string("/test/testfile.txt"),
+                common::val_string("hello world"),
+            ],
+        )
+        .await
+        .unwrap();
+    _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/remove-file",
+            vec![common::val_string("/test/testfile.txt")],
+        )
+        .await
+        .unwrap();
+    let times1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test")],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let times2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![common::val_string("/test")],
+        )
+        .await
+        .unwrap();
+
+    check!(times1 == times2);
 }

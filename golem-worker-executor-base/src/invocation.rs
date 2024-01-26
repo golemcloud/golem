@@ -106,7 +106,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
             }
         }
         Ok(None) => {
-            // this invocation did not produce any result but we may get one in the future
+            // this invocation did not produce any result, but we may get one in the future
             false
         }
         Ok(Some(_)) => {

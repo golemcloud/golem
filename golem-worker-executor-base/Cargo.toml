@@ -36,6 +36,7 @@ dashmap = { workspace = true }
 figment = { workspace = true }
 flume = "0.11.0"
 fred = { workspace = true }
+fs-set-times = "0.20.1"
 futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }

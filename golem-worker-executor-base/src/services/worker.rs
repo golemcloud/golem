@@ -319,7 +319,7 @@ impl WorkerService for WorkerServiceRedis {
             status: status.clone(),
             oplog_idx,
         };
-        let status_value = self.redis.serialize(&status_value).unwrap_or_else(|err| {
+        let serialized_status_value = self.redis.serialize(&status_value).unwrap_or_else(|err| {
             panic!(
                 "failed to serialize worker status to {:?} in Redis: {err}",
                 status_value
@@ -329,7 +329,13 @@ impl WorkerService for WorkerServiceRedis {
         debug!("updating worker status for {worker_id} to {status_value:?}");
         self.redis
             .with("instance", "update_status")
-            .set(status_key.clone(), status_value, None, None, false)
+            .set(
+                status_key.clone(),
+                serialized_status_value,
+                None,
+                None,
+                false,
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to set worker status for {status_key} in Redis: {err}")
