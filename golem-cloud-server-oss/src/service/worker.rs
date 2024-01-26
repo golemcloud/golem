@@ -87,7 +87,7 @@ impl std::fmt::Display for WorkerError {
                 write!(f, "Account id not found: {}", account_id)
             }
             WorkerError::WorkerNotFound(ref worker_id) => {
-                write!(f, "Worker not found: {}", worker_id)
+                write!(f, "Worker not found: {}", worker_id.to_string())
             }
             WorkerError::Golem(ref error) => write!(f, "Golem error: {:?}", error),
         }

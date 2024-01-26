@@ -29,17 +29,20 @@ pub async fn ws(
 ) -> Response {
     tracing::info!("Connect request: {:?} {:?}", req.uri(), req);
 
-    let worker_id = match validate_worker_id(req, Data(service)).await {
+    let worker_metadata = match validate_worker_id(req, Data(service)).await {
         Ok(worker_id) => worker_id,
         Err(err) => return (http::StatusCode::BAD_REQUEST, err.0).into_response(),
     };
+
+    dbg!("Connecting to the worker_id {}", worker_metadata.clone());
 
     let service = service.clone();
 
     web_socket
         .on_upgrade(move |mut socket| async move {
             tokio::spawn(async move {
-                match try_proxy_worker_connection(&service, worker_id.worker_id, &mut socket).await
+                match try_proxy_worker_connection(&service, worker_metadata.worker_id, &mut socket)
+                    .await
                 {
                     Ok(()) => {
                         tracing::info!("Worker connection closed");
@@ -125,7 +128,7 @@ fn make_worker_id(
 async fn validate_worker_id(
     req: &Request,
     Data(service): Data<&ConnectService>,
-) -> Result<VersionedWorkerId, ConnectError> {
+) -> Result<golem_cloud_server_base::model::WorkerMetadata, ConnectError> {
     let (template_id, worker_name) = req.path_params::<(String, String)>().map_err(|_| {
         ConnectError(
             "Valid path parameters (template_id and worker_name) are required ".to_string(),
@@ -139,7 +142,7 @@ async fn validate_worker_id(
 
     service
         .worker_service
-        .get_by_id(&worker_id)
+        .get_metadata(&worker_id)
         .await
-        .map_err(|err| ConnectError(format!("Invalid worker Id {}, {}", worker_id, err)))
+        .map_err(|err| ConnectError(format!("Invalid worker {}, {}", worker_id, err.to_string())))
 }
