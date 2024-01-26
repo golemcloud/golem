@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::service::worker::WorkerService;
 use futures_util::{SinkExt, StreamExt};
-use golem_cloud_server_base::model::{WorkerId};
+use golem_cloud_server_base::model::WorkerId;
 use golem_common::model::TemplateId;
 use poem::web::websocket::{Message, WebSocket, WebSocketStream};
 use poem::web::Data;
