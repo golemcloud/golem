@@ -74,6 +74,20 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      - name: Extract metadata (tags, labels) for worker executor
+        id: meta-worker-executor
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-worker-executor
+      - name: Build and push worker executor image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-worker-executor-oss/docker/Dockerfile
+          push: false
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta-worker-executor.outputs.tags }}
+          labels: ${{ steps.meta-worker-executor.outputs.labels }}
       - name: Extract metadata (tags, labels) for shard manager
         id: meta-shard-manager
         uses: docker/metadata-action@v5
@@ -88,6 +102,20 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta-shard-manager.outputs.tags }}
           labels: ${{ steps.meta-shard-manager.outputs.labels }}
+      - name: Extract metadata (tags, labels) for golem server
+        id: meta-golem-server
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-server
+      - name: Build and push cloud server image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-cloud-server-oss/docker/Dockerfile
+          push: false
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta-golem-server.outputs.tags }}
+          labels: ${{ steps.meta-golem-server.outputs.labels }}
 
 #  docker:
 #    runs-on: ubuntu-latest

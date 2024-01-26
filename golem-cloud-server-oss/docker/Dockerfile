@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim as base
+FROM debian:bookworm-slim
 
 ARG TARGETARCH
 
@@ -13,15 +13,14 @@ ENV RUST_TARGET=aarch64-unknown-linux-gnu
 FROM platform-${TARGETARCH} AS final
 
 WORKDIR /app
-COPY /target/$RUST_TARGET/release/golem-shard-manager ./
-COPY /golem-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
+COPY /target/$RUST_TARGET/release/cloud-server-oss ./
+COPY /golem-cloud-server-oss/config/cloud-server.toml ./config/cloud-server.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates
 RUN update-ca-certificates
 
-EXPOSE 8081
-EXPOSE 9001
+EXPOSE 8080
+EXPOSE 9090
 
-ENTRYPOINT ["./golem-shard-manager"]
-
+ENTRYPOINT ["./cloud-server-oss"]
