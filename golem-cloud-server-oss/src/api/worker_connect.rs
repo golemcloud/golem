@@ -139,11 +139,9 @@ async fn validate_worker_id(
 
     let worker_id = make_worker_id(template_id, worker_name)?;
 
-    match service.worker_service.get_by_id(&worker_id).await {
-        Ok(v_worker_id) => Ok(v_worker_id),
-        Err(err) => Err(ConnectError(format!(
-            "Invalid worker Id {}, {}",
-            worker_id, err
-        ))),
-    }
+    service
+        .worker_service
+        .get_by_id(&worker_id)
+        .await
+        .map_err(|err| ConnectError(format!("Invalid worker Id {}, {}", worker_id, err)))
 }
