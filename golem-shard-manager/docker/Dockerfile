@@ -1,13 +1,22 @@
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim as base
 
 ARG TARGETARCH
 
-RUN echo ${TARGETARCH} && echo ${PWD} && ls -lR
+FROM base AS platform-amd64
+
+ENV RUST_TARGET=x86_64-unknown-linux-gnu
+
+FROM base AS platform-arm64
+
+ENV RUST_TARGET=aarch64-unknown-linux-gnu
+
+FROM platform-${TARGETARCH} AS final
 
 WORKDIR /app
 
 COPY /golem-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
-COPY /target/$TARGETARCH/release/golem-shard-manager ./
+
+COPY /target/$RUST_TARGET/release/golem-shard-manager ./
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates

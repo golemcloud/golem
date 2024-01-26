@@ -51,30 +51,10 @@ jobs:
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
       - name: Build amd64 Executables
         run: |
-          cargo build --release --target x86_64-unknown-linux-gnu     
-          mkdir -p target/amd64/release
-          cp target/x86_64-unknown-linux-gnu/release/golem-shard-manager target/amd64/release
-          cp target/x86_64-unknown-linux-gnu/release/worker-executor-oss target/amd64/release
-          cp target/x86_64-unknown-linux-gnu/release/cloud-server-oss target/amd64/release
-          echo "pwd"
-          pwd
-          echo "ls golem-shard-manager/config"
-          ls -la golem-shard-manager/config
-          echo "ls target/amd64/release"
-          ls -la target/amd64/release
+          cargo build --release --target x86_64-unknown-linux-gnu
       - name: Build arm64 Executables
         run: |
-          cargo build --release --target aarch64-unknown-linux-gnu --config "target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'"      
-          mkdir -p target/arm64/release
-          cp target/aarch64-unknown-linux-gnu/release/golem-shard-manager target/arm64/release
-          cp target/aarch64-unknown-linux-gnu/release/worker-executor-oss target/arm64/release
-          cp target/aarch64-unknown-linux-gnu/release/cloud-server-oss target/arm64/release
-          echo "pwd"
-          pwd
-          echo "ls golem-shard-manager/config"
-          ls -la golem-shard-manager/config
-          echo "ls target/arm64/release"
-          ls -la target/arm64/release
+          cargo build --release --target aarch64-unknown-linux-gnu --config "target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'"
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
