@@ -126,15 +126,12 @@ async fn validate_worker_id(
     req: &Request,
     Data(service): Data<&ConnectService>,
 ) -> Result<VersionedWorkerId, ConnectError> {
-    let (template_id, worker_name) = req
-        .path_params::<(String, String)>()
-        .map_err(|err| {
-            ConnectError("Valid path parameters are required".to_string());
-        })?;
-
-    let template_id = TemplateId::try_from(template_id.as_str()).map_err(|err| {
-        ConnectError(format!("Invalid template id: {}", err))
+    let (template_id, worker_name) = req.path_params::<(String, String)>().map_err(|err| {
+        ConnectError("Valid path parameters are required".to_string());
     })?;
+
+    let template_id = TemplateId::try_from(template_id.as_str())
+        .map_err(|err| ConnectError(format!("Invalid template id: {}", err)))?;
 
     let worker_id = make_worker_id(template_id, worker_name)?;
 
