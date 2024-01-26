@@ -269,7 +269,22 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         let (ws_stream, _) = connect_async_tls_with_config(request, None, false, connector)
             .await
-            .map_err(|e| GolemError(format!("Failed websocket: {e}")))?;
+            .map_err(|e| match e {
+                tungstenite::error::Error::Http(http_error_response) => {
+                    match http_error_response.body().clone() {
+                        Some(body) => GolemError(format!(
+                            "Failed Websocket. Http error: {}, {}",
+                            http_error_response.status(),
+                            String::from_utf8_lossy(&body)
+                        )),
+                        None => GolemError(format!(
+                            "Failed Websocket. Http error: {}",
+                            http_error_response.status()
+                        )),
+                    }
+                }
+                _ => GolemError(format!("Failed Websocket. Error: {}", e)),
+            })?;
 
         let (mut write, read) = ws_stream.split();
 
