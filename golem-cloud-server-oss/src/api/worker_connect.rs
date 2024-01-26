@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::service::worker::WorkerService;
 use futures_util::{SinkExt, StreamExt};
-use golem_cloud_server_base::model::{VersionedWorkerId, WorkerId};
+use golem_cloud_server_base::model::{WorkerId};
 use golem_common::model::TemplateId;
 use poem::web::websocket::{Message, WebSocket, WebSocketStream};
 use poem::web::Data;
@@ -144,5 +144,5 @@ async fn validate_worker_id(
         .worker_service
         .get_metadata(&worker_id)
         .await
-        .map_err(|err| ConnectError(format!("Invalid worker {}, {}", worker_id, err.to_string())))
+        .map_err(|err| ConnectError(format!("Invalid worker {}, {}", worker_id, err)))
 }
