@@ -263,7 +263,8 @@ impl WorkerServiceDefault {
                         }
                         Err(GolemError::RuntimeError(GolemErrorRuntimeError { details }))
                             if details.contains("UNAVAILABLE")
-                                || details.contains("CHANNEL CLOSED") =>
+                                || details.contains("CHANNEL CLOSED")
+                                || details.contains("transport error") =>
                         {
                             info!("Worker executor unavailable");
                             info!("Invalidating routing table");
