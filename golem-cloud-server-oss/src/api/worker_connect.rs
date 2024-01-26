@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::service::worker::WorkerService;
 use futures_util::{SinkExt, StreamExt};
+use golem_cloud_server_base::model::{VersionedWorkerId, WorkerId};
 use golem_common::model::TemplateId;
 use poem::web::websocket::{Message, WebSocket, WebSocketStream};
 use poem::web::Data;
@@ -21,46 +22,42 @@ impl ConnectService {
 }
 
 #[handler]
-pub fn ws(req: &Request, ws: WebSocket, Data(service): Data<&ConnectService>) -> Response {
+pub async fn ws(
+    req: &Request,
+    web_socket: WebSocket,
+    Data(service): Data<&ConnectService>,
+) -> Response {
     tracing::info!("Connect request: {:?} {:?}", req.uri(), req);
 
-    let (template_id, worker_name) = req
-        .path_params::<(String, String)>()
-        .expect("Valid path parameters");
-
-    let maybe_template_id = TemplateId::try_from(template_id.as_str());
-
-    let template_id = match maybe_template_id {
-        Err(err) => return (http::StatusCode::BAD_REQUEST, err).into_response(),
-        Ok(template_id) => template_id,
+    let worker_id = match validate_worker_id(req, Data(service)).await {
+        Ok(worker_id) => worker_id,
+        Err(err) => return (http::StatusCode::BAD_REQUEST, err.0).into_response(),
     };
 
     let service = service.clone();
 
-    ws.on_upgrade(move |mut socket| async move {
-        tokio::spawn(async move {
-            match try_proxy_worker_connection(&service, template_id, worker_name, &mut socket).await
-            {
-                Ok(()) => {
-                    tracing::info!("Worker connection closed");
+    web_socket
+        .on_upgrade(move |mut socket| async move {
+            tokio::spawn(async move {
+                match try_proxy_worker_connection(&service, worker_id.worker_id, &mut socket).await
+                {
+                    Ok(()) => {
+                        tracing::info!("Worker connection closed");
+                    }
+                    Err(err) => {
+                        tracing::error!("Error connecting to worker: {}", err);
+                    }
                 }
-                Err(err) => {
-                    tracing::error!("Error connecting to worker: {}", err);
-                }
-            }
+            })
         })
-    })
-    .into_response()
+        .into_response()
 }
 
 async fn try_proxy_worker_connection(
     service: &ConnectService,
-    template_id: TemplateId,
-    worker_name: String,
+    worker_id: WorkerId,
     socket: &mut WebSocketStream,
 ) -> Result<(), ConnectError> {
-    let worker_id = make_worker_id(template_id, worker_name)?;
-
     let mut stream = service.worker_service.connect(&worker_id).await?;
 
     while let Some(msg) = stream.next().await {
@@ -123,4 +120,30 @@ fn make_worker_id(
 ) -> std::result::Result<golem_cloud_server_base::model::WorkerId, ConnectError> {
     golem_cloud_server_base::model::WorkerId::new(template_id, worker_name)
         .map_err(|error| ConnectError(format!("Invalid worker name: {error}")))
+}
+
+async fn validate_worker_id(
+    req: &Request,
+    Data(service): Data<&ConnectService>,
+) -> Result<VersionedWorkerId, ConnectError> {
+    let (template_id, worker_name) = req
+        .path_params::<(String, String)>()
+        .expect("Valid path parameters");
+
+    let maybe_template_id = TemplateId::try_from(template_id.as_str());
+
+    let template_id = match maybe_template_id {
+        Err(err) => return Err(ConnectError(format!("Invalid template id: {}", err))),
+        Ok(template_id) => template_id,
+    };
+
+    let worker_id = make_worker_id(template_id, worker_name)?;
+
+    match service.worker_service.get_by_id(&worker_id).await {
+        Ok(v_worker_id) => Ok(v_worker_id),
+        Err(err) => Err(ConnectError(format!(
+            "Invalid worker Id {}, {}",
+            worker_id, err
+        ))),
+    }
 }
