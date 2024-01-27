@@ -41,6 +41,10 @@ jobs:
           toolchain: stable
           target: ${{ matrix.platform.target }}
           override: true
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
       - name: Install Rust Target
         run: rustup target add ${{ matrix.platform.target }}
       - name: Install Protoc
@@ -48,7 +52,7 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install gcc-aarch64-linux-gnu
-        if:  ${{ matrix.platform.platform }} == 'linux/arm64'
+        if: matrix.platform.platform == 'linux/arm64'
         run: |
           sudo apt-get update
           sudo apt-get install gcc-aarch64-linux-gnu
@@ -65,7 +69,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.platform.target }} ${{ matrix.platform.build-config }}
       - uses: actions/upload-artifact@v4
         with:
-          name: docker-targets-build-${{ matrix.platform.platform }}
+          name: docker-targets-build-${{ env.PLATFORM_PAIR }}
           path: |
             target/${{ matrix.platform.target }}/release/golem-shard-manager
             target/${{ matrix.platform.target }}/release/worker-executor-oss
