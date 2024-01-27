@@ -11,7 +11,7 @@ services:
   golem-shard-manager:
     build:
       context: .
-      dockerfile: golem-shard-manager/docker/amd64/Dockerfile
+      dockerfile: golem-shard-manager/docker/Dockerfile
     environment:
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
@@ -27,7 +27,7 @@ services:
   golem-cloud-server-oss:
     build:
       context: .
-      dockerfile: golem-cloud-server-oss/docker/amd64/Dockerfile
+      dockerfile: golem-cloud-server-oss/docker/Dockerfile
     environment:
       - ENVIRONMENT=local
       - RUST_LOG="debug,h2=warn,hyper=warn,tower=warn"
@@ -52,7 +52,7 @@ services:
   golem-worker-executor-oss:
     build:
       context: .
-      dockerfile: golem-worker-executor-oss/docker/amd64/Dockerfile
+      dockerfile: golem-worker-executor-oss/docker/Dockerfile
     environment:
       - ENVIRONMENT=local
       - RUST_LOG=info
