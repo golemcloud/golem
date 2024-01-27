@@ -17,7 +17,7 @@ env:
 jobs:
   docker-targets-build: # WIP
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+#    if: github.event_name == 'push' && github.ref_type == 'tag'
     strategy:
       fail-fast: false
       matrix:
