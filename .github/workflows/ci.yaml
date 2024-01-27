@@ -15,9 +15,20 @@ env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
 
 jobs:
-  docker:
+  docker-targets-build: # WIP
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref_type == 'tag'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - platform: linux/amd64
+            target: x86_64-unknown-linux-gnu
+            build-config: ""
+          - platform: linux/arm64
+            target: aarch64-unknown-linux-gnu
+            build-config: "--config \"target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'\""
+    name: docker-targets-build (${{ matrix.platform.platform }})
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -28,16 +39,16 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+          target: ${{ matrix.platform.target }}
           override: true
-      - name: Install Rust Targets
-        run: |
-          rustup target add x86_64-unknown-linux-gnu
-          rustup target add aarch64-unknown-linux-gnu
+      - name: Install Rust Target
+        run: rustup target add ${{ matrix.platform.target }}
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install gcc-aarch64-linux-gnu
+        if:  ${{ matrix.platform.platform }} == 'linux/arm64'
         run: |
           sudo apt-get update
           sudo apt-get install gcc-aarch64-linux-gnu
@@ -50,189 +61,208 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-      - name: Build amd64 Executables
-        run: |
-          cargo build --release --target x86_64-unknown-linux-gnu
-      - name: Build arm64 Executables
-        run: |
-          cargo build --release --target aarch64-unknown-linux-gnu --config "target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'"
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Set Docker version
-        id: set-version
-        run: |
-          if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
-            DOCKER_VERSION=$(echo "${{ github.ref }}" | sed 's|^refs/tags/v||')
-            echo "DOCKER_VERSION=${DOCKER_VERSION}" >> $GITHUB_ENV
-          else
-            COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
-            echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
-          fi
-      - uses: jpribyl/action-docker-layer-caching@v0.1.1
-        continue-on-error: true
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+      - name: Build ${{ matrix.platform.platform }} Executables
+        run: cargo build --release --target ${{ matrix.platform.target }} ${{ matrix.platform.build-config }}
+      - uses: actions/upload-artifact@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - name: Extract metadata (tags, labels) for worker executor
-        id: meta-worker-executor
-        uses: docker/metadata-action@v5
-        with:
-          images: golemservices/golem-worker-executor
-      - name: Build and push worker executor image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./golem-worker-executor-oss/docker/Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta-worker-executor.outputs.tags }}
-          labels: ${{ steps.meta-worker-executor.outputs.labels }}
-      - name: Extract metadata (tags, labels) for shard manager
-        id: meta-shard-manager
-        uses: docker/metadata-action@v5
-        with:
-          images: golemservices/golem-shard-manager
-      - name: Build and push shard manager image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./golem-shard-manager/docker/Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta-shard-manager.outputs.tags }}
-          labels: ${{ steps.meta-shard-manager.outputs.labels }}
-      - name: Extract metadata (tags, labels) for golem server
-        id: meta-golem-server
-        uses: docker/metadata-action@v5
-        with:
-          images: golemservices/golem-server
-      - name: Build and push cloud server image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./golem-cloud-server-oss/docker/Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta-golem-server.outputs.tags }}
-          labels: ${{ steps.meta-golem-server.outputs.labels }}
-  build:
+          name: docker-targets-build
+          path: |
+            target/${{ matrix.platform.target }}/release/golem-shard-manager
+            target/${{ matrix.platform.target }}/release/worker-executor-oss
+            target/${{ matrix.platform.target }}/release/cloud-server-oss
+  docker-publish:
     runs-on: ubuntu-latest
+    needs: [docker-targets-build]
+#    if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
         uses: actions/checkout@v3
         with:
           submodules: recursive
-      - uses: actions/cache@v3
+          fetch-depth: '0'
+      - uses: actions/download-artifact@v4
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
-
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v1
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.29.0
-        with:
-          redis-version: latest
-          auto-start: false
-      - name: Check formatting
-        run: cargo fmt -- --check
-      - name: Clippy
-        run: cargo clippy -- -Dwarnings
-      - name: Unit tests
-        run: cargo test --lib --bins --all-features
-      - name: "Worker Executor integration tests"
-        run: WASMTIME_BACKTRACE_DETAILS=1 cargo test --package golem-worker-executor-base --test '*' -- --nocapture
-      - name: Generate Golem OpenAPI yaml
-        working-directory: golem-cloud-server-oss
-        run: |
-          cargo build
-          ../target/debug/cloud-server-oss-yaml > ../target/golem-cloud-server-oss.yaml
-      - name: Check Golem OpenAPI yaml latest
-        shell: bash
-        run: |
-          if diff openapi/golem-cloud-server-oss.yaml target/golem-cloud-server-oss.yaml  >/dev/null 2>&1
-            then
-              echo "Latest Golem OpenAPI spec version detected."
-            else
-              echo "openapi/golem-cloud-server-oss.yaml is not the same as produced by cloud-server-oss-yaml." 1>&2
-              echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec." 1>&2
-              exit 1
-          fi
-      - name: Generate Golem client
-        working-directory: golem-openapi-client-generator
-        run: |
-          cargo build
-          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-cloud-server-oss.yaml --output-directory ../golem-client --name "golem-client" --client-version "0.0.0"
-      - name: Compile Golem client
-        working-directory: golem-client
-        run: cargo build
-  publish:
-    needs: [build]
-    if: "startsWith(github.ref, 'refs/tags/v')"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          submodules: recursive
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
-
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v1
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - id: get_version
-        uses: battila7/get-version-action@v2
-      - name: Generate Golem client
-        working-directory: golem-openapi-client-generator
-        run: |
-          export VERSION="${{ steps.get_version.outputs.version-without-v }}"
-          cargo build
-          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-cloud-server-oss.yaml --output-directory ../golem-client --name "golem-client" --client-version "${VERSION}"
-      - name: Publish Golem client
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        working-directory: golem-client
-        run: cargo publish --all-features --allow-dirty
-      - name: Publish crate
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          export VERSION="${{ steps.get_version.outputs.version-without-v }}"
-          sed -i "s/0.0.0/$VERSION/g" golem-api-grpc/Cargo.toml
-          sed -i "s/0.0.0/$VERSION/g" golem-common/Cargo.toml
-          sed -i "s/0.0.0/$VERSION/g" golem-worker-executor-base/Cargo.toml
-          sed -i "s/0.0.0/$VERSION/g" golem-worker-executor-oss/Cargo.toml
-          cargo publish -p golem-api-grpc --all-features --allow-dirty
-          cargo publish -p golem-common --all-features --allow-dirty
-          cargo publish -p golem-worker-executor-base --all-features --allow-dirty
-          cargo publish -p golem-worker-executor-oss --all-features --allow-dirty
+          name: docker-targets-build
+          path: target
+      - name: Display structure of downloaded files
+        run: ls -R target
+#      - name: Set up QEMU
+#        uses: docker/setup-qemu-action@v3
+#      - name: Set up Docker Buildx
+#        uses: docker/setup-buildx-action@v3
+#      - name: Set Docker version
+#        id: set-version
+#        run: |
+#          if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
+#            DOCKER_VERSION=$(echo "${{ github.ref }}" | sed 's|^refs/tags/v||')
+#            echo "DOCKER_VERSION=${DOCKER_VERSION}" >> $GITHUB_ENV
+#          else
+#            COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
+#            echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
+#          fi
+#      - uses: jpribyl/action-docker-layer-caching@v0.1.1
+#        continue-on-error: true
+#      - name: Log in to Docker Hub
+#        uses: docker/login-action@v3
+#        with:
+#          username: ${{ secrets.DOCKERHUB_USERNAME }}
+#          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+#      - name: Extract metadata (tags, labels) for worker executor
+#        id: meta-worker-executor
+#        uses: docker/metadata-action@v5
+#        with:
+#          images: golemservices/golem-worker-executor
+#      - name: Build and push worker executor image
+#        uses: docker/build-push-action@v5
+#        with:
+#          context: .
+#          file: ./golem-worker-executor-oss/docker/Dockerfile
+#          push: false
+#          platforms: linux/amd64,linux/arm64
+#          tags: ${{ steps.meta-worker-executor.outputs.tags }}
+#          labels: ${{ steps.meta-worker-executor.outputs.labels }}
+#      - name: Extract metadata (tags, labels) for shard manager
+#        id: meta-shard-manager
+#        uses: docker/metadata-action@v5
+#        with:
+#          images: golemservices/golem-shard-manager
+#      - name: Build and push shard manager image
+#        uses: docker/build-push-action@v5
+#        with:
+#          context: .
+#          file: ./golem-shard-manager/docker/Dockerfile
+#          push: false
+#          platforms: linux/amd64,linux/arm64
+#          tags: ${{ steps.meta-shard-manager.outputs.tags }}
+#          labels: ${{ steps.meta-shard-manager.outputs.labels }}
+#      - name: Extract metadata (tags, labels) for golem server
+#        id: meta-golem-server
+#        uses: docker/metadata-action@v5
+#        with:
+#          images: golemservices/golem-server
+#      - name: Build and push cloud server image
+#        uses: docker/build-push-action@v5
+#        with:
+#          context: .
+#          file: ./golem-cloud-server-oss/docker/Dockerfile
+#          push: false
+#          platforms: linux/amd64,linux/arm64
+#          tags: ${{ steps.meta-golem-server.outputs.tags }}
+#          labels: ${{ steps.meta-golem-server.outputs.labels }}
+#  build:
+#    runs-on: ubuntu-latest
+#    steps:
+#      - name: Checkout
+#        uses: actions/checkout@v3
+#        with:
+#          submodules: recursive
+#      - uses: actions/cache@v3
+#        with:
+#          path: |
+#            ~/.cargo/bin/
+#            ~/.cargo/registry/index/
+#            ~/.cargo/registry/cache/
+#            ~/.cargo/git/db/
+#            target/
+#          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
+#
+#      - name: Setup Rust
+#        uses: actions-rs/toolchain@v1
+#        with:
+#          toolchain: stable
+#          override: true
+#      - name: Install Protoc
+#        uses: arduino/setup-protoc@v1
+#        with:
+#          repo-token: ${{ secrets.GITHUB_TOKEN }}
+#      - name: Setup Redis
+#        uses: shogo82148/actions-setup-redis@v1.29.0
+#        with:
+#          redis-version: latest
+#          auto-start: false
+#      - name: Check formatting
+#        run: cargo fmt -- --check
+#      - name: Clippy
+#        run: cargo clippy -- -Dwarnings
+#      - name: Unit tests
+#        run: cargo test --lib --bins --all-features
+#      - name: "Worker Executor integration tests"
+#        run: WASMTIME_BACKTRACE_DETAILS=1 cargo test --package golem-worker-executor-base --test '*' -- --nocapture
+#      - name: Generate Golem OpenAPI yaml
+#        working-directory: golem-cloud-server-oss
+#        run: |
+#          cargo build
+#          ../target/debug/cloud-server-oss-yaml > ../target/golem-cloud-server-oss.yaml
+#      - name: Check Golem OpenAPI yaml latest
+#        shell: bash
+#        run: |
+#          if diff openapi/golem-cloud-server-oss.yaml target/golem-cloud-server-oss.yaml  >/dev/null 2>&1
+#            then
+#              echo "Latest Golem OpenAPI spec version detected."
+#            else
+#              echo "openapi/golem-cloud-server-oss.yaml is not the same as produced by cloud-server-oss-yaml." 1>&2
+#              echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec." 1>&2
+#              exit 1
+#          fi
+#      - name: Generate Golem client
+#        working-directory: golem-openapi-client-generator
+#        run: |
+#          cargo build
+#          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-cloud-server-oss.yaml --output-directory ../golem-client --name "golem-client" --client-version "0.0.0"
+#      - name: Compile Golem client
+#        working-directory: golem-client
+#        run: cargo build
+#  publish:
+#    needs: [build]
+#    if: "startsWith(github.ref, 'refs/tags/v')"
+#    runs-on: ubuntu-latest
+#    steps:
+#      - name: Checkout
+#        uses: actions/checkout@v3
+#        with:
+#          submodules: recursive
+#      - uses: actions/cache@v3
+#        with:
+#          path: |
+#            ~/.cargo/bin/
+#            ~/.cargo/registry/index/
+#            ~/.cargo/registry/cache/
+#            ~/.cargo/git/db/
+#            target/
+#          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
+#
+#      - name: Setup Rust
+#        uses: actions-rs/toolchain@v1
+#        with:
+#          toolchain: stable
+#          override: true
+#      - name: Install Protoc
+#        uses: arduino/setup-protoc@v1
+#        with:
+#          repo-token: ${{ secrets.GITHUB_TOKEN }}
+#      - id: get_version
+#        uses: battila7/get-version-action@v2
+#      - name: Generate Golem client
+#        working-directory: golem-openapi-client-generator
+#        run: |
+#          export VERSION="${{ steps.get_version.outputs.version-without-v }}"
+#          cargo build
+#          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-cloud-server-oss.yaml --output-directory ../golem-client --name "golem-client" --client-version "${VERSION}"
+#      - name: Publish Golem client
+#        env:
+#          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+#        working-directory: golem-client
+#        run: cargo publish --all-features --allow-dirty
+#      - name: Publish crate
+#        env:
+#          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+#        run: |
+#          export VERSION="${{ steps.get_version.outputs.version-without-v }}"
+#          sed -i "s/0.0.0/$VERSION/g" golem-api-grpc/Cargo.toml
+#          sed -i "s/0.0.0/$VERSION/g" golem-common/Cargo.toml
+#          sed -i "s/0.0.0/$VERSION/g" golem-worker-executor-base/Cargo.toml
+#          sed -i "s/0.0.0/$VERSION/g" golem-worker-executor-oss/Cargo.toml
+#          cargo publish -p golem-api-grpc --all-features --allow-dirty
+#          cargo publish -p golem-common --all-features --allow-dirty
+#          cargo publish -p golem-worker-executor-base --all-features --allow-dirty
+#          cargo publish -p golem-worker-executor-oss --all-features --allow-dirty
