@@ -30,38 +30,31 @@ pub async fn ws(
 ) -> Response {
     tracing::info!("Connect request: {:?} {:?}", req.uri(), req);
 
-    let worker_metadata = match validate_worker_id(req, Data(service)).await {
+    let worker_id = match get_worker_id(req).await {
         Ok(worker_id) => worker_id,
         Err(err) => return (http::StatusCode::BAD_REQUEST, err.0).into_response(),
     };
-
-
-    dbg!("Connecting to the worker_id {}", worker_metadata.clone());
-
+    
     let service = service.clone();
 
     web_socket
         .on_upgrade(move |mut socket| async move {
             tokio::spawn(async move {
-                let result = try_proxy_worker_connection(&service, worker_metadata, &mut socket).await;
+                let result = try_proxy_worker_connection(&service, worker_id, &mut socket).await;
                 match result {
                     Ok(()) => {
                         tracing::info!("Worker connection closed");
                     }
                     Err(err) => {
-                        dbg!("Error connecting to worker");
                         tracing::error!("Error connecting to worker: {}", err);
                         let close_message = format!("Error connecting to worker: {}", err);
                         let message = Message::Close(Some((CloseCode::Error, close_message)));
-
 
                         if let Err(e) = socket.send(message).await {
                             tracing::error!("Failed to send closing frame: {}", e);
                         }
 
                         socket.close().await;
-                        // Close the WebSocket connection with an error
-                        //drop(socket);
                     }
                 }
             })
@@ -138,9 +131,15 @@ fn make_worker_id(
         .map_err(|error| ConnectError(format!("Invalid worker name: {error}")))
 }
 
-async fn validate_worker_id(
+fn make_template_id(
+    template_id: String,
+) -> std::result::Result<golem_cloud_server_base::model::TemplateId, ConnectError> {
+    golem_cloud_server_base::model::TemplateId::try_from(template_id.as_str())
+        .map_err(|error| ConnectError(format!("Invalid template id: {error}")))
+}
+
+fn get_worker_id(
     req: &Request,
-    Data(service): Data<&ConnectService>,
 ) -> Result<golem_cloud_server_base::model::WorkerId, ConnectError> {
     let (template_id, worker_name) = req.path_params::<(String, String)>().map_err(|_| {
         ConnectError(
@@ -148,15 +147,9 @@ async fn validate_worker_id(
         )
     })?;
 
-    let template_id = TemplateId::try_from(template_id.as_str())
-        .map_err(|err| ConnectError(format!("Invalid template id: {}", err)))?;
+    let template_id = make_template_id(template_id)?;
 
     let worker_id = make_worker_id(template_id, worker_name)?;
 
     Ok(worker_id)
-    // service
-    //     .worker_service
-    //     .get_metadata(&worker_id)
-    //     .await
-    //     .map_err(|err| ConnectError(format!("Invalid worker {}, {}", worker_id, err)))
 }
