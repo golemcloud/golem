@@ -25,6 +25,7 @@ tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-tungstenite = "0.21.0"
 tokio-util = "0.7.10"
 futures-util = { workspace = true }
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "postgres", "uuid" , "migrate", "chrono"] }
