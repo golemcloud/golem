@@ -31,7 +31,7 @@ async fn async_main(config: &CloudServiceConfig) -> Result<(), std::io::Error> {
             db::postgres_migrate(&c)
                 .await
                 .map_err(|e| {
-                    error!("DB - init error: {}", e);
+                    dbg!("DB - init error: {}", e);
                     std::io::Error::new(std::io::ErrorKind::Other, "Init error")
                 })?;
         }

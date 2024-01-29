@@ -223,14 +223,14 @@ impl TemplateRepo for DbTemplateRepo<sqlx::Postgres> {
 
 
     async fn get_all(&self) -> Result<Vec<TemplateRecord>, RepoError> {
-        sqlx::query_as::<_, TemplateRecord>("SELECT template_id, version, project_id, name, size, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata  FROM templates")
+        sqlx::query_as::<_, TemplateRecord>("SELECT template_id, name, size, version, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata  FROM templates")
             .fetch_all(self.db_pool.deref())
             .await
             .map_err(|e| e.into())
     }
 
     async fn get(&self, template_id: &Uuid) -> Result<Vec<TemplateRecord>, RepoError> {
-        sqlx::query_as::<_, TemplateRecord>("SELECT template_id, version, project_id, name, size, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata  FROM templates WHERE template_id = $1")
+        sqlx::query_as::<_, TemplateRecord>("SELECT template_id, name, size, version, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata  FROM templates WHERE template_id = $1")
             .bind(template_id)
             .fetch_all(self.db_pool.deref())
             .await
@@ -242,7 +242,7 @@ impl TemplateRepo for DbTemplateRepo<sqlx::Postgres> {
         name: &str,
     ) -> Result<Vec<TemplateRecord>, RepoError> {
         sqlx::query_as::<_, TemplateRecord>(
-            "SELECT template_id, version, project_id, name, size, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata FROM templates WHERE name = $1",
+            "SELECT template_id, name, size, version, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata FROM templates WHERE name = $1",
         )
             .bind(name)
             .fetch_all(self.db_pool.deref())
@@ -255,7 +255,7 @@ impl TemplateRepo for DbTemplateRepo<sqlx::Postgres> {
         template_id: &Uuid,
     ) -> Result<Option<TemplateRecord>, RepoError> {
         sqlx::query_as::<_, TemplateRecord>(
-            "SELECT template_id, version, project_id, name, size, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata FROM templates WHERE template_id = $1 ORDER BY version DESC LIMIT 1",
+            "SELECT template_id, name, size, version, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata FROM templates WHERE template_id = $1 ORDER BY version DESC LIMIT 1",
         )
             .bind(template_id)
             .fetch_optional(self.db_pool.deref())
@@ -269,7 +269,7 @@ impl TemplateRepo for DbTemplateRepo<sqlx::Postgres> {
         version: i32,
     ) -> Result<Option<TemplateRecord>, RepoError> {
         sqlx::query_as::<_, TemplateRecord>(
-            "SELECT template_id, version, project_id, name, size, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata  FROM templates WHERE template_id = $1 AND version = $2",
+            "SELECT template_id, name, size, version, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata  FROM templates WHERE template_id = $1 AND version = $2",
         )
             .bind(template_id)
             .bind(version)

@@ -48,8 +48,9 @@ services:
       - GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX=""
       - GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH=/template_store
       - GOLEM__DB__TYPE=Postgres
-      - GOLEM__DB__DATABASE=golem_db
+      - GOLEM__DB__CONFIG__DATABASE=golem_db
       - GOLEM__DB__CONFIG__MAX_CONNECTIONS=10
+      - GOLEM__DB__CONFIG__HOST=postgres
       - GOLEM__DB__CONFIG__USERNAME=golem_user
       - GOLEM__DB__CONFIG__PASSWORD=golem_password
       - GOLEM__ROUTING_TABLE__HOST="golem-shard-manager"
@@ -62,6 +63,8 @@ services:
       - "8080:8080"
       - "9090:9090"
       - "9001:9001"
+    depends_on:
+      - postgres
 
   golem-worker-executor-oss:
     build:
