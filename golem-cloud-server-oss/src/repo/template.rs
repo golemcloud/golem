@@ -221,7 +221,6 @@ impl TemplateRepo for DbTemplateRepo<sqlx::Postgres> {
         Ok(())
     }
 
-
     async fn get_all(&self) -> Result<Vec<TemplateRecord>, RepoError> {
         sqlx::query_as::<_, TemplateRecord>("SELECT template_id, name, size, version, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata  FROM templates")
             .fetch_all(self.db_pool.deref())
@@ -237,10 +236,7 @@ impl TemplateRepo for DbTemplateRepo<sqlx::Postgres> {
             .map_err(|e| e.into())
     }
 
-    async fn get_by_name(
-        &self,
-        name: &str,
-    ) -> Result<Vec<TemplateRecord>, RepoError> {
+    async fn get_by_name(&self, name: &str) -> Result<Vec<TemplateRecord>, RepoError> {
         sqlx::query_as::<_, TemplateRecord>(
             "SELECT template_id, name, size, version, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata FROM templates WHERE name = $1",
         )

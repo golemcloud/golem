@@ -24,7 +24,6 @@ pub struct CloudServiceConfig {
     pub routing_table: RoutingTableConfig,
 }
 
-
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum DbConfig {

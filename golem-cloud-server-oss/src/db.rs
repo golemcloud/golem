@@ -2,7 +2,7 @@ use std::error::Error;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{Connection, Executor, Pool, Sqlite, Postgres, SqliteConnection, PgConnection};
+use sqlx::{Connection, Executor, PgConnection, Pool, Postgres, Sqlite, SqliteConnection};
 use tracing::info;
 
 use crate::config::{DbPostgresConfig, DbSqliteConfig};
@@ -42,10 +42,7 @@ pub async fn create_postgres_pool(
         .map_err(|e| e.into())
 }
 
-
-pub async fn postgres_migrate(
-    config: &DbPostgresConfig,
-) -> Result<(), Box<dyn Error>> {
+pub async fn postgres_migrate(config: &DbPostgresConfig) -> Result<(), Box<dyn Error>> {
     info!(
         "DB migration: postgresql://{}:{}/{}",
         config.host, config.port, config.database
