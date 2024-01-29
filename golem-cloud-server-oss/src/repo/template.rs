@@ -111,7 +111,7 @@ impl TemplateRepo for DbTemplateRepo<sqlx::Sqlite> {
                   protected_template = $6,
                   protector_version = $7,
                   metadata = $8::jsonb
-            "#,
+               "#,
         )
             .bind(template.template_id)
             .bind(template.version)
@@ -197,7 +197,7 @@ impl TemplateRepo for DbTemplateRepo<sqlx::Postgres> {
               INSERT INTO templates
                 (template_id, version, name, size, user_template, protected_template, protector_version, metadata)
               VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8:jsonb)
+                ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
               ON CONFLICT (template_id, version) DO UPDATE
               SET name = $3,
                   size = $4,
