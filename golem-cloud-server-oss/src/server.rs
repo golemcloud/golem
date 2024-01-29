@@ -42,7 +42,7 @@ async fn async_main(config: &CloudServiceConfig) -> Result<(), std::io::Error> {
             })?;
         }
     };
-    
+
     let services = Services::new(config).await.map_err(|e| {
         error!("Services - init error: {}", e);
         std::io::Error::new(std::io::ErrorKind::Other, e)
