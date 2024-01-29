@@ -305,59 +305,71 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             }
         });
 
-        let read_res = read.for_each(|message| async {
-            let message: Message = message.unwrap();
+        let read_res = read.for_each(|message_or_error| async {
+            match message_or_error {
+                Err(error) => {
+                    print!("Error reading message: {}", error);
+                }
+                Ok(message) => {
+                    let instance_connect_msg = match message {
+                        Message::Text(str) => {
+                            let parsed: serde_json::Result<InstanceConnectMessage> =
+                                serde_json::from_str(&str);
+                            Some(parsed.unwrap()) // TODO: error handling
+                        }
+                        Message::Binary(data) => {
+                            let parsed: serde_json::Result<InstanceConnectMessage> =
+                                serde_json::from_slice(&data);
+                            Some(parsed.unwrap()) // TODO: error handling
+                        }
+                        Message::Ping(_) => {
+                            debug!("Ignore ping");
+                            None
+                        }
+                        Message::Pong(_) => {
+                            debug!("Ignore pong");
+                            None
+                        }
+                        Message::Close(details) => {
+                            match details {
+                                Some(closed_frame) => {
+                                    print!("Connection Closed: {}", closed_frame);
+                                }
+                                None => {
+                                    print!("Connection Closed");
+                                }
+                            }
+                            None
+                        }
+                        Message::Frame(_) => {
+                            info!("Ignore unexpected frame");
+                            None
+                        }
+                    };
 
-            let msg = match message {
-                Message::Text(str) => {
-                    let parsed: serde_json::Result<InstanceConnectMessage> =
-                        serde_json::from_str(&str);
-                    Some(parsed.unwrap()) // TODO: error handling
-                }
-                Message::Binary(data) => {
-                    let parsed: serde_json::Result<InstanceConnectMessage> =
-                        serde_json::from_slice(&data);
-                    Some(parsed.unwrap()) // TODO: error handling
-                }
-                Message::Ping(_) => {
-                    debug!("Ignore ping");
-                    None
-                }
-                Message::Pong(_) => {
-                    debug!("Ignore pong");
-                    None
-                }
-                Message::Close(_) => {
-                    info!("Ignore unexpected close");
-                    None
-                }
-                Message::Frame(_) => {
-                    info!("Ignore unexpected frame");
-                    None
-                }
-            };
-
-            match msg {
-                None => {}
-                Some(msg) => match msg.event {
-                    WorkerEvent::Stdout(StdOutLog { message }) => {
-                        print!("{message}")
+                    match instance_connect_msg {
+                        None => {}
+                        Some(msg) => match msg.event {
+                            WorkerEvent::Stdout(StdOutLog { message }) => {
+                                print!("{message}")
+                            }
+                            WorkerEvent::Stderr(StdErrLog { message }) => {
+                                print!("{message}")
+                            }
+                            WorkerEvent::Log(Log {
+                                level,
+                                context,
+                                message,
+                            }) => match level {
+                                0 => tracing::trace!(message, context = context),
+                                1 => tracing::debug!(message, context = context),
+                                2 => tracing::info!(message, context = context),
+                                3 => tracing::warn!(message, context = context),
+                                _ => tracing::error!(message, context = context),
+                            },
+                        },
                     }
-                    WorkerEvent::Stderr(StdErrLog { message }) => {
-                        print!("{message}")
-                    }
-                    WorkerEvent::Log(Log {
-                        level,
-                        context,
-                        message,
-                    }) => match level {
-                        0 => tracing::trace!(message, context = context),
-                        1 => tracing::debug!(message, context = context),
-                        2 => tracing::info!(message, context = context),
-                        3 => tracing::warn!(message, context = context),
-                        _ => tracing::error!(message, context = context),
-                    },
-                },
+                }
             }
         });
 
