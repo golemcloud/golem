@@ -17,7 +17,6 @@ env:
 jobs:
   docker:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -87,7 +86,7 @@ jobs:
         with:
           context: .
           file: ./golem-worker-executor-oss/docker/Dockerfile
-          push: true
+          push: github.event_name == 'push' && github.ref_type == 'tag'
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta-worker-executor.outputs.tags }}
           labels: ${{ steps.meta-worker-executor.outputs.labels }}
@@ -101,7 +100,7 @@ jobs:
         with:
           context: .
           file: ./golem-shard-manager/docker/Dockerfile
-          push: true
+          push: github.event_name == 'push' && github.ref_type == 'tag'
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta-shard-manager.outputs.tags }}
           labels: ${{ steps.meta-shard-manager.outputs.labels }}
@@ -115,10 +114,13 @@ jobs:
         with:
           context: .
           file: ./golem-cloud-server-oss/docker/Dockerfile
-          push: true
+          push: github.event_name == 'push' && github.ref_type == 'tag'
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta-golem-server.outputs.tags }}
           labels: ${{ steps.meta-golem-server.outputs.labels }}
+      - name: Test docker-compose
+        run: |
+          docker-compose up --build --exit-code-from test
   build:
     runs-on: ubuntu-latest
     steps:
