@@ -376,9 +376,7 @@ impl WorkerService for WorkerServiceDefault {
                 {
                     Ok(response) => Ok(response),
                     Err(status) => {
-                        dbg!("Is the status NotFound?");
                         if status.code() == tonic::Code::NotFound {
-                            dbg!("Is this here???");
                             Err(WorkerError::WorkerNotFound(worker_id.clone()))
                         } else {
                             Err(WorkerError::Internal(status.message().to_string()))
