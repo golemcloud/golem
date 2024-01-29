@@ -188,3 +188,101 @@ impl TemplateRepo for DbTemplateRepo<sqlx::Sqlite> {
         Ok(())
     }
 }
+
+#[async_trait]
+impl TemplateRepo for DbTemplateRepo<sqlx::Postgres> {
+    async fn upsert(&self, template: &TemplateRecord) -> Result<(), RepoError> {
+        sqlx::query(
+            r#"
+              INSERT INTO templates
+                (template_id, version, name, size, user_template, protected_template, protector_version, metadata)
+              VALUES
+                ($1, $2, $3, $4, $5, $6, $7, $8:jsonb)
+              ON CONFLICT (template_id, version) DO UPDATE
+              SET name = $3,
+                  size = $4,
+                  user_template = $5,
+                  protected_template = $6,
+                  protector_version = $7,
+                  metadata = $8::jsonb
+            "#,
+        )
+            .bind(template.template_id)
+            .bind(template.version)
+            .bind(template.name.clone())
+            .bind(template.size)
+            .bind(template.user_template.clone())
+            .bind(template.protected_template.clone())
+            .bind(template.protector_version)
+            .bind(template.metadata.clone())
+            .execute(self.db_pool.deref())
+            .await?;
+
+        Ok(())
+    }
+
+
+    async fn get_all(&self) -> Result<Vec<TemplateRecord>, RepoError> {
+        sqlx::query_as::<_, TemplateRecord>("SELECT template_id, version, project_id, name, size, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata  FROM templates")
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    async fn get(&self, template_id: &Uuid) -> Result<Vec<TemplateRecord>, RepoError> {
+        sqlx::query_as::<_, TemplateRecord>("SELECT template_id, version, project_id, name, size, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata  FROM templates WHERE template_id = $1")
+            .bind(template_id)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    async fn get_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Vec<TemplateRecord>, RepoError> {
+        sqlx::query_as::<_, TemplateRecord>(
+            "SELECT template_id, version, project_id, name, size, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata FROM templates WHERE name = $1",
+        )
+            .bind(name)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    async fn get_latest_version(
+        &self,
+        template_id: &Uuid,
+    ) -> Result<Option<TemplateRecord>, RepoError> {
+        sqlx::query_as::<_, TemplateRecord>(
+            "SELECT template_id, version, project_id, name, size, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata FROM templates WHERE template_id = $1 ORDER BY version DESC LIMIT 1",
+        )
+            .bind(template_id)
+            .fetch_optional(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    async fn get_by_version(
+        &self,
+        template_id: &Uuid,
+        version: i32,
+    ) -> Result<Option<TemplateRecord>, RepoError> {
+        sqlx::query_as::<_, TemplateRecord>(
+            "SELECT template_id, version, project_id, name, size, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata  FROM templates WHERE template_id = $1 AND version = $2",
+        )
+            .bind(template_id)
+            .bind(version)
+            .fetch_optional(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    async fn delete(&self, template_id: &Uuid) -> Result<(), RepoError> {
+        sqlx::query("DELETE FROM templates WHERE template_id = $1")
+            .bind(template_id)
+            .execute(self.db_pool.deref())
+            .await?;
+        Ok(())
+    }
+}
