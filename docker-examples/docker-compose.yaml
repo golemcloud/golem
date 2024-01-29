@@ -14,6 +14,7 @@ services:
       - REDIS_HOST=redis
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
+      - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
       - GOLEM__REDIS__HOST=redis
       - GOLEM__REDIS__PORT=6379
       - GOLEM__HTTP_PORT=8081
@@ -27,9 +28,9 @@ services:
     image: golemservices/golem-server:latest
     environment:
       - ENVIRONMENT=local
-      - RUST_LOG="debug,h2=warn,hyper=warn,tower=warn"
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
+      - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
       - GOLEM__DB__DATABASE=/app/golem_db/golem.sqlite
       - GOLEM__TEMPLATES__STORE__TYPE="Local"
       - GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX=""
@@ -50,9 +51,9 @@ services:
     image: golemservices/golem-worker-executor:latest
     environment:
       - ENVIRONMENT=local
-      - RUST_LOG=info
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
+      - RUST_LOG=info
       - GOLEM__REDIS__PORT=6379
       - GOLEM__REDIS__HOST=redis
       - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-cloud-server-oss
@@ -71,9 +72,6 @@ services:
       - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT="data/templates"
       - GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE="Local"
       - GOLEM__SHARD_MANAGER_SERVICE__TYPE="Grpc"
-      - AWS_SECRET_ACCESS_KEY=root
-      - AWS_ACCESS_KEY_ID=root
-      - AWS_DEFAULT_REGION=us-east-1
     ports:
       - "9000:9000"
 

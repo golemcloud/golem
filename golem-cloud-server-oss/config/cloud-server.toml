@@ -1,3 +1,6 @@
+enable_tracing_console = false
+enable_json_log = false
+
 http_port = 8081
 grpc_port = 9091
 
