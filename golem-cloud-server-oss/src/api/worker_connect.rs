@@ -52,8 +52,6 @@ pub async fn ws(
                         if let Err(e) = socket.send(message).await {
                             tracing::error!("Failed to send closing frame: {}", e);
                         }
-
-                        //socket.close().await;
                     }
                 }
             })
