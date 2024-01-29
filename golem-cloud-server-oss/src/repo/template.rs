@@ -250,13 +250,18 @@ impl TemplateRepo for DbTemplateRepo<sqlx::Postgres> {
         &self,
         template_id: &Uuid,
     ) -> Result<Option<TemplateRecord>, RepoError> {
-        sqlx::query_as::<_, TemplateRecord>(
+        dbg!("Damn is this?????");
+        let result = sqlx::query_as::<_, TemplateRecord>(
             "SELECT template_id, name, size, version, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata FROM templates WHERE template_id = $1 ORDER BY version DESC LIMIT 1",
         )
             .bind(template_id)
             .fetch_optional(self.db_pool.deref())
             .await
-            .map_err(|e| e.into())
+            .map_err(|e| e.into());
+
+        dbg!("The result is {}", result.is_err());
+
+        result
     }
 
     async fn get_by_version(
