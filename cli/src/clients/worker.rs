@@ -309,7 +309,6 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             match message {
                 Err(e) => {
                     print!("Error reading message: {}", e);
-                    return;
                 }
                 Ok(msgg) => {
                     let msg = match msgg {
