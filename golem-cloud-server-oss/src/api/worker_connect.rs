@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -30,11 +29,11 @@ pub async fn ws(
 ) -> Response {
     tracing::info!("Connect request: {:?} {:?}", req.uri(), req);
 
-    let worker_id = match get_worker_id(req).await {
+    let worker_id = match get_worker_id(req) {
         Ok(worker_id) => worker_id,
         Err(err) => return (http::StatusCode::BAD_REQUEST, err.0).into_response(),
     };
-    
+
     let service = service.clone();
 
     web_socket
@@ -54,7 +53,7 @@ pub async fn ws(
                             tracing::error!("Failed to send closing frame: {}", e);
                         }
 
-                        socket.close().await;
+                        //socket.close().await;
                     }
                 }
             })
@@ -126,21 +125,17 @@ impl From<crate::service::worker::WorkerError> for ConnectError {
 fn make_worker_id(
     template_id: TemplateId,
     worker_name: String,
-) -> std::result::Result<golem_cloud_server_base::model::WorkerId, ConnectError> {
-    golem_cloud_server_base::model::WorkerId::new(template_id, worker_name)
+) -> std::result::Result<WorkerId, ConnectError> {
+    WorkerId::new(template_id, worker_name)
         .map_err(|error| ConnectError(format!("Invalid worker name: {error}")))
 }
 
-fn make_template_id(
-    template_id: String,
-) -> std::result::Result<golem_cloud_server_base::model::TemplateId, ConnectError> {
-    golem_cloud_server_base::model::TemplateId::try_from(template_id.as_str())
+fn make_template_id(template_id: String) -> std::result::Result<TemplateId, ConnectError> {
+    TemplateId::try_from(template_id.as_str())
         .map_err(|error| ConnectError(format!("Invalid template id: {error}")))
 }
 
-fn get_worker_id(
-    req: &Request,
-) -> Result<golem_cloud_server_base::model::WorkerId, ConnectError> {
+fn get_worker_id(req: &Request) -> Result<golem_cloud_server_base::model::WorkerId, ConnectError> {
     let (template_id, worker_name) = req.path_params::<(String, String)>().map_err(|_| {
         ConnectError(
             "Valid path parameters (template_id and worker_name) are required ".to_string(),
