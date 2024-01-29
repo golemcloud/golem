@@ -305,13 +305,13 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             }
         });
 
-        let read_res = read.for_each(|message| async {
-            match message {
-                Err(e) => {
-                    print!("Error reading message: {}", e);
+        let read_res = read.for_each(|message_or_error| async {
+            match message_or_error {
+                Err(error) => {
+                    print!("Error reading message: {}", error);
                 }
-                Ok(msgg) => {
-                    let msg = match msgg {
+                Ok(message) => {
+                    let instance_connect_msg = match message {
                         Message::Text(str) => {
                             let parsed: serde_json::Result<InstanceConnectMessage> =
                                 serde_json::from_str(&str);
@@ -347,7 +347,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                         }
                     };
 
-                    match msg {
+                    match instance_connect_msg {
                         None => {}
                         Some(msg) => match msg.event {
                             WorkerEvent::Stdout(StdOutLog { message }) => {
