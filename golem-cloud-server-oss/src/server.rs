@@ -28,7 +28,7 @@ async fn async_main(config: &CloudServiceConfig) -> Result<(), std::io::Error> {
 
     match config.db.clone() {
         DbConfig::Postgres(c) => {
-            db::postgres_migrate(&c, &config.workspace)
+            db::postgres_migrate(&c)
                 .await
                 .map_err(|e| {
                     error!("DB - init error: {}", e);
@@ -42,13 +42,7 @@ async fn async_main(config: &CloudServiceConfig) -> Result<(), std::io::Error> {
             })?;
         }
     };
-
-
-    db::sqlite_migrate(&config.db).await.map_err(|e| {
-        error!("DB - init error: {}", e);
-        std::io::Error::new(std::io::ErrorKind::Other, "Init error")
-    })?;
-
+    
     let services = Services::new(config).await.map_err(|e| {
         error!("Services - init error: {}", e);
         std::io::Error::new(std::io::ErrorKind::Other, e)

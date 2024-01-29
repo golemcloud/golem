@@ -45,26 +45,13 @@ pub async fn create_postgres_pool(
 
 pub async fn postgres_migrate(
     config: &DbPostgresConfig,
-    workspace: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let schema = workspace;
     info!(
-        "DB migration: postgresql://{}:{}/{}?currentSchema={}",
-        config.host, config.port, config.database, schema
+        "DB migration: postgresql://{}:{}/{}",
+        config.host, config.port, config.database
     );
     let conn_options = PgConnectOptions::from(config);
     let mut conn = PgConnection::connect_with(&conn_options).await?;
-
-    // check if schema exists
-    let sql = format!(
-        "SELECT schema_name FROM information_schema.schemata WHERE schema_name = '{}';",
-        schema
-    );
-    let result = conn.execute(sqlx::query(&sql)).await?;
-    if result.rows_affected() == 0 {
-        let _ = conn.close().await;
-        return Err(format!("DB schema {} do not exists/was not created", schema).into());
-    }
 
     sqlx::migrate!("./db/migration/postgres")
         .run(&mut conn)
