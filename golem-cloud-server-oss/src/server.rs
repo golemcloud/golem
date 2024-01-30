@@ -1,4 +1,4 @@
-use cloud_server_oss::config::CloudServiceConfig;
+use cloud_server_oss::config::{CloudServiceConfig, DbConfig};
 use cloud_server_oss::db;
 use cloud_server_oss::service::Services;
 use cloud_server_oss::{api, grpcapi};
@@ -45,10 +45,20 @@ async fn async_main(config: &CloudServiceConfig) -> Result<(), std::io::Error> {
         http_port, grpc_port
     );
 
-    db::sqlite_migrate(&config.db).await.map_err(|e| {
-        error!("DB - init error: {}", e);
-        std::io::Error::new(std::io::ErrorKind::Other, "Init error")
-    })?;
+    match config.db.clone() {
+        DbConfig::Postgres(c) => {
+            db::postgres_migrate(&c).await.map_err(|e| {
+                dbg!("DB - init error: {}", e);
+                std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+            })?;
+        }
+        DbConfig::Sqlite(c) => {
+            db::sqlite_migrate(&c).await.map_err(|e| {
+                error!("DB - init error: {}", e);
+                std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+            })?;
+        }
+    };
 
     let services = Services::new(config).await.map_err(|e| {
         error!("Services - init error: {}", e);

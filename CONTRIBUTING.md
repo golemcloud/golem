@@ -9,20 +9,44 @@ cd golem-services
 # Target has to be x86_64-unknown-linux-gnu or aarch64-unknown-linux-gnu-gcc
 cargo build --release --target x86_64-unknown-linux-gnu
 
-docker-compose up --build
+docker-compose -f docker-compose-sqlite.yaml up --build
 ```
 To start the service without a rebuild
 
 ```bash
 
-docker-compose up
+docker-compose -f docker-compose-sqlite.yaml up
 
 ```
 
-To run the services in background
+To compose down,
 
 ```bash
-docker-compose up -d
+
+docker-compose -f docker-compose-sqlite.yaml down
+
+```
+
+To compose down including persistence volume
+
+```bash
+
+docker-compose -f docker-compose-sqlite.yaml down -v
+
+```
+
+Note that, if you are using MAC, the persistene volumes may be present in the Linux VM. You can inspect this using the following command:
+
+```bash
+
+docker run -it --rm --privileged --pid=host alpine:latest nsenter -t 1 -m -u -n -i sh
+
+# As an example: cd /var/lib/docker/volumes/golem-services_redis_data/_data
+/var/lib/docker/volumes/golem-services_redis_data/_data # ls -lrt
+total 4
+-rw-------    1 999      ping          3519 Jan 19 02:32 dump.rdb
+/var/lib/docker/volumes/golem-services_redis_data/_data #
+
 ```
 
 If you have issues running the above cargo build command, then read on:
