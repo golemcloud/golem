@@ -141,9 +141,12 @@ async fn file_write_read_delete() {
 
     let template_id =
         executor.store_template(Path::new("../test-templates/file-write-read-delete.wasm"));
+    let mut env = HashMap::new();
+    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .start_worker(&template_id, "file-write-read-delete-1")
-        .await;
+        .try_start_worker_versioned(&template_id, 0, "file-write-read-delete-1", vec![], env)
+        .await
+        .unwrap();
 
     let result = executor
         .invoke_and_await(&worker_id, "run", vec![])
@@ -958,7 +961,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
             &worker_id,
             "golem:it/api/write-file-direct",
             vec![
-                common::val_string("/test/testfile.txt"),
+                common::val_string("test/testfile.txt"),
                 common::val_string("hello world"),
             ],
         )

@@ -1,14 +1,12 @@
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use cap_std::fs::{Dir, File, Metadata};
+use cap_std::fs::{Dir, Metadata};
 use fs_set_times::{set_symlink_times, SetTimes, SystemTimeSpec};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use std::os::fd::AsFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
-use tracing::{debug, info};
 use wasmtime::component::Resource;
 
 use crate::durable_host::{Durability, DurableWorkerCtx, SerializableDateTime, SerializableError};
@@ -120,7 +118,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<Filesize, FsError> {
         record_host_function_call("filesystem::types::descriptor", "write");
         let f = Descriptor::file(self.table.get(&self_)?)?;
-        let f = Arc::new(FileWithPath::new(f.file.clone(), f.path.clone()));
+        let f = Arc::new(f.path.clone());
 
         let result = HostDescriptor::write(&mut self.as_wasi_view(), self_, buffer, offset).await?;
         self.durable_file_times(f, "filesystem::types::descriptor::write")
@@ -169,7 +167,6 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<DescriptorStat, FsError> {
         record_host_function_call("filesystem::types::descriptor", "stat_at");
-        info!("stat_at: path={}, flags={:?}", path, path_flags);
         HostDescriptor::stat_at(&mut self.as_wasi_view(), self_, path_flags, path).await
     }
 
@@ -217,19 +214,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let f = Arc::new(FileWithPath::new(
-            Arc::new(dir.open(new_path.clone())?),
-            dir_path.join(new_path.clone()),
-        ));
+        let f = Arc::new(dir_path.join(new_path.clone()));
         self.durable_file_times(f, "filesystem::types::descriptor::link_at/file")
             .await?;
 
-        let target_path: PathBuf = new_path.into();
-        let parent = match target_path.parent() {
-            Some(p) => Arc::new(dir.open_dir(p)?),
-            None => dir,
-        };
-
+        let parent = get_parent_dir(dir, new_path)?;
         self.durable_file_times(parent, "filesystem::types::descriptor::link_at/dir")
             .await?;
 
@@ -245,7 +234,6 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
         record_host_function_call("filesystem::types::descriptor", "open_at");
-        debug!("open_at called, path={:?}, flags={:?}", path, path_flags);
         HostDescriptor::open_at(
             &mut self.as_wasi_view(),
             self_,
@@ -279,12 +267,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             HostDescriptor::remove_directory_at(&mut self.as_wasi_view(), self_, path.clone())
                 .await;
 
-        let target_path: PathBuf = path.into();
-        let parent = match target_path.parent() {
-            Some(p) => Arc::new(dir.open_dir(p)?),
-            None => dir,
-        };
-
+        let parent = get_parent_dir(dir, path)?;
         self.durable_file_times(parent, "filesystem::types::descriptor::remove_directory_at")
             .await?;
         result
@@ -314,28 +297,15 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         )
         .await;
 
-        let target_f = Arc::new(FileWithPath::new(
-            Arc::new(target_dir.open(new_path.clone())?),
-            target_dir_path.join(new_path.clone()),
-        ));
+        let target_f = Arc::new(target_dir_path.join(new_path.clone()));
         self.durable_file_times(
             target_f,
             "filesystem::types::descriptor::rename_at/target-file",
         )
         .await?;
 
-        let source_path: PathBuf = old_path.into();
-        let source_parent = match source_path.parent() {
-            Some(p) => Arc::new(source_dir.open_dir(p)?),
-            None => source_dir,
-        };
-
-        let target_path: PathBuf = new_path.into();
-        let target_parent = match target_path.parent() {
-            Some(p) => Arc::new(target_dir.open_dir(p)?),
-            None => target_dir,
-        };
-
+        let source_parent = get_parent_dir(source_dir, old_path)?;
+        let target_parent = get_parent_dir(target_dir, new_path)?;
         self.durable_file_times(
             source_parent,
             "filesystem::types::descriptor::rename_at/source-dir",
@@ -366,22 +336,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             HostDescriptor::symlink_at(&mut self.as_wasi_view(), self_, old_path, new_path.clone())
                 .await;
 
-        debug!("symlink_at called, new_path={:?}, dir_path={:?}", new_path, dir_path);
-        let f = Arc::new(dir.open(new_path.clone())?);
-        debug!("xxx");
-        let f = Arc::new(FileWithPath::new(
-            f,
-            dir_path.join(new_path.clone()),
-        ));
+        let f = Arc::new(dir_path.join(new_path.clone()));
         self.durable_file_times(f, "filesystem::types::descriptor::symlink_at/file")
             .await?;
 
-        let target_path: PathBuf = new_path.into();
-        let parent = match target_path.parent() {
-            Some(p) => Arc::new(dir.open_dir(p)?),
-            None => dir,
-        };
-
+        let parent = get_parent_dir(dir, new_path)?;
         self.durable_file_times(parent, "filesystem::types::descriptor::symlink_at/dir")
             .await?;
 
@@ -401,11 +360,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let result =
             HostDescriptor::unlink_file_at(&mut self.as_wasi_view(), self_, path.clone()).await;
 
-        let target_path: PathBuf = path.into();
-        let parent = match target_path.parent() {
-            Some(p) => Arc::new(dir.open_dir(p)?),
-            None => dir,
-        };
+        let parent = get_parent_dir(dir, path)?;
         self.durable_file_times(parent, "filesystem::types::descriptor::unlink_file_at")
             .await?;
 
@@ -454,21 +409,9 @@ trait FileTimeSupport {
     ) -> std::io::Result<()>;
 }
 
-#[derive(Debug)]
-struct FileWithPath {
-    file: Arc<File>,
-    path: PathBuf,
-}
-
-impl FileWithPath {
-    fn new(file: Arc<File>, path: PathBuf) -> Self {
-        Self { file, path }
-    }
-}
-
-impl FileTimeSupport for FileWithPath {
+impl FileTimeSupport for PathBuf {
     fn metadata(&self) -> std::io::Result<Metadata> {
-        self.file.metadata()
+        Ok(Metadata::from_just_metadata(std::fs::symlink_metadata(self)?))
     }
 
     fn set_times(
@@ -476,8 +419,7 @@ impl FileTimeSupport for FileWithPath {
         accessed: Option<SystemTimeSpec>,
         modified: Option<SystemTimeSpec>,
     ) -> std::io::Result<()> {
-        debug!("Setting file times for {:?} to {:?} and {:?}", self.path, accessed, modified);
-        set_symlink_times(&self.path, accessed, modified)
+        set_symlink_times(self, accessed, modified)
     }
 }
 
@@ -501,7 +443,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         f: Arc<Entry>,
         function_name: &str,
     ) -> Result<(), FsError> {
-        debug!("durable_file_times called for {:?}", f);
         let f_clone = f.clone();
         let times = Durability::<Ctx, SerializableFileTimes, SerializableError>::wrap(
             self,
@@ -536,10 +477,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.is_replay() {
             let accessed = times.data_access_timestamp.into();
             let modified = times.data_modification_timestamp.into();
-            info!(
-                "Setting file times for {f:?} to {:?} and {:?}",
-                accessed, modified
-            );
             f.set_times(
                 Some(SystemTimeSpec::Absolute(accessed)),
                 Some(SystemTimeSpec::Absolute(modified)),
@@ -606,4 +543,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 struct SerializableFileTimes {
     pub data_access_timestamp: SerializableDateTime,
     pub data_modification_timestamp: SerializableDateTime,
+}
+
+fn get_parent_dir(root: Arc<Dir>, path: String) -> Result<Arc<Dir>, FsError> {
+    let path: PathBuf = path.into();
+    match path.parent() {
+        Some(p) if p != Path::new("") => Ok(Arc::new(root.open_dir(p)?)),
+        _ => Ok(root),
+    }
 }

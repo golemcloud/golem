@@ -29,6 +29,7 @@ aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
 bitflags = "2.4.2"
 bytes = { workspace = true }
+cap-fs-ext = "2.0.0" # keep in sync with wasmtime
 cap-std = "2.0.0" # keep in sync with wasmtime
 cap-time-ext = "2.0.0" # keep in sync with wasmtime
 chrono = { workspace = true }

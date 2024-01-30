@@ -2099,6 +2099,7 @@ dependencies = [
  "bincode 2.0.0-rc.3",
  "bitflags 2.4.2",
  "bytes",
+ "cap-fs-ext",
  "cap-std",
  "cap-time-ext",
  "chrono",

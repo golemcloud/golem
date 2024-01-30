@@ -142,11 +142,13 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             if is_live {
                 event_service.emit_stdout(contents.clone());
             }
+            debug!("[stdout] [is_live={is_live}] {}", String::from_utf8(contents.clone()).unwrap());
             is_std = true;
         } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
             if is_live {
                 event_service.emit_stderr(contents.clone());
             }
+            debug!("[stderr] [is_live={is_live}] {}", String::from_utf8(contents.clone()).unwrap());
             is_std = true;
         }
 
@@ -173,11 +175,15 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             if is_live {
                 event_service.emit_stdout(contents.clone());
             }
+            debug!("[stdout] [is_live={is_live}] {}", String::from_utf8(contents.clone()).unwrap());
+
             is_std = true;
         } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
             if is_live {
                 event_service.emit_stderr(contents.clone());
             }
+            debug!("[stderr] [is_live={is_live}] {}", String::from_utf8(contents.clone()).unwrap());
+
             is_std = true;
         }
 
