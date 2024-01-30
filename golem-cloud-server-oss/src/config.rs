@@ -17,6 +17,8 @@ pub struct DbSqliteConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct CloudServiceConfig {
+    pub enable_tracing_console: bool,
+    pub enable_json_log: bool,
     pub http_port: u16,
     pub grpc_port: u16,
     pub db: DbConfig,

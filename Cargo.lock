@@ -997,6 +997,7 @@ name = "cloud-server-oss"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "console-subscriber",
  "figment",
  "futures-util",
  "golem-api-grpc",
@@ -1017,6 +1018,7 @@ dependencies = [
  "tonic-health",
  "tonic-reflection",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

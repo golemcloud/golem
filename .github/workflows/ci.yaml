@@ -15,29 +15,44 @@ env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
 
 jobs:
-  docker:
+  docker-targets-build:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref_type == 'tag'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - platform: linux/amd64
+            target: x86_64-unknown-linux-gnu
+            build-config: ""
+          - platform: linux/arm64
+            target: aarch64-unknown-linux-gnu
+            build-config: "--config \"target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'\""
+    name: docker-targets-build (${{ matrix.platform.platform }})
     steps:
       - name: Checkout
         uses: actions/checkout@v3
         with:
           submodules: recursive
           fetch-depth: '0'
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+          target: ${{ matrix.platform.target }}
           override: true
-      - name: Install Rust Targets
-        run: |
-          rustup target add x86_64-unknown-linux-gnu
-          rustup target add aarch64-unknown-linux-gnu
+      - name: Install Rust Target
+        run: rustup target add ${{ matrix.platform.target }}
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install gcc-aarch64-linux-gnu
+        if: matrix.platform.platform == 'linux/arm64'
         run: |
           sudo apt-get update
           sudo apt-get install gcc-aarch64-linux-gnu
@@ -50,12 +65,44 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-      - name: Build amd64 Executables
+      - name: Build Executables
+        run: cargo build --release --target ${{ matrix.platform.target }} ${{ matrix.platform.build-config }}
+      - name: Prepare Targets
         run: |
-          cargo build --release --target x86_64-unknown-linux-gnu
-      - name: Build arm64 Executables
+          cd target
+          tar -cvf ${{ matrix.platform.target }}.tar \
+            ${{ matrix.platform.target }}/release/golem-shard-manager \
+            ${{ matrix.platform.target }}/release/worker-executor-oss \
+            ${{ matrix.platform.target }}/release/cloud-server-oss  \
+      - uses: actions/upload-artifact@v4
+        name: Upload Targets
+        with:
+          name: docker-targets-build-${{ env.PLATFORM_PAIR }}
+          path: target/${{ matrix.platform.target }}.tar
+  docker-publish:
+    runs-on: ubuntu-latest
+    needs: [docker-targets-build]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          fetch-depth: '0'
+      - name: Prepare
         run: |
-          cargo build --release --target aarch64-unknown-linux-gnu --config "target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'"
+          echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        name: Download Targets
+        with:
+          pattern: docker-targets-build-*
+          path: target
+          merge-multiple: true
+      - name: Extract Targets
+        run: |
+          ls -R target
+          cd target
+          for f in *.tar; do tar xvf "$f"; done
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
@@ -88,7 +135,7 @@ jobs:
           context: .
           file: ./golem-worker-executor-oss/docker/Dockerfile
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-worker-executor.outputs.tags }}
           labels: ${{ steps.meta-worker-executor.outputs.labels }}
       - name: Extract metadata (tags, labels) for shard manager
@@ -102,7 +149,7 @@ jobs:
           context: .
           file: ./golem-shard-manager/docker/Dockerfile
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-shard-manager.outputs.tags }}
           labels: ${{ steps.meta-shard-manager.outputs.labels }}
       - name: Extract metadata (tags, labels) for golem server
@@ -116,7 +163,7 @@ jobs:
           context: .
           file: ./golem-cloud-server-oss/docker/Dockerfile
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-server.outputs.tags }}
           labels: ${{ steps.meta-golem-server.outputs.labels }}
   build:
