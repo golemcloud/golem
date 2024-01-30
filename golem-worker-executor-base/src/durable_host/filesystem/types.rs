@@ -157,7 +157,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
         record_host_function_call("filesystem::types::descriptor", "stat");
-        HostDescriptor::stat(&mut self.as_wasi_view(), self_).await
+        let mut stat = HostDescriptor::stat(&mut self.as_wasi_view(), self_).await?;
+        stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays so we rather not support it
+        Ok(stat)
     }
 
     async fn stat_at(
@@ -167,7 +169,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<DescriptorStat, FsError> {
         record_host_function_call("filesystem::types::descriptor", "stat_at");
-        HostDescriptor::stat_at(&mut self.as_wasi_view(), self_, path_flags, path).await
+        let mut stat =
+            HostDescriptor::stat_at(&mut self.as_wasi_view(), self_, path_flags, path).await?;
+        stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays so we rather not support it
+        Ok(stat)
     }
 
     async fn set_times_at(
