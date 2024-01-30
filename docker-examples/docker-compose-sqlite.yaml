@@ -9,12 +9,12 @@ services:
       - "6379:6379"
 
   golem-shard-manager:
-    build:
-      context: .
-      dockerfile: golem-shard-manager/docker/amd64/Dockerfile
+    image: golemservices/golem-shard-manager:latest
     environment:
+      - REDIS_HOST=redis
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
+      - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
       - GOLEM__REDIS__HOST=redis
       - GOLEM__REDIS__PORT=6379
       - GOLEM__HTTP_PORT=8081
@@ -25,18 +25,16 @@ services:
       - redis
 
   golem-cloud-server-oss:
-    build:
-      context: .
-      dockerfile: golem-cloud-server-oss/docker/amd64/Dockerfile
+    image: golemservices/golem-server:latest
     environment:
       - ENVIRONMENT=local
-      - RUST_LOG="debug,h2=warn,hyper=warn,tower=warn"
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
+      - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
+      - GOLEM__DB__DATABASE=/app/golem_db/golem.sqlite
       - GOLEM__TEMPLATES__STORE__TYPE="Local"
       - GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX=""
       - GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH=/template_store
-      - GOLEM__DB__DATABASE=/app/golem_db/golem.sqlite
       - GOLEM__ROUTING_TABLE__HOST="golem-shard-manager"
       - GOLEM__ROUTING_TABLE__PORT=9001
       - GOLEM__GRPC_PORT=9090
@@ -50,19 +48,17 @@ services:
       - "9001:9001"
 
   golem-worker-executor-oss:
-    build:
-      context: .
-      dockerfile: golem-worker-executor-oss/docker/amd64/Dockerfile
+    image: golemservices/golem-worker-executor:latest
     environment:
       - ENVIRONMENT=local
-      - RUST_LOG=info
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
+      - RUST_LOG=info
       - GOLEM__REDIS__PORT=6379
       - GOLEM__REDIS__HOST=redis
       - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-cloud-server-oss
       - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=9090
-        # This is a dummy access id, didn't want to change the base golem-config as I am not aware of what's the implication
+      # This is a dummy access id, didn't want to change the base golem-config as I am not aware of what's the implication
       - GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
       - GOLEM__PORT=9000
       - GOLEM__HTTP_PORT=8082
@@ -76,9 +72,6 @@ services:
       - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT="data/templates"
       - GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE="Local"
       - GOLEM__SHARD_MANAGER_SERVICE__TYPE="Grpc"
-      - AWS_SECRET_ACCESS_KEY=root
-      - AWS_ACCESS_KEY_ID=root
-      - AWS_DEFAULT_REGION=us-east-1
     ports:
       - "9000:9000"
 

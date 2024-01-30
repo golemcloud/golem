@@ -17,11 +17,30 @@ pub struct DbSqliteConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct CloudServiceConfig {
+    pub enable_tracing_console: bool,
+    pub enable_json_log: bool,
     pub http_port: u16,
     pub grpc_port: u16,
-    pub db: DbSqliteConfig,
+    pub db: DbConfig,
     pub templates: TemplatesConfig,
     pub routing_table: RoutingTableConfig,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum DbConfig {
+    Postgres(DbPostgresConfig),
+    Sqlite(DbSqliteConfig),
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DbPostgresConfig {
+    pub host: String,
+    pub database: String,
+    pub username: String,
+    pub password: String,
+    pub port: u16,
+    pub max_connections: u32,
 }
 
 impl CloudServiceConfig {
@@ -44,6 +63,9 @@ impl Default for CloudServiceConfig {
 mod tests {
     #[test]
     pub fn config_is_loadable() {
+        std::env::set_var("GOLEM__DB__TYPE", "Postgres");
+        std::env::set_var("GOLEM__DB__CONFIG__USERNAME", "postgres");
+        std::env::set_var("GOLEM__DB__CONFIG__PASSWORD", "postgres");
         std::env::set_var("GOLEM__ROUTING_TABLE__HOST", "localhost");
         std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
         std::env::set_var("GOLEM__TEMPLATES__STORE__TYPE", "Local");

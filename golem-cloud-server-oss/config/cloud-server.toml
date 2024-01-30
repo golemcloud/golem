@@ -1,11 +1,19 @@
+enable_tracing_console = false
+enable_json_log = false
+
 http_port = 8081
 grpc_port = 9091
 
 [db]
+type = "Sqlite"
+
+[db.config]
 max_connections = 10
 host = "localhost"
 port = 5432
 database = "golem"
+#username
+#password
 
 [templates.store]
 object_prefix = ""

@@ -5,7 +5,7 @@ use golem_cloud_server_base::config::TemplateStoreConfig;
 use golem_cloud_server_base::service::template_object_store;
 use std::sync::Arc;
 
-use crate::config::CloudServiceConfig;
+use crate::config::{CloudServiceConfig, DbConfig};
 use crate::db;
 use crate::repo::template::{DbTemplateRepo, TemplateRepo};
 
@@ -17,12 +17,20 @@ pub struct Services {
 
 impl Services {
     pub async fn new(config: &CloudServiceConfig) -> Result<Services, String> {
-        let db_pool = db::create_sqlite_pool(&config.db)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let template_repo: Arc<dyn TemplateRepo + Sync + Send> =
-            Arc::new(DbTemplateRepo::new(db_pool.clone().into()));
+        let template_repo: Arc<dyn TemplateRepo + Sync + Send> = match config.db.clone() {
+            DbConfig::Postgres(c) => {
+                let db_pool = db::create_postgres_pool(&c)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Arc::new(DbTemplateRepo::new(db_pool.clone().into()))
+            }
+            DbConfig::Sqlite(c) => {
+                let db_pool = db::create_sqlite_pool(&c)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Arc::new(DbTemplateRepo::new(db_pool.clone().into()))
+            }
+        };
 
         let object_store: Arc<dyn template_object_store::TemplateObjectStore + Sync + Send> =
             match config.templates.store.clone() {

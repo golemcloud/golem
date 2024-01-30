@@ -8,10 +8,22 @@ services:
     ports:
       - "6379:6379"
 
-  golem-shard-manager:
-    image: golemservices/golem-shard-manager:latest
+  postgres:
+    image: postgres:latest
     environment:
-      - REDIS_HOST=redis
+      POSTGRES_DB: golem_db
+      POSTGRES_USER: golem_user
+      POSTGRES_PASSWORD: golem_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  golem-shard-manager:
+    build:
+      context: .
+      dockerfile: golem-shard-manager/docker/Dockerfile
+    environment:
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
       - GOLEM__REDIS__HOST=redis
@@ -24,30 +36,40 @@ services:
       - redis
 
   golem-cloud-server-oss:
-    image: golemservices/golem-server:latest
+    build:
+      context: .
+      dockerfile: golem-cloud-server-oss/docker/Dockerfile
     environment:
       - ENVIRONMENT=local
       - RUST_LOG="debug,h2=warn,hyper=warn,tower=warn"
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
-      - GOLEM__DB__DATABASE=/app/golem_db/golem.sqlite
       - GOLEM__TEMPLATES__STORE__TYPE="Local"
       - GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX=""
       - GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH=/template_store
+      - GOLEM__DB__TYPE=Postgres
+      - GOLEM__DB__CONFIG__DATABASE=golem_db
+      - GOLEM__DB__CONFIG__MAX_CONNECTIONS=10
+      - GOLEM__DB__CONFIG__HOST=postgres
+      - GOLEM__DB__CONFIG__USERNAME=golem_user
+      - GOLEM__DB__CONFIG__PASSWORD=golem_password
       - GOLEM__ROUTING_TABLE__HOST="golem-shard-manager"
       - GOLEM__ROUTING_TABLE__PORT=9001
       - GOLEM__GRPC_PORT=9090
       - GOLEM__HTTP_PORT=8080
     volumes:
       - template_store:/template_store
-      - golem_db:/app/golem_db
     ports:
       - "8080:8080"
       - "9090:9090"
       - "9001:9001"
+    depends_on:
+      - postgres
 
   golem-worker-executor-oss:
-    image: golemservices/golem-worker-executor:latest
+    build:
+      context: .
+      dockerfile: golem-worker-executor-oss/docker/Dockerfile
     environment:
       - ENVIRONMENT=local
       - RUST_LOG=info
@@ -82,5 +104,5 @@ volumes:
     driver: local
   template_store:
     driver: local
-  golem_db:
+  postgres_data:
     driver: local
