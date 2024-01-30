@@ -2,7 +2,6 @@ use crate::error::GolemError;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
-use tracing::debug;
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::{StreamError, Table};
 
@@ -25,7 +24,6 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<Vec<u8>, StreamError> {
         record_host_function_call("io::streams::input_stream", "read");
         if is_incoming_http_body_stream(&self.table, &self_) {
-            debug!("read from incoming http body stream");
             Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
                 self,
                 WrappedFunctionType::ReadRemote,
@@ -38,7 +36,6 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             )
             .await
         } else {
-            debug!("read from arbitrary stream (non durable)");
             HostInputStream::read(&mut self.as_wasi_view(), self_, len).await
         }
     }
@@ -142,19 +139,11 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             if is_live {
                 event_service.emit_stdout(contents.clone());
             }
-            debug!(
-                "[stdout] [is_live={is_live}] {}",
-                String::from_utf8(contents.clone()).unwrap()
-            );
             is_std = true;
         } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
             if is_live {
                 event_service.emit_stderr(contents.clone());
             }
-            debug!(
-                "[stderr] [is_live={is_live}] {}",
-                String::from_utf8(contents.clone()).unwrap()
-            );
             is_std = true;
         }
 
@@ -181,21 +170,11 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             if is_live {
                 event_service.emit_stdout(contents.clone());
             }
-            debug!(
-                "[stdout] [is_live={is_live}] {}",
-                String::from_utf8(contents.clone()).unwrap()
-            );
-
             is_std = true;
         } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
             if is_live {
                 event_service.emit_stderr(contents.clone());
             }
-            debug!(
-                "[stderr] [is_live={is_live}] {}",
-                String::from_utf8(contents.clone()).unwrap()
-            );
-
             is_std = true;
         }
 

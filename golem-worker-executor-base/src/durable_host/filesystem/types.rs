@@ -1,12 +1,12 @@
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use cap_std::fs::{Dir, Metadata};
-use fs_set_times::{set_symlink_times, SetTimes, SystemTimeSpec};
+use cap_std::fs::Metadata;
+use fs_set_times::{set_symlink_times, SystemTimeSpec};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::SystemTime;
+
 use wasmtime::component::Resource;
 
 use crate::durable_host::{Durability, DurableWorkerCtx, SerializableDateTime, SerializableError};
@@ -118,7 +118,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<Filesize, FsError> {
         record_host_function_call("filesystem::types::descriptor", "write");
         let f = Descriptor::file(self.table.get(&self_)?)?;
-        let f = Arc::new(f.path.clone());
+        let f = f.path.clone();
 
         let result = HostDescriptor::write(&mut self.as_wasi_view(), self_, buffer, offset).await?;
         self.durable_file_times(f, "filesystem::types::descriptor::write")
@@ -146,7 +146,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<(), FsError> {
         record_host_function_call("filesystem::types::descriptor", "create_directory_at");
         let f = Descriptor::dir(self.table.get(&self_)?)?;
-        let f = f.dir.clone();
+        let f = f.path.clone();
 
         let result =
             HostDescriptor::create_directory_at(&mut self.as_wasi_view(), self_, path).await?;
@@ -202,7 +202,6 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         let dir = Descriptor::dir(self.table.get(&self_)?)?;
         let dir_path = dir.path.clone();
-        let dir = dir.dir.clone();
 
         let result = HostDescriptor::link_at(
             &mut self.as_wasi_view(),
@@ -214,11 +213,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let f = Arc::new(dir_path.join(new_path.clone()));
+        let f = dir_path.join(new_path.clone());
         self.durable_file_times(f, "filesystem::types::descriptor::link_at/file")
             .await?;
 
-        let parent = get_parent_dir(dir, new_path)?;
+        let parent = get_parent_dir(dir_path, new_path);
         self.durable_file_times(parent, "filesystem::types::descriptor::link_at/dir")
             .await?;
 
@@ -261,13 +260,13 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<(), FsError> {
         record_host_function_call("filesystem::types::descriptor", "remove_directory_at");
         let dir = Descriptor::dir(self.table.get(&self_)?)?;
-        let dir = dir.dir.clone();
+        let dir_path = dir.path.clone();
 
         let result =
             HostDescriptor::remove_directory_at(&mut self.as_wasi_view(), self_, path.clone())
                 .await;
 
-        let parent = get_parent_dir(dir, path)?;
+        let parent = get_parent_dir(dir_path, path);
         self.durable_file_times(parent, "filesystem::types::descriptor::remove_directory_at")
             .await?;
         result
@@ -283,10 +282,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         record_host_function_call("filesystem::types::descriptor", "rename_at");
 
         let source_dir = Descriptor::dir(self.table.get(&self_)?)?;
-        let source_dir = source_dir.dir.clone();
+        let source_dir_path = source_dir.path.clone();
         let target_dir = Descriptor::dir(self.table.get(&self_)?)?;
         let target_dir_path = target_dir.path.clone();
-        let target_dir = target_dir.dir.clone();
 
         let result = HostDescriptor::rename_at(
             &mut self.as_wasi_view(),
@@ -297,15 +295,15 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         )
         .await;
 
-        let target_f = Arc::new(target_dir_path.join(new_path.clone()));
+        let target_f = target_dir_path.join(new_path.clone());
         self.durable_file_times(
             target_f,
             "filesystem::types::descriptor::rename_at/target-file",
         )
         .await?;
 
-        let source_parent = get_parent_dir(source_dir, old_path)?;
-        let target_parent = get_parent_dir(target_dir, new_path)?;
+        let source_parent = get_parent_dir(source_dir_path, old_path);
+        let target_parent = get_parent_dir(target_dir_path, new_path);
         self.durable_file_times(
             source_parent,
             "filesystem::types::descriptor::rename_at/source-dir",
@@ -330,17 +328,16 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         let dir = Descriptor::dir(self.table.get(&self_)?)?;
         let dir_path = dir.path.clone();
-        let dir = dir.dir.clone();
 
         let result =
             HostDescriptor::symlink_at(&mut self.as_wasi_view(), self_, old_path, new_path.clone())
                 .await;
 
-        let f = Arc::new(dir_path.join(new_path.clone()));
+        let f = dir_path.join(new_path.clone());
         self.durable_file_times(f, "filesystem::types::descriptor::symlink_at/file")
             .await?;
 
-        let parent = get_parent_dir(dir, new_path)?;
+        let parent = get_parent_dir(dir_path, new_path);
         self.durable_file_times(parent, "filesystem::types::descriptor::symlink_at/dir")
             .await?;
 
@@ -355,12 +352,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         record_host_function_call("filesystem::types::descriptor", "unlink_file_at");
 
         let dir = Descriptor::dir(self.table.get(&self_)?)?;
-        let dir = dir.dir.clone();
+        let dir_path = dir.path.clone();
 
         let result =
             HostDescriptor::unlink_file_at(&mut self.as_wasi_view(), self_, path.clone()).await;
 
-        let parent = get_parent_dir(dir, path)?;
+        let parent = get_parent_dir(dir_path, path);
         self.durable_file_times(parent, "filesystem::types::descriptor::unlink_file_at")
             .await?;
 
@@ -425,24 +422,10 @@ impl FileTimeSupport for PathBuf {
     }
 }
 
-impl FileTimeSupport for Dir {
-    fn metadata(&self) -> std::io::Result<Metadata> {
-        self.dir_metadata()
-    }
-
-    fn set_times(
-        &self,
-        accessed: Option<SystemTimeSpec>,
-        modified: Option<SystemTimeSpec>,
-    ) -> std::io::Result<()> {
-        SetTimes::set_times(self, accessed, modified)
-    }
-}
-
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    async fn durable_file_times<Entry: FileTimeSupport + Debug + Send + Sync + 'static>(
+    async fn durable_file_times<Entry: FileTimeSupport + Clone + Debug + Send + Sync + 'static>(
         &mut self,
-        f: Arc<Entry>,
+        f: Entry,
         function_name: &str,
     ) -> Result<(), FsError> {
         let f_clone = f.clone();
@@ -461,6 +444,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .modified()?
                         .into_std()
                         .duration_since(SystemTime::UNIX_EPOCH)?;
+
                     Ok(SerializableFileTimes {
                         data_access_timestamp: SerializableDateTime {
                             seconds: accessed.as_secs(),
@@ -479,33 +463,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.is_replay() {
             let accessed = times.data_access_timestamp.into();
             let modified = times.data_modification_timestamp.into();
+
             f.set_times(
                 Some(SystemTimeSpec::Absolute(accessed)),
                 Some(SystemTimeSpec::Absolute(modified)),
             )?;
-
-            // debug:
-            let metadata = f.metadata()?;
-            let accessed2 = metadata
-                .accessed()?
-                .into_std()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap();
-            let modified2 = metadata
-                .modified()?
-                .into_std()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap();
-
-            assert_eq!(
-                accessed.duration_since(SystemTime::UNIX_EPOCH).unwrap(),
-                accessed2
-            );
-            assert_eq!(
-                modified.duration_since(SystemTime::UNIX_EPOCH).unwrap(),
-                modified2
-            );
-            // end debug
         }
         Ok(())
     }
@@ -547,10 +509,10 @@ struct SerializableFileTimes {
     pub data_modification_timestamp: SerializableDateTime,
 }
 
-fn get_parent_dir(root: Arc<Dir>, path: String) -> Result<Arc<Dir>, FsError> {
+fn get_parent_dir(root: PathBuf, path: String) -> PathBuf {
     let path: PathBuf = path.into();
     match path.parent() {
-        Some(p) if p != Path::new("") => Ok(Arc::new(root.open_dir(p)?)),
-        _ => Ok(root),
+        Some(p) if p != Path::new("") => root.join(p),
+        _ => root,
     }
 }
