@@ -1,12 +1,22 @@
 version: '3'
 
+x-ports:
+  redis: &redis-port 6379
+  postgres: &postgres-port 5432
+  cloud_server_http: &cloud-server-http-port 9001
+  cloud_server_grpc: &cloud-server-grpc-port 9090
+  shard_manager_http: &shard-manager-http-port 8081
+  shard_manager_grpc: &shard-manager-grpc-port 9002
+  worker_executor_http: &worker-executor-http-port 8082
+  worker_executor_grpc: &worker-executor-grpc-port 9000
+
 services:
   redis:
     image: redis:latest
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - *redis-port
 
   postgres:
     image: postgres:latest
@@ -17,7 +27,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - *postgres-port
 
   golem-shard-manager:
     build:
@@ -27,11 +37,9 @@ services:
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
       - GOLEM__REDIS__HOST=redis
-      - GOLEM__REDIS__PORT=6379
-      - GOLEM__HTTP_PORT=8081
-      - GOLEM_SHARD_MANAGER_PORT=9001
-    ports:
-      - "8081:8081"
+      - GOLEM__REDIS__PORT=*redis-port
+      - GOLEM__HTTP_PORT=*shard-manager-http-port
+      - GOLEM_SHARD_MANAGER_PORT=*shard-manager-grpc-port
     depends_on:
       - redis
 
@@ -53,16 +61,15 @@ services:
       - GOLEM__DB__CONFIG__HOST=postgres
       - GOLEM__DB__CONFIG__USERNAME=golem_user
       - GOLEM__DB__CONFIG__PASSWORD=golem_password
-      - GOLEM__ROUTING_TABLE__HOST="golem-shard-manager"
-      - GOLEM__ROUTING_TABLE__PORT=9001
-      - GOLEM__GRPC_PORT=9090
-      - GOLEM__HTTP_PORT=8080
+      - GOLEM__ROUTING_TABLE__HOST=golem-shard-manager
+      - GOLEM__ROUTING_TABLE__PORT=*shard-manager-grpc-port
+      - GOLEM__GRPC_PORT=*cloud-server-grpc-port
+      - GOLEM__HTTP_PORT=*cloud-server-http-port
     volumes:
       - template_store:/template_store
     ports:
-      - "8080:8080"
-      - "9090:9090"
-      - "9001:9001"
+      - *cloud-server-http-port
+      - *cloud-server-grpc-port
     depends_on:
       - postgres
 
@@ -78,13 +85,12 @@ services:
       - GOLEM__REDIS__PORT=6379
       - GOLEM__REDIS__HOST=redis
       - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-cloud-server-oss
-      - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=9090
-      # This is a dummy access id, didn't want to change the base golem-config as I am not aware of what's the implication
+      - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=*cloud-server-grpc-port
       - GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
-      - GOLEM__PORT=9000
-      - GOLEM__HTTP_PORT=8082
+      - GOLEM__PORT=*worker-executor-grpc-port
+      - GOLEM__HTTP_PORT=*worker-executor-http-port
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST=golem-shard-manager
-      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT=9001
+      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT=*shard-manager-grpc-port
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS=5
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY="100ms"
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY="2s"
@@ -93,11 +99,8 @@ services:
       - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT="data/templates"
       - GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE="Local"
       - GOLEM__SHARD_MANAGER_SERVICE__TYPE="Grpc"
-      - AWS_SECRET_ACCESS_KEY=root
-      - AWS_ACCESS_KEY_ID=root
-      - AWS_DEFAULT_REGION=us-east-1
     ports:
-      - "9000:9000"
+      - *worker-executor-http-port
 
 volumes:
   redis_data:
