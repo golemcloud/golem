@@ -2,7 +2,6 @@ use crate::error::GolemError;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
-use tracing::debug;
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::{StreamError, Table};
 
@@ -25,7 +24,6 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<Vec<u8>, StreamError> {
         record_host_function_call("io::streams::input_stream", "read");
         if is_incoming_http_body_stream(&self.table, &self_) {
-            debug!("read from incoming http body stream");
             Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
                 self,
                 WrappedFunctionType::ReadRemote,
@@ -38,7 +36,6 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             )
             .await
         } else {
-            debug!("read from arbitrary stream (non durable)");
             HostInputStream::read(&mut self.as_wasi_view(), self_, len).await
         }
     }

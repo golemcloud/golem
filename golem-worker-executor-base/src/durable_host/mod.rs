@@ -5,10 +5,11 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
+use std::ops::Add;
 use std::pin::Pin;
 use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::error::{is_interrupt, is_suspend, GolemError};
 use crate::invocation::invoke_worker;
@@ -16,7 +17,7 @@ use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, Worker
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
-use crate::services::invocation_key::InvocationKeyService;
+use crate::services::invocation_key::{InvocationKeyService, LookupResult};
 use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
@@ -182,6 +183,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &worker_config.args,
             &worker_config.env,
             root_dir,
+            temp_dir.path().to_path_buf(),
             stdin,
             stdout,
             stderr,
@@ -340,6 +342,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await
             .or(self.private_state.get_current_invocation_key())
     }
+
+    pub fn get_current_invocation_result(&self) -> LookupResult {
+        match &self.private_state.current_invocation_key {
+            Some(key) => self
+                .private_state
+                .invocation_key_service
+                .lookup_key(&self.private_state.worker_id, key),
+            None => LookupResult::Invalid,
+        }
+    }
 }
 
 pub(crate) trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
@@ -403,7 +415,11 @@ pub(crate) trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
         )
             -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
         GetFn: FnOnce(&mut DurableWorkerCtx<Ctx>, &Success) -> Result<SerializedSuccess, Err>,
-        PutFn: FnOnce(&mut DurableWorkerCtx<Ctx>, SerializedSuccess) -> Result<Success, Err>,
+        PutFn: for<'b> FnOnce(
+            &'b mut DurableWorkerCtx<Ctx>,
+            SerializedSuccess,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
         SerializedSuccess: Encode + Decode + DeserializeOwned + Debug,
         SerializedErr: Encode
             + Decode
@@ -487,7 +503,11 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
         )
             -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
         GetFn: FnOnce(&mut DurableWorkerCtx<Ctx>, &Success) -> Result<SerializedSuccess, Err>,
-        PutFn: FnOnce(&mut DurableWorkerCtx<Ctx>, SerializedSuccess) -> Result<Success, Err>,
+        PutFn: for<'b> FnOnce(
+            &'b mut DurableWorkerCtx<Ctx>,
+            SerializedSuccess,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
         SerializedSuccess: Encode + Decode + DeserializeOwned + Debug,
         SerializedErr: Encode
             + Decode
@@ -526,9 +546,13 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
             let response = self
                 .get_oplog_entry_imported_function_invoked::<Result<SerializedSuccess, SerializedErr>>()
                 .await.map_err(|err| Into::<SerializedErr>::into(err).into())?;
-            response
-                .map_err(|serialized_err| serialized_err.into())
-                .and_then(|serialized_success| put_serializable(self, serialized_success))
+            match response {
+                Ok(serialized_success) => {
+                    let success = put_serializable(self, serialized_success).await?;
+                    Ok(success)
+                }
+                Err(serialized_err) => Err(serialized_err.into()),
+            }
         }
     }
 }
@@ -802,7 +826,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 match oplog_entry {
                     None => break Ok(()),
                     Some((function_name, function_input, invocation_key, calling_convention)) => {
-                        debug!("resume_worker invoking function {function_name} on {worker_id}");
+                        debug!("prepare_instance invoking function {function_name} on {worker_id}");
                         store
                             .as_context_mut()
                             .data_mut()
@@ -823,6 +847,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             break Err(GolemError::failed_to_resume_instance(
                                 worker_id.worker_id.clone(),
                             ));
+                        } else {
+                            let result = store
+                                .as_context()
+                                .data()
+                                .durable_ctx()
+                                .get_current_invocation_result();
+                            if matches!(result, LookupResult::Complete(Err(_))) {
+                                // TODO: include the inner error in the failure?
+                                break Err(GolemError::failed_to_resume_instance(
+                                    worker_id.worker_id.clone(),
+                                ));
+                            }
                         }
 
                         count += 1;
@@ -1242,7 +1278,7 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 struct SerializableDateTime {
     seconds: u64,
     nanoseconds: u32,
@@ -1270,6 +1306,24 @@ impl From<SerializableDateTime>
     }
 }
 
+impl From<SerializableDateTime> for SystemTime {
+    fn from(value: SerializableDateTime) -> Self {
+        SystemTime::UNIX_EPOCH.add(Duration::new(value.seconds, value.nanoseconds))
+    }
+}
+
+impl From<SerializableDateTime> for cap_std::time::SystemTime {
+    fn from(value: SerializableDateTime) -> Self {
+        cap_std::time::SystemTime::from_std(value.into())
+    }
+}
+
+impl From<SerializableDateTime> for fs_set_times::SystemTimeSpec {
+    fn from(value: SerializableDateTime) -> Self {
+        Self::Absolute(value.into())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct SerializableError {
     message: String,
@@ -1283,8 +1337,8 @@ impl From<&anyhow::Error> for SerializableError {
     }
 }
 
-impl From<&FsError> for SerializableError {
-    fn from(value: &FsError) -> Self {
+impl From<FsError> for SerializableError {
+    fn from(value: FsError) -> Self {
         Self {
             message: value.to_string(),
         }

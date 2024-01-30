@@ -28,20 +28,22 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .collect::<Vec<String>>())
             },
             move |_ctx, names| {
-                // Filtering the current set of pre-opened directories by the serialized names
-                let filtered = current_dirs2
-                    .into_iter()
-                    .filter(|(_, name)| names.contains(name))
-                    .collect::<Vec<_>>();
+                Box::pin(async move {
+                    // Filtering the current set of pre-opened directories by the serialized names
+                    let filtered = current_dirs2
+                        .into_iter()
+                        .filter(|(_, name)| names.contains(name))
+                        .collect::<Vec<_>>();
 
-                if filtered.len() == names.len() {
-                    // All directories were found
-                    Ok(filtered)
-                } else {
-                    Err(anyhow!(
-                        "Not all previously available pre-opened directories were found"
-                    ))
-                }
+                    if filtered.len() == names.len() {
+                        // All directories were found
+                        Ok(filtered)
+                    } else {
+                        Err(anyhow!(
+                            "Not all previously available pre-opened directories were found"
+                        ))
+                    }
+                })
             },
         )
         .await

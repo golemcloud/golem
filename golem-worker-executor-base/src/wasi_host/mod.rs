@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use cap_std::fs::Dir;
@@ -109,6 +110,7 @@ pub fn create_context<T, F>(
     args: &[impl AsRef<str>],
     env: &[(impl AsRef<str>, impl AsRef<str>)],
     root_dir: Dir,
+    root_dir_path: PathBuf,
     stdin: impl StdinStream + Sized + 'static,
     stdout: impl StdoutStream + Sized + 'static,
     stderr: impl StdoutStream + Sized + 'static,
@@ -135,8 +137,15 @@ where
             DirPerms::all(),
             FilePerms::all(),
             "/",
+            root_dir_path.clone(),
         )
-        .preopened_dir(root_dir, DirPerms::all(), FilePerms::all(), ".")
+        .preopened_dir(
+            root_dir,
+            DirPerms::all(),
+            FilePerms::all(),
+            ".",
+            root_dir_path,
+        )
         .set_suspend(suspend_threshold, suspend_signal)
         .build();
 
