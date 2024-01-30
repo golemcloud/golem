@@ -26,6 +26,7 @@ services:
     environment:
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
+      - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
       - GOLEM__REDIS__HOST=redis
       - GOLEM__REDIS__PORT=6379
       - GOLEM__HTTP_PORT=8081
@@ -35,15 +36,15 @@ services:
     depends_on:
       - redis
 
-  golem-cloud-server-oss:
+  golem-service:
     build:
       context: .
-      dockerfile: golem-cloud-server-oss/docker/Dockerfile
+      dockerfile: golem-service/docker/Dockerfile
     environment:
       - ENVIRONMENT=local
-      - RUST_LOG="debug,h2=warn,hyper=warn,tower=warn"
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
+      - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
       - GOLEM__TEMPLATES__STORE__TYPE="Local"
       - GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX=""
       - GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH=/template_store
@@ -66,10 +67,10 @@ services:
     depends_on:
       - postgres
 
-  golem-worker-executor-oss:
+  golem-worker-executor:
     build:
       context: .
-      dockerfile: golem-worker-executor-oss/docker/Dockerfile
+      dockerfile: golem-worker-executor/docker/Dockerfile
     environment:
       - ENVIRONMENT=local
       - RUST_LOG=info
@@ -77,7 +78,7 @@ services:
       - RUST_BACKTRACE=1
       - GOLEM__REDIS__PORT=6379
       - GOLEM__REDIS__HOST=redis
-      - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-cloud-server-oss
+      - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-service
       - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=9090
       # This is a dummy access id, didn't want to change the base golem-config as I am not aware of what's the implication
       - GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
@@ -93,9 +94,6 @@ services:
       - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT="data/templates"
       - GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE="Local"
       - GOLEM__SHARD_MANAGER_SERVICE__TYPE="Grpc"
-      - AWS_SECRET_ACCESS_KEY=root
-      - AWS_ACCESS_KEY_ID=root
-      - AWS_DEFAULT_REGION=us-east-1
     ports:
       - "9000:9000"
 

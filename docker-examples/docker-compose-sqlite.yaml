@@ -24,8 +24,8 @@ services:
     depends_on:
       - redis
 
-  golem-cloud-server-oss:
-    image: golemservices/golem-server:latest
+  golem-service:
+    image: golemservices/golem-service:latest
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1
@@ -47,7 +47,7 @@ services:
       - "9090:9090"
       - "9001:9001"
 
-  golem-worker-executor-oss:
+  golem-worker-executor:
     image: golemservices/golem-worker-executor:latest
     environment:
       - ENVIRONMENT=local
@@ -56,7 +56,7 @@ services:
       - RUST_LOG=info
       - GOLEM__REDIS__PORT=6379
       - GOLEM__REDIS__HOST=redis
-      - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-cloud-server-oss
+      - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-service
       - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=9090
       # This is a dummy access id, didn't want to change the base golem-config as I am not aware of what's the implication
       - GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"

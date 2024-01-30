@@ -72,8 +72,8 @@ jobs:
           cd target
           tar -cvf ${{ matrix.platform.target }}.tar \
             ${{ matrix.platform.target }}/release/golem-shard-manager \
-            ${{ matrix.platform.target }}/release/worker-executor-oss \
-            ${{ matrix.platform.target }}/release/cloud-server-oss  \
+            ${{ matrix.platform.target }}/release/worker-executor \
+            ${{ matrix.platform.target }}/release/golem-service  \
       - uses: actions/upload-artifact@v4
         name: Upload Targets
         with:
@@ -133,7 +133,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./golem-worker-executor-oss/docker/Dockerfile
+          file: ./golem-worker-executor/docker/Dockerfile
           push: true
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-worker-executor.outputs.tags }}
@@ -153,19 +153,19 @@ jobs:
           tags: ${{ steps.meta-shard-manager.outputs.tags }}
           labels: ${{ steps.meta-shard-manager.outputs.labels }}
       - name: Extract metadata (tags, labels) for golem server
-        id: meta-golem-server
+        id: meta-golem-service
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-server
+          images: golemservices/golem-service
       - name: Build and push cloud server image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./golem-cloud-server-oss/docker/Dockerfile
+          file: ./golem-service/docker/Dockerfile
           push: true
           platforms: ${{ env.PLATFORMS }}
-          tags: ${{ steps.meta-golem-server.outputs.tags }}
-          labels: ${{ steps.meta-golem-server.outputs.labels }}
+          tags: ${{ steps.meta-golem-service.outputs.tags }}
+          labels: ${{ steps.meta-golem-service.outputs.labels }}
   build:
     runs-on: ubuntu-latest
     steps:
@@ -206,18 +206,18 @@ jobs:
       - name: "Worker Executor integration tests"
         run: WASMTIME_BACKTRACE_DETAILS=1 cargo test --package golem-worker-executor-base --test '*' -- --nocapture
       - name: Generate Golem OpenAPI yaml
-        working-directory: golem-cloud-server-oss
+        working-directory: golem-service
         run: |
           cargo build
-          ../target/debug/cloud-server-oss-yaml > ../target/golem-cloud-server-oss.yaml
+          ../target/debug/golem-service-yaml > ../target/golem-service.yaml
       - name: Check Golem OpenAPI yaml latest
         shell: bash
         run: |
-          if diff openapi/golem-cloud-server-oss.yaml target/golem-cloud-server-oss.yaml  >/dev/null 2>&1
+          if diff openapi/golem-service.yaml target/golem-service.yaml  >/dev/null 2>&1
             then
               echo "Latest Golem OpenAPI spec version detected."
             else
-              echo "openapi/golem-cloud-server-oss.yaml is not the same as produced by cloud-server-oss-yaml." 1>&2
+              echo "openapi/golem-service.yaml is not the same as produced by golem-service-yaml." 1>&2
               echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec." 1>&2
               exit 1
           fi
@@ -225,7 +225,7 @@ jobs:
         working-directory: golem-openapi-client-generator
         run: |
           cargo build
-          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-cloud-server-oss.yaml --output-directory ../golem-client --name "golem-client" --client-version "0.0.0"
+          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-service.yaml --output-directory ../golem-client --name "golem-client" --client-version "0.0.0"
       - name: Compile Golem client
         working-directory: golem-client
         run: cargo build
@@ -264,7 +264,7 @@ jobs:
         run: |
           export VERSION="${{ steps.get_version.outputs.version-without-v }}"
           cargo build
-          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-cloud-server-oss.yaml --output-directory ../golem-client --name "golem-client" --client-version "${VERSION}"
+          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-service.yaml --output-directory ../golem-client --name "golem-client" --client-version "${VERSION}"
       - name: Publish Golem client
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -278,8 +278,8 @@ jobs:
           sed -i "s/0.0.0/$VERSION/g" golem-api-grpc/Cargo.toml
           sed -i "s/0.0.0/$VERSION/g" golem-common/Cargo.toml
           sed -i "s/0.0.0/$VERSION/g" golem-worker-executor-base/Cargo.toml
-          sed -i "s/0.0.0/$VERSION/g" golem-worker-executor-oss/Cargo.toml
+          sed -i "s/0.0.0/$VERSION/g" golem-worker-executor/Cargo.toml
           cargo publish -p golem-api-grpc --all-features --allow-dirty
           cargo publish -p golem-common --all-features --allow-dirty
           cargo publish -p golem-worker-executor-base --all-features --allow-dirty
-          cargo publish -p golem-worker-executor-oss --all-features --allow-dirty
+          cargo publish -p golem-worker-executor --all-features --allow-dirty
