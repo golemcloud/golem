@@ -411,7 +411,9 @@ trait FileTimeSupport {
 
 impl FileTimeSupport for PathBuf {
     fn metadata(&self) -> std::io::Result<Metadata> {
-        Ok(Metadata::from_just_metadata(std::fs::symlink_metadata(self)?))
+        Ok(Metadata::from_just_metadata(std::fs::symlink_metadata(
+            self,
+        )?))
     }
 
     fn set_times(
@@ -473,7 +475,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             },
         )
         .await
-        .map_err(|err| FsError::trap(err))?;
+        .map_err(FsError::trap)?;
         if self.is_replay() {
             let accessed = times.data_access_timestamp.into();
             let modified = times.data_modification_timestamp.into();
