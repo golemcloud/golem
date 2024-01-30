@@ -415,7 +415,11 @@ pub(crate) trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
         )
             -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
         GetFn: FnOnce(&mut DurableWorkerCtx<Ctx>, &Success) -> Result<SerializedSuccess, Err>,
-        PutFn: FnOnce(&mut DurableWorkerCtx<Ctx>, SerializedSuccess) -> Result<Success, Err>,
+        PutFn: for<'b> FnOnce(
+            &'b mut DurableWorkerCtx<Ctx>,
+            SerializedSuccess,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
         SerializedSuccess: Encode + Decode + DeserializeOwned + Debug,
         SerializedErr: Encode
             + Decode
@@ -499,7 +503,11 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
         )
             -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
         GetFn: FnOnce(&mut DurableWorkerCtx<Ctx>, &Success) -> Result<SerializedSuccess, Err>,
-        PutFn: FnOnce(&mut DurableWorkerCtx<Ctx>, SerializedSuccess) -> Result<Success, Err>,
+        PutFn: for<'b> FnOnce(
+            &'b mut DurableWorkerCtx<Ctx>,
+            SerializedSuccess,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
         SerializedSuccess: Encode + Decode + DeserializeOwned + Debug,
         SerializedErr: Encode
             + Decode
@@ -538,9 +546,13 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
             let response = self
                 .get_oplog_entry_imported_function_invoked::<Result<SerializedSuccess, SerializedErr>>()
                 .await.map_err(|err| Into::<SerializedErr>::into(err).into())?;
-            response
-                .map_err(|serialized_err| serialized_err.into())
-                .and_then(|serialized_success| put_serializable(self, serialized_success))
+            match response {
+                Ok(serialized_success) => {
+                    let success = put_serializable(self, serialized_success).await?;
+                    Ok(success)
+                }
+                Err(serialized_err) => Err(serialized_err.into()),
+            }
         }
     }
 }
@@ -1303,6 +1315,12 @@ impl From<SerializableDateTime> for SystemTime {
 impl From<SerializableDateTime> for cap_std::time::SystemTime {
     fn from(value: SerializableDateTime) -> Self {
         cap_std::time::SystemTime::from_std(value.into())
+    }
+}
+
+impl From<SerializableDateTime> for fs_set_times::SystemTimeSpec {
+    fn from(value: SerializableDateTime) -> Self {
+        Self::Absolute(value.into())
     }
 }
 

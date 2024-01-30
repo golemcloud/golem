@@ -1184,3 +1184,46 @@ async fn filesystem_remove_file_replay_restores_file_times() {
 
     check!(times1 == times2);
 }
+
+#[tokio::test]
+async fn filesystem_write_via_stream_replay_restores_file_times() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-3").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/write-file",
+            vec![
+                common::val_string("/testfile.txt"),
+                common::val_string("hello world"),
+            ],
+        )
+        .await
+        .unwrap();
+    let times1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-file-info",
+            vec![common::val_string("/testfile.txt")],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let times2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-file-info",
+            vec![common::val_string("/testfile.txt")],
+        )
+        .await
+        .unwrap();
+
+    check!(times1 == times2);
+}

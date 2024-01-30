@@ -4,8 +4,7 @@ use cap_std::fs::Metadata;
 use fs_set_times::{set_symlink_times, SystemTimeSpec};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::path::PathBuf;
 
 use wasmtime::component::Resource;
 
@@ -19,7 +18,7 @@ use wasmtime_wasi::preview2::bindings::filesystem::types::{
     HostDirectoryEntryStream, InputStream, MetadataHashValue, NewTimestamp, OpenFlags,
     OutputStream, PathFlags,
 };
-use wasmtime_wasi::preview2::FsError;
+use wasmtime_wasi::preview2::{spawn_blocking, FsError};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
@@ -117,13 +116,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         offset: Filesize,
     ) -> Result<Filesize, FsError> {
         record_host_function_call("filesystem::types::descriptor", "write");
-        let f = Descriptor::file(self.table.get(&self_)?)?;
-        let f = f.path.clone();
-
-        let result = HostDescriptor::write(&mut self.as_wasi_view(), self_, buffer, offset).await?;
-        self.durable_file_times(f, "filesystem::types::descriptor::write")
-            .await?;
-        Ok(result)
+        HostDescriptor::write(&mut self.as_wasi_view(), self_, buffer, offset).await
     }
 
     async fn read_directory(
@@ -145,21 +138,62 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         record_host_function_call("filesystem::types::descriptor", "create_directory_at");
-        let f = Descriptor::dir(self.table.get(&self_)?)?;
-        let f = f.path.clone();
-
-        let result =
-            HostDescriptor::create_directory_at(&mut self.as_wasi_view(), self_, path).await?;
-        self.durable_file_times(f, "filesystem::types::descriptor::create_directory_at")
-            .await?;
-        Ok(result)
+        HostDescriptor::create_directory_at(&mut self.as_wasi_view(), self_, path).await
     }
 
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
         record_host_function_call("filesystem::types::descriptor", "stat");
+
+        let path = match self.table.get(&self_)? {
+            Descriptor::File(f) => f.path.clone(),
+            Descriptor::Dir(d) => d.path.clone(),
+        };
+
         let mut stat = HostDescriptor::stat(&mut self.as_wasi_view(), self_).await?;
-        stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays so we rather not support it
-        Ok(stat)
+        stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
+
+        let stat_clone1 = stat;
+        Durability::<Ctx, SerializableFileTimes, SerializableError>::custom_wrap(
+            self,
+            WrappedFunctionType::ReadLocal,
+            "filesystem::types::descriptor::stat",
+            |_ctx| Box::pin(async move { Ok(stat_clone1) }),
+            |_ctx, stat| {
+                Ok(SerializableFileTimes {
+                    data_access_timestamp: stat.data_access_timestamp.map(|t| {
+                        SerializableDateTime {
+                            seconds: t.seconds,
+                            nanoseconds: t.nanoseconds,
+                        }
+                    }),
+                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| {
+                        SerializableDateTime {
+                            seconds: t.seconds,
+                            nanoseconds: t.nanoseconds,
+                        }
+                    }),
+                })
+            },
+            |_ctx, times| {
+                Box::pin(async move {
+                    let accessed = times
+                        .data_access_timestamp
+                        .as_ref()
+                        .map(|t| t.clone().into());
+                    let modified = times
+                        .data_modification_timestamp
+                        .as_ref()
+                        .map(|t| t.clone().into());
+                    spawn_blocking(|| set_symlink_times(path, accessed, modified)).await?;
+                    stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
+                    stat.data_modification_timestamp =
+                        times.data_modification_timestamp.map(|t| t.into());
+                    Ok(stat)
+                })
+            },
+        )
+        .await
+        .map_err(FsError::trap)
     }
 
     async fn stat_at(
@@ -169,10 +203,57 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<DescriptorStat, FsError> {
         record_host_function_call("filesystem::types::descriptor", "stat_at");
+        let full_path = match self.table.get(&self_)? {
+            Descriptor::File(f) => f.path.join(path.clone()),
+            Descriptor::Dir(d) => d.path.join(path.clone()),
+        };
+
         let mut stat =
             HostDescriptor::stat_at(&mut self.as_wasi_view(), self_, path_flags, path).await?;
-        stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays so we rather not support it
-        Ok(stat)
+        stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
+
+        let stat_clone1 = stat;
+        Durability::<Ctx, SerializableFileTimes, SerializableError>::custom_wrap(
+            self,
+            WrappedFunctionType::ReadLocal,
+            "filesystem::types::descriptor::stat_at",
+            |_ctx| Box::pin(async move { Ok(stat_clone1) }),
+            |_ctx, stat| {
+                Ok(SerializableFileTimes {
+                    data_access_timestamp: stat.data_access_timestamp.map(|t| {
+                        SerializableDateTime {
+                            seconds: t.seconds,
+                            nanoseconds: t.nanoseconds,
+                        }
+                    }),
+                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| {
+                        SerializableDateTime {
+                            seconds: t.seconds,
+                            nanoseconds: t.nanoseconds,
+                        }
+                    }),
+                })
+            },
+            |_ctx, times| {
+                Box::pin(async move {
+                    let accessed = times
+                        .data_access_timestamp
+                        .as_ref()
+                        .map(|t| t.clone().into());
+                    let modified = times
+                        .data_modification_timestamp
+                        .as_ref()
+                        .map(|t| t.clone().into());
+                    spawn_blocking(|| set_symlink_times(full_path, accessed, modified)).await?;
+                    stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
+                    stat.data_modification_timestamp =
+                        times.data_modification_timestamp.map(|t| t.into());
+                    Ok(stat)
+                })
+            },
+        )
+        .await
+        .map_err(FsError::trap)
     }
 
     async fn set_times_at(
@@ -204,11 +285,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_path: String,
     ) -> Result<(), FsError> {
         record_host_function_call("filesystem::types::descriptor", "link_at");
-
-        let dir = Descriptor::dir(self.table.get(&self_)?)?;
-        let dir_path = dir.path.clone();
-
-        let result = HostDescriptor::link_at(
+        HostDescriptor::link_at(
             &mut self.as_wasi_view(),
             self_,
             old_path_flags,
@@ -216,17 +293,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             new_descriptor,
             new_path.clone(),
         )
-        .await?;
-
-        let f = dir_path.join(new_path.clone());
-        self.durable_file_times(f, "filesystem::types::descriptor::link_at/file")
-            .await?;
-
-        let parent = get_parent_dir(dir_path, new_path);
-        self.durable_file_times(parent, "filesystem::types::descriptor::link_at/dir")
-            .await?;
-
-        Ok(result)
+        .await
     }
 
     async fn open_at(
@@ -264,17 +331,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         record_host_function_call("filesystem::types::descriptor", "remove_directory_at");
-        let dir = Descriptor::dir(self.table.get(&self_)?)?;
-        let dir_path = dir.path.clone();
-
-        let result =
-            HostDescriptor::remove_directory_at(&mut self.as_wasi_view(), self_, path.clone())
-                .await;
-
-        let parent = get_parent_dir(dir_path, path);
-        self.durable_file_times(parent, "filesystem::types::descriptor::remove_directory_at")
-            .await?;
-        result
+        HostDescriptor::remove_directory_at(&mut self.as_wasi_view(), self_, path.clone()).await
     }
 
     async fn rename_at(
@@ -285,42 +342,14 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_path: String,
     ) -> Result<(), FsError> {
         record_host_function_call("filesystem::types::descriptor", "rename_at");
-
-        let source_dir = Descriptor::dir(self.table.get(&self_)?)?;
-        let source_dir_path = source_dir.path.clone();
-        let target_dir = Descriptor::dir(self.table.get(&self_)?)?;
-        let target_dir_path = target_dir.path.clone();
-
-        let result = HostDescriptor::rename_at(
+        HostDescriptor::rename_at(
             &mut self.as_wasi_view(),
             self_,
             old_path.clone(),
             new_descriptor,
             new_path.clone(),
         )
-        .await;
-
-        let target_f = target_dir_path.join(new_path.clone());
-        self.durable_file_times(
-            target_f,
-            "filesystem::types::descriptor::rename_at/target-file",
-        )
-        .await?;
-
-        let source_parent = get_parent_dir(source_dir_path, old_path);
-        let target_parent = get_parent_dir(target_dir_path, new_path);
-        self.durable_file_times(
-            source_parent,
-            "filesystem::types::descriptor::rename_at/source-dir",
-        )
-        .await?;
-        self.durable_file_times(
-            target_parent,
-            "filesystem::types::descriptor::rename_at/target-dir",
-        )
-        .await?;
-
-        result
+        .await
     }
 
     async fn symlink_at(
@@ -330,23 +359,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_path: String,
     ) -> Result<(), FsError> {
         record_host_function_call("filesystem::types::descriptor", "symlink_at");
-
-        let dir = Descriptor::dir(self.table.get(&self_)?)?;
-        let dir_path = dir.path.clone();
-
-        let result =
-            HostDescriptor::symlink_at(&mut self.as_wasi_view(), self_, old_path, new_path.clone())
-                .await;
-
-        let f = dir_path.join(new_path.clone());
-        self.durable_file_times(f, "filesystem::types::descriptor::symlink_at/file")
-            .await?;
-
-        let parent = get_parent_dir(dir_path, new_path);
-        self.durable_file_times(parent, "filesystem::types::descriptor::symlink_at/dir")
-            .await?;
-
-        result
+        HostDescriptor::symlink_at(&mut self.as_wasi_view(), self_, old_path, new_path.clone())
+            .await
     }
 
     async fn unlink_file_at(
@@ -355,18 +369,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         record_host_function_call("filesystem::types::descriptor", "unlink_file_at");
-
-        let dir = Descriptor::dir(self.table.get(&self_)?)?;
-        let dir_path = dir.path.clone();
-
-        let result =
-            HostDescriptor::unlink_file_at(&mut self.as_wasi_view(), self_, path.clone()).await;
-
-        let parent = get_parent_dir(dir_path, path);
-        self.durable_file_times(parent, "filesystem::types::descriptor::unlink_file_at")
-            .await?;
-
-        result
+        HostDescriptor::unlink_file_at(&mut self.as_wasi_view(), self_, path.clone()).await
     }
 
     async fn is_same_object(
@@ -427,57 +430,6 @@ impl FileTimeSupport for PathBuf {
     }
 }
 
-impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    async fn durable_file_times<Entry: FileTimeSupport + Clone + Debug + Send + Sync + 'static>(
-        &mut self,
-        f: Entry,
-        function_name: &str,
-    ) -> Result<(), FsError> {
-        let f_clone = f.clone();
-        let times = Durability::<Ctx, SerializableFileTimes, SerializableError>::wrap(
-            self,
-            WrappedFunctionType::WriteLocal,
-            function_name,
-            |_ctx| {
-                Box::pin(async move {
-                    let metadata = f_clone.metadata()?;
-                    let accessed = metadata
-                        .accessed()?
-                        .into_std()
-                        .duration_since(SystemTime::UNIX_EPOCH)?;
-                    let modified = metadata
-                        .modified()?
-                        .into_std()
-                        .duration_since(SystemTime::UNIX_EPOCH)?;
-
-                    Ok(SerializableFileTimes {
-                        data_access_timestamp: SerializableDateTime {
-                            seconds: accessed.as_secs(),
-                            nanoseconds: accessed.subsec_nanos(),
-                        },
-                        data_modification_timestamp: SerializableDateTime {
-                            seconds: modified.as_secs(),
-                            nanoseconds: modified.subsec_nanos(),
-                        },
-                    })
-                })
-            },
-        )
-        .await
-        .map_err(FsError::trap)?;
-        if self.is_replay() {
-            let accessed = times.data_access_timestamp.into();
-            let modified = times.data_modification_timestamp.into();
-
-            f.set_times(
-                Some(SystemTimeSpec::Absolute(accessed)),
-                Some(SystemTimeSpec::Absolute(modified)),
-            )?;
-        }
-        Ok(())
-    }
-}
-
 #[async_trait]
 impl<Ctx: WorkerCtx> HostDirectoryEntryStream for DurableWorkerCtx<Ctx> {
     async fn read_directory_entry(
@@ -510,14 +462,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 struct SerializableFileTimes {
-    pub data_access_timestamp: SerializableDateTime,
-    pub data_modification_timestamp: SerializableDateTime,
-}
-
-fn get_parent_dir(root: PathBuf, path: String) -> PathBuf {
-    let path: PathBuf = path.into();
-    match path.parent() {
-        Some(p) if p != Path::new("") => root.join(p),
-        _ => root,
-    }
+    pub data_access_timestamp: Option<SerializableDateTime>,
+    pub data_modification_timestamp: Option<SerializableDateTime>,
 }
