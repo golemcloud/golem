@@ -2,7 +2,7 @@ use std::error::Error;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{Connection, Executor, PgConnection, Pool, Postgres, Sqlite, SqliteConnection};
+use sqlx::{Connection, PgConnection, Pool, Postgres, Sqlite, SqliteConnection};
 use tracing::info;
 
 use crate::config::{DbPostgresConfig, DbSqliteConfig};
