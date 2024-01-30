@@ -183,6 +183,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &worker_config.args,
             &worker_config.env,
             root_dir,
+            temp_dir.path().to_path_buf(),
             stdin,
             stdout,
             stderr,

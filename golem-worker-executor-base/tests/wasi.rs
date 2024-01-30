@@ -879,7 +879,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
     let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
-    let worker_id = executor.start_worker(&template_id, "file-service-4").await;
+    let worker_id = executor.start_worker(&template_id, "file-service-7").await;
 
     let _ = executor
         .invoke_and_await(
@@ -935,7 +935,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
     let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
-    let worker_id = executor.start_worker(&template_id, "file-service-6").await;
+    let worker_id = executor.start_worker(&template_id, "file-service-8").await;
 
     let _ = executor
         .invoke_and_await(
@@ -956,7 +956,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/write-file",
+            "golem:it/api/write-file-direct",
             vec![
                 common::val_string("/test/testfile.txt"),
                 common::val_string("hello world"),
@@ -994,6 +994,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .unwrap();
 
     drop(executor);
+
     let mut executor = common::start(&context).await.unwrap();
 
     let times_dir_2 = executor
@@ -1023,7 +1024,7 @@ async fn filesystem_rename_replay_restores_file_times() {
     let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
-    let worker_id = executor.start_worker(&template_id, "file-service-6").await;
+    let worker_id = executor.start_worker(&template_id, "file-service-9").await;
 
     let _ = executor
         .invoke_and_await(
@@ -1128,7 +1129,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
     let mut executor = common::start(&context).await.unwrap();
 
     let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
-    let worker_id = executor.start_worker(&template_id, "file-service-4").await;
+    let worker_id = executor.start_worker(&template_id, "file-service-10").await;
 
     let _ = executor
         .invoke_and_await(

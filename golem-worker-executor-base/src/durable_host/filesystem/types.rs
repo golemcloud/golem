@@ -1,13 +1,14 @@
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use cap_std::fs::{Dir, File, Metadata};
-use fs_set_times::{SetTimes, SystemTimeSpec};
+use fs_set_times::{set_symlink_times, SetTimes, SystemTimeSpec};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
+use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tracing::info;
+use tracing::{debug, info};
 use wasmtime::component::Resource;
 
 use crate::durable_host::{Durability, DurableWorkerCtx, SerializableDateTime, SerializableError};
@@ -119,7 +120,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<Filesize, FsError> {
         record_host_function_call("filesystem::types::descriptor", "write");
         let f = Descriptor::file(self.table.get(&self_)?)?;
-        let f = f.file.clone();
+        let f = Arc::new(FileWithPath::new(f.file.clone(), f.path.clone()));
 
         let result = HostDescriptor::write(&mut self.as_wasi_view(), self_, buffer, offset).await?;
         self.durable_file_times(f, "filesystem::types::descriptor::write")
@@ -203,6 +204,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         record_host_function_call("filesystem::types::descriptor", "link_at");
 
         let dir = Descriptor::dir(self.table.get(&self_)?)?;
+        let dir_path = dir.path.clone();
         let dir = dir.dir.clone();
 
         let result = HostDescriptor::link_at(
@@ -215,7 +217,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let f = Arc::new(dir.open(new_path.clone())?);
+        let f = Arc::new(FileWithPath::new(
+            Arc::new(dir.open(new_path.clone())?),
+            dir_path.join(new_path.clone()),
+        ));
         self.durable_file_times(f, "filesystem::types::descriptor::link_at/file")
             .await?;
 
@@ -240,6 +245,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
         record_host_function_call("filesystem::types::descriptor", "open_at");
+        debug!("open_at called, path={:?}, flags={:?}", path, path_flags);
         HostDescriptor::open_at(
             &mut self.as_wasi_view(),
             self_,
@@ -296,6 +302,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let source_dir = Descriptor::dir(self.table.get(&self_)?)?;
         let source_dir = source_dir.dir.clone();
         let target_dir = Descriptor::dir(self.table.get(&self_)?)?;
+        let target_dir_path = target_dir.path.clone();
         let target_dir = target_dir.dir.clone();
 
         let result = HostDescriptor::rename_at(
@@ -307,7 +314,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         )
         .await;
 
-        let target_f = Arc::new(target_dir.open(new_path.clone())?);
+        let target_f = Arc::new(FileWithPath::new(
+            Arc::new(target_dir.open(new_path.clone())?),
+            target_dir_path.join(new_path.clone()),
+        ));
         self.durable_file_times(
             target_f,
             "filesystem::types::descriptor::rename_at/target-file",
@@ -349,13 +359,20 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         record_host_function_call("filesystem::types::descriptor", "symlink_at");
 
         let dir = Descriptor::dir(self.table.get(&self_)?)?;
+        let dir_path = dir.path.clone();
         let dir = dir.dir.clone();
 
         let result =
             HostDescriptor::symlink_at(&mut self.as_wasi_view(), self_, old_path, new_path.clone())
                 .await;
 
+        debug!("symlink_at called, new_path={:?}, dir_path={:?}", new_path, dir_path);
         let f = Arc::new(dir.open(new_path.clone())?);
+        debug!("xxx");
+        let f = Arc::new(FileWithPath::new(
+            f,
+            dir_path.join(new_path.clone()),
+        ));
         self.durable_file_times(f, "filesystem::types::descriptor::symlink_at/file")
             .await?;
 
@@ -437,9 +454,21 @@ trait FileTimeSupport {
     ) -> std::io::Result<()>;
 }
 
-impl FileTimeSupport for File {
+#[derive(Debug)]
+struct FileWithPath {
+    file: Arc<File>,
+    path: PathBuf,
+}
+
+impl FileWithPath {
+    fn new(file: Arc<File>, path: PathBuf) -> Self {
+        Self { file, path }
+    }
+}
+
+impl FileTimeSupport for FileWithPath {
     fn metadata(&self) -> std::io::Result<Metadata> {
-        self.metadata()
+        self.file.metadata()
     }
 
     fn set_times(
@@ -447,7 +476,8 @@ impl FileTimeSupport for File {
         accessed: Option<SystemTimeSpec>,
         modified: Option<SystemTimeSpec>,
     ) -> std::io::Result<()> {
-        SetTimes::set_times(self, accessed, modified)
+        debug!("Setting file times for {:?} to {:?} and {:?}", self.path, accessed, modified);
+        set_symlink_times(&self.path, accessed, modified)
     }
 }
 
@@ -471,6 +501,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         f: Arc<Entry>,
         function_name: &str,
     ) -> Result<(), FsError> {
+        debug!("durable_file_times called for {:?}", f);
         let f_clone = f.clone();
         let times = Durability::<Ctx, SerializableFileTimes, SerializableError>::wrap(
             self,
