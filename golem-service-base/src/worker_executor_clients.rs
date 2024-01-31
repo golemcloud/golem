@@ -30,7 +30,7 @@ impl WorkerExecutorClients for WorkerExecutorClientsDefault {
     async fn lookup(&self, pod: &Pod) -> Result<WorkerExecutorClient<Channel>, String> {
         let mut cache = self.cache.lock().await;
 
-        if let Some(client) = cache.get(&pod) {
+        if let Some(client) = cache.get(pod) {
             return Ok(client.clone());
         }
 
