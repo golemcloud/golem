@@ -1,14 +1,4 @@
-version: '3'
-
-x-ports:
-  redis: &redis-port 6379
-  postgres: &postgres-port 5432
-  cloud_server_http: &cloud-server-http-port 9001
-  cloud_server_grpc: &cloud-server-grpc-port 9090
-  shard_manager_http: &shard-manager-http-port 8081
-  shard_manager_grpc: &shard-manager-grpc-port 9002
-  worker_executor_http: &worker-executor-http-port 8082
-  worker_executor_grpc: &worker-executor-grpc-port 9000
+version: '3.8'
 
 services:
   redis:
@@ -16,7 +6,7 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - *redis-port
+      - "${REDIS_PORT}:6379"
 
   postgres:
     image: postgres:latest
@@ -27,7 +17,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - *postgres-port
+      - "${POSTGRES_PORT}:5432"
 
   golem-shard-manager:
     build:
@@ -37,9 +27,9 @@ services:
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
       - GOLEM__REDIS__HOST=redis
-      - GOLEM__REDIS__PORT=*redis-port
-      - GOLEM__HTTP_PORT=*shard-manager-http-port
-      - GOLEM_SHARD_MANAGER_PORT=*shard-manager-grpc-port
+      - GOLEM__REDIS__PORT=${REDIS_PORT}
+      - GOLEM__HTTP_PORT=${SHARD_MANAGER_HTTP_PORT}
+      - GOLEM_SHARD_MANAGER_PORT=${SHARD_MANAGER_GRPC_PORT}
     depends_on:
       - redis
 
@@ -62,14 +52,14 @@ services:
       - GOLEM__DB__CONFIG__USERNAME=golem_user
       - GOLEM__DB__CONFIG__PASSWORD=golem_password
       - GOLEM__ROUTING_TABLE__HOST=golem-shard-manager
-      - GOLEM__ROUTING_TABLE__PORT=*shard-manager-grpc-port
-      - GOLEM__GRPC_PORT=*cloud-server-grpc-port
-      - GOLEM__HTTP_PORT=*cloud-server-http-port
+      - GOLEM__ROUTING_TABLE__PORT=${SHARD_MANAGER_GRPC_PORT}
+      - GOLEM__GRPC_PORT=${CLOUD_SERVER_GRPC_PORT}
+      - GOLEM__HTTP_PORT=${CLOUD_SERVER_HTTP_PORT}
     volumes:
       - template_store:/template_store
     ports:
-      - *cloud-server-http-port
-      - *cloud-server-grpc-port
+      - "${CLOUD_SERVER_HTTP_PORT}:${CLOUD_SERVER_HTTP_PORT}"
+      - "${CLOUD_SERVER_GRPC_PORT}:${CLOUD_SERVER_GRPC_PORT}"
     depends_on:
       - postgres
 
@@ -82,15 +72,15 @@ services:
       - RUST_LOG=info
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
-      - GOLEM__REDIS__PORT=6379
+      - GOLEM__REDIS__PORT=${REDIS_PORT}
       - GOLEM__REDIS__HOST=redis
       - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-cloud-server-oss
-      - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=*cloud-server-grpc-port
+      - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=${CLOUD_SERVER_GRPC_PORT}
       - GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
-      - GOLEM__PORT=*worker-executor-grpc-port
-      - GOLEM__HTTP_PORT=*worker-executor-http-port
+      - GOLEM__PORT=${WORKER_EXECUTOR_GRPC_PORT}
+      - GOLEM__HTTP_PORT=${WORKER_EXECUTOR_HTTP_PORT}
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST=golem-shard-manager
-      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT=*shard-manager-grpc-port
+      - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT=${SHARD_MANAGER_GRPC_PORT}
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS=5
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY="100ms"
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY="2s"
@@ -100,7 +90,7 @@ services:
       - GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE="Local"
       - GOLEM__SHARD_MANAGER_SERVICE__TYPE="Grpc"
     ports:
-      - *worker-executor-http-port
+      - "${WORKER_EXECUTOR_HTTP_PORT}:${WORKER_EXECUTOR_HTTP_PORT}"
 
 volumes:
   redis_data:
