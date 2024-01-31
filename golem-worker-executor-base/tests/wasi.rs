@@ -1227,3 +1227,46 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
 
     check!(times1 == times2);
 }
+
+#[tokio::test]
+async fn filesystem_metadata_hash() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-3").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/write-file-direct",
+            vec![
+                common::val_string("testfile.txt"),
+                common::val_string("hello world"),
+            ],
+        )
+        .await
+        .unwrap();
+    let hash1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/hash",
+            vec![common::val_string("testfile.txt")],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let hash2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/hash",
+            vec![common::val_string("testfile.txt")],
+        )
+        .await
+        .unwrap();
+
+    check!(hash1 == hash2);
+}

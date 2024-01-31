@@ -2124,6 +2124,7 @@ dependencies = [
  "iso8601-timestamp",
  "lazy_static",
  "log",
+ "metrohash",
  "prometheus",
  "prost",
  "redis",
@@ -2841,6 +2842,12 @@ checksum = "5a634b1c61a95585bd15607c6ab0c4e5b226e695ff2800ba0cdccddf208c406c"
 dependencies = [
  "autocfg",
 ]
+
+[[package]]
+name = "metrohash"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ba553cb19e2acbc54baa16faef215126243fe45e53357a3b2e9f4ebc7b0506c"
 
 [[package]]
 name = "mime"

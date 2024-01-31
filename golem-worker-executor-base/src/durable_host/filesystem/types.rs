@@ -2,8 +2,10 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use cap_std::fs::Metadata;
 use fs_set_times::{set_symlink_times, SystemTimeSpec};
+use metrohash::MetroHash128;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
+use std::hash::Hasher;
 use std::path::PathBuf;
 
 use wasmtime::component::Resource;
@@ -12,6 +14,7 @@ use crate::durable_host::{Durability, DurableWorkerCtx, SerializableDateTime, Se
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::WrappedFunctionType;
+use wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime;
 use wasmtime_wasi::preview2::bindings::filesystem::types::{
     Advice, Descriptor, DescriptorFlags, DescriptorStat, DescriptorType, DirectoryEntry,
     DirectoryEntryStream, Error, ErrorCode, Filesize, Host, HostDescriptor,
@@ -386,7 +389,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
     ) -> Result<MetadataHashValue, FsError> {
         record_host_function_call("filesystem::types::descriptor", "metadata_hash");
-        HostDescriptor::metadata_hash(&mut self.as_wasi_view(), self_).await
+
+        // Using the WASI stat function as it guarantees the file times are preserved
+        let metadata = self.stat(self_).await?;
+        Ok(calculate_metadata_hash(&metadata))
     }
 
     async fn metadata_hash_at(
@@ -396,7 +402,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<MetadataHashValue, FsError> {
         record_host_function_call("filesystem::types::descriptor", "metadata_hash_at");
-        HostDescriptor::metadata_hash_at(&mut self.as_wasi_view(), self_, path_flags, path).await
+        // Using the WASI stat_at function as it guarantees the file times are preserved
+        let metadata = self.stat_at(self_, path_flags, path).await?;
+        Ok(calculate_metadata_hash(&metadata))
     }
 
     fn drop(&mut self, rep: Resource<Descriptor>) -> anyhow::Result<()> {
@@ -464,4 +472,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 struct SerializableFileTimes {
     pub data_access_timestamp: Option<SerializableDateTime>,
     pub data_modification_timestamp: Option<SerializableDateTime>,
+}
+
+fn calculate_metadata_hash(meta: &DescriptorStat) -> MetadataHashValue {
+    let mut hasher = MetroHash128::new();
+
+    let modified = meta.data_modification_timestamp.unwrap_or(Datetime {
+        seconds: 0,
+        nanoseconds: 0,
+    });
+    hasher.write_u64(modified.seconds);
+    hasher.write_u32(modified.nanoseconds);
+    hasher.write_u64(meta.size);
+
+    let (lower, upper) = hasher.finish128();
+    MetadataHashValue { lower, upper }
 }
