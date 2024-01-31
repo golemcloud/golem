@@ -76,8 +76,9 @@ struct GolemCommand {
     #[arg(short = 'F', long, default_value = "yaml")]
     format: Format,
 
-    #[arg(short = 'u', long, default_value = "http://localhost:9001")]
-    golem_url: String,
+    #[arg(short = 'u', long)]
+    /// Golem base url. Default: GOLEM_BASE_URL environment variable or http://localhost:9881.
+    golem_url: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -112,7 +113,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>> {
-    let url_str = cmd.golem_url;
+    let url_str = cmd
+        .golem_url
+        .or_else(|| std::env::var("GOLEM_BASE_URL").ok())
+        .unwrap_or("http://localhost:9881".to_string());
     let url = Url::parse(&url_str).unwrap();
     let allow_insecure_str = std::env::var("GOLEM_ALLOW_INSECURE").unwrap_or("false".to_string());
     let allow_insecure = allow_insecure_str != "false";
