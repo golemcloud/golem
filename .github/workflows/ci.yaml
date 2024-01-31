@@ -192,7 +192,13 @@ jobs:
 
       - name: Run Docker Compose tests
         run: |
-          docker-compose -f docker-compose-sqlite.yml up --build
+          docker-compose -f docker-compose-sqlite.yml down -v
+          docker-compose -f docker-compose-sqlite.yml up --build -d
+
+      # Not necessary but just in case
+      - name: Sleep for 20 seconds
+        run: |
+          sleep 20
 
       - name: Run some tests against service
         run: |
