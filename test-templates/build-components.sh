@@ -1,7 +1,7 @@
 #!/bin/bash
 
 rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service" 
-"option-service" "flags-service" "http-client-2" "stdio-cc" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service")
+"option-service" "flags-service" "http-client-2" "stdio-cc" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking")
 zig_test_components=("zig-1" "zig-2")
 tinygo_test_components=("tinygo-wasi" "tinygo-wasi-http")
 grain_test_components=("grain-1")
