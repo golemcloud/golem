@@ -1233,18 +1233,13 @@ async fn ip_address_resolve() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
 
-    let template_id =
-        executor.store_template(Path::new("../test-templates/networking.wasm"));
+    let template_id = executor.store_template(Path::new("../test-templates/networking.wasm"));
     let worker_id = executor
         .start_worker(&template_id, "ip-address-resolve-1")
         .await;
 
     let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api/get",
-            vec![],
-        )
+        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
         .await
         .unwrap();
 
@@ -1252,11 +1247,7 @@ async fn ip_address_resolve() {
     let mut executor = common::start(&context).await.unwrap();
 
     let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api/get",
-            vec![],
-        )
+        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
         .await
         .unwrap();
 
