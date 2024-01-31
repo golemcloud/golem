@@ -133,7 +133,7 @@ jobs:
           cargo publish -p golem-worker-executor-base --all-features --allow-dirty
           cargo publish -p golem-worker-executor-oss --all-features --allow-dirty
 
-  docker-publish-x86_64:
+  docker-build-and-test-x86_64:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -272,7 +272,7 @@ jobs:
           labels: ${{ steps.meta-golem-server.outputs.labels }}
 
 
-  docker-publish-aarch64:
+  docker-build-aarch64:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
