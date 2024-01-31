@@ -177,6 +177,15 @@ jobs:
       - uses: satackey/action-docker-layer-caching@v0.0.11
         continue-on-error: true
 
+      - name: Push Decision
+        id: push_decision
+        run: |
+          if [[ "${{ github.ref }}" == "refs/tags/v"* ]]; then
+            echo "::set-output name=push::true"
+          else
+            echo "::set-output name=push::false"
+          fi
+
       # Set up Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -201,7 +210,7 @@ jobs:
         with:
           context: .
           file: ./golem-worker-executor-oss/docker/Dockerfile
-          push: github.event_name == 'push' && github.ref_type == 'tag'
+          push: ${{ steps.push_decision.outputs.push }}
           platforms: linux/amd64
           tags: ${{ steps.meta-worker-executor.outputs.tags }}
           labels: ${{ steps.meta-worker-executor.outputs.labels }}
@@ -220,7 +229,7 @@ jobs:
         with:
           context: .
           file: ./golem-shard-manager/docker/Dockerfile
-          push: github.event_name == 'push' && github.ref_type == 'tag'
+          push: ${{ steps.push_decision.outputs.push }}
           platforms: linux/amd64
           tags: ${{ steps.meta-shard-manager.outputs.tags }}
           labels: ${{ steps.meta-shard-manager.outputs.labels }}
@@ -238,7 +247,7 @@ jobs:
         with:
           context: .
           file: ./golem-cloud-server-oss/docker/Dockerfile
-          push: github.event_name == 'push' && github.ref_type == 'tag'
+          push: ${{ steps.push_decision.outputs.push }}
           platforms: linux/amd64
           tags: ${{ steps.meta-golem-server.outputs.tags }}
           labels: ${{ steps.meta-golem-server.outputs.labels }}
