@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use crate::model::Pod;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
-use tonic::transport::Channel;
-use tokio::sync::Mutex;
+use std::collections::HashMap;
 use std::sync::Arc;
-use crate::model::Pod;
+use tokio::sync::Mutex;
+use tonic::transport::Channel;
 
 type WorkerExecutorCache = Arc<Mutex<HashMap<String, WorkerExecutorClient<Channel>>>>;
 
@@ -14,7 +14,7 @@ pub trait WorkerExecutorClients: Send + Sync {
 }
 
 pub struct WorkerExecutorClientsDefault {
-    cache: WorkerExecutorCache
+    cache: WorkerExecutorCache,
 }
 
 impl WorkerExecutorClientsDefault {
