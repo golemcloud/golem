@@ -215,21 +215,22 @@ mod keep_alive {
         time::Duration,
     };
 
-    use futures_util::{SinkExt, StreamExt};
+    use futures_util::{Future, SinkExt, StreamExt};
     use poem::web::websocket::{Message, WebSocketStream};
     use tokio::time::Instant;
 
     pub struct WebSocketKeepAlive<A, B> {
         sink: A,
         stream: B,
-        // Interval between sending Ping messages
-        keep_alive_interval: Duration,
-        // Maximum time to wait for a Pong response before closing the connection
-        max_confirmation: Duration,
-        // The start time for keepalive. Is reset when a pong is received.
-        start_time: Option<Instant>,
+        max_pong_timeout: Duration,
+        // When last ping was sent
         last_ping: Option<Instant>,
+        // Timer that triggers sending of Ping messages at regular intervals
+        ping_interval: Pin<Box<tokio::time::Interval>>,
+        // Is reset when a Ping message is sent
+        pong_timeout: Pin<Box<tokio::time::Sleep>>,
     }
+
     impl
         WebSocketKeepAlive<
             futures_util::stream::SplitSink<WebSocketStream, Message>,
@@ -255,22 +256,28 @@ mod keep_alive {
     impl<A, B, StreamError> WebSocketKeepAlive<A, B>
     where
         A: futures_util::Sink<Message> + Unpin,
-        A::Error: std::fmt::Debug,
         B: futures_util::Stream<Item = Result<Message, StreamError>> + Unpin,
     {
         pub fn from_sink_and_stream(
             stream: B,
             sink: A,
             keep_alive_interval: Duration,
-            max_confirmation: Duration,
+            max_pong_timeout: Duration,
         ) -> Self {
+            let mut ping_interval =
+                tokio::time::interval_at(Instant::now() + keep_alive_interval, keep_alive_interval);
+
+            ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+            let ping_interval = Box::pin(ping_interval);
+
             WebSocketKeepAlive {
-                last_ping: None,
-                start_time: None,
-                keep_alive_interval,
-                max_confirmation,
                 sink,
                 stream,
+                last_ping: None,
+                ping_interval,
+                max_pong_timeout,
+                pong_timeout: Box::pin(tokio::time::sleep(Duration::MAX)),
             }
         }
     }
@@ -293,27 +300,14 @@ mod keep_alive {
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Option<Self::Item>> {
-            // Set start_time on first poll.
-            let start_time = {
-                if let Some(start_time) = self.start_time {
-                    start_time
-                } else {
-                    tracing::debug!("Starting WebSocket KeepAlive");
-                    let start_time = Instant::now();
-                    self.start_time = Some(start_time);
-                    start_time
-                }
-            };
+            if (self.pong_timeout.as_mut().poll(cx).is_ready() || self.pong_timeout.is_elapsed())
+                && self.last_ping.is_some()
+            {
+                tracing::debug!("Ping confirmation timed out");
+                return Poll::Ready(Some(Err(KeepAliveError::Timeout)));
+            }
 
-            // Close the sink if the last ping was not confirmed
-            if let Some(last_ping) = self.last_ping {
-                let elapsed = last_ping.elapsed();
-                if elapsed > self.max_confirmation {
-                    tracing::debug!("Ping confirmation timed out: {}", elapsed.as_millis());
-                    return Poll::Ready(Some(Err(KeepAliveError::Timeout)));
-                }
-            // Send a ping if needed
-            } else if start_time.elapsed() > self.keep_alive_interval {
+            if self.ping_interval.poll_tick(cx).is_ready() && self.last_ping.is_none() {
                 tracing::debug!("Initiating WebSocket Ping");
 
                 let sink_ready = self.sink.poll_ready_unpin(cx).map_err(|e| {
@@ -333,15 +327,25 @@ mod keep_alive {
                     return Poll::Ready(Some(Err(KeepAliveError::Sink(error))));
                 } else {
                     tracing::debug!("WebSocket Ping sent");
-                    self.last_ping = Some(Instant::now());
+                    let now = Instant::now();
+                    let timeout = now + self.max_pong_timeout;
+
+                    self.last_ping = Some(now);
+                    self.pong_timeout.as_mut().reset(timeout);
                 }
             }
 
+            // Ensure to return Poll::Pending when waiting for events and register the task's waker
             match self.stream.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(Message::Pong(pong)))) => {
                     tracing::debug!("Received WebSocket confirmation Pong");
                     self.last_ping = None;
-                    self.start_time = Some(Instant::now());
+                    self.ping_interval.as_mut().reset();
+
+                    // Expiration that should never fire.
+                    let period = self.ping_interval.period() * 2;
+                    self.pong_timeout.as_mut().reset(Instant::now() + period);
+
                     Poll::Ready(Some(Ok(Message::Pong(pong))))
                 }
                 Poll::Ready(Some(msg)) => Poll::Ready(Some(msg.map_err(KeepAliveError::Stream))),
@@ -386,12 +390,9 @@ mod keep_alive {
 
     #[cfg(test)]
     mod test {
-        use futures_util::stream::Stream;
-        use futures_util::Sink;
         use poem::web::websocket::Message;
-        use std::pin::Pin;
+        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Once;
-        use std::task::{Context, Poll};
         use tokio::sync::mpsc;
         use tokio::time::{timeout, Duration};
         use tokio_stream::wrappers::ReceiverStream;
@@ -400,68 +401,6 @@ mod keep_alive {
         use super::*;
 
         // Mock sink that accepts messages and records them
-        struct MockSink {
-            closed: bool,
-            sent_messages: Vec<Message>,
-        }
-
-        impl Sink<Message> for MockSink {
-            type Error = ();
-
-            fn poll_ready(
-                self: Pin<&mut Self>,
-                _cx: &mut Context<'_>,
-            ) -> Poll<Result<(), Self::Error>> {
-                Poll::Ready(Ok(()))
-            }
-
-            fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-                let self_mut = self.get_mut();
-                self_mut.sent_messages.push(item);
-                Ok(())
-            }
-
-            fn poll_flush(
-                self: Pin<&mut Self>,
-                _cx: &mut Context<'_>,
-            ) -> Poll<Result<(), Self::Error>> {
-                Poll::Ready(Ok(()))
-            }
-
-            fn poll_close(
-                self: Pin<&mut Self>,
-                _cx: &mut Context<'_>,
-            ) -> Poll<Result<(), Self::Error>> {
-                if self.closed {
-                    Poll::Ready(Err(()))
-                } else {
-                    let self_mut = self.get_mut();
-                    self_mut.closed = true;
-                    Poll::Ready(Ok(()))
-                }
-            }
-        }
-
-        // Mock stream that can yield predefined messages
-        struct MockStream {
-            messages_to_send: Vec<Result<Message, ()>>,
-        }
-
-        impl Stream for MockStream {
-            type Item = Result<Message, ()>;
-
-            fn poll_next(
-                mut self: Pin<&mut Self>,
-                _cx: &mut Context<'_>,
-            ) -> Poll<Option<Self::Item>> {
-                if let Some(msg) = self.messages_to_send.pop() {
-                    Poll::Ready(Some(msg))
-                } else {
-                    Poll::Pending
-                }
-            }
-        }
-
         static TRACING_SETUP: Once = Once::new();
 
         fn setup_tracing() {
@@ -476,136 +415,7 @@ mod keep_alive {
         }
 
         #[tokio::test]
-        async fn test_ping_pong_cycle() {
-            setup_tracing();
-
-            let mock_sink = MockSink {
-                closed: false,
-                sent_messages: Vec::new(),
-            };
-            // Simulate a Pong response
-            let mock_stream = MockStream {
-                messages_to_send: vec![],
-            };
-
-            let ping_interval = Duration::from_millis(50);
-
-            let mut keep_alive = WebSocketKeepAlive::from_sink_and_stream(
-                mock_stream,
-                mock_sink,
-                ping_interval,
-                Duration::from_millis(100),
-            );
-
-            let waker = futures::task::noop_waker_ref();
-            let mut cx = Context::from_waker(waker);
-
-            let poll_result = keep_alive.poll_next_unpin(&mut cx);
-            assert!(poll_result.is_pending());
-            assert!(keep_alive.start_time.is_some());
-            assert!(keep_alive.last_ping.is_none());
-            assert!(keep_alive.sink.sent_messages.first().is_none());
-
-            // This sleep is necessary for the interval to fire
-            tokio::time::sleep(ping_interval).await;
-
-            // Check Ping was sent
-            let poll_result = keep_alive.poll_next_unpin(&mut cx);
-            assert!(poll_result.is_pending());
-            assert!(matches!(
-                keep_alive.sink.sent_messages.first(),
-                Some(Message::Ping(_))
-            ));
-            assert!(keep_alive.last_ping.is_some());
-
-            // Set sink message to respond with a pong on next poll.
-            keep_alive
-                .stream
-                .messages_to_send
-                .push(Ok(Message::Pong(Vec::new())));
-
-            // Poll again to process the Pong
-            let poll_result = Pin::new(&mut keep_alive).poll_next(&mut cx);
-            assert!(matches!(
-                poll_result,
-                Poll::Ready(Some(Ok(Message::Pong(_))))
-            ));
-            // Ensure the Pong was processed and last_ping is reset
-            assert!(keep_alive.last_ping.is_none());
-        }
-
-        #[tokio::test]
-        async fn test_pong_timeout() {
-            setup_tracing();
-
-            let mock_sink = MockSink {
-                sent_messages: Vec::new(),
-                closed: false,
-            };
-
-            // No Pong response is simulated by leaving messages_to_send empty
-            let mock_stream = MockStream {
-                messages_to_send: vec![],
-            };
-
-            let ping_interval = Duration::from_millis(50);
-
-            let mut keep_alive = WebSocketKeepAlive::from_sink_and_stream(
-                mock_stream,
-                mock_sink,
-                ping_interval,
-                ping_interval + ping_interval,
-            );
-
-            // Simulate polling the Stream to trigger a Ping send
-            let waker = futures::task::noop_waker_ref();
-            let mut cx = Context::from_waker(waker);
-
-            let poll_result = keep_alive.poll_next_unpin(&mut cx);
-            assert!(poll_result.is_pending());
-            assert!(keep_alive.start_time.is_some());
-            assert!(keep_alive.last_ping.is_none());
-            assert!(keep_alive.sink.sent_messages.first().is_none());
-
-            // This sleep is necessary for the interval to fire
-            tokio::time::sleep(ping_interval).await;
-
-            let poll_result = keep_alive.poll_next_unpin(&mut cx);
-
-            // Assert that a Ping was sent
-            assert!(poll_result.is_pending());
-            assert_eq!(keep_alive.sink.sent_messages.len(), 1);
-            assert!(matches!(
-                keep_alive.sink.sent_messages.first(),
-                Some(Message::Ping(_))
-            ));
-            assert!(keep_alive.last_ping.is_some());
-
-            // Sleep but not enough for timeout
-            tokio::time::sleep(ping_interval).await;
-
-            let poll_result = keep_alive.poll_next_unpin(&mut cx);
-            assert_eq!(
-                poll_result,
-                Poll::Pending,
-                "Timeout hasn't expired, so no error should be returned"
-            );
-
-            // Simulate enough time passing without receiving a Pong response
-            tokio::time::sleep(ping_interval).await;
-
-            // Poll again to trigger the timeout behavior
-            let poll_result = keep_alive.poll_next_unpin(&mut cx);
-            assert_eq!(
-                poll_result,
-                Poll::Ready(Some(Err(KeepAliveError::Timeout))),
-                "Timeout error should be returned"
-            );
-        }
-
-        #[tokio::test]
-        async fn test_websocket_keep_alive_with_mpsc() {
-            // Setup tracing if necessary
+        async fn test_websocket_keep_alive() {
             setup_tracing();
 
             // Create a channel for simulating incoming WebSocket messages (pong responses)
@@ -618,34 +428,30 @@ mod keep_alive {
             let pong_stream = ReceiverStream::new(pong_rx);
             let ping_sink = PollSender::new(ping_tx);
 
-            let ping_interval = Duration::from_millis(50);
-
             // Initialize WebSocketKeepAlive with the ping sender and pong receiver
             let mut websocket_keep_alive = WebSocketKeepAlive::from_sink_and_stream(
                 pong_stream,
                 ping_sink,
-                ping_interval,
-                Duration::from_millis(1000),
+                Duration::from_millis(10),
+                Duration::from_millis(50),
             );
 
-            // Test that ping/pong response works
-            // Simulate receiving a pong response after a delay
+            // Task and flag to simulate a response message.
+            let send_pong = std::sync::Arc::new(AtomicBool::new(true));
             tokio::spawn({
                 let pong_tx = pong_tx.clone();
+                let send_pong = send_pong.clone();
                 async move {
                     while let Some(_) = ping_rx.recv().await {
-                        pong_tx
-                            .send(Ok(Message::Pong(Vec::new())))
-                            .await
-                            .expect("Failed to send pong");
+                        if send_pong.load(Ordering::Relaxed) {
+                            pong_tx
+                                .send(Ok(Message::Pong(Vec::new())))
+                                .await
+                                .expect("Failed to send pong");
+                        }
                     }
                 }
             });
-
-            // Initiate polling.
-            let _ = timeout(Duration::ZERO, websocket_keep_alive.next()).await;
-
-            tokio::time::sleep(ping_interval).await;
 
             // Poll the WebSocketKeepAlive stream to trigger the keep-alive mechanism
             let next = websocket_keep_alive.next().await;
@@ -676,14 +482,19 @@ mod keep_alive {
                 "Expected to receive a timeout error"
             );
 
-            // Sleep the rest of the interval, so that the next ping/pong executes.
-            tokio::time::sleep(ping_interval).await;
-
             let next = websocket_keep_alive.next().await;
 
             assert!(
                 matches!(next, Some(Ok(Message::Pong(_)))),
                 "Expected to receive a pong message"
+            );
+
+            send_pong.store(false, Ordering::Relaxed);
+            let next = websocket_keep_alive.next().await;
+
+            assert!(
+                matches!(next, Some(Err(KeepAliveError::Timeout))),
+                "Expected to receive a timeout error"
             );
         }
     }
