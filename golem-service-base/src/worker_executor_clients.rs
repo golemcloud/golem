@@ -2,13 +2,14 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use tonic::transport::Channel;
-use std::sync::{Arc, Mutex};
+use tokio::sync::Mutex;
+use std::sync::Arc;
 use crate::model::Pod;
 
 type WorkerExecutorCache = Arc<Mutex<HashMap<String, WorkerExecutorClient<Channel>>>>;
 
 #[async_trait]
-pub trait WorkerExecutorClients {
+pub trait WorkerExecutorClients: Send + Sync {
     async fn lookup(&self, pod: &Pod) -> Result<WorkerExecutorClient<Channel>, String>;
 }
 
@@ -27,7 +28,7 @@ impl WorkerExecutorClientsDefault {
 #[async_trait]
 impl WorkerExecutorClients for WorkerExecutorClientsDefault {
     async fn lookup(&self, pod: &Pod) -> Result<WorkerExecutorClient<Channel>, String> {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock().await;
 
         if let Some(client) = cache.get(&pod.uri().to_string()) {
             return Ok(client.clone());
