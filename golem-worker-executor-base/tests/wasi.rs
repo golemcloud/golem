@@ -1246,11 +1246,15 @@ async fn ip_address_resolve() {
     drop(executor);
     let mut executor = common::start(&context).await.unwrap();
 
+    // If the recovery succeeds, that means that the replayed IP address resolution produced the same result as expected
+
     let result2 = executor
         .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
         .await
         .unwrap();
 
+    // Result 2 is a fresh resolution which is not guaranteed to return the same addresses (or the same order) but we can expect
+    // that it could resolve golem.cloud to at least one address.
     check!(result1.len() > 0);
-    check!(result1 == result2);
+    check!(result2.len() > 0);
 }
