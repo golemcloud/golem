@@ -23,7 +23,6 @@ tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
-dashmap = "5.5.3"
 
 [dev-dependencies]
 proptest = "1.4.0"

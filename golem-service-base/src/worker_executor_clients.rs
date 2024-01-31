@@ -1,11 +1,11 @@
+use std::collections::HashMap;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use tonic::transport::Channel;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use crate::model::Pod;
-use dashmap::DashMap;
 
-type WorkerExecutorCache = Arc<DashMap<Pod, WorkerExecutorClient<Channel>>>;
+type WorkerExecutorCache = Arc<Mutex<HashMap<String, WorkerExecutorClient<Channel>>>>;
 
 #[async_trait]
 pub trait WorkerExecutorClients {
@@ -19,7 +19,7 @@ pub struct WorkerExecutorClientsDefault {
 impl WorkerExecutorClientsDefault {
     pub fn new() -> Self {
         Self {
-            cache: Arc::new(DashMap::new()),
+            cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -27,7 +27,9 @@ impl WorkerExecutorClientsDefault {
 #[async_trait]
 impl WorkerExecutorClients for WorkerExecutorClientsDefault {
     async fn lookup(&self, pod: &Pod) -> Result<WorkerExecutorClient<Channel>, String> {
-        if let Some(client) = self.cache.get(pod) {
+        let mut cache = self.cache.lock().unwrap();
+
+        if let Some(client) = cache.get(&pod.uri().to_string()) {
             return Ok(client.clone());
         }
 
@@ -35,7 +37,7 @@ impl WorkerExecutorClients for WorkerExecutorClientsDefault {
             .await
             .map_err(|e| e.to_string())?;
 
-        self.cache.insert(pod.clone(), client.clone());
+        cache.insert(pod.uri().to_string(), client.clone());
 
         Ok(client)
     }
