@@ -190,6 +190,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Run Docker Compose tests
+        run: |
+          docker-compose -f docker-compose-sqlite.yaml up --build
+
+      - name: Run some tests against service
+        run: |
+          curl -X GET http://localhost:9001/v2/templates
+          curl -X POST http://localhost:9001/v2/templates -H "Content-Type: multipart/form-data" -F "name=mytemplate" -F "template=@test-templates/shopping-cart.wasm
+
+      - name: Pull down docker
+        run: |
+          docker-compose -f docker-compose-sqlite.yaml down -v     
+
       # Login to docker hub
       - name: Log in to Docker Hub
         uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
