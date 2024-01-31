@@ -203,7 +203,7 @@ jobs:
       - name: Run some tests against service
         run: |
           curl -X GET http://localhost:9001/v2/templates
-          curl -X POST http://localhost:9001/v2/templates -H "Content-Type: multipart/form-data" -F "name=mytemplate" -F "template=@test-templates/shopping-cart.wasm
+          curl -X POST http://localhost:9001/v2/templates -H "Content-Type: multipart/form-data" -F "name=mytemplate" -F "template=@test-templates/shopping-cart.wasm"
 
       - name: Pull down docker
         run: |
