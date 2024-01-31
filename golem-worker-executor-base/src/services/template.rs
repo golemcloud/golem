@@ -25,7 +25,7 @@ use wasmtime::Engine;
 
 use crate::error::GolemError;
 use crate::grpc::{is_grpc_retriable, GrpcError};
-use crate::metrics::component::record_compilation_time;
+use crate::metrics::template::record_compilation_time;
 use crate::services::compiled_template;
 use crate::services::compiled_template::CompiledTemplateService;
 use crate::services::golem_config::{
