@@ -2704,7 +2704,7 @@ pub struct NumberOfShards {
     pub value: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Pod {
     host: String,
     port: u16,
