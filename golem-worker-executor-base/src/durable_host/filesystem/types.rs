@@ -21,7 +21,7 @@ use wasmtime_wasi::preview2::bindings::filesystem::types::{
     HostDirectoryEntryStream, InputStream, MetadataHashValue, NewTimestamp, OpenFlags,
     OutputStream, PathFlags,
 };
-use wasmtime_wasi::preview2::{spawn_blocking, FsError};
+use wasmtime_wasi::preview2::{spawn_blocking, FsError, ReaddirIterator};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
@@ -127,7 +127,18 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
     ) -> Result<Resource<DirectoryEntryStream>, FsError> {
         record_host_function_call("filesystem::types::descriptor", "read_directory");
-        HostDescriptor::read_directory(&mut self.as_wasi_view(), self_).await
+        let stream = HostDescriptor::read_directory(&mut self.as_wasi_view(), self_).await?;
+        // Iterating through the whole stream to make sure we have a stable order
+        let mut entries = Vec::new();
+        let iter = self.table.delete(stream)?;
+        for entry in iter {
+            entries.push(entry?.clone());
+        }
+        entries.sort_by_key(|entry| entry.name.clone());
+
+        Ok(self
+            .table
+            .push(ReaddirIterator::new(entries.into_iter().map(Ok)))?)
     }
 
     async fn sync(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
