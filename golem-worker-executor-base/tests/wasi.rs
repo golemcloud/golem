@@ -237,6 +237,7 @@ async fn directories_replay() {
 
     // NOTE: if the directory listing would not be stable, replay would fail with divergence error
 
+    tokio::time::sleep(Duration::from_secs(5)).await;
     let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     check!(metadata.last_known_status.status == WorkerStatus::Idle);
@@ -1327,4 +1328,35 @@ async fn filesystem_metadata_hash() {
         .unwrap();
 
     check!(hash1 == hash2);
+}
+
+#[tokio::test]
+async fn ip_address_resolve() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/networking.wasm"));
+    let worker_id = executor
+        .start_worker(&template_id, "ip-address-resolve-1")
+        .await;
+
+    let result1 = executor
+        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    // If the recovery succeeds, that means that the replayed IP address resolution produced the same result as expected
+
+    let result2 = executor
+        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .await
+        .unwrap();
+
+    // Result 2 is a fresh resolution which is not guaranteed to return the same addresses (or the same order) but we can expect
+    // that it could resolve golem.cloud to at least one address.
+    check!(result1.len() > 0);
+    check!(result2.len() > 0);
 }
