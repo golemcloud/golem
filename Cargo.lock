@@ -993,36 +993,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cloud-server-oss"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "console-subscriber",
- "figment",
- "futures-util",
- "golem-api-grpc",
- "golem-cloud-server-base",
- "golem-common",
- "golem-wasm-ast",
- "mappable-rc",
- "poem",
- "poem-openapi",
- "serde",
- "serde_json",
- "sqlx",
- "tap",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tonic-health",
- "tonic-reflection",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "combine"
 version = "4.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1992,30 +1962,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "golem-cloud-server-base"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "aws-config",
- "aws-sdk-s3",
- "bigdecimal",
- "dashmap",
- "golem-api-grpc",
- "golem-common",
- "http 0.2.11",
- "hyper 1.0.0-rc.3",
- "num-traits",
- "poem-openapi",
- "proptest",
- "serde",
- "serde_json",
- "tokio",
- "tonic",
- "tracing",
- "url",
-]
-
-[[package]]
 name = "golem-common"
 version = "0.0.0"
 dependencies = [
@@ -2042,6 +1988,59 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "golem-service"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "console-subscriber",
+ "figment",
+ "futures-util",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-service-base",
+ "golem-wasm-ast",
+ "mappable-rc",
+ "poem",
+ "poem-openapi",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tap",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "golem-service-base"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
+ "bigdecimal",
+ "golem-api-grpc",
+ "golem-common",
+ "http 0.2.11",
+ "hyper 1.0.0-rc.3",
+ "num-traits",
+ "poem-openapi",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -2085,6 +2084,36 @@ dependencies = [
  "wasm-encoder 0.36.2",
  "wasm-metadata",
  "wasmparser 0.116.1",
+]
+
+[[package]]
+name = "golem-worker-executor"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "cap-std",
+ "console-subscriber",
+ "figment",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-worker-executor-base",
+ "humantime-serde",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wasmtime",
+ "wasmtime-runtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
 ]
 
 [[package]]
@@ -2150,36 +2179,6 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "golem-worker-executor-oss"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "cap-std",
- "console-subscriber",
- "figment",
- "golem-api-grpc",
- "golem-common",
- "golem-worker-executor-base",
- "humantime-serde",
- "prometheus",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tonic",
- "tonic-health",
- "tonic-reflection",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "wasmtime",
- "wasmtime-runtime",
- "wasmtime-wasi",
- "wasmtime-wasi-http",
 ]
 
 [[package]]
