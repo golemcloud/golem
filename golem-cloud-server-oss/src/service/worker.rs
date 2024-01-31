@@ -287,6 +287,8 @@ impl WorkerServiceDefault {
                     if details.contains("transport error") =>
                 {
                     info!("Shard manager unavailable");
+                    info!("Invalidating routing table");
+                    self.routing_table_service.invalidate_routing_table().await;
                     sleep(Duration::from_secs(1)).await;
                 }
                 Err(other) => {
