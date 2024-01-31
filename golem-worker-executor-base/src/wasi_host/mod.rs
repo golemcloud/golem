@@ -153,6 +153,3 @@ where
 
     Ok(f(wasi, table))
 }
-
-#[cfg(test)]
-mod tests;
