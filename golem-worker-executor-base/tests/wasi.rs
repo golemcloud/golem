@@ -237,6 +237,7 @@ async fn directories_replay() {
 
     // NOTE: if the directory listing would not be stable, replay would fail with divergence error
 
+    tokio::time::sleep(Duration::from_secs(5)).await;
     let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     check!(metadata.last_known_status.status == WorkerStatus::Idle);
