@@ -1999,6 +1999,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "bigdecimal",
+ "dashmap",
  "golem-api-grpc",
  "golem-common",
  "http 0.2.11",

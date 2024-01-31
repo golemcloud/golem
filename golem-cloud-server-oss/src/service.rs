@@ -59,8 +59,7 @@ impl Services {
                 + Sync
                 + Send,
         > = Arc::new(
-            golem_cloud_server_base::worker_executor_clients::WorkerExecutorClientsDefault::default(
-            ),
+            golem_cloud_server_base::worker_executor_clients::WorkerExecutorClientsDefault::new(),
         );
 
         let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =

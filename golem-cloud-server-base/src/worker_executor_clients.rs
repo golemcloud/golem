@@ -1,24 +1,45 @@
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use tonic::transport::Channel;
-
+use std::sync::Arc;
 use crate::model::Pod;
+use dashmap::DashMap;
+
+type WorkerExecutorCache = Arc<DashMap<Pod, WorkerExecutorClient<Channel>>>;
 
 #[async_trait]
 pub trait WorkerExecutorClients {
     async fn lookup(&self, pod: &Pod) -> Result<WorkerExecutorClient<Channel>, String>;
 }
 
-#[derive(Default)]
-pub struct WorkerExecutorClientsDefault {}
+pub struct WorkerExecutorClientsDefault {
+    cache: WorkerExecutorCache
+}
 
-// TODO caching
+impl WorkerExecutorClientsDefault {
+    pub fn new() -> Self {
+        Self {
+            cache: Arc::new(DashMap::new()),
+        }
+    }
+}
+
 #[async_trait]
 impl WorkerExecutorClients for WorkerExecutorClientsDefault {
     async fn lookup(&self, pod: &Pod) -> Result<WorkerExecutorClient<Channel>, String> {
+        // Check if the client exists in the cache
+        if let Some(client) = self.cache.get(pod) {
+            return Ok(client.clone()); // Return the cached client
+        }
+
+        // If the client is not cached, create a new one
         let client = WorkerExecutorClient::connect(pod.uri())
             .await
             .map_err(|e| e.to_string())?;
+
+        // Insert the client into the cache
+        self.cache.insert(pod.clone(), client.clone());
+
         Ok(client)
     }
 }
