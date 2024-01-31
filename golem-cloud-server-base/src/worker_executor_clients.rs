@@ -27,17 +27,14 @@ impl WorkerExecutorClientsDefault {
 #[async_trait]
 impl WorkerExecutorClients for WorkerExecutorClientsDefault {
     async fn lookup(&self, pod: &Pod) -> Result<WorkerExecutorClient<Channel>, String> {
-        // Check if the client exists in the cache
         if let Some(client) = self.cache.get(pod) {
-            return Ok(client.clone()); // Return the cached client
+            return Ok(client.clone());
         }
 
-        // If the client is not cached, create a new one
         let client = WorkerExecutorClient::connect(pod.uri())
             .await
             .map_err(|e| e.to_string())?;
 
-        // Insert the client into the cache
         self.cache.insert(pod.clone(), client.clone());
 
         Ok(client)
