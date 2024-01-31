@@ -133,7 +133,7 @@ jobs:
           cargo publish -p golem-worker-executor-base --all-features --allow-dirty
           cargo publish -p golem-worker-executor-oss --all-features --allow-dirty
 
-  docker-publish-amd64:
+  docker-publish-x86_64:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -249,5 +249,130 @@ jobs:
           file: ./golem-cloud-server-oss/docker/Dockerfile
           push: ${{ steps.push_decision.outputs.push }}
           platforms: linux/amd64
+          tags: ${{ steps.meta-golem-server.outputs.tags }}
+          labels: ${{ steps.meta-golem-server.outputs.labels }}
+
+
+  docker-publish-aarch64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust Targets
+        run: |
+          rustup target add aarch64-unknown-linux-gnu
+
+      - name: Install gcc-aarch64-linux-gnu
+        run: |
+          sudo apt-get update
+          sudo apt-get install gcc-aarch64-linux-gnu
+
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build aarch64 Executables
+        run: |
+          cargo build --release --target aarch64-unknown-linux-gnu --config "target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'"
+
+      # Set up QEMU
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - uses: satackey/action-docker-layer-caching@v0.0.11
+        continue-on-error: true
+
+      - name: Push Decision
+        id: push_decision
+        run: |
+          if [[ "${{ github.ref }}" == "refs/tags/v"* ]]; then
+            echo "::set-output name=push::true"
+          else
+            echo "::set-output name=push::false"
+          fi
+
+      # Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Login to docker hub
+      - name: Log in to Docker Hub
+        uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      # Extract metadata (tags, labels) for worker executor
+      - name: Extract metadata (tags, labels) for worker executor
+        id: meta-worker-executor
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-worker-executor
+
+      # Build and push worker executor image
+      - name: Build and push worker executor image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-worker-executor-oss/docker/Dockerfile
+          push: ${{ steps.push_decision.outputs.push }}
+          platforms: linux/arm64
+          tags: ${{ steps.meta-worker-executor.outputs.tags }}
+          labels: ${{ steps.meta-worker-executor.outputs.labels }}
+
+
+      # Extract metadata (tags, labels) for shard manager
+      - name: Extract metadata (tags, labels) for shard manager
+        id: meta-shard-manager
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-shard-manager
+
+      # Build and push shard manager image
+      - name: Build and push shard manager image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-shard-manager/docker/Dockerfile
+          push: ${{ steps.push_decision.outputs.push }}
+          platforms: linux/arm64
+          tags: ${{ steps.meta-shard-manager.outputs.tags }}
+          labels: ${{ steps.meta-shard-manager.outputs.labels }}
+
+      # Extract metadata (tags, labels) for golem server
+      - name: Extract metadata (tags, labels) for golem server
+        id: meta-golem-server
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-server
+
+      # Build and push cloud server image
+      - name: Build and push cloud server image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-cloud-server-oss/docker/Dockerfile
+          push: ${{ steps.push_decision.outputs.push }}
+          platforms: linux/arm64
           tags: ${{ steps.meta-golem-server.outputs.tags }}
           labels: ${{ steps.meta-golem-server.outputs.labels }}
