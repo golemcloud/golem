@@ -1,13 +1,42 @@
 package golem:it;
 
 interface api {
+  use wasi:clocks/wall-clock@0.2.0-rc-2023-11-10.{datetime};
+
+  record file-info {
+    last-modified: datetime,
+    last-accessed: datetime,
+  }
+
   read-file: func(path: string) -> result<string, string>;
 
   write-file: func(path: string, contents: string) -> result<_, string>;
 
+  write-file-direct: func(path: string, contents: string) -> result<_, string>;
+
   delete-file: func(path: string) -> result<_, string>;
+
+  get-file-info: func(path: string) -> result<file-info, string>;
+
+  get-info: func(path: string) -> result<file-info, string>;
+
+  create-directory: func(path: string) -> result<_, string>;
+
+  create-link: func(source: string, destination: string) -> result<_, string>;
+
+  create-sym-link: func(source: string, destination: string) -> result<_, string>;
+
+  remove-directory: func(path: string) -> result<_, string>;
+
+  remove-file: func(path: string) -> result<_, string>;
+
+  rename-file: func(source: string, destination: string) -> result<_, string>;
 }
 
 world file-service {
+  import wasi:clocks/wall-clock@0.2.0-rc-2023-11-10;
+  import wasi:filesystem/preopens@0.2.0-rc-2023-11-10;
+  import wasi:filesystem/types@0.2.0-rc-2023-11-10;
+
   export api;
 }

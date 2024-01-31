@@ -402,20 +402,27 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                 Some(Err(error_code)) => Ok(Some(Err(error_code.into()))),
                 None => Ok(None),
             },
-            |ctx, serialized| match serialized {
-                Some(Ok(None)) => Ok(None),
-                Some(Ok(Some(serialized_trailers))) => {
-                    let mut fields = FieldMap::new();
-                    for (key, value) in serialized_trailers {
-                        fields.insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
+            |ctx, serialized| {
+                Box::pin(async {
+                    match serialized {
+                        Some(Ok(None)) => Ok(None),
+                        Some(Ok(Some(serialized_trailers))) => {
+                            let mut fields = FieldMap::new();
+                            for (key, value) in serialized_trailers {
+                                fields.insert(
+                                    HeaderName::from_str(&key)?,
+                                    HeaderValue::try_from(value)?,
+                                );
+                            }
+                            let hdrs = ctx
+                                .table
+                                .push(wasmtime_wasi_http::types::HostFields::Owned { fields })?;
+                            Ok(Some(Ok(Some(hdrs))))
+                        }
+                        Some(Err(error_code)) => Ok(Some(Err(error_code.into()))),
+                        None => Ok(None),
                     }
-                    let hdrs = ctx
-                        .table
-                        .push(wasmtime_wasi_http::types::HostFields::Owned { fields })?;
-                    Ok(Some(Ok(Some(hdrs))))
-                }
-                Some(Err(error_code)) => Ok(Some(Err(error_code.into()))),
-                None => Ok(None),
+                })
             },
         )
         .await
