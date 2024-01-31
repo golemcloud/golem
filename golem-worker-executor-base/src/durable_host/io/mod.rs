@@ -98,6 +98,9 @@ impl StdinStream for ManagedStdIn {
     }
 }
 
+/// The number of bytes demanded from the underlying stream loop on each 'ready' call.
+const DEMAND_UNIT: usize = 128;
+
 #[async_trait]
 impl Subscribe for ManagedStdIn {
     async fn ready(&mut self) {
@@ -107,7 +110,7 @@ impl Subscribe for ManagedStdIn {
         {
             self.state
                 .demand
-                .send(128)
+                .send(DEMAND_UNIT)
                 .map_err(|err| StreamError::Trap(anyhow!(err)))
                 .expect("failed to send initial demand");
         }
@@ -324,7 +327,7 @@ mod tests {
             template_id: TemplateId(Uuid::new_v4()),
             worker_name: "test".to_string(),
         };
-        let invocation_key_service = Arc::new(InvocationKeyServiceDefault::new());
+        let invocation_key_service = Arc::new(InvocationKeyServiceDefault::default());
         let stdio = ManagedStandardIo::new(instance_id, invocation_key_service);
 
         let msg1 = Bytes::from("hello\n".to_string());
@@ -361,7 +364,7 @@ mod tests {
             template_id: TemplateId(Uuid::new_v4()),
             worker_name: "test".to_string(),
         };
-        let invocation_key_service = Arc::new(InvocationKeyServiceDefault::new());
+        let invocation_key_service = Arc::new(InvocationKeyServiceDefault::default());
         let stdio = ManagedStandardIo::new(instance_id, invocation_key_service);
 
         let msg1 = Bytes::from("hello\n".to_string());

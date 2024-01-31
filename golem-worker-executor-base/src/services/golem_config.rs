@@ -1,3 +1,5 @@
+use anyhow::Context;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -26,9 +28,12 @@ pub struct GolemConfig {
     pub suspend: SuspendConfig,
     pub active_workers: ActiveWorkersConfig,
     pub scheduler: SchedulerConfig,
+    pub invocation_keys: InvocationKeysConfig,
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
+    pub grpc_address: String,
     pub port: u16,
+    pub http_address: String,
     pub http_port: u16,
 }
 
@@ -40,6 +45,9 @@ pub struct Limits {
     pub event_broadcast_capacity: usize,
     pub event_history_size: usize,
     pub fuel_to_borrow: i64,
+    #[serde(with = "humantime_serde")]
+    pub epoch_interval: Duration,
+    pub epoch_ticks: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -62,6 +70,7 @@ pub struct TemplateServiceGrpcConfig {
     pub port: u16,
     pub access_token: String,
     pub retries: RetryConfig,
+    pub max_template_size: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -167,6 +176,21 @@ impl GolemConfig {
             .extract()
             .expect("Failed to parse config")
     }
+
+    pub fn grpc_addr(&self) -> anyhow::Result<SocketAddr> {
+        format!("{}:{}", self.grpc_address, self.port)
+            .parse::<SocketAddr>()
+            .context("grpc_address configuration")
+    }
+
+    pub fn http_addr(&self) -> anyhow::Result<SocketAddrV4> {
+        Ok(SocketAddrV4::new(
+            self.http_address
+                .parse::<Ipv4Addr>()
+                .context("http_address configuration")?,
+            self.http_port,
+        ))
+    }
 }
 
 impl TemplateServiceGrpcConfig {
@@ -218,6 +242,13 @@ pub struct OplogConfig {
     pub debug_enabled: bool,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct InvocationKeysConfig {
+    #[serde(with = "humantime_serde")]
+    pub pending_key_retention: Duration,
+    pub confirm_queue_capacity: usize,
+}
+
 impl Default for GolemConfig {
     fn default() -> Self {
         Self {
@@ -235,10 +266,13 @@ impl Default for GolemConfig {
             oplog: OplogConfig::default(),
             suspend: SuspendConfig::default(),
             scheduler: SchedulerConfig::default(),
+            invocation_keys: InvocationKeysConfig::default(),
             active_workers: ActiveWorkersConfig::default(),
             enable_tracing_console: false,
             enable_json_log: false,
+            grpc_address: "0.0.0.0".to_string(),
             port: 9000,
+            http_address: "0.0.0.0".to_string(),
             http_port: 8080,
         }
     }
@@ -253,6 +287,8 @@ impl Default for Limits {
             event_broadcast_capacity: 16,
             event_history_size: 128,
             fuel_to_borrow: 10000,
+            epoch_interval: Duration::from_millis(10),
+            epoch_ticks: 1,
         }
     }
 }
@@ -279,6 +315,7 @@ impl Default for TemplateServiceGrpcConfig {
             port: 9090,
             access_token: "access_token".to_string(),
             retries: RetryConfig::default(),
+            max_template_size: 50 * 1024 * 1024,
         }
     }
 }
@@ -382,6 +419,15 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
             refresh_interval: Duration::from_secs(2),
+        }
+    }
+}
+
+impl Default for InvocationKeysConfig {
+    fn default() -> Self {
+        Self {
+            pending_key_retention: Duration::from_secs(60),
+            confirm_queue_capacity: 1024,
         }
     }
 }
