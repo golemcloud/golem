@@ -28,6 +28,7 @@ exclude = [
     "test-templates/http-client-2",
     "test-templates/interruption",
     "test-templates/key-value-service",
+    "test-templates/networking",
     "test-templates/option-service",
     "test-templates/promise",
     "test-templates/read-stdin",

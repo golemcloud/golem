@@ -171,7 +171,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             self,
             WrappedFunctionType::ReadLocal,
             "filesystem::types::descriptor::stat",
-            |_ctx| Box::pin(async move { Ok(stat_clone1) }),
+            |_ctx| {
+                Box::pin(async move { Ok(stat_clone1) as Result<DescriptorStat, anyhow::Error> })
+            },
             |_ctx, stat| {
                 Ok(SerializableFileTimes {
                     data_access_timestamp: stat.data_access_timestamp.map(|t| {
@@ -231,7 +233,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             self,
             WrappedFunctionType::ReadLocal,
             "filesystem::types::descriptor::stat_at",
-            |_ctx| Box::pin(async move { Ok(stat_clone1) }),
+            |_ctx| {
+                Box::pin(async move { Ok(stat_clone1) as Result<DescriptorStat, anyhow::Error> })
+            },
             |_ctx, stat| {
                 Ok(SerializableFileTimes {
                     data_access_timestamp: stat.data_access_timestamp.map(|t| {
