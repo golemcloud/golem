@@ -1,0 +1,41 @@
+[package]
+name = "golem-worker-executor"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+description = "Golem worker executor service"
+
+[lib]
+
+# Rename to golem-worker-executor ?
+[[bin]]
+name = "worker-executor"
+path = "src/server.rs"
+
+[dependencies]
+golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
+golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "0.0.0" }
+
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+cap-std = "2.0.0" # keep in sync with wasmtime
+console-subscriber = { workspace = true }
+figment = { workspace = true }
+humantime-serde = { workspace = true }
+prometheus = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tonic-reflection = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+wasmtime = { version = "=15.0.0", features = ["component-model"] }
+wasmtime-runtime = { version = "=15.0.0" }
+wasmtime-wasi = { version = "=15.0.0" }
+wasmtime-wasi-http = { version = "=15.0.0" }

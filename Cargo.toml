@@ -3,11 +3,11 @@ resolver = "2"
 
 members = [
     "golem-worker-executor-base",
-    "golem-worker-executor-oss",
+    "golem-worker-executor",
     "golem-common",
     "golem-api-grpc",
-    "golem-cloud-server-base",
-    "golem-cloud-server-oss",
+    "golem-service-base",
+    "golem-service",
     "golem-shard-manager"
 ]
 

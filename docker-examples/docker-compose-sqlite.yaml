@@ -22,8 +22,8 @@ services:
     depends_on:
       - redis
 
-  golem-cloud-server-oss:
-    image: golemservices/golem-server:latest
+  golem-service:
+    image: golemservices/golem-service:latest
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1
@@ -35,16 +35,16 @@ services:
       - GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH=/template_store
       - GOLEM__ROUTING_TABLE__HOST="golem-shard-manager"
       - GOLEM__ROUTING_TABLE__PORT=${SHARD_MANAGER_GRPC_PORT}
-      - GOLEM__GRPC_PORT=${CLOUD_SERVER_GRPC_PORT}
-      - GOLEM__HTTP_PORT=${CLOUD_SERVER_HTTP_PORT}
+      - GOLEM__GRPC_PORT=${GOLEM_SERVICE_GRPC_PORT}
+      - GOLEM__HTTP_PORT=${GOLEM_SERVICE_HTTP_PORT}
     volumes:
       - template_store:/template_store
       - golem_db:/app/golem_db
     ports:
-      - "${CLOUD_SERVER_HTTP_PORT}:${CLOUD_SERVER_HTTP_PORT}"
-      - "${CLOUD_SERVER_GRPC_PORT}:${CLOUD_SERVER_GRPC_PORT}"
+      - "${GOLEM_SERVICE_HTTP_PORT}:${GOLEM_SERVICE_HTTP_PORT}"
+      - "${GOLEM_SERVICE_GRPC_PORT}:${GOLEM_SERVICE_GRPC_PORT}"
 
-  golem-worker-executor-oss:
+  golem-worker-executor:
     image: golemservices/golem-worker-executor:latest
     environment:
       - ENVIRONMENT=local
@@ -53,8 +53,8 @@ services:
       - RUST_LOG=info
       - GOLEM__REDIS__PORT=${REDIS_PORT}
       - GOLEM__REDIS__HOST=redis
-      - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-cloud-server-oss
-      - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=${CLOUD_SERVER_GRPC_PORT}
+      - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-service
+      - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=${GOLEM_SERVICE_GRPC_PORT}
       - GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
       - GOLEM__PORT=${WORKER_EXECUTOR_GRPC_PORT}
       - GOLEM__HTTP_PORT=${WORKER_EXECUTOR_HTTP_PORT}
