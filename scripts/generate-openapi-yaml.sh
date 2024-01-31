@@ -3,7 +3,7 @@ set -uo pipefail
 
 script_full_path=$(dirname "$0")
 
-cd "${script_full_path}"/../golem-cloud-server-oss || exit
+cd "${script_full_path}"/../golem-service || exit
 
 cargo build
-../target/debug/cloud-server-oss-yaml > ../openapi/golem-cloud-server-oss.yaml
+../target/debug/golem-service-yaml > ../openapi/golem-service.yaml

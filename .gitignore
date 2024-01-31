@@ -4,7 +4,7 @@ target/
 **/*.rs.bk
 *.pdb
 .idea/
-./golem-worker-executor-oss/data/
+./golem-worker-executor/data/
 ./golem-worker-executor-base/data/
 zig-cache/
 dump.rdb
