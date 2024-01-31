@@ -9,13 +9,13 @@ cd golem-services
 # Target has to be x86_64-unknown-linux-gnu or aarch64-unknown-linux-gnu-gcc
 cargo build --release --target x86_64-unknown-linux-gnu
 
-docker-compose -f docker-compose-sqlite.yaml up --build
+docker-compose -f docker-compose-sqlite.yml up --build
 ```
 To start the service without a rebuild
 
 ```bash
 
-docker-compose -f docker-compose-sqlite.yaml up
+docker-compose -f docker-compose-sqlite.yml up
 
 ```
 
@@ -23,7 +23,7 @@ To compose down,
 
 ```bash
 
-docker-compose -f docker-compose-sqlite.yaml down
+docker-compose -f docker-compose-sqlite.yml down
 
 ```
 
@@ -31,7 +31,7 @@ To compose down including persistence volume
 
 ```bash
 
-docker-compose -f docker-compose-sqlite.yaml down -v
+docker-compose -f docker-compose-sqlite.yml down -v
 
 ```
 

@@ -192,7 +192,7 @@ jobs:
 
       - name: Run Docker Compose tests
         run: |
-          docker-compose -f docker-compose-sqlite.yaml up --build
+          docker-compose -f docker-compose-sqlite.yml up --build
 
       - name: Run some tests against service
         run: |
@@ -201,7 +201,7 @@ jobs:
 
       - name: Pull down docker
         run: |
-          docker-compose -f docker-compose-sqlite.yaml down -v     
+          docker-compose -f docker-compose-sqlite.yml down -v     
 
       # Login to docker hub
       - name: Log in to Docker Hub
