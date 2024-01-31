@@ -1,0 +1,57 @@
+enable_tracing_console = false
+enable_json_log = false
+
+#workspace
+#environment
+
+http_port = 8081
+grpc_port = 9091
+
+[db]
+type = "Postgres" # Postgres, Sqlite
+
+[db.config]
+max_connections = 10
+host = "localhost"
+port = 5432
+database = "golem"
+#username
+#password
+
+[templates.store]
+type = "Local" # Local, S3
+
+[templates.store.config]
+object_prefix = ""
+#bucket_name
+#root_path
+
+[plans.default]
+plan_id = "80b56370-1ed4-4d90-864b-e8809641995d" # default plan id
+project_limit = 100
+template_limit = 100
+worker_limit = 10000
+storage_limit = 500000000
+monthly_gas_limit = 1000000000000
+monthly_upload_limit = 1000000000
+
+[routing_table]
+# host
+# port
+
+[oauth2]
+github_client_id = "c57138f3680c74ab39d4"
+
+[accounts.root]
+# token
+id = "root"
+role = "Admin"
+name = "Initial User"
+email = "initial@user"
+
+[accounts.marketing]
+# token
+id = "marketing"
+role = "MarketingAdmin"
+name = "Marketing User"
+email = "marketing@user"

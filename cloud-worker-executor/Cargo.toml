@@ -1,0 +1,73 @@
+[package]
+name = "cloud-worker-executor"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+
+[[bin]]
+name = "cloud-worker-executor"
+path = "src/server.rs"
+
+[dependencies]
+golem-common = { path = "../golem-services/golem-common" }
+golem-api-grpc = { path = "../golem-services/golem-api-grpc" }
+golem-worker-executor-base = { path = "../golem-services/golem-worker-executor-base" }
+golem-api-grpc-cloud = { path = "../golem-api-grpc-cloud" }
+
+anyhow = { workspace = true }
+async-mutex = "1.4.0"
+async-trait = { workspace = true }
+bincode = { workspace = true }
+bitflags = "2.4.2"
+bytes = { workspace = true }
+cap-fs-ext = "2.0.0" # keep in sync with wasmtime
+cap-rand = { version = "3.0.0", features = ["small_rng"] } # keep in sync with wasmtime
+cap-std = "2.0.0" # keep in sync with wasmtime
+cap-time-ext = "2.0.0" # keep in sync with wasmtime
+chrono = { workspace = true }
+console-subscriber = { workspace = true }
+dashmap = "5.5.3"
+figment = { workspace = true }
+flume = "0.11.0"
+fred = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+http = { workspace = true }
+http-body = "1.0.0-rc.2" # keep in sync with wasmtime
+http-body-util = "0.1.0-rc.2" # keep in sync with wasmtime
+humantime-serde = { workspace = true }
+hyper = { workspace = true }
+io-extras = "0.18.1"
+lazy_static = { workspace = true }
+prometheus = { workspace = true }
+prost = { workspace = true }
+rustix = { version = "0.38.30", features = ["event"] }
+serde = { workspace = true }
+tempfile = "3.9.0"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tonic-reflection = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+wasmtime = { version = "=15.0.0", features = ["component-model"] }
+wasmtime-runtime = { version = "=15.0.0" }
+wasmtime-wasi = { version = "=15.0.0" }
+wasmtime-wasi-http = { version = "=15.0.0" }
+webpki-roots = { workspace = true }
+windows-sys = "0.52.0"
+log = "0.4.20"
+
+[dev-dependencies]
+golem-worker-executor-base = { path = "../golem-services/golem-worker-executor-base", features = ["mocks"] }
+fred = { workspace = true, features = ["metrics", "serde-json", "partial-tracing", "mocks"] }
+ctor = "0.2.6"
+assert2 = "0.3.11"
+serde_json = { workspace = true }
+warp = { workspace = true }
+

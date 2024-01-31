@@ -1,0 +1,53 @@
+FROM segment/chamber:2 AS chamber
+
+FROM debian:bookworm-slim
+
+COPY --from=chamber /chamber /bin/chamber
+
+WORKDIR /app
+
+COPY /target/x86_64-unknown-linux-gnu/release/cloud-worker-executor ./
+COPY /cloud-worker-executor/config/worker-executor.toml ./config/worker-executor.toml
+
+RUN apt-get update && apt-get install -y libssl-dev
+RUN apt-get update && apt-get install -y ca-certificates
+RUN update-ca-certificates
+
+ARG ENVIRONMENT
+ARG COMPONENT_STORE_OBJECT_PREFIX
+ARG BLOB_STORE_BUCKET_PREFIX
+ARG REDIS_DATABASE
+ARG REDIS_KEY_PREFIX
+ARG COMPONENT_SERVICE_HOST
+ARG SHARD_MANAGER_HOST
+ARG SHARD_MANAGER_PORT
+
+ENV ENVIRONMENT=$ENVIRONMENT \
+    RUST_LOG=info \
+    WASMTIME_BACKTRACE_DETAILS=1 \
+    RUST_BACKTRACE=1 \
+    GOLEM__REDIS__PORT=6379 \
+    GOLEM__REDIS__DATABASE=$REDIS_DATABASE \
+    GOLEM__REDIS__KEY_PREFIX=$REDIS_KEY_PREFIX \
+    GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=$COMPONENT_SERVICE_HOST \
+    GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=9090 \
+    GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION=us-east-1 \
+    GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX=$COMPONENT_STORE_OBJECT_PREFIX \
+    GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION=us-east-1 \
+    GOLEM__BLOB_STORE_SERVICE__CONFIG__BUCKET_PREFIX=$BLOB_STORE_BUCKET_PREFIX \
+    GOLEM__PORT=9000 \
+    GOLEM__HTTP_PORT=8080 \
+    GOLEM__PORT=9000 \
+    GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST=$SHARD_MANAGER_HOST \
+    GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT=$SHARD_MANAGER_PORT \
+    GOLEM__ENABLE_JSON_LOG=true \
+    GOLEM__RESOURCE_LIMITS__CONFIG__HOST=$COMPONENT_SERVICE_HOST \
+    GOLEM__RESOURCE_LIMITS__CONFIG__PORT=9090
+
+RUN chmod +x cloud-worker-executor
+
+COPY cloud-worker-executor/cloud-worker-executor-wrapper.sh cloud-worker-executor-wrapper.sh
+RUN chmod +x cloud-worker-executor-wrapper.sh
+EXPOSE 9000
+
+ENTRYPOINT ["./cloud-worker-executor-wrapper.sh"]

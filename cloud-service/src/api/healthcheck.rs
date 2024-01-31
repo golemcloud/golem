@@ -1,0 +1,24 @@
+use poem_openapi::payload::Json;
+use poem_openapi::*;
+
+use crate::api::ApiTags;
+use crate::model::{HealthcheckResponse, VersionInfo};
+
+pub struct HealthcheckApi;
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[OpenApi(prefix_path = "/", tag = ApiTags::HealthCheck)]
+impl HealthcheckApi {
+    #[oai(path = "/healthcheck", method = "get")]
+    async fn healthcheck(&self) -> Json<HealthcheckResponse> {
+        Json(HealthcheckResponse {})
+    }
+
+    #[oai(path = "/version", method = "get")]
+    async fn version(&self) -> Json<VersionInfo> {
+        Json(VersionInfo {
+            version: VERSION.to_string(),
+        })
+    }
+}

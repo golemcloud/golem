@@ -1,0 +1,90 @@
+port = 9000
+http_port = 9100
+
+enable_tracing_console = false
+enable_json_log = false
+
+[oplog]
+max_operations_before_commit = 128
+operations_to_load = 128
+debug_enabled = false
+
+[limits]
+max_active_instances = 1024
+concurrency_limit_per_connection = 1024
+max_concurrent_streams = 1024
+event_broadcast_capacity = 16
+event_history_size = 128
+fuel_to_borrow = 10000
+
+[retry]
+max_attempts = 3
+min_delay = "100ms"
+max_delay = "1s"
+multiplier = 3
+
+[template_cache]
+max_capacity = 32
+time_to_idle = "12h"
+
+[template_service]
+type = "Local"
+
+[template_service.config]
+root = "data/templates"
+
+[template_service.config.retries]
+max_attempts = 3
+min_delay = "100ms"
+max_delay = "1s"
+multiplier = 3
+
+[compiled_template_service]
+type = "Local"
+
+[compiled_template_service.config]
+root = "data/compiled_templates"
+
+[blob_store_service]
+type = "InMemory"
+
+[blob_store_service.config]
+
+[key_value_service]
+type = "Redis"
+
+[resource_limits]
+type = "Disabled"
+
+[redis]
+host = "localhost"
+port = 6379
+database = 0
+tracing = false
+pool_size = 8
+key_prefix = ""
+
+[redis.retries]
+max_attempts = 5
+min_delay = "100ms"
+max_delay = "2s"
+multiplier = 2
+
+[shard_manager_service]
+type = "SingleShard"
+
+[scheduler]
+refresh_interval = "2s"
+
+[suspend]
+suspend_after = "10s"
+
+[active_workers]
+drop_when_full = 0.25
+ttl = "8h"
+
+[promises]
+type = "Redis"
+
+[workers]
+type = "Redis"
