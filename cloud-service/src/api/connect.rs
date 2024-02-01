@@ -5,7 +5,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::TemplateId;
-use poem::web::websocket::{Message, WebSocket, WebSocketStream};
+use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketStream};
 use poem::web::{Data, Path};
 use poem::*;
 use tap::TapFallible;
@@ -52,17 +52,31 @@ async fn try_proxy_worker_connection(
     template_id: TemplateId,
     worker_name: String,
     auth: AccountAuthorisation,
-    websocket: WebSocketStream,
+    mut websocket: WebSocketStream,
 ) -> Result<(), ConnectError> {
-    let worker_id = make_worker_id(template_id, worker_name)?;
+    let worker_id = make_worker_id(template_id.clone(), worker_name.clone())?;
 
     let worker_stream = service
         .worker_service
         .connect(&worker_id, &auth)
         .await
-        .tap_err(|e| tracing::info!("Error connecting to worker {e}"))?;
+        .tap_err(|e| tracing::info!("Error connecting to worker {e}"));
 
-    proxy_worker_connection(worker_id, worker_stream, websocket).await
+    match worker_stream {
+        Ok(worker_stream) => proxy_worker_connection(worker_id, worker_stream, websocket).await,
+        Err(err) => {
+            let close_message = format!(
+                "Error connecting to worker: Template-Id: {}, Worker Name: {},  {}",
+                &template_id, &worker_name, err
+            );
+            let message = Message::Close(Some((CloseCode::Error, close_message)));
+
+            websocket
+                .send(message)
+                .await
+                .map_err(|err| ConnectError(format!("Failed to send closing frame: {}", err)))
+        }
+    }
 }
 
 #[tracing::instrument(skip_all, fields(worker_id = worker_id.to_string()))]
