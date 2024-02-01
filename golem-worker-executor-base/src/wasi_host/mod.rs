@@ -8,7 +8,7 @@ use wasmtime::component::Linker;
 use wasmtime::Engine;
 use wasmtime_wasi::preview2::bindings::wasi;
 use wasmtime_wasi::preview2::{
-    DirPerms, FilePerms, StdinStream, StdoutStream, ResourceTable, WasiCtx, WasiCtxBuilder,
+    DirPerms, FilePerms, ResourceTable, StdinStream, StdoutStream, WasiCtx, WasiCtxBuilder,
 };
 
 pub mod helpers;

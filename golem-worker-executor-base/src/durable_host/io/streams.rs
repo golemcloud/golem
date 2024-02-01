@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::{StreamError, ResourceTable};
+use wasmtime_wasi::preview2::{ResourceTable, StreamError};
 
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{Durability, DurableWorkerCtx, SerializableError};

@@ -46,7 +46,7 @@ use tracing::{debug, info};
 use wasmtime::component::{Instance, Resource};
 use wasmtime::AsContextMut;
 use wasmtime_wasi::preview2::{
-    FsError, I32Exit, SocketError, Stderr, Subscribe, ResourceTable, WasiCtx, WasiView,
+    FsError, I32Exit, ResourceTable, SocketError, Stderr, Subscribe, WasiCtx, WasiView,
 };
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequest,

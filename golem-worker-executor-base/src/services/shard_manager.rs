@@ -53,14 +53,16 @@ impl ShardManagerService for ShardManagerServiceGrpc {
                 let uri = uri.clone();
                 Box::pin(async move {
                     let mut shard_manager_client =
-                        shard_manager_service_client::ShardManagerServiceClient::connect(uri.as_http_02())
-                            .await
-                            .map_err(|err| {
-                                GolemError::unknown(format!(
-                                    "Connecting to shard manager failed with {}",
-                                    err
-                                ))
-                            })?;
+                        shard_manager_service_client::ShardManagerServiceClient::connect(
+                            uri.as_http_02(),
+                        )
+                        .await
+                        .map_err(|err| {
+                            GolemError::unknown(format!(
+                                "Connecting to shard manager failed with {}",
+                                err
+                            ))
+                        })?;
                     let response = shard_manager_client
                         .register(shardmanager::RegisterRequest {
                             host: host.clone(),
