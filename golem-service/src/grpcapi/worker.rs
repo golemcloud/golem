@@ -8,7 +8,7 @@ use golem_api_grpc::proto::golem::worker::{
     invoke_and_await_response, invoke_and_await_response_json, invoke_response,
     launch_new_worker_response, resume_worker_response, CompletePromiseRequest,
     CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
-    GetInvocationKeyRequest, GetInvocationKeyResponse, GetWorkerByIdRequest, GetWorkerByIdResponse,
+    GetInvocationKeyRequest, GetInvocationKeyResponse,
     GetWorkerMetadataRequest, GetWorkerMetadataResponse, InterruptWorkerRequest,
     InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitRequestJson,
     InvokeAndAwaitResponse, InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson,
@@ -233,17 +233,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
 }
 
 impl WorkerGrpcApi {
-    async fn get_worker_by_id(
-        &self,
-        request: GetWorkerByIdRequest,
-    ) -> Result<VersionedWorkerId, GrpcWorkerError> {
-        let worker_id = make_crate_worker_id(request.worker_id)?;
-
-        let worker = self.worker_service.get_by_id(&worker_id).await?;
-
-        Ok(worker.into())
-    }
-
     async fn launch_new_worker(
         &self,
         request: LaunchNewWorkerRequest,
