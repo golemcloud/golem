@@ -26,7 +26,6 @@ service WorkerService {
   rpc Invoke (InvokeRequest) returns (InvokeResponse);
   rpc GetInvocationKey (GetInvocationKeyRequest) returns (GetInvocationKeyResponse);
   rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
-  rpc GetWorkerById (GetWorkerByIdRequest) returns (GetWorkerByIdResponse);
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
 
 
@@ -148,13 +147,6 @@ message ResumeWorkerResponse {
 
 message GetWorkerByIdRequest {
   golem.worker.WorkerId workerId = 1;
-}
-
-message GetWorkerByIdResponse {
-  oneof result {
-    golem.worker.VersionedWorkerId success = 1;
-    golem.worker.WorkerError error = 2;
-  }
 }
 
 message ConnectWorkerRequest {
