@@ -4,7 +4,7 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::{
     complete_promise_response, delete_worker_response, get_invocation_key_response,
-    get_worker_by_id_response, get_worker_metadata_response, interrupt_worker_response,
+    get_worker_metadata_response, interrupt_worker_response,
     invoke_and_await_response, invoke_and_await_response_json, invoke_response,
     launch_new_worker_response, resume_worker_response, CompletePromiseRequest,
     CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
@@ -44,20 +44,6 @@ pub struct WorkerGrpcApi {
 
 #[async_trait::async_trait]
 impl GrpcWorkerService for WorkerGrpcApi {
-    async fn get_worker_by_id(
-        &self,
-        request: Request<GetWorkerByIdRequest>,
-    ) -> Result<Response<GetWorkerByIdResponse>, Status> {
-        let response = match self.get_worker_by_id(request.into_inner()).await {
-            Ok(worker_id) => get_worker_by_id_response::Result::Success(worker_id),
-            Err(error) => get_worker_by_id_response::Result::Error(error),
-        };
-
-        Ok(Response::new(GetWorkerByIdResponse {
-            result: Some(response),
-        }))
-    }
-
     async fn launch_new_worker(
         &self,
         request: Request<LaunchNewWorkerRequest>,

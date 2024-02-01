@@ -145,10 +145,6 @@ message ResumeWorkerResponse {
   }
 }
 
-message GetWorkerByIdRequest {
-  golem.worker.WorkerId workerId = 1;
-}
-
 message ConnectWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
 }
