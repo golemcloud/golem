@@ -6,12 +6,12 @@ wasmtime::component::bindgen!({
       import wasi:blobstore/blobstore;
       import wasi:blobstore/container;
       import wasi:blobstore/types;
-      import wasi:keyvalue/atomic;
-      import wasi:keyvalue/batch;
-      import wasi:keyvalue/cache;
-      import wasi:keyvalue/readwrite;
-      import wasi:keyvalue/types;
-      import wasi:keyvalue/wasi-cloud-error;
+      import wasi:keyvalue/atomic@0.1.0;
+      import wasi:keyvalue/eventual-batch@0.1.0;
+      import wasi:keyvalue/cache@0.1.0;
+      import wasi:keyvalue/eventual@0.1.0;
+      import wasi:keyvalue/types@0.1.0;
+      import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
       import wasi:logging/logging;
     ",
     tracing: false,
@@ -24,7 +24,7 @@ wasmtime::component::bindgen!({
         "wasi:blobstore/container/stream-object-names": super::durable_host::blobstore::types::StreamObjectNamesEntry,
         "wasi:blobstore/types/incoming-value": super::durable_host::blobstore::types::IncomingValueEntry,
         "wasi:blobstore/types/outgoing-value": super::durable_host::blobstore::types::OutgoingValueEntry,
-        "wasi:keyvalue/wasi-cloud-error/error": super::durable_host::keyvalue::error::ErrorEntry,
+        "wasi:keyvalue/wasi-keyvalue-error/error": super::durable_host::keyvalue::error::ErrorEntry,
         "wasi:keyvalue/types/bucket": super::durable_host::keyvalue::types::BucketEntry,
         "wasi:keyvalue/types/incoming-value": super::durable_host::keyvalue::types::IncomingValueEntry,
         "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,

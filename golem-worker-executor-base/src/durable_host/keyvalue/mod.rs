@@ -1,6 +1,6 @@
 pub mod atomic;
-pub mod batch;
+pub mod eventual_batch;
 pub mod caching;
 pub mod error;
-pub mod readwrite;
+pub mod eventual;
 pub mod types;

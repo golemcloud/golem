@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use assert2::check;
-use http::{Response, StatusCode};
+use http_02::{Response, StatusCode};
 
 use golem_api_grpc::proto::golem::worker::{worker_execution_error, LogEvent, TemplateParseFailed};
 use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;

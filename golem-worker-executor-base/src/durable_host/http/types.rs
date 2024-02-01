@@ -49,6 +49,11 @@ impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
         HostFields::get(&mut self.as_wasi_http_view(), self_, name)
     }
 
+    fn has(&mut self, self_: Resource<Fields>, name: FieldKey) -> anyhow::Result<bool> {
+        record_host_function_call("http::types::fields", "has");
+        HostFields::has(&mut self.as_wasi_http_view(), self_, name)
+    }
+
     fn set(
         &mut self,
         self_: Resource<Fields>,
@@ -232,49 +237,49 @@ impl<Ctx: WorkerCtx> HostRequestOptions for DurableWorkerCtx<Ctx> {
         HostRequestOptions::new(&mut self.as_wasi_http_view())
     }
 
-    fn connect_timeout_ms(
+    fn connect_timeout(
         &mut self,
         self_: Resource<RequestOptions>,
     ) -> anyhow::Result<Option<Duration>> {
         record_host_function_call("http::types::request_options", "connect_timeout_ms");
-        HostRequestOptions::connect_timeout_ms(&mut self.as_wasi_http_view(), self_)
+        HostRequestOptions::connect_timeout(&mut self.as_wasi_http_view(), self_)
     }
 
-    fn set_connect_timeout_ms(
+    fn set_connect_timeout(
         &mut self,
         self_: Resource<RequestOptions>,
         ms: Option<Duration>,
     ) -> anyhow::Result<Result<(), ()>> {
         record_host_function_call("http::types::request_options", "set_connect_timeout_ms");
-        HostRequestOptions::set_connect_timeout_ms(&mut self.as_wasi_http_view(), self_, ms)
+        HostRequestOptions::set_connect_timeout(&mut self.as_wasi_http_view(), self_, ms)
     }
 
-    fn first_byte_timeout_ms(
+    fn first_byte_timeout(
         &mut self,
         self_: Resource<RequestOptions>,
     ) -> anyhow::Result<Option<Duration>> {
         record_host_function_call("http::types::request_options", "first_byte_timeout_ms");
-        HostRequestOptions::first_byte_timeout_ms(&mut self.as_wasi_http_view(), self_)
+        HostRequestOptions::first_byte_timeout(&mut self.as_wasi_http_view(), self_)
     }
 
-    fn set_first_byte_timeout_ms(
+    fn set_first_byte_timeout(
         &mut self,
         self_: Resource<RequestOptions>,
         ms: Option<Duration>,
     ) -> anyhow::Result<Result<(), ()>> {
         record_host_function_call("http::types::request_options", "set_first_byte_timeout_ms");
-        HostRequestOptions::set_first_byte_timeout_ms(&mut self.as_wasi_http_view(), self_, ms)
+        HostRequestOptions::set_first_byte_timeout(&mut self.as_wasi_http_view(), self_, ms)
     }
 
-    fn between_bytes_timeout_ms(
+    fn between_bytes_timeout(
         &mut self,
         self_: Resource<RequestOptions>,
     ) -> anyhow::Result<Option<Duration>> {
         record_host_function_call("http::types::request_options", "between_bytes_timeout_ms");
-        HostRequestOptions::between_bytes_timeout_ms(&mut self.as_wasi_http_view(), self_)
+        HostRequestOptions::between_bytes_timeout(&mut self.as_wasi_http_view(), self_)
     }
 
-    fn set_between_bytes_timeout_ms(
+    fn set_between_bytes_timeout(
         &mut self,
         self_: Resource<RequestOptions>,
         ms: Option<Duration>,
@@ -283,7 +288,7 @@ impl<Ctx: WorkerCtx> HostRequestOptions for DurableWorkerCtx<Ctx> {
             "http::types::request_options",
             "set_between_bytes_timeout_ms",
         );
-        HostRequestOptions::set_between_bytes_timeout_ms(&mut self.as_wasi_http_view(), self_, ms)
+        HostRequestOptions::set_between_bytes_timeout(&mut self.as_wasi_http_view(), self_, ms)
     }
 
     fn drop(&mut self, rep: Resource<RequestOptions>) -> anyhow::Result<()> {
@@ -371,11 +376,11 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
     async fn get(
         &mut self,
         self_: Resource<FutureTrailers>,
-    ) -> anyhow::Result<Option<Result<Option<Resource<Trailers>>, ErrorCode>>> {
+    ) -> anyhow::Result<Option<Result<Result<Option<Resource<Trailers>>, ErrorCode>, ()>>> {
         record_host_function_call("http::types::future_trailers", "get");
         Durability::<
             Ctx,
-            Option<Result<Option<HashMap<String, Vec<u8>>>, SerializableErrorCode>>,
+            Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableErrorCode>, ()>>,
             SerializableError,
         >::custom_wrap(
             self,
@@ -387,8 +392,8 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                 })
             },
             |ctx, result| match result {
-                Some(Ok(None)) => Ok(Some(Ok(None))),
-                Some(Ok(Some(trailers))) => {
+                Some(Ok(Ok(None))) => Ok(Some(Ok(Ok(None)))),
+                Some(Ok(Ok(Some(trailers)))) => {
                     let mut serialized_trailers = HashMap::new();
                     let host_fields: &Resource<wasmtime_wasi_http::types::HostFields> =
                         unsafe { std::mem::transmute(trailers) };
@@ -397,16 +402,17 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                         serialized_trailers
                             .insert(key.as_str().to_string(), value.as_bytes().to_vec());
                     }
-                    Ok(Some(Ok(Some(serialized_trailers))))
+                    Ok(Some(Ok(Ok(Some(serialized_trailers)))))
                 }
-                Some(Err(error_code)) => Ok(Some(Err(error_code.into()))),
+                Some(Ok(Err(error_code))) => Ok(Some(Ok(Err(error_code.into())))),
+                Some(Err(_)) => Ok(Some(Err(()))),
                 None => Ok(None),
             },
             |ctx, serialized| {
                 Box::pin(async {
                     match serialized {
-                        Some(Ok(None)) => Ok(None),
-                        Some(Ok(Some(serialized_trailers))) => {
+                        Some(Ok(Ok(None))) => Ok(Some(Ok(Ok(None)))),
+                        Some(Ok(Ok(Some(serialized_trailers)))) => {
                             let mut fields = FieldMap::new();
                             for (key, value) in serialized_trailers {
                                 fields.insert(
@@ -417,9 +423,10 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                             let hdrs = ctx
                                 .table
                                 .push(wasmtime_wasi_http::types::HostFields::Owned { fields })?;
-                            Ok(Some(Ok(Some(hdrs))))
+                            Ok(Some(Ok(Ok(Some(hdrs)))))
                         }
-                        Some(Err(error_code)) => Ok(Some(Err(error_code.into()))),
+                        Some(Ok(Err(error_code))) => Ok(Some(Ok(Err(error_code.into())))),
+                        Some(Err(_)) => Ok(Some(Err(()))),
                         None => Ok(None),
                     }
                 })

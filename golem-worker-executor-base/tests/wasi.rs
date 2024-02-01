@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 use assert2::{assert, check};
 use golem_api_grpc::proto::golem::worker::{val, Val};
 use golem_common::model::WorkerStatus;
-use http::{Response, StatusCode};
+use http_02::{Response, StatusCode};
 use tokio::spawn;
 use tokio::time::Instant;
 use tonic::transport::Body;

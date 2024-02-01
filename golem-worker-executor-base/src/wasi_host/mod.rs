@@ -8,7 +8,7 @@ use wasmtime::component::Linker;
 use wasmtime::Engine;
 use wasmtime_wasi::preview2::bindings::wasi;
 use wasmtime_wasi::preview2::{
-    DirPerms, FilePerms, StdinStream, StdoutStream, Table, WasiCtx, WasiCtxBuilder,
+    DirPerms, FilePerms, StdinStream, StdoutStream, ResourceTable, WasiCtx, WasiCtxBuilder,
 };
 
 pub mod helpers;
@@ -45,11 +45,11 @@ where
         + wasi::io::streams::Host
         + wasi::io::poll::Host
         + crate::preview2::wasi::keyvalue::atomic::Host
-        + crate::preview2::wasi::keyvalue::batch::Host
+        + crate::preview2::wasi::keyvalue::eventual_batch::Host
         + crate::preview2::wasi::keyvalue::cache::Host
-        + crate::preview2::wasi::keyvalue::readwrite::Host
+        + crate::preview2::wasi::keyvalue::eventual::Host
         + crate::preview2::wasi::keyvalue::types::Host
-        + crate::preview2::wasi::keyvalue::wasi_cloud_error::Host
+        + crate::preview2::wasi::keyvalue::wasi_keyvalue_error::Host
         + crate::preview2::wasi::logging::logging::Host
         + wasi::random::random::Host
         + wasi::random::insecure::Host
@@ -97,11 +97,11 @@ where
     crate::preview2::wasi::blobstore::container::add_to_linker(&mut linker, get)?;
     crate::preview2::wasi::blobstore::types::add_to_linker(&mut linker, get)?;
     crate::preview2::wasi::keyvalue::atomic::add_to_linker(&mut linker, get)?;
-    crate::preview2::wasi::keyvalue::batch::add_to_linker(&mut linker, get)?;
     crate::preview2::wasi::keyvalue::cache::add_to_linker(&mut linker, get)?;
-    crate::preview2::wasi::keyvalue::readwrite::add_to_linker(&mut linker, get)?;
+    crate::preview2::wasi::keyvalue::eventual::add_to_linker(&mut linker, get)?;
+    crate::preview2::wasi::keyvalue::eventual_batch::add_to_linker(&mut linker, get)?;
     crate::preview2::wasi::keyvalue::types::add_to_linker(&mut linker, get)?;
-    crate::preview2::wasi::keyvalue::wasi_cloud_error::add_to_linker(&mut linker, get)?;
+    crate::preview2::wasi::keyvalue::wasi_keyvalue_error::add_to_linker(&mut linker, get)?;
     crate::preview2::wasi::logging::logging::add_to_linker(&mut linker, get)?;
 
     Ok(linker)
@@ -120,9 +120,9 @@ pub fn create_context<T, F>(
     f: F,
 ) -> Result<T, anyhow::Error>
 where
-    F: FnOnce(WasiCtx, Table) -> T,
+    F: FnOnce(WasiCtx, ResourceTable) -> T,
 {
-    let table = Table::new();
+    let table = ResourceTable::new();
     debug!("Creating WASI context, root directory is {:?}", root_dir);
     let wasi = WasiCtxBuilder::new()
         .args(args)

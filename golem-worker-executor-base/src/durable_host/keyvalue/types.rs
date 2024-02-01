@@ -134,7 +134,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
         Ok(Ok(incoming_value_async_body))
     }
 
-    async fn size(&mut self, self_: Resource<IncomingValue>) -> anyhow::Result<u64> {
+    async fn incoming_value_size(&mut self, self_: Resource<IncomingValue>) -> anyhow::Result<Result<u64, Resource<Error>>> {
         record_host_function_call("keyvalue::types::incoming_value", "size");
         let body = self
             .as_wasi_view()
@@ -143,7 +143,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
             .body
             .clone();
         let size = body.read().unwrap().len() as u64;
-        Ok(size)
+        Ok(Ok(size))
     }
 
     fn drop(&mut self, rep: Resource<IncomingValue>) -> anyhow::Result<()> {

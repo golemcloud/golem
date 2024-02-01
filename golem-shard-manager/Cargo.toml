@@ -20,6 +20,7 @@ figment = { workspace = true }
 fred = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
+http_02 = { package = "http", version = "0.2.11" }
 humantime-serde = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }

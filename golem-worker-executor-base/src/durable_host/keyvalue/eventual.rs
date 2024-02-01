@@ -7,7 +7,7 @@ use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
 use crate::durable_host::{Durability, DurableWorkerCtx, SerializableError};
 use crate::metrics::wasm::record_host_function_call;
-use crate::preview2::wasi::keyvalue::readwrite::{
+use crate::preview2::wasi::keyvalue::eventual::{
     Bucket, Error, Host, IncomingValue, Key, OutgoingValue,
 };
 use crate::workerctx::WorkerCtx;
@@ -18,8 +18,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         bucket: Resource<Bucket>,
         key: Key,
-    ) -> anyhow::Result<Result<Resource<IncomingValue>, Resource<Error>>> {
-        record_host_function_call("keyvalue::readwrite", "get");
+    ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
+        record_host_function_call("keyvalue::eventual", "get");
         let account_id = self.private_state.account_id.clone();
         let bucket = self
             .as_wasi_view()
@@ -30,7 +30,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let result = Durability::<Ctx, Option<Vec<u8>>, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
-            "golem keyvalue::readwrite::get",
+            "golem keyvalue::eventual::get",
             |ctx| {
                 ctx.private_state.key_value_service.get(
                     account_id.clone(),
@@ -46,15 +46,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .as_wasi_view()
                     .table_mut()
                     .push(IncomingValueEntry::new(value))?;
-                Ok(Ok(incoming_value))
+                Ok(Ok(Some(incoming_value)))
             }
-            Ok(None) => {
-                let error = self
-                    .as_wasi_view()
-                    .table_mut()
-                    .push(ErrorEntry::new("Key not found".to_string()))?;
-                Ok(Err(error))
-            }
+            Ok(None) => Ok(Ok(None)),
             Err(e) => {
                 let error = self
                     .as_wasi_view()
@@ -71,7 +65,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         key: Key,
         outgoing_value: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        record_host_function_call("keyvalue::readwrite", "set");
+        record_host_function_call("keyvalue::eventual", "set");
         let account_id = self.private_state.account_id.clone();
         let bucket = self
             .as_wasi_view()
@@ -90,7 +84,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
-            "golem keyvalue::readwrite::set",
+            "golem keyvalue::eventual::set",
             |ctx| {
                 ctx.private_state.key_value_service.set(
                     account_id.clone(),
@@ -118,7 +112,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        record_host_function_call("keyvalue::readwrite", "delete");
+        record_host_function_call("keyvalue::eventual", "delete");
         let account_id = self.private_state.account_id.clone();
         let bucket = self
             .as_wasi_view()
@@ -129,7 +123,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
-            "golem keyvalue::readwrite::delete",
+            "golem keyvalue::eventual::delete",
             |ctx| {
                 ctx.private_state.key_value_service.delete(
                     account_id.clone(),
@@ -156,7 +150,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<bool, Resource<Error>>> {
-        record_host_function_call("keyvalue::readwrite", "exists");
+        record_host_function_call("keyvalue::eventual", "exists");
         let account_id = self.private_state.account_id.clone();
         let bucket = self
             .as_wasi_view()
@@ -167,7 +161,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let result = Durability::<Ctx, bool, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
-            "golem keyvalue::readwrite::exists",
+            "golem keyvalue::eventual::exists",
             |ctx| {
                 ctx.private_state.key_value_service.exists(
                     account_id.clone(),

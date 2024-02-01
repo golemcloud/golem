@@ -63,20 +63,6 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         HostUdpSocket::address_family(&mut self.as_wasi_view(), self_)
     }
 
-    fn ipv6_only(&mut self, self_: Resource<UdpSocket>) -> Result<bool, SocketError> {
-        record_host_function_call("sockets::udp", "ipv6_only");
-        HostUdpSocket::ipv6_only(&mut self.as_wasi_view(), self_)
-    }
-
-    fn set_ipv6_only(
-        &mut self,
-        self_: Resource<UdpSocket>,
-        value: bool,
-    ) -> Result<(), SocketError> {
-        record_host_function_call("sockets::udp", "set_ipv6_only");
-        HostUdpSocket::set_ipv6_only(&mut self.as_wasi_view(), self_, value)
-    }
-
     fn unicast_hop_limit(&mut self, self_: Resource<UdpSocket>) -> Result<u8, SocketError> {
         record_host_function_call("sockets::udp", "unicast_hop_limit");
         HostUdpSocket::unicast_hop_limit(&mut self.as_wasi_view(), self_)

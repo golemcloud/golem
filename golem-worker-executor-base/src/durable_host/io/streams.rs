@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::{StreamError, Table};
+use wasmtime_wasi::preview2::{StreamError, ResourceTable};
 
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{Durability, DurableWorkerCtx, SerializableError};
@@ -288,7 +288,7 @@ impl From<GolemError> for SerializableStreamError {
     }
 }
 
-fn is_incoming_http_body_stream(table: &Table, stream: &Resource<InputStream>) -> bool {
+fn is_incoming_http_body_stream(table: &ResourceTable, stream: &Resource<InputStream>) -> bool {
     let stream = table.get::<InputStream>(stream).unwrap();
     match stream {
         InputStream::Host(host_input_stream) => {

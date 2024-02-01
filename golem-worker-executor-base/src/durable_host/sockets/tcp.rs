@@ -96,20 +96,6 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         HostTcpSocket::address_family(&mut self.as_wasi_view(), self_)
     }
 
-    fn ipv6_only(&mut self, self_: Resource<TcpSocket>) -> Result<bool, SocketError> {
-        record_host_function_call("sockets::tcp", "ipv6_only");
-        HostTcpSocket::ipv6_only(&mut self.as_wasi_view(), self_)
-    }
-
-    fn set_ipv6_only(
-        &mut self,
-        self_: Resource<TcpSocket>,
-        value: bool,
-    ) -> Result<(), SocketError> {
-        record_host_function_call("sockets::tcp", "set_ipv6_only");
-        HostTcpSocket::set_ipv6_only(&mut self.as_wasi_view(), self_, value)
-    }
-
     fn set_listen_backlog_size(
         &mut self,
         self_: Resource<TcpSocket>,

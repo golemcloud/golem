@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use chrono::Datelike;
-use http::{Response, StatusCode};
+use http_02::{Response, StatusCode};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
