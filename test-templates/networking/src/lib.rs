@@ -1,4 +1,4 @@
-cargo_component_bindings::generate!();
+mod bindings;
 
 use crate::bindings::exports::golem::it::api::*;
 use crate::bindings::wasi::sockets::instance_network::*;

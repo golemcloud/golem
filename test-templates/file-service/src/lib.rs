@@ -1,4 +1,4 @@
-cargo_component_bindings::generate!();
+mod bindings;
 
 use std::fs;
 use crate::bindings::exports::golem::it::api::{Datetime, FileInfo, Guest, MetadataHashValue};
@@ -6,7 +6,6 @@ use crate::bindings::wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathF
 use crate::bindings::wasi::filesystem::preopens::get_directories;
 
 use std::fs::{File, read_to_string, remove_file, write};
-use cargo_component_bindings::bitflags::Flags;
 
 struct Component;
 
