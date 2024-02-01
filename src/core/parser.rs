@@ -203,6 +203,9 @@ impl TryFrom<wasmparser::HeapType> for RefType {
             wasmparser::HeapType::Struct => Err("GC proposal is not supported".to_string()),
             wasmparser::HeapType::Array => Err("GC proposal is not supported".to_string()),
             wasmparser::HeapType::I31 => Err("GC proposal is not supported".to_string()),
+            wasmparser::HeapType::Exn => {
+                Err("Exception handling proposal is not supported".to_string())
+            }
         }
     }
 }
@@ -1570,6 +1573,99 @@ impl<'a> TryFrom<OperatorsReader<'a>> for Expr {
                 }
                 Operator::BrOnNonNull { .. } => {
                     return Err("Function Reference Types Proposal is not supported".to_string());
+                }
+                Operator::TryTable { .. } => {
+                    return Err("Exception Handling Proposal is not supported".to_string());
+                }
+                Operator::ThrowRef { .. } => {
+                    return Err("Exception Handling Proposal is not supported".to_string());
+                }
+                Operator::RefEq => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::StructNew { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::StructNewDefault { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::StructGet { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::StructGetS { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::StructGetU { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::StructSet { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayNew { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayNewDefault { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayNewFixed { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayNewData { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayNewElem { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayGet { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayGetS { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayGetU { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArraySet { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayLen => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayFill { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayCopy { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayInitData { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ArrayInitElem { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::RefTestNonNull { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::RefTestNullable { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::RefCastNonNull { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::RefCastNullable { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::BrOnCast { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::BrOnCastFail { .. } => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::AnyConvertExtern => {
+                    return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::ExternConvertAny => {
+                    return Err("GC Proposal is not supported".to_string());
                 }
             };
 
