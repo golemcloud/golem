@@ -37,7 +37,7 @@ tracing-subscriber = { workspace = true }
 console-subscriber = { workspace = true }
 figment = { workspace = true }
 tap = "1.0.1"
-golem-wasm-ast = "0.1.2"
+golem-wasm-ast = "0.1.3"
 mappable-rc = "0.1.1"
 
 
