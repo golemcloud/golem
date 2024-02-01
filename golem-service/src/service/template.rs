@@ -149,7 +149,7 @@ impl TemplateService for TemplateServiceDefault {
 
         info!(
             "Uploaded template {} version 0 with exports {:?}",
-            template_id, metadata.exports
+            versioned_template_id.template_id, metadata.exports
         );
 
         let template_size: i32 = data.len().try_into().map_err(|e| {

@@ -104,7 +104,7 @@ impl TestWorkerExecutor {
         let _ = std::fs::copy(source, target_dir.join(format!("{uuid}-0.wasm")))
             .expect("Failed to copy WASM to the local template store");
 
-        dump_template_info(&source);
+        dump_template_info(source);
 
         TemplateId(uuid)
     }
