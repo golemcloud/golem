@@ -12,17 +12,14 @@ pub mod wasm_types;
 pub mod worker;
 pub mod workerctx;
 
-use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::Arc;
-use std::time::Duration;
-
 use async_trait::async_trait;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutorServer;
 use prometheus::Registry;
+use std::sync::Arc;
 use tokio::runtime::Handle;
 use tonic::transport::Server;
-use tracing::{debug, info};
+use tracing::info;
 use wasmtime::component::Linker;
 use wasmtime::{Config, Engine};
 
@@ -111,15 +108,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .build()
             .unwrap();
 
-        let http_server = HttpServerImpl::new(
-            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), golem_config.http_port),
-            prometheus_registry,
-        );
+        let http_server = HttpServerImpl::new(golem_config.http_addr()?, prometheus_registry);
 
         info!("Using Redis at {}", golem_config.redis.url());
         let pool = golem_common::redis::RedisPool::configured(&golem_config.redis).await?;
-
-        info!("Done with pool");
 
         let template_service = template::configured(
             &golem_config.template_service,
@@ -129,17 +121,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         .await;
 
         let golem_config = Arc::new(golem_config.clone());
-
-        info!("Done with golem");
-
         let promise_service = promise::configured(&golem_config.promises, pool.clone());
-
-        info!("Done with promise service");
-
         let shard_service = Arc::new(ShardServiceDefault::new());
-
-        info!("Done with promise shard service");
-
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
         let worker_service = services::worker::configured(
             &golem_config.workers,
@@ -148,22 +131,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         );
         let active_workers = self.create_active_workers(&golem_config);
 
-        debug!("Finish setting up all services");
-
-        let worker_executor_port = golem_config.port;
-        let worker_executor_addr = format!("0.0.0.0:{}", worker_executor_port);
-
-        debug!("Listening on port {}", worker_executor_port);
-
-        let addr = worker_executor_addr.parse()?;
-
         let shard_manager_service = shard_manager::configured(&golem_config.shard_manager_service);
 
         let config = self.create_wasmtime_config();
         let engine = Arc::new(Engine::new(&config)?);
         let linker = self.create_wasmtime_linker(&engine)?;
 
-        let mut epoch_interval = tokio::time::interval(Duration::from_millis(10));
+        let mut epoch_interval = tokio::time::interval(golem_config.limits.epoch_interval);
         let engine_ref: Arc<Engine> = engine.clone();
         tokio::spawn(async move {
             loop {
@@ -174,7 +148,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let linker = Arc::new(linker);
 
-        let invocation_key_service = Arc::new(InvocationKeyServiceDefault::new());
+        let invocation_key_service = Arc::new(InvocationKeyServiceDefault::new(
+            golem_config.invocation_keys.pending_key_retention,
+            golem_config.invocation_keys.confirm_queue_capacity,
+        ));
 
         let key_value_service =
             key_value::configured(&golem_config.key_value_service, pool.clone());
@@ -212,12 +189,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             )
             .await?;
 
+        let addr = golem_config.grpc_addr()?;
         let worker_executor =
             WorkerExecutorImpl::<Ctx, All<Ctx>>::new(services, lazy_worker_activator, addr).await?;
 
         let service = WorkerExecutorServer::new(worker_executor);
 
-        info!("Starting gRPC server");
+        info!("Starting gRPC server on port {}", golem_config.port);
         Server::builder()
             .concurrency_limit_per_connection(golem_config.limits.concurrency_limit_per_connection)
             .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))

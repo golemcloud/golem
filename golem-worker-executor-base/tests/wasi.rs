@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use assert2::{assert, check};
 use golem_api_grpc::proto::golem::worker::{val, Val};
+use golem_common::model::WorkerStatus;
 use http::{Response, StatusCode};
 use tokio::spawn;
 use tokio::time::Instant;
@@ -204,20 +205,78 @@ async fn directories() {
     else {
         panic!("expected list")
     };
-    check!(list.values.len() == 3);
-    check!(list.values.contains(&common::val_pair(
-        common::val_string("/test/dir1"),
-        common::val_bool(true)
-    )));
-    check!(list.values.contains(&common::val_pair(
-        common::val_string("/test/dir2"),
-        common::val_bool(true)
-    )));
-    check!(list.values.contains(&common::val_pair(
-        common::val_string("/test/hello.txt"),
-        common::val_bool(false)
-    )));
+    check!(
+        list.values
+            == vec![
+                common::val_pair(common::val_string("/test/dir1"), common::val_bool(true)),
+                common::val_pair(common::val_string("/test/dir2"), common::val_bool(true)),
+                common::val_pair(
+                    common::val_string("/test/hello.txt"),
+                    common::val_bool(false)
+                ),
+            ]
+    );
+    check!(tuple.values[3] == common::val_u32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+}
 
+#[tokio::test]
+async fn directories_replay() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/directories.wasm"));
+    let worker_id = executor.start_worker(&template_id, "directories-1").await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "run", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    // NOTE: if the directory listing would not be stable, replay would fail with divergence error
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    check!(metadata.last_known_status.status == WorkerStatus::Idle);
+
+    let Val {
+        val: Some(val::Val::Tuple(tuple)),
+    } = &result[0]
+    else {
+        panic!("expected tuple")
+    };
+    check!(tuple.values.len() == 4); //  tuple<u32, list<tuple<string, bool>>, list<tuple<string, bool>>, u32>;
+
+    check!(tuple.values[0] == common::val_u32(0)); // initial number of entries
+    check!(
+        tuple.values[1]
+            == common::val_list(vec![common::val_pair(
+                common::val_string("/test"),
+                common::val_bool(true)
+            )])
+    ); // contents of /
+
+    // contents of /test
+    let Val {
+        val: Some(val::Val::List(list)),
+    } = &tuple.values[2]
+    else {
+        panic!("expected list")
+    };
+    check!(
+        list.values
+            == vec![
+                common::val_pair(common::val_string("/test/dir1"), common::val_bool(true)),
+                common::val_pair(common::val_string("/test/dir2"), common::val_bool(true)),
+                common::val_pair(
+                    common::val_string("/test/hello.txt"),
+                    common::val_bool(false)
+                ),
+            ]
+    );
     check!(tuple.values[3] == common::val_u32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 }
 
@@ -1226,4 +1285,78 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
         .unwrap();
 
     check!(times1 == times2);
+}
+
+#[tokio::test]
+async fn filesystem_metadata_hash() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let worker_id = executor.start_worker(&template_id, "file-service-3").await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/write-file-direct",
+            vec![
+                common::val_string("testfile.txt"),
+                common::val_string("hello world"),
+            ],
+        )
+        .await
+        .unwrap();
+    let hash1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/hash",
+            vec![common::val_string("testfile.txt")],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let hash2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/hash",
+            vec![common::val_string("testfile.txt")],
+        )
+        .await
+        .unwrap();
+
+    check!(hash1 == hash2);
+}
+
+#[tokio::test]
+async fn ip_address_resolve() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/networking.wasm"));
+    let worker_id = executor
+        .start_worker(&template_id, "ip-address-resolve-1")
+        .await;
+
+    let result1 = executor
+        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    // If the recovery succeeds, that means that the replayed IP address resolution produced the same result as expected
+
+    let result2 = executor
+        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .await
+        .unwrap();
+
+    // Result 2 is a fresh resolution which is not guaranteed to return the same addresses (or the same order) but we can expect
+    // that it could resolve golem.cloud to at least one address.
+    check!(result1.len() > 0);
+    check!(result2.len() > 0);
 }

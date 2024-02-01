@@ -45,7 +45,7 @@ const MEMORY_SIZE_BUCKETS: &[f64; 11] = &[
     1073741824.0,
 ];
 
-pub mod component {
+pub mod template {
     use std::time::Duration;
 
     use golem_common::metrics::DEFAULT_TIME_BUCKETS;
@@ -55,7 +55,7 @@ pub mod component {
     lazy_static! {
         pub static ref COMPILATION_TIME_SECONDS: Histogram = register_histogram!(
             "compilation_time_seconds",
-            "Time to compile a WASM component to native code",
+            "Time to compile a WASM template to native code",
             DEFAULT_TIME_BUCKETS.to_vec()
         )
         .unwrap();
@@ -211,16 +211,18 @@ pub mod workers {
     use prometheus::*;
 
     lazy_static! {
-        static ref INSTANCE_SVC_CALL_TOTAL: CounterVec = register_counter_vec!(
-            "instance_svc_call_total",
-            "Number of calls to the worker management service",
+        static ref WORKER_EXECUTOR_CALL_TOTAL: CounterVec = register_counter_vec!(
+            "worker_executor_call_total",
+            "Number of calls to the worker executor service",
             &["api"]
         )
         .unwrap();
     }
 
     pub fn record_worker_call(api_name: &'static str) {
-        INSTANCE_SVC_CALL_TOTAL.with_label_values(&[api_name]).inc();
+        WORKER_EXECUTOR_CALL_TOTAL
+            .with_label_values(&[api_name])
+            .inc();
     }
 }
 
@@ -298,13 +300,13 @@ pub mod wasm {
 
     lazy_static! {
         static ref CREATE_WORKER_SECONDS: Histogram = register_histogram!(
-            "create_instance_seconds",
+            "create_worker_seconds",
             "Time taken to create a worker",
             golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )
         .unwrap();
         static ref CREATE_WORKER_FAILURE_TOTAL: CounterVec = register_counter_vec!(
-            "create_instance_failure_total",
+            "create_worker_failure_total",
             "Number of failed worker creations",
             &["error"]
         )
@@ -337,7 +339,7 @@ pub mod wasm {
         )
         .unwrap();
         static ref RESUME_WORKER_SECONDS: Histogram = register_histogram!(
-            "resume_instance_seconds",
+            "resume_worker_seconds",
             "Time taken to resume a worker",
             golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )

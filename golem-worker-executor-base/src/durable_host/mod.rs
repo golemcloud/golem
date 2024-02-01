@@ -45,7 +45,9 @@ use tempfile::TempDir;
 use tracing::{debug, info};
 use wasmtime::component::{Instance, Resource};
 use wasmtime::AsContextMut;
-use wasmtime_wasi::preview2::{FsError, I32Exit, Stderr, Subscribe, Table, WasiCtx, WasiView};
+use wasmtime_wasi::preview2::{
+    FsError, I32Exit, SocketError, Stderr, Subscribe, Table, WasiCtx, WasiView,
+};
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequest,
 };
@@ -1362,6 +1364,20 @@ impl From<GolemError> for SerializableError {
         Self {
             message: value.to_string(),
         }
+    }
+}
+
+impl From<&SocketError> for SerializableError {
+    fn from(value: &SocketError) -> Self {
+        Self {
+            message: value.to_string(),
+        }
+    }
+}
+
+impl From<SerializableError> for SocketError {
+    fn from(value: SerializableError) -> Self {
+        SocketError::trap(<SerializableError as Into<anyhow::Error>>::into(value))
     }
 }
 

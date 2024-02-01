@@ -25,7 +25,7 @@ use wasmtime::Engine;
 
 use crate::error::GolemError;
 use crate::grpc::{is_grpc_retriable, GrpcError};
-use crate::metrics::component::record_compilation_time;
+use crate::metrics::template::record_compilation_time;
 use crate::services::compiled_template;
 use crate::services::compiled_template::CompiledTemplateService;
 use crate::services::golem_config::{
@@ -68,6 +68,7 @@ pub async fn configured(
                 cache_config.time_to_idle,
                 config.retries.clone(),
                 compiled_component_service,
+                config.max_template_size,
             ))
         }
         TemplateServiceConfig::Local(config) => Arc::new(TemplateServiceLocalFileSystem::new(
@@ -91,6 +92,7 @@ pub struct TemplateServiceGrpc {
     access_token: Uuid,
     retry_config: RetryConfig,
     compiled_template_service: Arc<dyn CompiledTemplateService + Send + Sync>,
+    max_template_size: usize,
 }
 
 impl TemplateServiceGrpc {
@@ -101,6 +103,7 @@ impl TemplateServiceGrpc {
         time_to_idle: Duration,
         retry_config: RetryConfig,
         compiled_component_service: Arc<dyn CompiledTemplateService + Send + Sync>,
+        max_template_size: usize,
     ) -> Self {
         Self {
             endpoint,
@@ -108,6 +111,7 @@ impl TemplateServiceGrpc {
             access_token,
             retry_config,
             compiled_template_service: compiled_component_service,
+            max_template_size,
         }
     }
 }
@@ -129,6 +133,7 @@ impl TemplateService for TemplateServiceGrpc {
         let endpoint = self.endpoint.clone();
         let access_token = self.access_token;
         let retry_config = self.retry_config.clone();
+        let max_template_size = self.max_template_size;
         let compiled_template_service = self.compiled_template_service.clone();
         self.template_cache
             .get_or_insert_simple(&key.clone(), || {
@@ -154,6 +159,7 @@ impl TemplateService for TemplateServiceGrpc {
                                 &retry_config,
                                 &template_id,
                                 template_version,
+                                max_template_size,
                             )
                             .await?;
 
@@ -217,6 +223,7 @@ async fn download_via_grpc(
     retry_config: &RetryConfig,
     template_id: &TemplateId,
     template_version: i32,
+    max_template_size: usize,
 ) -> Result<Vec<u8>, GolemError> {
     let desc = format!("Downloading template {template_id}");
     debug!("{}", &desc);
@@ -234,7 +241,7 @@ async fn download_via_grpc(
             Box::pin(async move {
                 let mut client = TemplateServiceClient::connect(endpoint.clone())
                     .await?
-                    .max_decoding_message_size(50 * 1024 * 1024);
+                    .max_decoding_message_size(max_template_size);
 
                 let request = authorised_request(
                     DownloadTemplateRequest {

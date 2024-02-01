@@ -227,7 +227,8 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         let worker_service = Arc::new(worker::WorkerServiceMock::new());
         let promise_service = Arc::new(promise::PromiseServiceMock::new());
         let golem_config = Arc::new(golem_config::GolemConfig::default());
-        let invocation_key_service = Arc::new(invocation_key::InvocationKeyServiceDefault::new());
+        let invocation_key_service =
+            Arc::new(invocation_key::InvocationKeyServiceDefault::default());
         let shard_service = Arc::new(shard::ShardServiceDefault::new());
         let shard_manager_service = Arc::new(shard_manager::ShardManagerServiceSingleShard::new());
         let key_value_service = Arc::new(key_value::KeyValueServiceInMemory::new());

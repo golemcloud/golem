@@ -2,6 +2,7 @@ package golem:it;
 
 interface api {
   use wasi:clocks/wall-clock@0.2.0-rc-2023-11-10.{datetime};
+  use wasi:filesystem/types@0.2.0-rc-2023-11-10.{metadata-hash-value};
 
   record file-info {
     last-modified: datetime,
@@ -31,6 +32,8 @@ interface api {
   remove-file: func(path: string) -> result<_, string>;
 
   rename-file: func(source: string, destination: string) -> result<_, string>;
+
+  hash: func(path: string) -> result<metadata-hash-value, string>;
 }
 
 world file-service {
