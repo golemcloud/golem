@@ -8,6 +8,7 @@ use golem_common::model::TemplateId;
 use poem::web::websocket::{Message, WebSocket, WebSocketStream};
 use poem::web::{Data, Path};
 use poem::*;
+use tap::TapFallible;
 use tonic::Status;
 
 use crate::api::auth::AuthData;
@@ -35,20 +36,12 @@ pub fn ws(
     auth: AuthData,
 ) -> Response {
     let service = service.clone();
-    let auth = auth.auth.clone();
+    let auth = auth.auth;
 
     ws.on_upgrade(move |mut socket| async move {
         tokio::spawn(async move {
-            match try_proxy_worker_connection(&service, template_id, worker_name, auth, socket)
-                .await
-            {
-                Ok(()) => {
-                    tracing::info!("Worker connection closed");
-                }
-                Err(err) => {
-                    tracing::error!("Error connecting to worker: {err}");
-                }
-            }
+            let _ =
+                try_proxy_worker_connection(&service, template_id, worker_name, auth, socket).await;
         })
     })
     .into_response()
@@ -63,9 +56,11 @@ async fn try_proxy_worker_connection(
 ) -> Result<(), ConnectError> {
     let worker_id = make_worker_id(template_id, worker_name)?;
 
-    tracing::info!("Connecting to worker");
-
-    let worker_stream = service.worker_service.connect(&worker_id, &auth).await?;
+    let worker_stream = service
+        .worker_service
+        .connect(&worker_id, &auth)
+        .await
+        .tap_err(|e| tracing::info!("Error connecting to worker {e}"))?;
 
     proxy_worker_connection(worker_id, worker_stream, websocket).await
 }
@@ -76,6 +71,8 @@ async fn proxy_worker_connection(
     mut worker_stream: ConnectWorkerStream,
     websocket: WebSocketStream,
 ) -> Result<(), ConnectError> {
+    tracing::info!("Connecting to worker: {worker_id}");
+
     let mut websocket = WebSocketKeepAlive::from_websocket(
         websocket,
         Duration::from_secs(20),
@@ -117,23 +114,24 @@ async fn proxy_worker_connection(
                 if let Some(message) = worker_message {
                     if let Err(error) = forward_worker_message(message, &mut websocket).await {
                         tracing::info!("Error forwarding message to WebSocket client: {error}");
-                        if let Err(error) = websocket.close().await {
-                            break Err(error.into());
-                        }
+                        break(Err(error))
                     }
                 } else {
+                    tracing::info!("Worker Stream ended");
                     break Ok(());
                 }
             },
         }
     };
 
-    if result.is_err() {
-        if let Err(error) = websocket.close().await {
-            tracing::info!("Error closing WebSocket connection: {error}");
-        } else {
-            tracing::info!("WebSocket connection successfully closed");
-        }
+    if let Err(ref error) = result {
+        tracing::info!("Error proxying worker: {worker_id} {error}");
+    }
+
+    if let Err(error) = websocket.close().await {
+        tracing::info!("Error closing WebSocket connection: {error}");
+    } else {
+        tracing::info!("WebSocket connection successfully closed");
     }
 
     result
@@ -231,6 +229,12 @@ mod keep_alive {
         pong_timeout: Pin<Box<tokio::time::Sleep>>,
     }
 
+    fn far_future() -> Instant {
+        // Roughly 30 years from now.
+        // API does not provide a way to obtain max `Instant`
+        Instant::now() + Duration::from_secs(86400 * 365 * 30)
+    }
+
     impl
         WebSocketKeepAlive<
             futures_util::stream::SplitSink<WebSocketStream, Message>,
@@ -277,7 +281,7 @@ mod keep_alive {
                 last_ping: None,
                 ping_interval,
                 max_pong_timeout,
-                pong_timeout: Box::pin(tokio::time::sleep(Duration::MAX)),
+                pong_timeout: Box::pin(tokio::time::sleep_until(far_future())),
             }
         }
     }
@@ -320,19 +324,25 @@ mod keep_alive {
                     return Poll::Pending;
                 }
 
-                let send_result = self.sink.start_send_unpin(Message::Ping(Vec::new()));
+                self.sink
+                    .start_send_unpin(Message::Ping(Vec::new()))
+                    .map_err(|e| {
+                        tracing::debug!("Error sending WebSocket Ping");
+                        KeepAliveError::Sink(e)
+                    })?;
 
-                if let Err(error) = send_result {
-                    tracing::debug!("Error sending WebSocket Ping");
-                    return Poll::Ready(Some(Err(KeepAliveError::Sink(error))));
-                } else {
-                    tracing::debug!("WebSocket Ping sent");
-                    let now = Instant::now();
-                    let timeout = now + self.max_pong_timeout;
+                let _ = self.sink.poll_flush_unpin(cx).map_err(|e| {
+                    tracing::debug!("Error flushing WebSocket Ping");
+                    KeepAliveError::Sink(e)
+                })?;
 
-                    self.last_ping = Some(now);
-                    self.pong_timeout.as_mut().reset(timeout);
-                }
+                tracing::debug!("WebSocket Ping sent");
+
+                let now = Instant::now();
+                let timeout = now + self.max_pong_timeout;
+
+                self.last_ping = Some(now);
+                self.pong_timeout.as_mut().reset(timeout);
             }
 
             // Ensure to return Poll::Pending when waiting for events and register the task's waker
@@ -343,8 +353,7 @@ mod keep_alive {
                     self.ping_interval.as_mut().reset();
 
                     // Expiration that should never fire.
-                    let period = self.ping_interval.period() * 2;
-                    self.pong_timeout.as_mut().reset(Instant::now() + period);
+                    self.pong_timeout.as_mut().reset(far_future());
 
                     Poll::Ready(Some(Ok(Message::Pong(pong))))
                 }
@@ -400,7 +409,6 @@ mod keep_alive {
 
         use super::*;
 
-        // Mock sink that accepts messages and records them
         static TRACING_SETUP: Once = Once::new();
 
         fn setup_tracing() {
