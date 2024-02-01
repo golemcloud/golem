@@ -4,11 +4,10 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::{
     complete_promise_response, delete_worker_response, get_invocation_key_response,
-    get_worker_metadata_response, interrupt_worker_response,
-    invoke_and_await_response, invoke_and_await_response_json, invoke_response,
-    launch_new_worker_response, resume_worker_response, CompletePromiseRequest,
-    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
-    GetInvocationKeyRequest, GetInvocationKeyResponse,
+    get_worker_metadata_response, interrupt_worker_response, invoke_and_await_response,
+    invoke_and_await_response_json, invoke_response, launch_new_worker_response,
+    resume_worker_response, CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest,
+    DeleteWorkerRequest, DeleteWorkerResponse, GetInvocationKeyRequest, GetInvocationKeyResponse,
     GetWorkerMetadataRequest, GetWorkerMetadataResponse, InterruptWorkerRequest,
     InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitRequestJson,
     InvokeAndAwaitResponse, InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson,
