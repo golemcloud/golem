@@ -45,6 +45,7 @@ pub struct ConnectWorkerStream {
     stream: ReceiverStream<Result<LogEvent, Status>>,
     account_connections_repository: Arc<dyn AccountConnectionsRepo + Send + Sync>,
     account_id: AccountId,
+    cancel: tokio_util::sync::CancellationToken,
 }
 
 impl ConnectWorkerStream {
@@ -58,13 +59,33 @@ impl ConnectWorkerStream {
         let (sender, receiver) = tokio::sync::mpsc::channel(32);
         let mut streaming = streaming;
 
-        tokio::spawn(async move {
-            while let Some(message) = streaming.next().await {
-                if let Err(error) = sender.send(message).await {
-                    tracing::info!("Failed to forward WorkerStream: {error}");
-                    sender.closed().await;
-                    break;
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        tokio::spawn({
+            let cancel = cancel.clone();
+
+            let forward_loop = {
+                let sender = sender.clone();
+                async move {
+                    while let Some(message) = streaming.next().await {
+                        if let Err(error) = sender.send(message).await {
+                            tracing::info!("Failed to forward WorkerStream: {error}");
+                            break;
+                        }
+                    }
                 }
+            };
+
+            async move {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        tracing::info!("WorkerStream cancelled");
+                    }
+                    _ = forward_loop => {
+                        tracing::info!("WorkerStream forward loop finished");
+                    }
+                };
+                sender.closed().await;
             }
         });
 
@@ -74,6 +95,7 @@ impl ConnectWorkerStream {
             stream,
             account_connections_repository,
             account_id,
+            cancel,
         }
     }
 }
@@ -91,6 +113,8 @@ impl Stream for ConnectWorkerStream {
 
 impl Drop for ConnectWorkerStream {
     fn drop(&mut self) {
+        self.cancel.cancel();
+
         let account_connections_repository = self.account_connections_repository.clone();
         let account_id = self.account_id.clone();
         tokio::spawn(async move {
