@@ -18,22 +18,16 @@ use uuid::Uuid;
 
 use golem_common::newtype_uuid;
 
-newtype_uuid!(
-    PlanId,
-    golem_api_grpc_cloud::proto::golem::cloud::plan::PlanId
-);
+newtype_uuid!(PlanId, cloud_api_grpc::proto::golem::cloud::plan::PlanId);
 newtype_uuid!(
     ProjectGrantId,
-    golem_api_grpc_cloud::proto::golem::cloud::projectgrant::ProjectGrantId
+    cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantId
 );
 newtype_uuid!(
     ProjectPolicyId,
-    golem_api_grpc_cloud::proto::golem::cloud::projectpolicy::ProjectPolicyId
+    cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicyId
 );
-newtype_uuid!(
-    TokenId,
-    golem_api_grpc_cloud::proto::golem::cloud::token::TokenId
-);
+newtype_uuid!(TokenId, cloud_api_grpc::proto::golem::cloud::token::TokenId);
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
@@ -48,11 +42,11 @@ impl TokenSecret {
     }
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::token::TokenSecret> for TokenSecret {
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::token::TokenSecret> for TokenSecret {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::token::TokenSecret,
+        value: cloud_api_grpc::proto::golem::cloud::token::TokenSecret,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             value: value.value.ok_or("Missing field: value")?.into(),
@@ -60,7 +54,7 @@ impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::token::TokenSecret> for 
     }
 }
 
-impl From<TokenSecret> for golem_api_grpc_cloud::proto::golem::cloud::token::TokenSecret {
+impl From<TokenSecret> for cloud_api_grpc::proto::golem::cloud::token::TokenSecret {
     fn from(value: TokenSecret) -> Self {
         Self {
             value: Some(value.value.into()),

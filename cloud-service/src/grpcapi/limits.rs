@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody, ResourceLimits};
-use golem_api_grpc_cloud::proto::golem::cloud::limit::cloud_limits_service_server::CloudLimitsService;
-use golem_api_grpc_cloud::proto::golem::cloud::limit::{
+use cloud_api_grpc::proto::golem::cloud::limit::cloud_limits_service_server::CloudLimitsService;
+use cloud_api_grpc::proto::golem::cloud::limit::{
     batch_update_limits_response, get_limits_response, BatchUpdateLimitsRequest,
     BatchUpdateLimitsResponse, GetLimitsRequest, GetLimitsResponse,
 };
-use golem_api_grpc_cloud::proto::golem::cloud::limit::{limits_error, LimitsError};
+use cloud_api_grpc::proto::golem::cloud::limit::{limits_error, LimitsError};
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody, ResourceLimits};
 use golem_common::model::AccountId;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};

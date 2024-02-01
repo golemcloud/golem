@@ -19,7 +19,7 @@ golem-api-grpc = { path = "../golem-services/golem-api-grpc" }
 golem-service-base = { path = "../golem-services/golem-service-base" }
 
 cloud-common = { path = "../cloud-common" }
-golem-api-grpc-cloud = { path = "../golem-api-grpc-cloud" }
+cloud-api-grpc = { path = "../cloud-api-grpc" }
 
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }

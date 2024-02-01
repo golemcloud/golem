@@ -3,16 +3,16 @@ use crate::grpcapi::get_authorisation_token;
 use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::project_policy;
-use cloud_common::model::ProjectPolicyId;
-use golem_api_grpc::proto::golem::common::ErrorBody;
-use golem_api_grpc_cloud::proto::golem::cloud::projectpolicy::cloud_project_policy_service_server::CloudProjectPolicyService;
-use golem_api_grpc_cloud::proto::golem::cloud::projectpolicy::{
+use cloud_api_grpc::proto::golem::cloud::projectpolicy::cloud_project_policy_service_server::CloudProjectPolicyService;
+use cloud_api_grpc::proto::golem::cloud::projectpolicy::{
     create_project_policy_response, get_project_policy_response, CreateProjectPolicyRequest,
     CreateProjectPolicyResponse, GetProjectPolicyRequest, GetProjectPolicyResponse,
 };
-use golem_api_grpc_cloud::proto::golem::cloud::projectpolicy::{
+use cloud_api_grpc::proto::golem::cloud::projectpolicy::{
     project_policy_error, ProjectPolicy, ProjectPolicyError,
 };
+use cloud_common::model::ProjectPolicyId;
+use golem_api_grpc::proto::golem::common::ErrorBody;
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};

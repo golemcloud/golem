@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+import "golem/common/account_id.proto";
+import "golem/cloud/plan/plan_id.proto";
+
+package golem.cloud.account;
+
+
+message Account {
+  golem.common.AccountId id = 1;
+  string name = 2;
+  string email = 3;
+  golem.cloud.plan.PlanId plan_id = 4;
+}

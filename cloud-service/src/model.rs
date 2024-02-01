@@ -177,9 +177,7 @@ impl ProjectActions {
     }
 }
 
-impl From<ProjectActions>
-    for golem_api_grpc_cloud::proto::golem::cloud::projectpolicy::ProjectActions
-{
+impl From<ProjectActions> for cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectActions {
     fn from(value: ProjectActions) -> Self {
         Self {
             actions: value
@@ -191,13 +189,13 @@ impl From<ProjectActions>
     }
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::projectpolicy::ProjectActions>
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectActions>
     for ProjectActions
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::projectpolicy::ProjectActions,
+        value: cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectActions,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             actions: value
@@ -239,7 +237,7 @@ pub struct ProjectGrantDataRequest {
 }
 
 impl From<ProjectGrantDataRequest>
-    for golem_api_grpc_cloud::proto::golem::cloud::projectgrant::ProjectGrantDataRequest
+    for cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantDataRequest
 {
     fn from(value: ProjectGrantDataRequest) -> Self {
         Self {
@@ -261,7 +259,7 @@ pub struct BatchUpdateResourceLimits {
 }
 
 impl From<BatchUpdateResourceLimits>
-    for golem_api_grpc_cloud::proto::golem::cloud::limit::BatchUpdateResourceLimits
+    for cloud_api_grpc::proto::golem::cloud::limit::BatchUpdateResourceLimits
 {
     fn from(value: BatchUpdateResourceLimits) -> Self {
         Self {
@@ -377,11 +375,11 @@ impl Token {
     }
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::token::Token> for Token {
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::token::Token> for Token {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::token::Token,
+        value: cloud_api_grpc::proto::golem::cloud::token::Token,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             id: value.id.ok_or("Missing id")?.try_into()?,
@@ -394,7 +392,7 @@ impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::token::Token> for Token 
     }
 }
 
-impl From<Token> for golem_api_grpc_cloud::proto::golem::cloud::token::Token {
+impl From<Token> for cloud_api_grpc::proto::golem::cloud::token::Token {
     fn from(value: Token) -> Self {
         Self {
             id: Some(value.id.into()),
@@ -425,20 +423,20 @@ impl TryFrom<i32> for ProjectType {
     }
 }
 
-impl From<golem_api_grpc_cloud::proto::golem::cloud::project::ProjectType> for ProjectType {
-    fn from(value: golem_api_grpc_cloud::proto::golem::cloud::project::ProjectType) -> Self {
+impl From<cloud_api_grpc::proto::golem::cloud::project::ProjectType> for ProjectType {
+    fn from(value: cloud_api_grpc::proto::golem::cloud::project::ProjectType) -> Self {
         match value {
-            golem_api_grpc_cloud::proto::golem::cloud::project::ProjectType::Default => {
+            cloud_api_grpc::proto::golem::cloud::project::ProjectType::Default => {
                 ProjectType::Default
             }
-            golem_api_grpc_cloud::proto::golem::cloud::project::ProjectType::NonDefault => {
+            cloud_api_grpc::proto::golem::cloud::project::ProjectType::NonDefault => {
                 ProjectType::NonDefault
             }
         }
     }
 }
 
-impl From<ProjectData> for golem_api_grpc_cloud::proto::golem::cloud::project::ProjectData {
+impl From<ProjectData> for cloud_api_grpc::proto::golem::cloud::project::ProjectData {
     fn from(value: ProjectData) -> Self {
         Self {
             name: value.name,
@@ -463,11 +461,11 @@ pub struct ProjectData {
     pub project_type: ProjectType,
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::project::ProjectData> for ProjectData {
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::project::ProjectData> for ProjectData {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::project::ProjectData,
+        value: cloud_api_grpc::proto::golem::cloud::project::ProjectData,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
@@ -492,11 +490,11 @@ pub struct Project {
     pub project_data: ProjectData,
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::project::Project> for Project {
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::project::Project> for Project {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::project::Project,
+        value: cloud_api_grpc::proto::golem::cloud::project::Project,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             project_id: value.id.ok_or("Missing id")?.try_into()?,
@@ -505,7 +503,7 @@ impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::project::Project> for Pr
     }
 }
 
-impl From<Project> for golem_api_grpc_cloud::proto::golem::cloud::project::Project {
+impl From<Project> for cloud_api_grpc::proto::golem::cloud::project::Project {
     fn from(value: Project) -> Self {
         Self {
             id: Some(value.project_id.into()),
@@ -613,7 +611,7 @@ pub struct CreateTokenDTO {
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl From<CreateTokenDTO> for golem_api_grpc_cloud::proto::golem::cloud::token::CreateTokenDto {
+impl From<CreateTokenDTO> for cloud_api_grpc::proto::golem::cloud::token::CreateTokenDto {
     fn from(value: CreateTokenDTO) -> Self {
         Self {
             expires_at: value.expires_at.to_rfc3339(),
@@ -653,7 +651,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
 }
 
 impl From<ProjectGrantData>
-    for golem_api_grpc_cloud::proto::golem::cloud::projectgrant::ProjectGrantData
+    for cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantData
 {
     fn from(value: ProjectGrantData) -> Self {
         Self {
@@ -689,13 +687,13 @@ pub struct ProjectGrantData {
     pub project_policy_id: ProjectPolicyId,
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::projectgrant::ProjectGrantData>
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantData>
     for ProjectGrantData
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::projectgrant::ProjectGrantData,
+        value: cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantData,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             grantee_account_id: value
@@ -722,13 +720,11 @@ pub struct ProjectGrant {
     pub data: ProjectGrantData,
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::projectgrant::ProjectGrant>
-    for ProjectGrant
-{
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrant> for ProjectGrant {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::projectgrant::ProjectGrant,
+        value: cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrant,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             id: value.id.ok_or("Missing id")?.try_into()?,
@@ -737,7 +733,7 @@ impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::projectgrant::ProjectGra
     }
 }
 
-impl From<ProjectGrant> for golem_api_grpc_cloud::proto::golem::cloud::projectgrant::ProjectGrant {
+impl From<ProjectGrant> for cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrant {
     fn from(value: ProjectGrant) -> Self {
         Self {
             id: Some(value.id.into()),
@@ -755,9 +751,7 @@ pub struct ProjectPolicy {
     pub project_actions: ProjectActions,
 }
 
-impl From<ProjectPolicy>
-    for golem_api_grpc_cloud::proto::golem::cloud::projectpolicy::ProjectPolicy
-{
+impl From<ProjectPolicy> for cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicy {
     fn from(value: ProjectPolicy) -> Self {
         Self {
             id: Some(value.id.into()),
@@ -767,13 +761,11 @@ impl From<ProjectPolicy>
     }
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::projectpolicy::ProjectPolicy>
-    for ProjectPolicy
-{
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicy> for ProjectPolicy {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::projectpolicy::ProjectPolicy,
+        value: cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicy,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             id: value.id.ok_or("Missing id")?.try_into()?,
@@ -810,8 +802,8 @@ impl Default for PlanData {
     }
 }
 
-impl From<golem_api_grpc_cloud::proto::golem::cloud::plan::PlanData> for PlanData {
-    fn from(value: golem_api_grpc_cloud::proto::golem::cloud::plan::PlanData) -> Self {
+impl From<cloud_api_grpc::proto::golem::cloud::plan::PlanData> for PlanData {
+    fn from(value: cloud_api_grpc::proto::golem::cloud::plan::PlanData) -> Self {
         Self {
             project_limit: value.project_limit,
             template_limit: value.template_limit,
@@ -823,7 +815,7 @@ impl From<golem_api_grpc_cloud::proto::golem::cloud::plan::PlanData> for PlanDat
     }
 }
 
-impl From<PlanData> for golem_api_grpc_cloud::proto::golem::cloud::plan::PlanData {
+impl From<PlanData> for cloud_api_grpc::proto::golem::cloud::plan::PlanData {
     fn from(value: PlanData) -> Self {
         Self {
             project_limit: value.project_limit,
@@ -855,11 +847,11 @@ impl Default for Plan {
     }
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::plan::Plan> for Plan {
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::plan::Plan> for Plan {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::plan::Plan,
+        value: cloud_api_grpc::proto::golem::cloud::plan::Plan,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             plan_id: value.plan_id.ok_or("Missing field: plan_id")?.try_into()?,
@@ -868,7 +860,7 @@ impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::plan::Plan> for Plan {
     }
 }
 
-impl From<Plan> for golem_api_grpc_cloud::proto::golem::cloud::plan::Plan {
+impl From<Plan> for cloud_api_grpc::proto::golem::cloud::plan::Plan {
     fn from(value: Plan) -> Self {
         Self {
             plan_id: Some(value.plan_id.into()),
@@ -888,9 +880,7 @@ pub struct ProjectDataRequest {
     pub description: String,
 }
 
-impl From<ProjectDataRequest>
-    for golem_api_grpc_cloud::proto::golem::cloud::project::ProjectDataRequest
-{
+impl From<ProjectDataRequest> for cloud_api_grpc::proto::golem::cloud::project::ProjectDataRequest {
     fn from(value: ProjectDataRequest) -> Self {
         Self {
             name: value.name,
@@ -912,11 +902,11 @@ pub struct Account {
     pub plan_id: PlanId,
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::account::Account> for Account {
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::account::Account> for Account {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::account::Account,
+        value: cloud_api_grpc::proto::golem::cloud::account::Account,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             id: value.id.ok_or("Missing field: id")?.into(),
@@ -927,7 +917,7 @@ impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::account::Account> for Ac
     }
 }
 
-impl From<Account> for golem_api_grpc_cloud::proto::golem::cloud::account::Account {
+impl From<Account> for cloud_api_grpc::proto::golem::cloud::account::Account {
     fn from(value: Account) -> Self {
         Self {
             id: Some(value.id.into()),
@@ -952,13 +942,13 @@ pub struct AccountSummary {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::accountsummary::AccountSummary>
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::accountsummary::AccountSummary>
     for AccountSummary
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::accountsummary::AccountSummary,
+        value: cloud_api_grpc::proto::golem::cloud::accountsummary::AccountSummary,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             id: value.id.ok_or("Missing field: id")?.into(),
@@ -972,9 +962,7 @@ impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::accountsummary::AccountS
     }
 }
 
-impl From<AccountSummary>
-    for golem_api_grpc_cloud::proto::golem::cloud::accountsummary::AccountSummary
-{
+impl From<AccountSummary> for cloud_api_grpc::proto::golem::cloud::accountsummary::AccountSummary {
     fn from(value: AccountSummary) -> Self {
         Self {
             id: Some(value.id.into()),
@@ -995,7 +983,7 @@ pub struct AccountData {
     pub email: String,
 }
 
-impl From<AccountData> for golem_api_grpc_cloud::proto::golem::cloud::account::AccountData {
+impl From<AccountData> for cloud_api_grpc::proto::golem::cloud::account::AccountData {
     fn from(value: AccountData) -> Self {
         Self {
             name: value.name,
@@ -1004,8 +992,8 @@ impl From<AccountData> for golem_api_grpc_cloud::proto::golem::cloud::account::A
     }
 }
 
-impl From<golem_api_grpc_cloud::proto::golem::cloud::account::AccountData> for AccountData {
-    fn from(value: golem_api_grpc_cloud::proto::golem::cloud::account::AccountData) -> Self {
+impl From<cloud_api_grpc::proto::golem::cloud::account::AccountData> for AccountData {
+    fn from(value: cloud_api_grpc::proto::golem::cloud::account::AccountData) -> Self {
         Self {
             name: value.name,
             email: value.email,
@@ -1025,11 +1013,11 @@ pub struct OAuth2Data {
     pub encoded_session: String,
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::login::OAuth2Data> for OAuth2Data {
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::login::OAuth2Data> for OAuth2Data {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::login::OAuth2Data,
+        value: cloud_api_grpc::proto::golem::cloud::login::OAuth2Data,
     ) -> Result<Self, String> {
         Ok(Self {
             url: value.url,
@@ -1041,7 +1029,7 @@ impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::login::OAuth2Data> for O
     }
 }
 
-impl From<OAuth2Data> for golem_api_grpc_cloud::proto::golem::cloud::login::OAuth2Data {
+impl From<OAuth2Data> for cloud_api_grpc::proto::golem::cloud::login::OAuth2Data {
     fn from(value: OAuth2Data) -> Self {
         Self {
             url: value.url,
@@ -1066,11 +1054,11 @@ impl UnsafeToken {
     }
 }
 
-impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::token::UnsafeToken> for UnsafeToken {
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::token::UnsafeToken> for UnsafeToken {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc_cloud::proto::golem::cloud::token::UnsafeToken,
+        value: cloud_api_grpc::proto::golem::cloud::token::UnsafeToken,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             data: value.data.ok_or("Missing field: data")?.try_into()?,
@@ -1079,7 +1067,7 @@ impl TryFrom<golem_api_grpc_cloud::proto::golem::cloud::token::UnsafeToken> for 
     }
 }
 
-impl From<UnsafeToken> for golem_api_grpc_cloud::proto::golem::cloud::token::UnsafeToken {
+impl From<UnsafeToken> for cloud_api_grpc::proto::golem::cloud::token::UnsafeToken {
     fn from(value: UnsafeToken) -> Self {
         Self {
             data: Some(value.data.into()),

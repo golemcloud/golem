@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_api_grpc_cloud::proto::golem::cloud::project::cloud_project_service_server::CloudProjectService;
-use golem_api_grpc_cloud::proto::golem::cloud::project::{
+use cloud_api_grpc::proto::golem::cloud::project::cloud_project_service_server::CloudProjectService;
+use cloud_api_grpc::proto::golem::cloud::project::{
     create_project_response, delete_project_response, get_default_project_response,
     get_project_actions_response, get_project_response, get_projects_response,
     CreateProjectRequest, CreateProjectResponse, CreateProjectSuccessResponse,
@@ -11,9 +10,10 @@ use golem_api_grpc_cloud::proto::golem::cloud::project::{
     GetProjectActionsSuccessResponse, GetProjectRequest, GetProjectResponse, GetProjectsRequest,
     GetProjectsResponse, GetProjectsSuccessResponse,
 };
-use golem_api_grpc_cloud::proto::golem::cloud::project::{
+use cloud_api_grpc::proto::golem::cloud::project::{
     project_error, Project, ProjectDataRequest, ProjectError,
 };
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::model::ProjectId;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};

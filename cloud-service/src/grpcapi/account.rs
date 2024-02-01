@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_api_grpc_cloud::proto::golem::cloud::account::cloud_account_service_server::CloudAccountService;
-use golem_api_grpc_cloud::proto::golem::cloud::account::{
+use cloud_api_grpc::proto::golem::cloud::account::cloud_account_service_server::CloudAccountService;
+use cloud_api_grpc::proto::golem::cloud::account::{
     account_create_response, account_delete_response, account_get_plan_response,
     account_get_response, account_update_response, AccountCreateRequest, AccountCreateResponse,
     AccountDeleteRequest, AccountDeleteResponse, AccountGetPlanRequest, AccountGetPlanResponse,
     AccountGetRequest, AccountGetResponse, AccountUpdateRequest, AccountUpdateResponse,
 };
-use golem_api_grpc_cloud::proto::golem::cloud::account::{account_error, Account, AccountError};
-use golem_api_grpc_cloud::proto::golem::cloud::plan::Plan;
+use cloud_api_grpc::proto::golem::cloud::account::{account_error, Account, AccountError};
+use cloud_api_grpc::proto::golem::cloud::plan::Plan;
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::model::AccountId;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};

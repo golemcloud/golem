@@ -4,12 +4,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use dashmap::DashMap;
-use golem_api_grpc_cloud::proto::golem::cloud::limit::cloud_limits_service_client::CloudLimitsServiceClient;
-use golem_api_grpc_cloud::proto::golem::cloud::limit::{
+use cloud_api_grpc::proto::golem::cloud::limit::cloud_limits_service_client::CloudLimitsServiceClient;
+use cloud_api_grpc::proto::golem::cloud::limit::{
     batch_update_limits_response, get_limits_response, BatchUpdateLimitsRequest,
     BatchUpdateResourceLimits, GetLimitsRequest,
 };
+use dashmap::DashMap;
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::AccountId;

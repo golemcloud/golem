@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem.cloud.login;
+
+
+message OAuth2Data {
+  string url = 1;
+  string user_code = 2;
+  string expires = 3;
+  string encoded_session = 4;
+}

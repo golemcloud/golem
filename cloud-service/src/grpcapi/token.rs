@@ -1,15 +1,15 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use cloud_common::model::TokenId;
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_api_grpc_cloud::proto::golem::cloud::token::cloud_token_service_server::CloudTokenService;
-use golem_api_grpc_cloud::proto::golem::cloud::token::{
+use cloud_api_grpc::proto::golem::cloud::token::cloud_token_service_server::CloudTokenService;
+use cloud_api_grpc::proto::golem::cloud::token::{
     create_token_response, delete_token_response, get_token_response, get_tokens_response,
     token_error, CreateTokenRequest, CreateTokenResponse, DeleteTokenRequest, DeleteTokenResponse,
     GetTokenRequest, GetTokenResponse, GetTokensRequest, GetTokensResponse,
     GetTokensSuccessResponse, Token, TokenError, UnsafeToken,
 };
+use cloud_common::model::TokenId;
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::model::AccountId;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};

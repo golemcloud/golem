@@ -13,7 +13,7 @@ path = "src/server.rs"
 golem-common = { path = "../golem-services/golem-common" }
 golem-api-grpc = { path = "../golem-services/golem-api-grpc" }
 golem-worker-executor-base = { path = "../golem-services/golem-worker-executor-base" }
-golem-api-grpc-cloud = { path = "../golem-api-grpc-cloud" }
+cloud-api-grpc = { path = "../cloud-api-grpc" }
 
 anyhow = { workspace = true }
 async-mutex = "1.4.0"

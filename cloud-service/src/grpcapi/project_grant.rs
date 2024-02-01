@@ -1,15 +1,15 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use golem_api_grpc_cloud::proto::golem::cloud::projectgrant::cloud_project_grant_service_server::CloudProjectGrantService;
-use golem_api_grpc_cloud::proto::golem::cloud::projectgrant::{
+use cloud_api_grpc::proto::golem::cloud::projectgrant::cloud_project_grant_service_server::CloudProjectGrantService;
+use cloud_api_grpc::proto::golem::cloud::projectgrant::{
     create_project_grant_response, delete_project_grant_response, get_project_grant_response,
     get_project_grants_response, CreateProjectGrantRequest, CreateProjectGrantResponse,
     DeleteProjectGrantRequest, DeleteProjectGrantResponse, GetProjectGrantRequest,
     GetProjectGrantResponse, GetProjectGrantsRequest, GetProjectGrantsResponse,
     GetProjectGrantsSuccessResponse,
 };
-use golem_api_grpc_cloud::proto::golem::cloud::projectgrant::{
+use cloud_api_grpc::proto::golem::cloud::projectgrant::{
     project_grant_error, ProjectGrant, ProjectGrantDataRequest, ProjectGrantError,
 };
 

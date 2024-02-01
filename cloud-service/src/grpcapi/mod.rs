@@ -1,19 +1,3 @@
-use std::net::SocketAddr;
-use std::str::FromStr;
-use tonic::transport::{Error, Server};
-use tonic::metadata::MetadataMap;
-use cloud_common::model::TokenSecret as ModelTokenSecret;
-use golem_api_grpc_cloud::proto::golem::cloud::account::cloud_account_service_server::CloudAccountServiceServer;
-use golem_api_grpc_cloud::proto::golem::cloud::accountsummary::cloud_account_summary_service_server::CloudAccountSummaryServiceServer;
-use golem_api_grpc_cloud::proto::golem::cloud::grant::cloud_grant_service_server::CloudGrantServiceServer;
-use golem_api_grpc_cloud::proto::golem::cloud::limit::cloud_limits_service_server::CloudLimitsServiceServer;
-use golem_api_grpc_cloud::proto::golem::cloud::login::cloud_login_service_server::CloudLoginServiceServer;
-use golem_api_grpc_cloud::proto::golem::cloud::projectgrant::cloud_project_grant_service_server::CloudProjectGrantServiceServer;
-use golem_api_grpc_cloud::proto::golem::cloud::projectpolicy::cloud_project_policy_service_server::CloudProjectPolicyServiceServer;
-use golem_api_grpc_cloud::proto::golem::cloud::project::cloud_project_service_server::CloudProjectServiceServer;
-use golem_api_grpc_cloud::proto::golem::cloud::token::cloud_token_service_server::CloudTokenServiceServer;
-use golem_api_grpc::proto::golem::template::template_service_server::TemplateServiceServer;
-use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerServiceServer;
 use crate::grpcapi::account::AccountGrpcApi;
 use crate::grpcapi::account_summary::AccountSummaryGrpcApi;
 use crate::grpcapi::grant::GrantGrpcApi;
@@ -26,6 +10,22 @@ use crate::grpcapi::template::TemplateGrpcApi;
 use crate::grpcapi::token::TokenGrpcApi;
 use crate::grpcapi::worker::WorkerGrpcApi;
 use crate::service::Services;
+use cloud_api_grpc::proto::golem::cloud::account::cloud_account_service_server::CloudAccountServiceServer;
+use cloud_api_grpc::proto::golem::cloud::accountsummary::cloud_account_summary_service_server::CloudAccountSummaryServiceServer;
+use cloud_api_grpc::proto::golem::cloud::grant::cloud_grant_service_server::CloudGrantServiceServer;
+use cloud_api_grpc::proto::golem::cloud::limit::cloud_limits_service_server::CloudLimitsServiceServer;
+use cloud_api_grpc::proto::golem::cloud::login::cloud_login_service_server::CloudLoginServiceServer;
+use cloud_api_grpc::proto::golem::cloud::project::cloud_project_service_server::CloudProjectServiceServer;
+use cloud_api_grpc::proto::golem::cloud::projectgrant::cloud_project_grant_service_server::CloudProjectGrantServiceServer;
+use cloud_api_grpc::proto::golem::cloud::projectpolicy::cloud_project_policy_service_server::CloudProjectPolicyServiceServer;
+use cloud_api_grpc::proto::golem::cloud::token::cloud_token_service_server::CloudTokenServiceServer;
+use cloud_common::model::TokenSecret as ModelTokenSecret;
+use golem_api_grpc::proto::golem::template::template_service_server::TemplateServiceServer;
+use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerServiceServer;
+use std::net::SocketAddr;
+use std::str::FromStr;
+use tonic::metadata::MetadataMap;
+use tonic::transport::{Error, Server};
 
 mod account;
 mod account_summary;
@@ -92,7 +92,7 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(golem_api_grpc::proto::FILE_DESCRIPTOR_SET)
-        .register_encoded_file_descriptor_set(golem_api_grpc_cloud::proto::FILE_DESCRIPTOR_SET)
+        .register_encoded_file_descriptor_set(cloud_api_grpc::proto::FILE_DESCRIPTOR_SET)
         .build()
         .unwrap();
 

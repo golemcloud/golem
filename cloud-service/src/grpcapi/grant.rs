@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_api_grpc_cloud::proto::golem::cloud::grant::cloud_grant_service_server::CloudGrantService;
-use golem_api_grpc_cloud::proto::golem::cloud::grant::{
+use cloud_api_grpc::proto::golem::cloud::grant::cloud_grant_service_server::CloudGrantService;
+use cloud_api_grpc::proto::golem::cloud::grant::{
     delete_grant_response, get_grant_response, get_grants_response, put_grant_response,
     DeleteGrantRequest, DeleteGrantResponse, GetGrantRequest, GetGrantResponse, GetGrantsRequest,
     GetGrantsResponse, GetGrantsSuccessResponse, PutGrantRequest, PutGrantResponse,
 };
-use golem_api_grpc_cloud::proto::golem::cloud::grant::{grant_error, GrantError};
+use cloud_api_grpc::proto::golem::cloud::grant::{grant_error, GrantError};
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::model::AccountId;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
