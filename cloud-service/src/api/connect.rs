@@ -5,7 +5,10 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::TemplateId;
-use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketStream};
+use golem_service_base::model::GolemError as BaseGolemError;
+use golem_service_base::model::WorkerId;
+use http::StatusCode;
+use poem::web::websocket::{Message, WebSocket, WebSocketStream};
 use poem::web::{Data, Path};
 use poem::*;
 use tap::TapFallible;
@@ -14,6 +17,7 @@ use tonic::Status;
 use crate::api::auth::AuthData;
 use crate::api::connect::keep_alive::{KeepAliveError, WebSocketKeepAlive};
 use crate::auth::AccountAuthorisation;
+use crate::service::template::TemplateError;
 use crate::service::worker::ConnectWorkerStream;
 use crate::service::worker::WorkerService;
 
@@ -29,54 +33,47 @@ impl ConnectService {
 }
 
 #[handler]
-pub fn ws(
+pub async fn ws(
     Path((template_id, worker_name)): Path<(TemplateId, String)>,
-    ws: WebSocket,
+    websocket: WebSocket,
     Data(service): Data<&ConnectService>,
     auth: AuthData,
 ) -> Response {
-    let service = service.clone();
-    let auth = auth.auth;
-
-    ws.on_upgrade(move |mut socket| async move {
-        tokio::spawn(async move {
-            let _ =
-                try_proxy_worker_connection(&service, template_id, worker_name, auth, socket).await;
+    get_worker_stream(service, template_id, worker_name, auth.auth)
+        .await
+        .map(|(worker_id, worker_stream)| {
+            websocket
+                .on_upgrade(move |socket| {
+                    tokio::spawn(async move {
+                        proxy_worker_connection(worker_id, worker_stream, socket).await;
+                    })
+                })
+                .into_response()
         })
-    })
-    .into_response()
+        .unwrap_or_else(|err| err)
 }
 
-async fn try_proxy_worker_connection(
+async fn get_worker_stream(
     service: &ConnectService,
     template_id: TemplateId,
     worker_name: String,
     auth: AccountAuthorisation,
-    mut websocket: WebSocketStream,
-) -> Result<(), ConnectError> {
-    let worker_id = make_worker_id(template_id.clone(), worker_name.clone())?;
+) -> Result<(WorkerId, ConnectWorkerStream), Response> {
+    let worker_id = WorkerId::new(template_id, worker_name).map_err(|e| {
+        single_error(
+            http::StatusCode::BAD_REQUEST,
+            format!("Invalid worker id: {e}"),
+        )
+    })?;
 
     let worker_stream = service
         .worker_service
         .connect(&worker_id, &auth)
         .await
-        .tap_err(|e| tracing::info!("Error connecting to worker {e}"));
+        .tap_err(|e| tracing::info!("Error connecting to worker {e}"))
+        .map_err(|e| e.into_response())?;
 
-    match worker_stream {
-        Ok(worker_stream) => proxy_worker_connection(worker_id, worker_stream, websocket).await,
-        Err(err) => {
-            let close_message = format!(
-                "Error connecting to worker: Template-Id: {}, Worker Name: {},  {}",
-                &template_id, &worker_name, err
-            );
-            let message = Message::Close(Some((CloseCode::Error, close_message)));
-
-            websocket
-                .send(message)
-                .await
-                .map_err(|err| ConnectError(format!("Failed to send closing frame: {}", err)))
-        }
-    }
+    Ok((worker_id, worker_stream))
 }
 
 #[tracing::instrument(skip_all, fields(worker_id = worker_id.to_string()))]
@@ -84,7 +81,7 @@ async fn proxy_worker_connection(
     worker_id: golem_service_base::model::WorkerId,
     mut worker_stream: ConnectWorkerStream,
     websocket: WebSocketStream,
-) -> Result<(), ConnectError> {
+) {
     tracing::info!("Connecting to worker: {worker_id}");
 
     let mut websocket = WebSocketKeepAlive::from_websocket(
@@ -147,8 +144,6 @@ async fn proxy_worker_connection(
     } else {
         tracing::info!("WebSocket connection successfully closed");
     }
-
-    result
 }
 
 async fn forward_worker_message<S, E>(
@@ -192,12 +187,6 @@ impl From<serde_json::Error> for ConnectError {
     }
 }
 
-impl From<crate::service::worker::WorkerError> for ConnectError {
-    fn from(error: crate::service::worker::WorkerError) -> Self {
-        ConnectError(error.to_string())
-    }
-}
-
 impl<A, B> From<KeepAliveError<A, B>> for ConnectError
 where
     A: Display,
@@ -212,12 +201,172 @@ where
     }
 }
 
-fn make_worker_id(
-    template_id: TemplateId,
-    worker_name: String,
-) -> std::result::Result<golem_service_base::model::WorkerId, ConnectError> {
-    golem_service_base::model::WorkerId::new(template_id, worker_name)
-        .map_err(|error| ConnectError(format!("Invalid worker name: {error}")))
+fn single_error(status: http::StatusCode, message: impl Into<String>) -> Response {
+    let body = golem_service_base::model::ErrorBody {
+        error: message.into(),
+    };
+
+    let body = serde_json::to_string(&body).expect("Serialize ErrorBody");
+
+    poem::Response::builder()
+        .status(status)
+        .content_type("application/json")
+        .body(body)
+}
+
+impl IntoResponse for crate::service::worker::WorkerError {
+    fn into_response(self) -> Response {
+        use crate::service::worker::WorkerError as ServiceError;
+
+        match self {
+            ServiceError::Internal(error) => single_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+            ServiceError::Unauthorized(error) => single_error(StatusCode::UNAUTHORIZED, error),
+            ServiceError::LimitExceeded(error) => single_error(StatusCode::FORBIDDEN, error),
+            ServiceError::TypeCheckerError(error) => single_error(StatusCode::BAD_REQUEST, error),
+            ServiceError::VersionedTemplateIdNotFound(template_id) => single_error(
+                StatusCode::NOT_FOUND,
+                format!("Template not found: {template_id}"),
+            ),
+            ServiceError::TemplateNotFound(template_id) => single_error(
+                StatusCode::NOT_FOUND,
+                format!("Template not found: {template_id}"),
+            ),
+            ServiceError::ProjectIdNotFound(project_id) => single_error(
+                StatusCode::NOT_FOUND,
+                format!("Project not found: {project_id}"),
+            ),
+            ServiceError::AccountIdNotFound(account_id) => single_error(
+                StatusCode::NOT_FOUND,
+                format!("Account not found: {account_id}"),
+            ),
+            ServiceError::WorkerNotFound(worker_id) => single_error(
+                StatusCode::NOT_FOUND,
+                format!("Worker not found: {worker_id}"),
+            ),
+            ServiceError::Golem(golem_error) => {
+                let error: GolemError = golem_error.into();
+                let body = GolemErrorBody { golem_error: error };
+                let body = serde_json::to_string(&body).expect("Serialize GolemError");
+                poem::Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .content_type("application/json")
+                    .body(body)
+            }
+            ServiceError::DelegatedTemplateServiceError(error) => error.into_response(),
+        }
+    }
+}
+
+impl IntoResponse for TemplateError {
+    fn into_response(self) -> Response {
+        match self {
+            TemplateError::Internal(error) => {
+                single_error(StatusCode::INTERNAL_SERVER_ERROR, error)
+            }
+            TemplateError::Unauthorized(error) => single_error(StatusCode::UNAUTHORIZED, error),
+            TemplateError::LimitExceeded(error) => {
+                single_error(StatusCode::TOO_MANY_REQUESTS, error)
+            }
+            TemplateError::AlreadyExists(template_id) => single_error(
+                StatusCode::CONFLICT,
+                format!("Template already exists: {template_id}"),
+            ),
+            TemplateError::UnknownTemplateId(template_id) => single_error(
+                StatusCode::NOT_FOUND,
+                format!("Template not found: {template_id}"),
+            ),
+            TemplateError::UnknownVersionedTemplateId(template_id) => single_error(
+                StatusCode::NOT_FOUND,
+                format!("Versioned template not found: {template_id}"),
+            ),
+            TemplateError::UnknownProjectId(project_id) => single_error(
+                StatusCode::NOT_FOUND,
+                format!("Project not found: {project_id}"),
+            ),
+            TemplateError::IOError(error) => single_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("IO Error: {error}"),
+            ),
+            TemplateError::TemplateProcessingError(error) => single_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Template processing error: {error}"),
+            ),
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GolemErrorBody {
+    golem_error: GolemError,
+}
+
+// This is needed to match poem response serialization.
+// Uses an inner type tag instead of default serde enum serialization.
+#[derive(serde::Serialize)]
+#[serde(tag = "type")]
+pub enum GolemError {
+    InvalidRequest(golem_service_base::model::GolemErrorInvalidRequest),
+    WorkerAlreadyExists(golem_service_base::model::GolemErrorWorkerAlreadyExists),
+    WorkerNotFound(golem_service_base::model::GolemErrorWorkerNotFound),
+    WorkerCreationFailed(golem_service_base::model::GolemErrorWorkerCreationFailed),
+    FailedToResumeWorker(golem_service_base::model::GolemErrorFailedToResumeWorker),
+    TemplateDownloadFailed(golem_service_base::model::GolemErrorTemplateDownloadFailed),
+    TemplateParseFailed(golem_service_base::model::GolemErrorTemplateParseFailed),
+    GetLatestVersionOfTemplateFailed(
+        golem_service_base::model::GolemErrorGetLatestVersionOfTemplateFailed,
+    ),
+    PromiseNotFound(golem_service_base::model::GolemErrorPromiseNotFound),
+    PromiseDropped(golem_service_base::model::GolemErrorPromiseDropped),
+    PromiseAlreadyCompleted(golem_service_base::model::GolemErrorPromiseAlreadyCompleted),
+    Interrupted(golem_service_base::model::GolemErrorInterrupted),
+    ParamTypeMismatch(golem_service_base::model::GolemErrorParamTypeMismatch),
+    NoValueInMessage(golem_service_base::model::GolemErrorNoValueInMessage),
+    ValueMismatch(golem_service_base::model::GolemErrorValueMismatch),
+    UnexpectedOplogEntry(golem_service_base::model::GolemErrorUnexpectedOplogEntry),
+    RuntimeError(golem_service_base::model::GolemErrorRuntimeError),
+    InvalidShardId(golem_service_base::model::GolemErrorInvalidShardId),
+    PreviousInvocationFailed(golem_service_base::model::GolemErrorPreviousInvocationFailed),
+    PreviousInvocationExited(golem_service_base::model::GolemErrorPreviousInvocationExited),
+    Unknown(golem_service_base::model::GolemErrorUnknown),
+    InvalidAccount(golem_service_base::model::GolemErrorInvalidAccount),
+}
+
+impl From<BaseGolemError> for GolemError {
+    fn from(value: BaseGolemError) -> Self {
+        match value {
+            BaseGolemError::InvalidRequest(err) => GolemError::InvalidRequest(err),
+            BaseGolemError::WorkerAlreadyExists(err) => GolemError::WorkerAlreadyExists(err),
+            BaseGolemError::WorkerNotFound(err) => GolemError::WorkerNotFound(err),
+            BaseGolemError::WorkerCreationFailed(err) => GolemError::WorkerCreationFailed(err),
+            BaseGolemError::FailedToResumeWorker(err) => GolemError::FailedToResumeWorker(err),
+            BaseGolemError::TemplateDownloadFailed(err) => GolemError::TemplateDownloadFailed(err),
+            BaseGolemError::TemplateParseFailed(err) => GolemError::TemplateParseFailed(err),
+            BaseGolemError::GetLatestVersionOfTemplateFailed(err) => {
+                GolemError::GetLatestVersionOfTemplateFailed(err)
+            }
+            BaseGolemError::PromiseNotFound(err) => GolemError::PromiseNotFound(err),
+            BaseGolemError::PromiseDropped(err) => GolemError::PromiseDropped(err),
+            BaseGolemError::PromiseAlreadyCompleted(err) => {
+                GolemError::PromiseAlreadyCompleted(err)
+            }
+            BaseGolemError::Interrupted(err) => GolemError::Interrupted(err),
+            BaseGolemError::ParamTypeMismatch(err) => GolemError::ParamTypeMismatch(err),
+            BaseGolemError::NoValueInMessage(err) => GolemError::NoValueInMessage(err),
+            BaseGolemError::ValueMismatch(err) => GolemError::ValueMismatch(err),
+            BaseGolemError::UnexpectedOplogEntry(err) => GolemError::UnexpectedOplogEntry(err),
+            BaseGolemError::RuntimeError(err) => GolemError::RuntimeError(err),
+            BaseGolemError::InvalidShardId(err) => GolemError::InvalidShardId(err),
+            BaseGolemError::PreviousInvocationFailed(err) => {
+                GolemError::PreviousInvocationFailed(err)
+            }
+            BaseGolemError::PreviousInvocationExited(err) => {
+                GolemError::PreviousInvocationExited(err)
+            }
+            BaseGolemError::Unknown(err) => GolemError::Unknown(err),
+            BaseGolemError::InvalidAccount(err) => GolemError::InvalidAccount(err),
+        }
+    }
 }
 
 mod keep_alive {

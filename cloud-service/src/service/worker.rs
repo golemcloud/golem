@@ -23,6 +23,7 @@ use golem_common::model::{
 };
 use serde_json::Value;
 use tokio::time::sleep;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 use tonic::transport::Channel;
 use tonic::{Status, Streaming};
@@ -41,7 +42,7 @@ use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::worker_executor_clients::WorkerExecutorClients;
 
 pub struct ConnectWorkerStream {
-    streaming: Streaming<LogEvent>,
+    stream: ReceiverStream<Result<LogEvent, Status>>,
     account_connections_repository: Arc<dyn AccountConnectionsRepo + Send + Sync>,
     account_id: AccountId,
 }
@@ -52,8 +53,25 @@ impl ConnectWorkerStream {
         account_connections_repository: Arc<dyn AccountConnectionsRepo + Send + Sync>,
         account_id: AccountId,
     ) -> Self {
+        // Create a channel which is Send and Sync.
+        // Streaming is not Sync.
+        let (sender, receiver) = tokio::sync::mpsc::channel(32);
+        let mut streaming = streaming;
+
+        tokio::spawn(async move {
+            while let Some(message) = streaming.next().await {
+                if let Err(error) = sender.send(message).await {
+                    tracing::info!("Failed to forward WorkerStream: {error}");
+                    sender.closed().await;
+                    break;
+                }
+            }
+        });
+
+        let stream = ReceiverStream::new(receiver);
+
         Self {
-            streaming,
+            stream,
             account_connections_repository,
             account_id,
         }
@@ -67,7 +85,7 @@ impl Stream for ConnectWorkerStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<LogEvent, Status>>> {
-        self.streaming.poll_next_unpin(cx)
+        self.stream.poll_next_unpin(cx)
     }
 }
 
