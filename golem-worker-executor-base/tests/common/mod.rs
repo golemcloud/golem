@@ -1,6 +1,9 @@
 use anyhow::Error;
 use async_trait::async_trait;
 use ctor::ctor;
+use golem_wasm_ast::analysis::AnalysisContext;
+use golem_wasm_ast::component::Component;
+use golem_wasm_ast::IgnoreAllButMetadata;
 use prometheus::Registry;
 use std::collections::HashMap;
 use std::path::Path;
@@ -100,6 +103,8 @@ impl TestWorkerExecutor {
 
         let _ = std::fs::copy(source, target_dir.join(format!("{uuid}-0.wasm")))
             .expect("Failed to copy WASM to the local template store");
+
+        dump_template_info(&source);
 
         TemplateId(uuid)
     }
@@ -1286,4 +1291,14 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
 #[derive(Copy, Clone)]
 pub struct TestWorkerExecutorClone {
     grpc_port: u16,
+}
+
+fn dump_template_info(path: &Path) {
+    let data = std::fs::read(path).unwrap();
+    let component = Component::<IgnoreAllButMetadata>::from_bytes(&data).unwrap();
+
+    let state = AnalysisContext::new(component);
+    let exports = state.get_top_level_exports().unwrap();
+
+    info!("Exports: {exports:?}");
 }
