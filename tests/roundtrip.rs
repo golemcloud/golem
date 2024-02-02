@@ -11,6 +11,16 @@ fn roundtrip_shopping_cart_component() {
     assert_component_eq(component, component2);
 }
 
+#[test]
+fn roundtrip_file_service_component() {
+    let source_bytes = include_bytes!("../wasm/file-service.wasm");
+    let component: Component<DefaultAst> = Component::from_bytes(source_bytes).unwrap();
+    let result_bytes = component.clone().into_bytes().unwrap();
+    let component2: Component<DefaultAst> = Component::from_bytes(&result_bytes).unwrap();
+
+    assert_component_eq(component, component2);
+}
+
 fn assert_component_eq(a: Component<DefaultAst>, b: Component<DefaultAst>) {
     let bytes_a = a.into_bytes().unwrap();
     let bytes_b = b.into_bytes().unwrap();
