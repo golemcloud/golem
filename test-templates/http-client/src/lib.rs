@@ -82,9 +82,9 @@ fn send_request() -> types::FutureIncomingResponse {
     types::OutgoingBody::finish(request_body, None).unwrap();
 
     let options = types::RequestOptions::new();
-    options.set_connect_timeout(Some(5000)).unwrap();
-    options.set_first_byte_timeout(Some(5000)).unwrap();
-    options.set_between_bytes_timeout(Some(5000)).unwrap();
+    options.set_connect_timeout(Some(10000)).unwrap();
+    options.set_first_byte_timeout(Some(10000)).unwrap();
+    options.set_between_bytes_timeout(Some(10000)).unwrap();
 
     let future_incoming_response = outgoing_handler::handle(request, Some(options)).unwrap();
 
@@ -136,9 +136,9 @@ fn send_restart_request() {
     types::OutgoingBody::finish(request_body, None).unwrap();
 
     let options = types::RequestOptions::new();
-    options.set_connect_timeout(Some(5000)).unwrap();
-    options.set_first_byte_timeout(Some(5000)).unwrap();
-    options.set_between_bytes_timeout(Some(5000)).unwrap();
+    options.set_connect_timeout(Some(10000)).unwrap();
+    options.set_first_byte_timeout(Some(10000)).unwrap();
+    options.set_between_bytes_timeout(Some(10000)).unwrap();
 
     let future_incoming_response = outgoing_handler::handle(request, Some(options)).unwrap();
     let _ = get_incoming_response(&future_incoming_response);
