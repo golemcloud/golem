@@ -5,17 +5,17 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::{
     complete_promise_response, delete_worker_response, get_invocation_key_response,
-    get_worker_by_id_response, get_worker_metadata_response, interrupt_worker_response,
-    invoke_and_await_response, invoke_and_await_response_json, invoke_response,
-    launch_new_worker_response, resume_worker_response, worker_error, worker_execution_error,
-    CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest,
-    DeleteWorkerResponse, GetInvocationKeyRequest, GetInvocationKeyResponse, GetWorkerByIdRequest,
-    GetWorkerByIdResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvocationKey, InvokeAndAwaitRequest,
-    InvokeAndAwaitRequestJson, InvokeAndAwaitResponse, InvokeAndAwaitResponseJson, InvokeRequest,
-    InvokeRequestJson, InvokeResponse, InvokeResult, InvokeResultJson, LaunchNewWorkerRequest,
-    LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse, UnknownError,
-    VersionedWorkerId, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
+    get_worker_metadata_response, interrupt_worker_response, invoke_and_await_response,
+    invoke_and_await_response_json, invoke_response, launch_new_worker_response,
+    resume_worker_response, worker_error, worker_execution_error, CompletePromiseRequest,
+    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
+    GetInvocationKeyRequest, GetInvocationKeyResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvocationKey,
+    InvokeAndAwaitRequest, InvokeAndAwaitRequestJson, InvokeAndAwaitResponse,
+    InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson, InvokeResponse, InvokeResult,
+    InvokeResultJson, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest,
+    ResumeWorkerResponse, UnknownError, VersionedWorkerId, WorkerError as GrpcWorkerError,
+    WorkerExecutionError, WorkerMetadata,
 };
 use tap::TapFallible;
 use tonic::metadata::MetadataMap;
@@ -33,21 +33,6 @@ pub struct WorkerGrpcApi {
 
 #[async_trait::async_trait]
 impl GrpcWorkerService for WorkerGrpcApi {
-    async fn get_worker_by_id(
-        &self,
-        request: Request<GetWorkerByIdRequest>,
-    ) -> Result<Response<GetWorkerByIdResponse>, Status> {
-        let (m, _, r) = request.into_parts();
-        let response = match self.get_worker_by_id(r, m).await {
-            Ok(worker_id) => get_worker_by_id_response::Result::Success(worker_id),
-            Err(error) => get_worker_by_id_response::Result::Error(error),
-        };
-
-        Ok(Response::new(GetWorkerByIdResponse {
-            result: Some(response),
-        }))
-    }
-
     async fn launch_new_worker(
         &self,
         request: Request<LaunchNewWorkerRequest>,
@@ -273,20 +258,6 @@ impl WorkerGrpcApi {
                 })),
             }),
         }
-    }
-
-    async fn get_worker_by_id(
-        &self,
-        request: GetWorkerByIdRequest,
-        metadata: MetadataMap,
-    ) -> Result<VersionedWorkerId, GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
-
-        let worker_id = make_crate_worker_id(request.worker_id)?;
-
-        let worker = self.worker_service.get_by_id(&worker_id, &auth).await?;
-
-        Ok(worker.into())
     }
 
     async fn launch_new_worker(

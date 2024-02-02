@@ -1,6 +1,9 @@
 enable_tracing_console = false
 enable_json_log = false
 
+grpc_address = "0.0.0.0"
+http_address = "0.0.0.0"
+
 [oplog]
 max_operations_before_commit = 128
 operations_to_load = 128
@@ -13,6 +16,8 @@ max_concurrent_streams = 1024
 event_broadcast_capacity = 16
 event_history_size = 128
 fuel_to_borrow = 10000
+epoch_interval = "10ms"
+epoch_ticks = 1
 
 [retry]
 max_attempts = 3
@@ -28,6 +33,8 @@ time_to_idle = "12h"
 type = "Grpc"
 
 [template_service.config]
+max_template_size = 52428800 # 50 Mb
+
 # host
 # port
 # access_token
@@ -125,3 +132,7 @@ type = "Redis"
 
 [workers]
 type = "Redis"
+
+[invocation_keys]
+pending_key_retention = "1m"
+confirm_queue_capacity = 1024

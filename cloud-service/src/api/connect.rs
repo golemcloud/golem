@@ -648,10 +648,7 @@ mod keep_alive {
 
             // Make sure that ping/pong isn't executed
             let next = timeout(Duration::ZERO, websocket_keep_alive.next()).await;
-            assert!(
-                matches!(next, Err(_)),
-                "Expected to receive a timeout error"
-            );
+            assert!(next.is_err(), "Expected to receive a timeout error");
 
             let next = websocket_keep_alive.next().await;
 

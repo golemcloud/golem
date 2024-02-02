@@ -34,8 +34,9 @@ fred = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
-http-body = "1.0.0-rc.2" # keep in sync with wasmtime
-http-body-util = "0.1.0-rc.2" # keep in sync with wasmtime
+http_02 = { package = "http", version = "0.2.11" }
+http-body = "1.0.0" # keep in sync with wasmtime
+http-body-util = "0.1.0" # keep in sync with wasmtime
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
 io-extras = "0.18.1"
@@ -55,10 +56,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-wasmtime = { version = "=15.0.0", features = ["component-model"] }
-wasmtime-runtime = { version = "=15.0.0" }
-wasmtime-wasi = { version = "=15.0.0" }
-wasmtime-wasi-http = { version = "=15.0.0" }
+wasmtime = { version = "=17.0.0", features = ["component-model"] }
+wasmtime-runtime = { version = "=17.0.0" }
+wasmtime-wasi = { version = "=17.0.0" }
+wasmtime-wasi-http = { version = "=17.0.0" }
 webpki-roots = { workspace = true }
 windows-sys = "0.52.0"
 log = "0.4.20"

@@ -88,7 +88,8 @@ impl ResourceLimitsGrpc {
             &(self.endpoint.clone(), self.access_token, body),
             |(endpoint, access_token, body)| {
                 Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(endpoint.clone()).await?;
+                    let mut client =
+                        CloudLimitsServiceClient::connect(endpoint.as_http_02()).await?;
                     let request = authorised_request(
                         BatchUpdateLimitsRequest {
                             batch_update_resource_limits: Some(body.clone()),
@@ -127,7 +128,7 @@ impl ResourceLimitsGrpc {
             &(self.endpoint.clone(), self.access_token, account_id.clone()),
             |(url, access_token, account_id)| {
                 Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(url.clone()).await?;
+                    let mut client = CloudLimitsServiceClient::connect(url.as_http_02()).await?;
                     let request = authorised_request(
                         GetLimitsRequest {
                             account_id: Some(account_id.clone().into()),
@@ -401,5 +402,15 @@ impl ResourceLimits for ResourceLimitsMock {
 
     async fn get_max_memory(&self, _account_id: &AccountId) -> Result<usize, GolemError> {
         unimplemented!()
+    }
+}
+
+pub trait UriBackConversion {
+    fn as_http_02(&self) -> http_02::Uri;
+}
+
+impl UriBackConversion for http::Uri {
+    fn as_http_02(&self) -> http_02::Uri {
+        self.to_string().parse().unwrap()
     }
 }
