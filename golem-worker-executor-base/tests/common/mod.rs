@@ -85,6 +85,12 @@ pub struct TestWorkerExecutor {
 
 impl TestWorkerExecutor {
     pub fn store_template(&self, source: &Path) -> TemplateId {
+        let template_id = self.store_template_unverified(source);
+        dump_template_info(source);
+        template_id
+    }
+
+    pub fn store_template_unverified(&self, source: &Path) -> TemplateId {
         let uuid = Uuid::new_v4();
 
         let cwd = env::current_dir().expect("Failed to get current directory");
@@ -103,8 +109,6 @@ impl TestWorkerExecutor {
 
         let _ = std::fs::copy(source, target_dir.join(format!("{uuid}-0.wasm")))
             .expect("Failed to copy WASM to the local template store");
-
-        dump_template_info(source);
 
         TemplateId(uuid)
     }
@@ -1298,7 +1302,8 @@ fn dump_template_info(path: &Path) {
     let component = Component::<IgnoreAllButMetadata>::from_bytes(&data).unwrap();
 
     let state = AnalysisContext::new(component);
-    let exports = state.get_top_level_exports().unwrap();
+    let exports = state.get_top_level_exports();
 
-    info!("Exports: {exports:?}");
+    info!("Exports of {path:?}: {exports:?}");
+    let _ = exports.unwrap();
 }

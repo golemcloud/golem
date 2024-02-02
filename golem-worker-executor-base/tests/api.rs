@@ -906,7 +906,8 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message() {
 
     let mut executor = common::start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/old-component.wasm"));
+    let template_id =
+        executor.store_template_unverified(Path::new("../test-templates/old-component.wasm"));
     let result = executor
         .try_start_worker(&template_id, "old-component-1")
         .await;

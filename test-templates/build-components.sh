@@ -167,6 +167,8 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "js" ]; then
 
     if [ "$rebuild" = true ]; then
       rm *.wasm
+      rm package-lock.json
+      rm -rf node_modules
     fi
     mkdir -pv out
     npm install
