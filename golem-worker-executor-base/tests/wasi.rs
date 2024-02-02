@@ -349,6 +349,7 @@ async fn http_client() {
     let template_id = executor.store_template(Path::new("../test-templates/http-client.wasm"));
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let worker_id = executor
         .try_start_worker_versioned(&template_id, 0, "http-client-1", vec![], env)

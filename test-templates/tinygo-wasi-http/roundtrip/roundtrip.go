@@ -123,13 +123,13 @@ func (t WasiHttpTransport) RoundTrip(request *http.Request) (*http.Response, err
 	}
 
 	// TODO: timeouts
-	connectTimeoutMs := go_wasi_http.None[uint64]()
-	firstByteTimeoutMs := go_wasi_http.None[uint64]()
-	betweenBytesTimeoutMs := go_wasi_http.None[uint64]()
+	connectTimeoutNanos := go_wasi_http.None[uint64]()
+	firstByteTimeoutNanos := go_wasi_http.None[uint64]()
+	betweenBytesTimeoutNanos := go_wasi_http.None[uint64]()
 	options := go_wasi_http.NewRequestOptions()
-	options.SetConnectTimeout(connectTimeoutMs)
-	options.SetFirstByteTimeout(firstByteTimeoutMs)
-	options.SetBetweenBytesTimeout(betweenBytesTimeoutMs)
+	options.SetConnectTimeout(connectTimeoutNanos)
+	options.SetFirstByteTimeout(firstByteTimeoutNanos)
+	options.SetBetweenBytesTimeout(betweenBytesTimeoutNanos)
 
 	futureResult := go_wasi_http.WasiHttp0_2_0_OutgoingHandlerHandle(requestHandle, go_wasi_http.Some(options))
 	if futureResult.IsErr() {
