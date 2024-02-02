@@ -16,6 +16,9 @@
   },
   "promises": "Promises",
   "template-interface": "Template Interface",
+  "faq": "FAQ",
+  "technical-details": "Technical details",
+  "release-notes": "Release Notes",
   "-- API Reference": {
     "type": "separator",
     "title": "API Reference"
@@ -26,7 +29,5 @@
   "-- Other": {
     "type": "separator",
     "title": "Other"
-  },
-  "faq": "FAQ",
-  "release-notes": "Release Notes"
+  }
 }

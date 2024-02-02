@@ -1,0 +1,46 @@
+# Technical details
+
+This page summarizes some of the technical details for people familiar with the WASM ecosystem.
+
+## Runtime
+Golem uses a forked version of [Wasmtime v17.0](https://wasmtime.dev/). The fork contains minimal changes to the original required for implementing the _durability properties_ of Golem. The [forked repository is available on GitHub](https://github.com/golemcloud/wasmtime/tree/golem-wasmtime-17).
+
+## WASI
+Golem provides the following host interfaces:
+
+- The [final WASI Preview2](https://github.com/WebAssembly/WASI/blob/main/preview2/README.md)
+- [WASI Logging](https://github.com/WebAssembly/wasi-logging/)
+- [WASI Blobstore](https://github.com/WebAssembly/wasi-blobstore)
+- A subset of [WASI KeyValue](https://github.com/WebAssembly/wasi-keyvalue)
+
+<Callout type="info">
+The WASI TCP and UDP interfaces are currently not supporting persistent execution but they are added to the linker to avoid linker errors for example with `componentize-py` outputs.
+</Callout>
+
+## Component model, tiers, commands, reactors
+Golem is built on the [WebAssembly Component Model](https://github.com/WebAssembly/component-model) from scratch. The _templates_ for Golem _workers_ are WASM components, and the exported component model _functions_ and _instances_ are directly exposed via Golem's worker API for invocation.
+
+As explained on the [building templates](/docs/building-templates.md) page, Golem uses the concept of **tiers** to categorize support for various guest languages.
+
+The tiers are:
+- **Tier 1** would be a platform that built-in support for the component model
+- **Tier 2** languages are having a WIT binding generator and thus can be used to implement "reactor" (or "library") components, with multiple exported functions, and they can import and use any of the supported host interfaces.
+- **Tier 3** languages have no binding generators, but they can be used with the preview1 adapter to implement "command" components, exposing a single parameterless `run` function. There are Golem features allowing some level of interactivity with these components via standard input and output.
+- **Tier 4** languages are everything else
+
+## Repositories
+We have the following open-source repositories:
+
+- [Golem WIT](https://github.com/golemcloud/golem-wit) holds all the WIT definitions of the provided WASI interfaces, as well as the matching _preview1 adapter modules_.
+- [Golem Services](https://github.com/golemcloud/golem-services) is the primary repository containing all the open-sourced Golem services.
+- [Golem CLI](https://github.com/golemcloud/golem-cli) is the repository for the `golem` command line interface
+- [Golem Examples](https://github.com/golemcloud/golem-examples) is a repository of example template projects, exposed by the `golem new ...` command.
+- [Golem WASM AST](https://github.com/golemcloud/golem-wasm-ast) is a higher level library on top of `wasmparser` and `wasm-encoder` used by Golem to analyse the uploaded components.
+- [Golem Cloud CLI](https://github.com/golemcloud/golem-cloud-cli) is the repository for the Golem Cloud (hosted) command line interface
+- [docs](https://github.com/golemcloud/docs) holds these documentation pages.
+- [Wasmtime](https://github.com/golemcloud/wasmtime) is the forked version of Wasmtime used by Golem.
+- [reqwest](https://github.com/golemcloud/reqwest) is a fork of the Rust `reqwest` library, providing a **WASI-Http based HTTP client**.
+- [go-wasi-http](https://github.com/golemcloud/go-wasi-http) is a Go package implementing the [http.RoundTripper](https://pkg.go.dev/net/http#RoundTripper) interface, allowing Go programs to use the built-in http client through WASI Http.
+- [golem-rust](https://github.com/golemcloud/golem-rust) is an experimental set of Rust macros reducing the boilerplate of WIT bindings.
+- [golem-openapi-client-generator](https://github.com/golemcloud/golem-openapi-client-generator) is a code generator that transforms GOlem's OpenAPI specs into a Rust client library.
+- [golem-scalajs-wit-bindgen](https://github.com/golemcloud/golem-scalajs-wit-bindgen) is a binding generator from WIT for Scala.js
