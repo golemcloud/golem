@@ -5,6 +5,7 @@ The **Golem Cloud February 2024 release**, and the first **Golem Open Source** r
 This version uses the **final WASI Preview2** version, released earlier in January 2024.
 
 This page only contains the changes _since the January 2024 release_. Please check the following pages for the previous release notes:
+
 - [January 2024](/docs/release-notes/january-2024.md)
 - [August 2023](/docs/release-notes/august-2023.md)
 
@@ -15,7 +16,6 @@ The WASI interface definitions had breaking changes since the version implemente
 - The **required versions of** tooling (depending on the guest language) has been changed. Make sure to install the new versions before compiling any template for Golem Cloud!
 - The existing templates **cannot run** on the updated version of Golem Cloud. They need to be recompiled with the new tooling.
 - There are some differences in the generated bindings / required settings etc, depending on the used guest language, so the template's source code may have to be updated before recompilation. These differences are collected below.
-
 
 ### Common changes
 
@@ -39,6 +39,7 @@ The new tier2 and tier3 adapters are in the [golem-wit](https://github.com/golem
 Rust projects now have to use `cargo-component` version `0.7.0`, which comes with some breaking changes as it is documented on [it's release page](https://github.com/bytecodealliance/cargo-component/releases/tag/v0.7.0).
 
 The `cargo-component-bindings` dependency has to be replaced with a `wit-bindgen` dependency:
+
 ```toml
 [dependencies]
 wit-bindgen = { version = "0.16.0", default-features = false, features = ["realloc"] }
@@ -79,8 +80,7 @@ The `package.json` file needs to be updated to use the updated version of the `j
 ### Python specific changes
 
 The version of `componentize-py` (`0.11.0`) must be downloaded from [https://github.com/golemcloud/componentize-py/releases/tag/golem-feb-2024
-](https://github.com/golemcloud/componentize-py/releases/tag/golem-feb-2024
-)
+](https://github.com/golemcloud/componentize-py/releases/tag/golem-feb-2024)
 
 ### Go specific changes
 

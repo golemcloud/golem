@@ -3,9 +3,11 @@
 This page summarizes some of the technical details for people familiar with the WASM ecosystem.
 
 ## Runtime
+
 Golem uses a forked version of [Wasmtime v17.0](https://wasmtime.dev/). The fork contains minimal changes to the original required for implementing the _durability properties_ of Golem. The [forked repository is available on GitHub](https://github.com/golemcloud/wasmtime/tree/golem-wasmtime-17).
 
 ## WASI
+
 Golem provides the following host interfaces:
 
 - The [final WASI Preview2](https://github.com/WebAssembly/WASI/blob/main/preview2/README.md)
@@ -14,21 +16,25 @@ Golem provides the following host interfaces:
 - A subset of [WASI KeyValue](https://github.com/WebAssembly/wasi-keyvalue)
 
 <Callout type="info">
-The WASI TCP and UDP interfaces are currently not supporting persistent execution but they are added to the linker to avoid linker errors for example with `componentize-py` outputs.
+  The WASI TCP and UDP interfaces are currently not supporting persistent execution but they are
+  added to the linker to avoid linker errors for example with `componentize-py` outputs.
 </Callout>
 
 ## Component model, tiers, commands, reactors
+
 Golem is built on the [WebAssembly Component Model](https://github.com/WebAssembly/component-model) from scratch. The _templates_ for Golem _workers_ are WASM components, and the exported component model _functions_ and _instances_ are directly exposed via Golem's worker API for invocation.
 
 As explained on the [building templates](/docs/building-templates.md) page, Golem uses the concept of **tiers** to categorize support for various guest languages.
 
 The tiers are:
+
 - **Tier 1** would be a platform that built-in support for the component model
 - **Tier 2** languages are having a WIT binding generator and thus can be used to implement "reactor" (or "library") components, with multiple exported functions, and they can import and use any of the supported host interfaces.
 - **Tier 3** languages have no binding generators, but they can be used with the preview1 adapter to implement "command" components, exposing a single parameterless `run` function. There are Golem features allowing some level of interactivity with these components via standard input and output.
 - **Tier 4** languages are everything else
 
 ## Repositories
+
 We have the following open-source repositories:
 
 - [Golem WIT](https://github.com/golemcloud/golem-wit) holds all the WIT definitions of the provided WASI interfaces, as well as the matching _preview1 adapter modules_.
