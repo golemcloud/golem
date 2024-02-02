@@ -4,7 +4,7 @@ use wasmtime_wasi::preview2::WasiView;
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
-use crate::preview2::wasi::keyvalue::wasi_cloud_error::{Error, Host, HostError};
+use crate::preview2::wasi::keyvalue::wasi_keyvalue_error::{Error, Host, HostError};
 use crate::workerctx::WorkerCtx;
 
 #[async_trait]

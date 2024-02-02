@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 use assert2::{assert, check};
 use golem_api_grpc::proto::golem::worker::{val, Val};
 use golem_common::model::WorkerStatus;
-use http::{Response, StatusCode};
+use http_02::{Response, StatusCode};
 use tokio::spawn;
 use tokio::time::Instant;
 use tonic::transport::Body;
@@ -349,6 +349,7 @@ async fn http_client() {
     let template_id = executor.store_template(Path::new("../test-templates/http-client.wasm"));
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let worker_id = executor
         .try_start_worker_versioned(&template_id, 0, "http-client-1", vec![], env)

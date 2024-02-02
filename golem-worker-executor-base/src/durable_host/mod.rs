@@ -46,7 +46,7 @@ use tracing::{debug, info};
 use wasmtime::component::{Instance, Resource};
 use wasmtime::AsContextMut;
 use wasmtime_wasi::preview2::{
-    FsError, I32Exit, SocketError, Stderr, Subscribe, Table, WasiCtx, WasiView,
+    FsError, I32Exit, ResourceTable, SocketError, Stderr, Subscribe, WasiCtx, WasiView,
 };
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequest,
@@ -77,7 +77,7 @@ pub use self::golem::*;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
-    table: Table,
+    table: ResourceTable,
     wasi: WasiCtx,
     wasi_http: WasiHttpCtx,
     pub worker_id: VersionedWorkerId,
@@ -1232,11 +1232,11 @@ impl Error for SuspendForSleep {}
 
 // This wrapper forces the compiler to choose the wasmtime_wasi implementations for T: WasiView
 impl<'a, Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'a, Ctx> {
-    fn table(&self) -> &Table {
+    fn table(&self) -> &ResourceTable {
         &self.0.table
     }
 
-    fn table_mut(&mut self) -> &mut Table {
+    fn table_mut(&mut self) -> &mut ResourceTable {
         &mut self.0.table
     }
 
@@ -1254,7 +1254,7 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
         &mut self.0.wasi_http
     }
 
-    fn table(&mut self) -> &mut Table {
+    fn table(&mut self) -> &mut ResourceTable {
         &mut self.0.table
     }
 

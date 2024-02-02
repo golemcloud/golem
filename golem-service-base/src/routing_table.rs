@@ -58,7 +58,7 @@ impl RoutingTableServiceDefault {
 #[async_trait]
 impl RoutingTableService for RoutingTableServiceDefault {
     async fn get_routing_table(&self) -> Result<RoutingTable, RoutingTableError> {
-        let uri: hyper::Uri = self.routing_table_config.url().to_string().parse().unwrap();
+        let uri: http_02::Uri = self.routing_table_config.url().to_string().parse().unwrap();
         self.cache
             .get_or_insert_simple(&(), || {
                 Box::pin(async move {

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use assert2::check;
-use http::{Response, StatusCode};
+use http_02::{Response, StatusCode};
 
 use golem_api_grpc::proto::golem::worker::{worker_execution_error, LogEvent, TemplateParseFailed};
 use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;
@@ -906,7 +906,8 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message() {
 
     let mut executor = common::start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/old-component.wasm"));
+    let template_id =
+        executor.store_template_unverified(Path::new("../test-templates/old-component.wasm"));
     let result = executor
         .try_start_worker(&template_id, "old-component-1")
         .await;

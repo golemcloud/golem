@@ -1,14 +1,14 @@
 use async_trait::async_trait;
 use golem_common::model::WrappedFunctionType;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::{TableError, WasiView};
+use wasmtime_wasi::preview2::{ResourceTableError, WasiView};
 
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
 use crate::durable_host::{Durability, DurableWorkerCtx, SerializableError};
 use crate::metrics::wasm::record_host_function_call;
-use crate::preview2::wasi::keyvalue::batch::{
-    Bucket, Error, Host, IncomingValue, Key, Keys, OutgoingValue,
+use crate::preview2::wasi::keyvalue::eventual_batch::{
+    Bucket, Error, Host, IncomingValue, Key, OutgoingValue,
 };
 use crate::workerctx::WorkerCtx;
 
@@ -17,9 +17,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_many(
         &mut self,
         bucket: Resource<Bucket>,
-        keys: Keys,
-    ) -> anyhow::Result<Result<Vec<Resource<IncomingValue>>, Resource<Error>>> {
-        record_host_function_call("keyvalue::batch", "get_many");
+        keys: Vec<Key>,
+    ) -> anyhow::Result<Result<Vec<Option<Resource<IncomingValue>>>, Resource<Error>>> {
+        record_host_function_call("keyvalue::eventual_batch", "get_many");
         let account_id = self.private_state.account_id.clone();
         let bucket = self
             .as_wasi_view()
@@ -27,38 +27,38 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .get::<BucketEntry>(&bucket)?
             .name
             .clone();
-        let result = Durability::<Ctx, Vec<Option<Vec<u8>>>, SerializableError>::wrap(
-            self,
-            WrappedFunctionType::ReadRemote,
-            "golem keyvalue::readwrite::get_many",
-            |ctx| {
-                ctx.private_state.key_value_service.get_many(
-                    account_id.clone(),
-                    bucket.clone(),
-                    keys.clone(),
-                )
-            },
-        )
-        .await
-        .map(|result| result.into_iter().collect::<Option<Vec<_>>>());
+        let result: anyhow::Result<Vec<Option<Vec<u8>>>> =
+            Durability::<Ctx, Vec<Option<Vec<u8>>>, SerializableError>::wrap(
+                self,
+                WrappedFunctionType::ReadRemote,
+                "golem keyvalue::eventual_batch::get_many",
+                |ctx| {
+                    ctx.private_state.key_value_service.get_many(
+                        account_id.clone(),
+                        bucket.clone(),
+                        keys.clone(),
+                    )
+                },
+            )
+            .await;
         match result {
-            Ok(Some(values)) => {
-                let incoming_values = values
-                    .into_iter()
-                    .map(|value| {
-                        self.as_wasi_view()
-                            .table_mut()
-                            .push(IncomingValueEntry::new(value))
-                    })
-                    .collect::<Result<Vec<Resource<IncomingValue>>, _>>()?;
-                Ok(Ok(incoming_values))
-            }
-            Ok(None) => {
-                let error = self
-                    .as_wasi_view()
-                    .table_mut()
-                    .push(ErrorEntry::new("Key not found".to_string()))?;
-                Ok(Err(error))
+            Ok(values) => {
+                let mut result = Vec::new();
+                for maybe_incoming_value in values {
+                    match maybe_incoming_value {
+                        Some(incoming_value) => {
+                            let value = self
+                                .as_wasi_view()
+                                .table_mut()
+                                .push(IncomingValueEntry::new(incoming_value))?;
+                            result.push(Some(value));
+                        }
+                        None => {
+                            result.push(None);
+                        }
+                    }
+                }
+                Ok(Ok(result))
             }
             Err(e) => {
                 let error = self
@@ -70,8 +70,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn get_keys(&mut self, bucket: Resource<Bucket>) -> anyhow::Result<Keys> {
-        record_host_function_call("keyvalue::batch", "get_keys");
+    async fn keys(
+        &mut self,
+        bucket: Resource<Bucket>,
+    ) -> anyhow::Result<Result<Vec<Key>, Resource<Error>>> {
+        record_host_function_call("keyvalue::eventual_batch", "get_keys");
         let account_id = self.private_state.account_id.clone();
         let bucket = self
             .as_wasi_view()
@@ -82,7 +85,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let keys = Durability::<Ctx, Vec<String>, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
-            "golem keyvalue::readwrite::get_keys",
+            "golem keyvalue::eventual_batch::get_keys",
             |ctx| {
                 ctx.private_state
                     .key_value_service
@@ -90,7 +93,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             },
         )
         .await?;
-        Ok(keys)
+        Ok(Ok(keys))
     }
 
     async fn set_many(
@@ -98,7 +101,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key_values: Vec<(Key, Resource<OutgoingValue>)>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        record_host_function_call("keyvalue::batch", "set_many");
+        record_host_function_call("keyvalue::eventual_batch", "set_many");
         let account_id = self.private_state.account_id.clone();
         let bucket = self
             .as_wasi_view()
@@ -119,11 +122,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .clone();
                 Ok((key, outgoing_value))
             })
-            .collect::<Result<Vec<(String, Vec<u8>)>, TableError>>()?;
+            .collect::<Result<Vec<(String, Vec<u8>)>, ResourceTableError>>()?;
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
-            "golem keyvalue::readwrite::set_many",
+            "golem keyvalue::eventual_batch::set_many",
             |ctx| {
                 ctx.private_state.key_value_service.set_many(
                     account_id.clone(),
@@ -148,9 +151,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn delete_many(
         &mut self,
         bucket: Resource<Bucket>,
-        keys: Keys,
+        keys: Vec<Key>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        record_host_function_call("keyvalue::batch", "delete_many");
+        record_host_function_call("keyvalue::eventual_batch", "delete_many");
         let account_id = self.private_state.account_id.clone();
         let bucket = self
             .as_wasi_view()
@@ -161,7 +164,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
-            "golem keyvalue::readwrite::delete_many",
+            "golem keyvalue::eventual_batch::delete_many",
             |ctx| {
                 ctx.private_state.key_value_service.delete_many(
                     account_id.clone(),

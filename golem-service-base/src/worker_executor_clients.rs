@@ -16,7 +16,8 @@ pub struct WorkerExecutorClientsDefault {}
 #[async_trait]
 impl WorkerExecutorClients for WorkerExecutorClientsDefault {
     async fn lookup(&self, pod: &Pod) -> Result<WorkerExecutorClient<Channel>, String> {
-        let client = WorkerExecutorClient::connect(pod.uri())
+        let uri: http_02::Uri = pod.uri().to_string().parse().unwrap();
+        let client = WorkerExecutorClient::connect(uri)
             .await
             .map_err(|e| e.to_string())?;
         Ok(client)

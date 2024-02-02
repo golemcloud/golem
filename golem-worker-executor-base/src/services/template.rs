@@ -24,7 +24,7 @@ use wasmtime::component::Component;
 use wasmtime::Engine;
 
 use crate::error::GolemError;
-use crate::grpc::{is_grpc_retriable, GrpcError};
+use crate::grpc::{is_grpc_retriable, GrpcError, UriBackConversion};
 use crate::metrics::template::record_compilation_time;
 use crate::services::compiled_template;
 use crate::services::compiled_template::CompiledTemplateService;
@@ -239,7 +239,7 @@ async fn download_via_grpc(
         ),
         |(endpoint, template_id, access_token)| {
             Box::pin(async move {
-                let mut client = TemplateServiceClient::connect(endpoint.clone())
+                let mut client = TemplateServiceClient::connect(endpoint.as_http_02())
                     .await?
                     .max_decoding_message_size(max_template_size);
 
@@ -298,7 +298,7 @@ async fn get_latest_version_via_grpc(
         ),
         |(endpoint, template_id, access_token)| {
             Box::pin(async move {
-                let mut client = TemplateServiceClient::connect(endpoint.clone()).await?;
+                let mut client = TemplateServiceClient::connect(endpoint.as_http_02()).await?;
 
                 let request = authorised_request(
                     GetLatestTemplateVersionRequest {

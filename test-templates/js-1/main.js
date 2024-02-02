@@ -1,4 +1,4 @@
-import { now } from "wasi:clocks/wall-clock@0.2.0-rc-2023-11-10";
+import { now } from "wasi:clocks/wall-clock@0.2.0";
 
 export function hello(name) {
     let x = Math.random();

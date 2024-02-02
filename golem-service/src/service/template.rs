@@ -147,7 +147,10 @@ impl TemplateService for TemplateServiceDefault {
             versioned_template_id: versioned_template_id.clone(),
         };
 
-        info!("Pushing {:?}", user_template_id);
+        info!(
+            "Uploaded template {} version 0 with exports {:?}",
+            versioned_template_id.template_id, metadata.exports
+        );
 
         let template_size: i32 = data.len().try_into().map_err(|e| {
             TemplateError::internal(format!("Failed to convert data length: {}", e))
@@ -157,8 +160,6 @@ impl TemplateService for TemplateServiceDefault {
             self.upload_user_template(&user_template_id, data.clone()),
             self.upload_protected_template(&protected_template_id, data)
         )?;
-
-        info!("TemplateService create_template object store finished");
 
         let template = Template {
             template_name: template_name.clone(),
@@ -171,8 +172,6 @@ impl TemplateService for TemplateServiceDefault {
 
         self.template_repo.upsert(&template.clone().into()).await?;
 
-        info!("TemplateService create_template finished successfully");
-
         Ok(template)
     }
 
@@ -181,7 +180,7 @@ impl TemplateService for TemplateServiceDefault {
         template_id: &TemplateId,
         data: Vec<u8>,
     ) -> Result<Template, TemplateError> {
-        info!("Updating template {}", template_id.0);
+        info!("Updating template {}", template_id);
 
         let metadata = self.process_template(&data)?;
 
@@ -193,7 +192,10 @@ impl TemplateService for TemplateServiceDefault {
             .map(Template::next_version)
             .ok_or(TemplateError::UnknownTemplateId(template_id.clone()))?;
 
-        info!("Pushing {:?}", next_template.user_template_id);
+        info!(
+            "Uploaded template {} version {} with exports {:?}",
+            template_id, next_template.versioned_template_id.version, metadata.exports
+        );
 
         let template_size: i32 = data.len().try_into().map_err(|e| {
             TemplateError::internal(format!("Failed to convert data length: {}", e))
@@ -203,8 +205,6 @@ impl TemplateService for TemplateServiceDefault {
             self.upload_user_template(&next_template.user_template_id, data.clone()),
             self.upload_protected_template(&next_template.protected_template_id, data)
         )?;
-
-        info!("TemplateService update_template object store finished");
 
         let template = Template {
             template_size,
