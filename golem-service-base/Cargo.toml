@@ -26,4 +26,4 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-proptest = "1.4.0"
+proptest = { workspace = true }

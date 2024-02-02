@@ -1,9 +1,8 @@
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
-use serde::{Deserialize, Serialize};
 use wasmtime::component::Resource;
 
-use crate::durable_host::{Durability, DurableWorkerCtx, SerializableError};
+use crate::durable_host::serialized::{SerializableError, SerializableIpAddresses};
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::WrappedFunctionType;
@@ -95,55 +94,4 @@ async fn drain_resolve_address_stream(
         }
     }
     Ok(addresses)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-enum SerializableIpAddress {
-    IPv4 { address: [u8; 4] },
-    IPv6 { address: [u16; 8] },
-}
-
-impl From<IpAddress> for SerializableIpAddress {
-    fn from(value: IpAddress) -> Self {
-        match value {
-            IpAddress::Ipv4(address) => SerializableIpAddress::IPv4 {
-                address: [address.0, address.1, address.2, address.3],
-            },
-            IpAddress::Ipv6(address) => SerializableIpAddress::IPv6 {
-                address: [
-                    address.0, address.1, address.2, address.3, address.4, address.5, address.6,
-                    address.7,
-                ],
-            },
-        }
-    }
-}
-
-impl From<SerializableIpAddress> for IpAddress {
-    fn from(value: SerializableIpAddress) -> Self {
-        match value {
-            SerializableIpAddress::IPv4 { address } => {
-                IpAddress::Ipv4((address[0], address[1], address[2], address[3]))
-            }
-            SerializableIpAddress::IPv6 { address } => IpAddress::Ipv6((
-                address[0], address[1], address[2], address[3], address[4], address[5], address[6],
-                address[7],
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-struct SerializableIpAddresses(Vec<SerializableIpAddress>);
-
-impl From<Vec<IpAddress>> for SerializableIpAddresses {
-    fn from(value: Vec<IpAddress>) -> Self {
-        SerializableIpAddresses(value.into_iter().map(|v| v.into()).collect())
-    }
-}
-
-impl From<SerializableIpAddresses> for Vec<IpAddress> {
-    fn from(value: SerializableIpAddresses) -> Self {
-        value.0.into_iter().map(|v| v.into()).collect()
-    }
 }

@@ -1,3 +1,4 @@
+use bincode::{Decode, Encode};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
@@ -36,7 +37,7 @@ pub fn parse_function_name(name: &str) -> (Option<&str>, &str) {
     }
 }
 
-#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub enum InterruptKind {
     Interrupt,
     Restart,

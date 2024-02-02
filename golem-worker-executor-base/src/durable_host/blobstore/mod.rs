@@ -7,7 +7,8 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::WasiView;
 
 use crate::durable_host::blobstore::types::ContainerEntry;
-use crate::durable_host::{Durability, DurableWorkerCtx, SerializableError};
+use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::blobstore::blobstore::{
     Container, ContainerName, Error, Host, ObjectId,
