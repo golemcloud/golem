@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use wasmtime::component::Resource;
 
-use crate::durable_host::{Durability, DurableWorkerCtx, SerializableError};
+use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::WrappedFunctionType;

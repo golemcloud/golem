@@ -66,6 +66,7 @@ lazy_static = "1.4.0"
 poem = "2.0.0"
 poem-openapi = { version = "4.0.0", features = ["swagger-ui", "chrono", "time", "humantime", "uuid", "url", "websocket"] }
 prometheus = { version = "0.13.3", features = ["process"] }
+proptest = "1.4.0"
 prost = "0.12.3"
 rustls = { version = "0.22.2" }
 serde = { version = "1.0", features = ["derive"] }

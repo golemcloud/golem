@@ -11,12 +11,13 @@ use tracing::info;
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::subscribe;
 
-use crate::durable_host::{Durability, DurableWorkerCtx, Ready, SerializableError};
+use crate::durable_host::{Durability, DurableWorkerCtx, Ready};
 use crate::metrics::wasm::record_host_function_call;
 
 use crate::durable_host::http::serialized::{
     SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
 };
+use crate::durable_host::serialized::SerializableError;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::{OplogEntry, WrappedFunctionType};
 use wasmtime_wasi_http::bindings::wasi::http::types::{

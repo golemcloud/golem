@@ -5,11 +5,10 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
-use std::ops::Add;
 use std::pin::Pin;
 use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use crate::error::{is_interrupt, is_suspend, GolemError};
 use crate::invocation::invoke_worker;
@@ -40,14 +39,11 @@ use golem_common::model::{
 };
 use golem_common::model::{OplogEntry, WrappedFunctionType};
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tracing::{debug, info};
 use wasmtime::component::{Instance, Resource};
 use wasmtime::AsContextMut;
-use wasmtime_wasi::preview2::{
-    FsError, I32Exit, ResourceTable, SocketError, Stderr, Subscribe, WasiCtx, WasiView,
-};
+use wasmtime_wasi::preview2::{I32Exit, ResourceTable, Stderr, Subscribe, WasiCtx, WasiView};
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequest,
 };
@@ -71,6 +67,7 @@ pub mod io;
 pub mod keyvalue;
 mod logging;
 mod random;
+pub mod serialized;
 mod sockets;
 
 pub use self::golem::*;
@@ -141,6 +138,34 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub async fn consume_hint_entries(&mut self) {
         self.private_state.consume_hint_entries().await
+    }
+
+    #[allow(unused)]
+    pub async fn dump_remaining_oplog(&self) {
+        let current = self.private_state.oplog_idx as usize;
+        let entries = self
+            .private_state
+            .oplog_service
+            .read(
+                &self.private_state.worker_id,
+                0,
+                self.private_state.oplog_size,
+            )
+            .await;
+        let mut dump = String::new();
+        dump.push_str(&format!(
+            "\nOplog dump for {}\n",
+            self.private_state.worker_id
+        ));
+        for (idx, entry) in entries.iter().enumerate() {
+            let mark = if idx == current { "*" } else { " " };
+            dump.push_str(&format!("{} {}: {:?}\n", mark, idx, entry));
+        }
+        dump.push_str(&format!(
+            "End of oplog dump for {}\n",
+            self.private_state.worker_id
+        ));
+        debug!("{}", dump);
     }
 }
 
@@ -1277,107 +1302,6 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
         } else {
             default_send_request(self, request)
         }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-struct SerializableDateTime {
-    seconds: u64,
-    nanoseconds: u32,
-}
-
-impl From<wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime>
-    for SerializableDateTime
-{
-    fn from(value: wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime) -> Self {
-        Self {
-            seconds: value.seconds,
-            nanoseconds: value.nanoseconds,
-        }
-    }
-}
-
-impl From<SerializableDateTime>
-    for wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime
-{
-    fn from(value: SerializableDateTime) -> Self {
-        Self {
-            seconds: value.seconds,
-            nanoseconds: value.nanoseconds,
-        }
-    }
-}
-
-impl From<SerializableDateTime> for SystemTime {
-    fn from(value: SerializableDateTime) -> Self {
-        SystemTime::UNIX_EPOCH.add(Duration::new(value.seconds, value.nanoseconds))
-    }
-}
-
-impl From<SerializableDateTime> for cap_std::time::SystemTime {
-    fn from(value: SerializableDateTime) -> Self {
-        cap_std::time::SystemTime::from_std(value.into())
-    }
-}
-
-impl From<SerializableDateTime> for fs_set_times::SystemTimeSpec {
-    fn from(value: SerializableDateTime) -> Self {
-        Self::Absolute(value.into())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-pub struct SerializableError {
-    message: String,
-}
-
-impl From<&anyhow::Error> for SerializableError {
-    fn from(value: &anyhow::Error) -> Self {
-        Self {
-            message: value.to_string(),
-        }
-    }
-}
-
-impl From<FsError> for SerializableError {
-    fn from(value: FsError) -> Self {
-        Self {
-            message: value.to_string(),
-        }
-    }
-}
-
-impl From<SerializableError> for anyhow::Error {
-    fn from(value: SerializableError) -> Self {
-        anyhow::Error::msg(value.message.clone())
-    }
-}
-
-impl From<SerializableError> for FsError {
-    fn from(value: SerializableError) -> Self {
-        FsError::trap(<SerializableError as Into<anyhow::Error>>::into(value))
-    }
-}
-
-impl From<GolemError> for SerializableError {
-    fn from(value: GolemError) -> Self {
-        Self {
-            message: value.to_string(),
-        }
-    }
-}
-
-impl From<&SocketError> for SerializableError {
-    fn from(value: &SocketError) -> Self {
-        Self {
-            message: value.to_string(),
-        }
-    }
-}
-
-impl From<SerializableError> for SocketError {
-    fn from(value: SerializableError) -> Self {
-        SocketError::trap(<SerializableError as Into<anyhow::Error>>::into(value))
     }
 }
 

@@ -1,16 +1,17 @@
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 use cap_std::fs::Metadata;
 use fs_set_times::{set_symlink_times, SystemTimeSpec};
 use metrohash::MetroHash128;
-use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
 use std::hash::Hasher;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use wasmtime::component::Resource;
 
-use crate::durable_host::{Durability, DurableWorkerCtx, SerializableDateTime, SerializableError};
+use crate::durable_host::serialized::{
+    SerializableDateTime, SerializableError, SerializableFileTimes,
+};
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::WrappedFunctionType;
@@ -176,30 +177,22 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             },
             |_ctx, stat| {
                 Ok(SerializableFileTimes {
-                    data_access_timestamp: stat.data_access_timestamp.map(|t| {
-                        SerializableDateTime {
-                            seconds: t.seconds,
-                            nanoseconds: t.nanoseconds,
-                        }
-                    }),
-                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| {
-                        SerializableDateTime {
-                            seconds: t.seconds,
-                            nanoseconds: t.nanoseconds,
-                        }
-                    }),
+                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
                 })
             },
             |_ctx, times| {
                 Box::pin(async move {
-                    let accessed = times
-                        .data_access_timestamp
-                        .as_ref()
-                        .map(|t| t.clone().into());
-                    let modified = times
-                        .data_modification_timestamp
-                        .as_ref()
-                        .map(|t| t.clone().into());
+                    let accessed = times.data_access_timestamp.as_ref().map(|t| {
+                        SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
+                            t.clone(),
+                        ))
+                    });
+                    let modified = times.data_modification_timestamp.as_ref().map(|t| {
+                        SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
+                            t.clone(),
+                        ))
+                    });
                     spawn_blocking(|| set_symlink_times(path, accessed, modified)).await?;
                     stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
                     stat.data_modification_timestamp =
@@ -238,30 +231,22 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             },
             |_ctx, stat| {
                 Ok(SerializableFileTimes {
-                    data_access_timestamp: stat.data_access_timestamp.map(|t| {
-                        SerializableDateTime {
-                            seconds: t.seconds,
-                            nanoseconds: t.nanoseconds,
-                        }
-                    }),
-                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| {
-                        SerializableDateTime {
-                            seconds: t.seconds,
-                            nanoseconds: t.nanoseconds,
-                        }
-                    }),
+                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
                 })
             },
             |_ctx, times| {
                 Box::pin(async move {
-                    let accessed = times
-                        .data_access_timestamp
-                        .as_ref()
-                        .map(|t| t.clone().into());
-                    let modified = times
-                        .data_modification_timestamp
-                        .as_ref()
-                        .map(|t| t.clone().into());
+                    let accessed = times.data_access_timestamp.as_ref().map(|t| {
+                        SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
+                            t.clone(),
+                        ))
+                    });
+                    let modified = times.data_modification_timestamp.as_ref().map(|t| {
+                        SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
+                            t.clone(),
+                        ))
+                    });
                     spawn_blocking(|| set_symlink_times(full_path, accessed, modified)).await?;
                     stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
                     stat.data_modification_timestamp =
@@ -481,12 +466,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn convert_error_code(&mut self, err: FsError) -> anyhow::Result<ErrorCode> {
         Host::convert_error_code(&mut self.as_wasi_view(), err)
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-struct SerializableFileTimes {
-    pub data_access_timestamp: Option<SerializableDateTime>,
-    pub data_modification_timestamp: Option<SerializableDateTime>,
 }
 
 fn calculate_metadata_hash(meta: &DescriptorStat) -> MetadataHashValue {

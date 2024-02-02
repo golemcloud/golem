@@ -2141,6 +2141,7 @@ dependencies = [
  "log",
  "metrohash",
  "prometheus",
+ "proptest",
  "prost",
  "redis",
  "ringbuf",
