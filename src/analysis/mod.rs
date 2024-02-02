@@ -4,26 +4,26 @@ use mappable_rc::Mrc;
 use std::cell::RefCell;
 use std::fmt::Debug;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysedExport {
     Function(AnalysedFunction),
     Instance(AnalysedInstance),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysedFunction {
     pub name: String,
     pub params: Vec<AnalysedFunctionParameter>,
     pub results: Vec<AnalysedFunctionResult>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysedInstance {
     pub name: String,
     pub funcs: Vec<AnalysedFunction>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysedType {
     Bool,
     S8,
@@ -71,13 +71,13 @@ impl From<&PrimitiveValueType> for AnalysedType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysedFunctionParameter {
     pub name: String,
     pub typ: AnalysedType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysedFunctionResult {
     pub name: Option<String>,
     pub typ: AnalysedType,
@@ -246,41 +246,50 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
         })
     }
 
+    fn analyse_component_type_idx(
+        &self,
+        component_type_idx: &ComponentTypeIdx,
+    ) -> AnalysisResult<AnalysedType> {
+        let (component_type_section, next_ctx) = self.get_final_referenced(
+            format!("component type {component_type_idx}"),
+            |component| component.get_component_type(*component_type_idx),
+        )?;
+        match &*component_type_section {
+            ComponentSection::Type(ComponentType::Defined(component_defined_type)) => {
+                next_ctx.analyse_component_defined_type(component_defined_type)
+            }
+            ComponentSection::Type(ComponentType::Func(_)) => Err(AnalysisFailure::failed(
+                "Passing functions in exported functions is not supported",
+            )),
+            ComponentSection::Type(ComponentType::Component(_)) => Err(AnalysisFailure::failed(
+                "Passing components in exported functions is not supported",
+            )),
+            ComponentSection::Type(ComponentType::Instance(_)) => Err(AnalysisFailure::failed(
+                "Passing instances in exported functions is not supported",
+            )),
+            ComponentSection::Type(ComponentType::Resource { .. }) => Err(AnalysisFailure::failed(
+                "Passing resources in exported functions is not supported",
+            )),
+            ComponentSection::Import(ComponentImport { desc, .. }) => match desc {
+                ComponentTypeRef::Type(TypeBounds::Eq(component_type_idx)) => {
+                    self.analyse_component_type_idx(component_type_idx)
+                }
+                _ => Err(AnalysisFailure::failed(format!(
+                    "Imports {desc:?} is not supported as a defined type"
+                ))),
+            },
+            _ => Err(AnalysisFailure::failed(format!(
+                "Expected component type, but got {} instead",
+                component_type_section.type_name()
+            ))),
+        }
+    }
+
     fn analyse_component_val_type(&self, tpe: &ComponentValType) -> AnalysisResult<AnalysedType> {
         match tpe {
             ComponentValType::Primitive(primitive_value_type) => Ok(primitive_value_type.into()),
             ComponentValType::Defined(component_type_idx) => {
-                let (component_type_section, next_ctx) = self.get_final_referenced(
-                    format!("component type {component_type_idx}"),
-                    |component| component.get_component_type(*component_type_idx),
-                )?;
-                match &*component_type_section {
-                    ComponentSection::Type(ComponentType::Defined(component_defined_type)) => {
-                        next_ctx.analyse_component_defined_type(component_defined_type)
-                    }
-                    ComponentSection::Type(ComponentType::Func(_)) => Err(AnalysisFailure::failed(
-                        "Passing functions in exported functions is not supported",
-                    )),
-                    ComponentSection::Type(ComponentType::Component(_)) => {
-                        Err(AnalysisFailure::failed(
-                            "Passing components in exported functions is not supported",
-                        ))
-                    }
-                    ComponentSection::Type(ComponentType::Instance(_)) => {
-                        Err(AnalysisFailure::failed(
-                            "Passing instances in exported functions is not supported",
-                        ))
-                    }
-                    ComponentSection::Type(ComponentType::Resource { .. }) => {
-                        Err(AnalysisFailure::failed(
-                            "Passing resources in exported functions is not supported",
-                        ))
-                    }
-                    _ => Err(AnalysisFailure::failed(format!(
-                        "Expected component type, but got {} instead",
-                        component_type_section.type_name()
-                    ))),
-                }
+                self.analyse_component_type_idx(component_type_idx)
             }
         }
     }
