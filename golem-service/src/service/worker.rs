@@ -20,6 +20,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, ShardId, TemplateId, WorkerStatus,
 };
+use poem_openapi::types::ToJSON;
 use serde_json::Value;
 use tokio::time::sleep;
 use tokio_stream::Stream;
@@ -215,7 +216,7 @@ impl WorkerServiceDefault {
             Some(pod) => {
                 let worker_executor_client = self
                     .worker_executor_clients
-                    .lookup(pod)
+                    .lookup(pod.clone())
                     .await
                     .map_err(|err| {
                         WorkerError::Internal(format!(
@@ -226,7 +227,7 @@ impl WorkerServiceDefault {
                                 routing_table.number_of_shards.value,
                             ),
                             worker_id,
-                            err
+                            err.to_json_string()
                         ))
                     })?;
                 Ok(Some(worker_executor_client))

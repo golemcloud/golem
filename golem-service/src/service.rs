@@ -57,7 +57,10 @@ impl Services {
         let worker_executor_clients: Arc<
             dyn golem_service_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
         > = Arc::new(
-            golem_service_base::worker_executor_clients::WorkerExecutorClientsDefault::new(),
+            golem_service_base::worker_executor_clients::WorkerExecutorClientsDefault::new(
+                config.worker_connect_cache.max_capacity,
+                config.worker_connect_cache.time_to_idle,
+            ),
         );
 
         let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =

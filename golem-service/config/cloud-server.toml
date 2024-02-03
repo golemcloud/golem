@@ -19,7 +19,7 @@ database = "golem"
 object_prefix = ""
 
 [worker_connect_cache]
-max_capacity = 32
+max_capacity = 1000
 time_to_idle = "4h"
 
 [routing_table]

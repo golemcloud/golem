@@ -1,9 +1,9 @@
-use std::time::Duration;
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use golem_service_base::config::TemplateStoreConfig;
 use golem_service_base::routing_table::RoutingTableConfig;
 use serde::Deserialize;
+use std::time::Duration;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct TemplatesConfig {
@@ -18,10 +18,9 @@ pub struct DbSqliteConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct WorkerConnectCacheConig {
-    pub max_capacity: u32,
+    pub max_capacity: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
-
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -33,7 +32,7 @@ pub struct CloudServiceConfig {
     pub db: DbConfig,
     pub templates: TemplatesConfig,
     pub routing_table: RoutingTableConfig,
-    pub worker_connect_cache: WorkerConnectCacheConig
+    pub worker_connect_cache: WorkerConnectCacheConig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
