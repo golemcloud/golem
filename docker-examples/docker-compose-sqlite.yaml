@@ -1,4 +1,4 @@
-version: '3'
+version: '3.7'
 
 services:
   redis:
@@ -10,6 +10,7 @@ services:
 
   golem-shard-manager:
     image: golemservices/golem-shard-manager:latest
+    pull_policy: always
     environment:
       - REDIS_HOST=redis
       - WASMTIME_BACKTRACE_DETAILS=1
@@ -24,6 +25,7 @@ services:
 
   golem-service:
     image: golemservices/golem-service:latest
+    pull_policy: always
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1
@@ -46,6 +48,7 @@ services:
 
   golem-worker-executor:
     image: golemservices/golem-worker-executor:latest
+    pull_policy: always
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1
