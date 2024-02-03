@@ -37,6 +37,7 @@ services:
   golem-service:
     image: golemservices/golem-service:latest
     pull_policy: always
+    restart: on-failure
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1
