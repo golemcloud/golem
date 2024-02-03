@@ -19,9 +19,9 @@ brew install protobuf
 Then install the **required version** of `cargo-component`:
 
 ```bash
-cargo install --force --locked cargo-component@0.5.0
+cargo install --force --locked cargo-component@0.7.0
 cargo component --version
-cargo-component-component 0.5.0 (wasi:6f0da84)
+cargo-component-component 0.7.0 (wasi:ab5a448)
 ```
 
 <Callout>
@@ -98,8 +98,7 @@ The functions exported in the `world` in this file will be exposed by **Golem**.
 In the Rust source code you generate and import the exported symbols as:
 
 ```rust
-cargo_component_bindings::generate!();
-
+mod bindings;
 use bindings::exports::my::template::api::*;
 ```
 
@@ -174,10 +173,10 @@ The dependencies has to be added to the `Cargo.toml` file for `cargo-component`,
 This allows using these WIT packages in your main WIT file, making them available from Rust:
 
 ```rust
-import wasi:io/poll@0.2.0-rc-2023-11-10;
-import wasi:io/streams@0.2.0-rc-2023-11-10;
-import wasi:http/types@0.2.0-rc-2023-11-10;
-import wasi:http/outgoing-handler@0.2.0-rc-2023-11-10;
+import wasi:io/poll@0.2.0;
+import wasi:io/streams@0.2.0;
+import wasi:http/types@0.2.0;
+import wasi:http/outgoing-handler@0.2.0;
 ```
 
 ### HTTP
@@ -190,7 +189,7 @@ To use it, just add the following dependency to your component's `Cargo.toml`:
 
 ```toml
 [dependencies]
-reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-jan-2024", features = ["json"] }
+reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-feb-2024", features = ["json"] }
 ```
 
 There is no need to manually add the WASI-HTTP interfaces to your `wit/deps` folder.
