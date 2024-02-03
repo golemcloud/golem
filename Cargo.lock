@@ -1983,6 +1983,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
+ "humantime-serde",
  "mappable-rc",
  "poem",
  "poem-openapi",

@@ -1,3 +1,4 @@
+use std::time::Duration;
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use golem_service_base::config::TemplateStoreConfig;
@@ -16,6 +17,14 @@ pub struct DbSqliteConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct WorkerConnectCacheConig {
+    pub max_capacity: u32,
+    #[serde(with = "humantime_serde")]
+    pub time_to_idle: Duration,
+
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct CloudServiceConfig {
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
@@ -24,6 +33,7 @@ pub struct CloudServiceConfig {
     pub db: DbConfig,
     pub templates: TemplatesConfig,
     pub routing_table: RoutingTableConfig,
+    pub worker_connect_cache: WorkerConnectCacheConig
 }
 
 #[derive(Clone, Debug, Deserialize)]
