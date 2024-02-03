@@ -1,3 +1,5 @@
+use bincode::{Decode, Encode};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -8,7 +10,7 @@ use tonic::Status;
 
 use crate::model::InterruptKind;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub enum GolemError {
     InvalidRequest {
         details: String,

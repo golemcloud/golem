@@ -35,7 +35,7 @@ tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
-wasmtime = { version = "=15.0.0", features = ["component-model"] }
-wasmtime-runtime = { version = "=15.0.0" }
-wasmtime-wasi = { version = "=15.0.0" }
-wasmtime-wasi-http = { version = "=15.0.0" }
+wasmtime = { version = "=17.0.0", features = ["component-model"] }
+wasmtime-runtime = { version = "=17.0.0" }
+wasmtime-wasi = { version = "=17.0.0" }
+wasmtime-wasi-http = { version = "=17.0.0" }

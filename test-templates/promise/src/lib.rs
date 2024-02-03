@@ -1,4 +1,4 @@
-cargo_component_bindings::generate!();
+mod bindings;
 
 use crate::bindings::golem::api::host::*;
 use crate::bindings::Guest;

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use chrono::Datelike;
-use http::{Response, StatusCode};
+use http_02::{Response, StatusCode};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,7 +25,7 @@ async fn zig_example_1() {
     let result = executor
         .invoke_and_await_stdio(
             &worker_id,
-            "wasi:cli/run@0.2.0-rc-2023-11-10/run",
+            "wasi:cli/run@0.2.0/run",
             Value::Number(1234.into()),
         )
         .await;
@@ -47,7 +47,7 @@ async fn zig_example_2() {
     let _ = executor
         .invoke_and_await_stdio_eventloop(
             &worker_id,
-            "wasi:cli/run@0.2.0-rc-2023-11-10/run",
+            "wasi:cli/run@0.2.0/run",
             Value::Object(Map::from_iter([(
                 "add".to_string(),
                 Value::Number(10.into()),
@@ -58,7 +58,7 @@ async fn zig_example_2() {
     let _ = executor
         .invoke_and_await_stdio_eventloop(
             &worker_id,
-            "wasi:cli/run@0.2.0-rc-2023-11-10/run",
+            "wasi:cli/run@0.2.0/run",
             Value::Object(Map::from_iter([(
                 "add".to_string(),
                 Value::Number(1.into()),
@@ -69,7 +69,7 @@ async fn zig_example_2() {
     let response = executor
         .invoke_and_await_stdio_eventloop(
             &worker_id,
-            "wasi:cli/run@0.2.0-rc-2023-11-10/run",
+            "wasi:cli/run@0.2.0/run",
             Value::Object(Map::from_iter([(
                 "get".to_string(),
                 Value::Object(Map::new()),
@@ -205,7 +205,7 @@ async fn grain_example_1() {
     let mut rx = executor.capture_output(&worker_id).await;
 
     let _result = executor
-        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0-rc-2023-11-10/run", vec![])
+        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0/run", vec![])
         .await
         .unwrap();
 
@@ -447,7 +447,7 @@ async fn csharp_example_1() {
     let mut rx = executor.capture_output(&worker_id).await;
 
     let _result = executor
-        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0-rc-2023-11-10/run", vec![])
+        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0/run", vec![])
         .await
         .unwrap();
 
@@ -536,7 +536,7 @@ async fn swift_example_1() {
     let mut rx = executor.capture_output(&worker_id).await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0-rc-2023-11-10/run", vec![])
+        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0/run", vec![])
         .await
         .unwrap();
 

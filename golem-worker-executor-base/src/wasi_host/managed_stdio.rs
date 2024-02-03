@@ -20,6 +20,7 @@ pub struct ManagedStandardIo {
     instance_id: WorkerId,
     invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
     current_enqueue: Arc<Mutex<Option<mpsc::Sender<Event>>>>,
+    enqueue_capacity: usize,
 }
 
 #[derive(Debug)]
@@ -57,6 +58,9 @@ pub enum ManagedStreamStatus {
     Ended,
 }
 
+/// Capacity of the mspc channels used to send events to the IO loop
+const DEFAULT_ENQUEUE_CAPACITY: usize = 128;
+
 impl ManagedStandardIo {
     pub fn new(
         instance_id: WorkerId,
@@ -67,6 +71,7 @@ impl ManagedStandardIo {
             instance_id,
             invocation_key_service,
             current_enqueue: Arc::new(Mutex::new(None)),
+            enqueue_capacity: DEFAULT_ENQUEUE_CAPACITY,
         }
     }
 
@@ -82,7 +87,7 @@ impl ManagedStandardIo {
                 .await
                 .expect("Failed to enqueue event in ManagedStandardIo"),
             None => {
-                let (enqueue, dequeue) = mpsc::channel(128);
+                let (enqueue, dequeue) = mpsc::channel(self.enqueue_capacity);
                 enqueue
                     .send(event)
                     .await

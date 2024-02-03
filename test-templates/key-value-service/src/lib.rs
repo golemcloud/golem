@@ -1,8 +1,8 @@
-cargo_component_bindings::generate!();
+mod bindings;
 
 use crate::bindings::exports::golem::it::api::*;
-use crate::bindings::wasi::keyvalue::batch::*;
-use crate::bindings::wasi::keyvalue::readwrite::{Bucket, OutgoingValue, delete, exists, get, set};
+use crate::bindings::wasi::keyvalue::eventual_batch::*;
+use crate::bindings::wasi::keyvalue::eventual::{Bucket, OutgoingValue, delete, exists, get, set};
 
 struct Component;
 
@@ -25,46 +25,50 @@ impl Guest for Component {
     fn get(bucket: String, key: String) -> Option<Vec<u8>> {
         let bucket = Bucket::open_bucket(&bucket).unwrap();
         match get(&bucket, &key) {
-            Ok(incoming_value) => {
+            Ok(Some(incoming_value)) => {
                 let value = incoming_value.incoming_value_consume_sync().unwrap();
                 Some(value)
             }
+            Ok(None) => None,
             Err(error) => {
                 let trace = error.trace();
-                if trace == "Key not found" {
-                    None
-                } else {
-                    panic!("Unexpected error: {}", trace);
-                }
+                panic!("Unexpected error: {}", trace);
             }
         }
     }
 
     fn get_keys(bucket: String) -> Vec<String> {
         let bucket = Bucket::open_bucket(&bucket).unwrap();
-        get_keys(&bucket)
+        keys(&bucket).unwrap()
     }
 
     fn get_many(bucket: String, keys: Vec<String>) -> Option<Vec<Vec<u8>>> {
         let bucket = Bucket::open_bucket(&bucket).unwrap();
         match get_many(&bucket, &keys) {
             Ok(incoming_values) => {
-                incoming_values
+                let maybe_values: Vec<_> = incoming_values
                     .into_iter()
                     .map(|incoming_value| {
-                        let value = incoming_value.incoming_value_consume_sync().unwrap();
-                        value
+                        incoming_value.map(|incoming_value| {
+                            let value = incoming_value.incoming_value_consume_sync().unwrap();
+                            value
+                        })
                     })
                     .collect::<Vec<_>>()
-                    .into()
+                    .into();
+
+                let mut result = Vec::new();
+                for maybe_value in maybe_values {
+                    match maybe_value {
+                        Some(value) => result.push(value),
+                        None => return None
+                    }
+                }
+                Some(result)
             }
             Err(error) => {
                 let trace = error.trace();
-                if trace == "Key not found" {
-                    None
-                } else {
-                    panic!("Unexpected error: {}", trace);
-                }
+                panic!("Unexpected error: {}", trace);
             }
         }
     }

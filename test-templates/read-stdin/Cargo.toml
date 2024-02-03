@@ -12,7 +12,7 @@ lto = true
 opt-level = 's'
 
 [dependencies]
-cargo-component-bindings = { version = "0.5.0" }
+wit-bindgen = { version = "0.16.0", default-features = false, features = ["realloc"] }
 
 [package.metadata.component.target]
 path = "wit"

@@ -1,7 +1,7 @@
-cargo_component_bindings::generate!();
+mod bindings;
 
 use std::fs;
-use crate::bindings::exports::golem::it::api::{Datetime, FileInfo, Guest};
+use crate::bindings::exports::golem::it::api::{Datetime, FileInfo, Guest, MetadataHashValue};
 use crate::bindings::wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 use crate::bindings::wasi::filesystem::preopens::get_directories;
 
@@ -94,5 +94,10 @@ impl Guest for Component {
 
     fn rename_file(source: String, destination: String) -> Result<(), String> {
         fs::rename(source, destination).map_err(|err| err.to_string())
+    }
+
+    fn hash(path: String) -> Result<MetadataHashValue, String> {
+        let (root, _) = get_directories().into_iter().find(|(_, path)| path == "/").ok_or("Root not found")?;
+        root.metadata_hash_at(PathFlags::empty(), &path).map_err(|err| err.to_string())
     }
 }

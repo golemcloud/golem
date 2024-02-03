@@ -14,6 +14,7 @@ aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bigdecimal = "0.4.2"
 http = { workspace = true }
+http_02 = { package="http", version = "0.2.11" }
 hyper = { workspace = true }
 num-traits = "0.2"
 poem-openapi = { workspace = true }
@@ -25,4 +26,4 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-proptest = "1.4.0"
+proptest = { workspace = true }

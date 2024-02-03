@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem;
@@ -39,6 +39,7 @@ pub struct InvocationKeyServiceDefault {
     #[allow(unused)]
     confirm_receiver: Receiver<(WorkerId, InvocationKey)>,
     confirm_sender: Sender<(WorkerId, InvocationKey)>,
+    pending_key_retention: Duration,
 }
 
 #[derive(Debug)]
@@ -75,13 +76,18 @@ pub enum LookupResult {
 
 impl Default for InvocationKeyServiceDefault {
     fn default() -> Self {
-        Self::new()
+        Self::new(Duration::from_secs(60), 1024)
     }
 }
 
 impl InvocationKeyServiceDefault {
-    pub fn new() -> Self {
-        let (confirm_sender, confirm_receiver) = tokio::sync::broadcast::channel(16);
+    /// Creates a new instance of the default implementation of the invocation key service.
+    /// Parameters:
+    /// - `pending_key_retention`: how long to keep keys which are pending before removing them from memory
+    /// - `confirm_queue_capacity`: how many keys can be simultaneously enqueued for confirmation. If this value is lower than the maximum number of concurrent `wait_for_confirmation` calls, some of those will potentially miss the confirmation event.
+    pub fn new(pending_key_retention: Duration, confirm_queue_capacity: usize) -> Self {
+        let (confirm_sender, confirm_receiver) =
+            tokio::sync::broadcast::channel(confirm_queue_capacity);
         Self {
             state: Arc::new(Mutex::new(State {
                 pending_keys: std::collections::HashMap::new(),
@@ -89,6 +95,7 @@ impl InvocationKeyServiceDefault {
             })),
             confirm_receiver,
             confirm_sender,
+            pending_key_retention,
         }
     }
 
@@ -97,7 +104,7 @@ impl InvocationKeyServiceDefault {
             .lock()
             .unwrap()
             .pending_keys
-            .retain(|_, v| v.started_at.elapsed().as_secs() < 60);
+            .retain(|_, v| v.started_at.elapsed() < self.pending_key_retention);
     }
 }
 
@@ -228,7 +235,7 @@ mod tests {
     #[cfg(test)]
     #[test]
     fn replay_in_same_order_works() {
-        let svc1 = InvocationKeyServiceDefault::new();
+        let svc1 = InvocationKeyServiceDefault::default();
         let uuid = uuid::Uuid::parse_str("14e55083-2ff5-44ec-a414-595a748b19a0").unwrap();
 
         let worker_id = WorkerId {
@@ -240,7 +247,7 @@ mod tests {
         let key2 = svc1.generate_key(&worker_id);
         let key3 = svc1.generate_key(&worker_id);
 
-        let svc2 = InvocationKeyServiceDefault::new();
+        let svc2 = InvocationKeyServiceDefault::default();
         svc2.confirm_key(
             &worker_id,
             &key1,

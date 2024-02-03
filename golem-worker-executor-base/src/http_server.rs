@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::net::SocketAddr;
 
-use http::{Response, StatusCode};
+use http_02::{Response, StatusCode};
 use prometheus::{Encoder, Registry, TextEncoder};
 use tokio::task::JoinHandle;
 use tracing::info;

@@ -1,0 +1,24 @@
+[package]
+name = "networking"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+opt-level = 's'
+
+[dependencies]
+wit-bindgen = { version = "0.16.0", default-features = false, features = ["realloc"] }
+
+[package.metadata.component.target]
+path = "wit"
+
+[package.metadata.component.target.dependencies]
+"golem:api" = { path = "wit/deps/golem" }
+"wasi:sockets" = { path = "wit/deps/sockets" }
+"wasi:io" = { path = "wit/deps/io" }
+"wasi:clocks" = { path = "wit/deps/clocks" }

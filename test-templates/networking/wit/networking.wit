@@ -1,0 +1,13 @@
+package golem:it;
+
+interface api {
+  get: func() -> list<string>;
+}
+
+world networking {
+  import golem:api/host;
+  import wasi:sockets/ip-name-lookup@0.2.0;
+  import wasi:sockets/instance-network@0.2.0;
+
+  export api;
+}

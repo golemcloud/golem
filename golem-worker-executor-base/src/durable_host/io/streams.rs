@@ -1,12 +1,10 @@
-use crate::error::GolemError;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
-use serde::{Deserialize, Serialize};
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::{StreamError, Table};
+use wasmtime_wasi::preview2::{ResourceTable, StreamError};
 
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
-use crate::durable_host::{Durability, DurableWorkerCtx, SerializableError};
+use crate::durable_host::serialized::SerializableStreamError;
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::WrappedFunctionType;
@@ -255,40 +253,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-enum SerializableStreamError {
-    Closed,
-    LastOperationFailed(SerializableError),
-    Trap(SerializableError),
-}
-
-impl From<&StreamError> for SerializableStreamError {
-    fn from(value: &StreamError) -> Self {
-        match value {
-            StreamError::Closed => Self::Closed,
-            StreamError::LastOperationFailed(e) => Self::LastOperationFailed(e.into()),
-            StreamError::Trap(e) => Self::Trap(e.into()),
-        }
-    }
-}
-
-impl From<SerializableStreamError> for StreamError {
-    fn from(value: SerializableStreamError) -> Self {
-        match value {
-            SerializableStreamError::Closed => Self::Closed,
-            SerializableStreamError::LastOperationFailed(e) => Self::LastOperationFailed(e.into()),
-            SerializableStreamError::Trap(e) => Self::Trap(e.into()),
-        }
-    }
-}
-
-impl From<GolemError> for SerializableStreamError {
-    fn from(value: GolemError) -> Self {
-        Self::Trap(value.into())
-    }
-}
-
-fn is_incoming_http_body_stream(table: &Table, stream: &Resource<InputStream>) -> bool {
+fn is_incoming_http_body_stream(table: &ResourceTable, stream: &Resource<InputStream>) -> bool {
     let stream = table.get::<InputStream>(stream).unwrap();
     match stream {
         InputStream::Host(host_input_stream) => {

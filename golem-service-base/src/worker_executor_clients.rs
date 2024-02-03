@@ -34,7 +34,8 @@ impl WorkerExecutorClients for WorkerExecutorClientsDefault {
             return Ok(client.clone());
         }
 
-        let client = WorkerExecutorClient::connect(pod.uri())
+        let uri: http_02::Uri = pod.uri().to_string().parse().unwrap();
+        let client = WorkerExecutorClient::connect(uri)
             .await
             .map_err(|e| e.to_string())?;
 

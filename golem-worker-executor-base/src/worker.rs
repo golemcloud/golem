@@ -125,7 +125,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let public_state = context.get_public_state().clone();
 
             let mut store = Store::new(&this.engine(), context);
-            store.set_epoch_deadline(1);
+            store.set_epoch_deadline(this.config().limits.epoch_ticks);
             store.epoch_deadline_callback(|mut store| {
                 let current_level = store.get_fuel().unwrap_or(0);
                 if store.data().is_out_of_fuel(current_level as i64) {

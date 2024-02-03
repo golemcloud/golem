@@ -1,24 +1,28 @@
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 use cap_std::fs::Metadata;
 use fs_set_times::{set_symlink_times, SystemTimeSpec};
-use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
+use metrohash::MetroHash128;
+use std::hash::Hasher;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use wasmtime::component::Resource;
 
-use crate::durable_host::{Durability, DurableWorkerCtx, SerializableDateTime, SerializableError};
+use crate::durable_host::serialized::{
+    SerializableDateTime, SerializableError, SerializableFileTimes,
+};
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::WrappedFunctionType;
+use wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime;
 use wasmtime_wasi::preview2::bindings::filesystem::types::{
     Advice, Descriptor, DescriptorFlags, DescriptorStat, DescriptorType, DirectoryEntry,
     DirectoryEntryStream, Error, ErrorCode, Filesize, Host, HostDescriptor,
     HostDirectoryEntryStream, InputStream, MetadataHashValue, NewTimestamp, OpenFlags,
     OutputStream, PathFlags,
 };
-use wasmtime_wasi::preview2::{spawn_blocking, FsError};
+use wasmtime_wasi::preview2::{spawn_blocking, FsError, ReaddirIterator};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
@@ -124,7 +128,18 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
     ) -> Result<Resource<DirectoryEntryStream>, FsError> {
         record_host_function_call("filesystem::types::descriptor", "read_directory");
-        HostDescriptor::read_directory(&mut self.as_wasi_view(), self_).await
+        let stream = HostDescriptor::read_directory(&mut self.as_wasi_view(), self_).await?;
+        // Iterating through the whole stream to make sure we have a stable order
+        let mut entries = Vec::new();
+        let iter = self.table.delete(stream)?;
+        for entry in iter {
+            entries.push(entry?.clone());
+        }
+        entries.sort_by_key(|entry| entry.name.clone());
+
+        Ok(self
+            .table
+            .push(ReaddirIterator::new(entries.into_iter().map(Ok)))?)
     }
 
     async fn sync(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
@@ -157,33 +172,27 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             self,
             WrappedFunctionType::ReadLocal,
             "filesystem::types::descriptor::stat",
-            |_ctx| Box::pin(async move { Ok(stat_clone1) }),
+            |_ctx| {
+                Box::pin(async move { Ok(stat_clone1) as Result<DescriptorStat, anyhow::Error> })
+            },
             |_ctx, stat| {
                 Ok(SerializableFileTimes {
-                    data_access_timestamp: stat.data_access_timestamp.map(|t| {
-                        SerializableDateTime {
-                            seconds: t.seconds,
-                            nanoseconds: t.nanoseconds,
-                        }
-                    }),
-                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| {
-                        SerializableDateTime {
-                            seconds: t.seconds,
-                            nanoseconds: t.nanoseconds,
-                        }
-                    }),
+                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
                 })
             },
             |_ctx, times| {
                 Box::pin(async move {
-                    let accessed = times
-                        .data_access_timestamp
-                        .as_ref()
-                        .map(|t| t.clone().into());
-                    let modified = times
-                        .data_modification_timestamp
-                        .as_ref()
-                        .map(|t| t.clone().into());
+                    let accessed = times.data_access_timestamp.as_ref().map(|t| {
+                        SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
+                            t.clone(),
+                        ))
+                    });
+                    let modified = times.data_modification_timestamp.as_ref().map(|t| {
+                        SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
+                            t.clone(),
+                        ))
+                    });
                     spawn_blocking(|| set_symlink_times(path, accessed, modified)).await?;
                     stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
                     stat.data_modification_timestamp =
@@ -217,33 +226,27 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             self,
             WrappedFunctionType::ReadLocal,
             "filesystem::types::descriptor::stat_at",
-            |_ctx| Box::pin(async move { Ok(stat_clone1) }),
+            |_ctx| {
+                Box::pin(async move { Ok(stat_clone1) as Result<DescriptorStat, anyhow::Error> })
+            },
             |_ctx, stat| {
                 Ok(SerializableFileTimes {
-                    data_access_timestamp: stat.data_access_timestamp.map(|t| {
-                        SerializableDateTime {
-                            seconds: t.seconds,
-                            nanoseconds: t.nanoseconds,
-                        }
-                    }),
-                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| {
-                        SerializableDateTime {
-                            seconds: t.seconds,
-                            nanoseconds: t.nanoseconds,
-                        }
-                    }),
+                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
                 })
             },
             |_ctx, times| {
                 Box::pin(async move {
-                    let accessed = times
-                        .data_access_timestamp
-                        .as_ref()
-                        .map(|t| t.clone().into());
-                    let modified = times
-                        .data_modification_timestamp
-                        .as_ref()
-                        .map(|t| t.clone().into());
+                    let accessed = times.data_access_timestamp.as_ref().map(|t| {
+                        SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
+                            t.clone(),
+                        ))
+                    });
+                    let modified = times.data_modification_timestamp.as_ref().map(|t| {
+                        SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
+                            t.clone(),
+                        ))
+                    });
                     spawn_blocking(|| set_symlink_times(full_path, accessed, modified)).await?;
                     stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
                     stat.data_modification_timestamp =
@@ -386,7 +389,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
     ) -> Result<MetadataHashValue, FsError> {
         record_host_function_call("filesystem::types::descriptor", "metadata_hash");
-        HostDescriptor::metadata_hash(&mut self.as_wasi_view(), self_).await
+
+        // Using the WASI stat function as it guarantees the file times are preserved
+        let metadata = self.stat(self_).await?;
+        Ok(calculate_metadata_hash(&metadata))
     }
 
     async fn metadata_hash_at(
@@ -396,7 +402,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<MetadataHashValue, FsError> {
         record_host_function_call("filesystem::types::descriptor", "metadata_hash_at");
-        HostDescriptor::metadata_hash_at(&mut self.as_wasi_view(), self_, path_flags, path).await
+        // Using the WASI stat_at function as it guarantees the file times are preserved
+        let metadata = self.stat_at(self_, path_flags, path).await?;
+        Ok(calculate_metadata_hash(&metadata))
     }
 
     fn drop(&mut self, rep: Resource<Descriptor>) -> anyhow::Result<()> {
@@ -460,8 +468,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-struct SerializableFileTimes {
-    pub data_access_timestamp: Option<SerializableDateTime>,
-    pub data_modification_timestamp: Option<SerializableDateTime>,
+fn calculate_metadata_hash(meta: &DescriptorStat) -> MetadataHashValue {
+    let mut hasher = MetroHash128::new();
+
+    let modified = meta.data_modification_timestamp.unwrap_or(Datetime {
+        seconds: 0,
+        nanoseconds: 0,
+    });
+    hasher.write_u64(modified.seconds);
+    hasher.write_u32(modified.nanoseconds);
+    hasher.write_u64(meta.size);
+
+    let (lower, upper) = hasher.finish128();
+    MetadataHashValue { lower, upper }
 }
