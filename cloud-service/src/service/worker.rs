@@ -212,12 +212,6 @@ impl From<TemplateError> for WorkerError {
 
 #[async_trait]
 pub trait WorkerService {
-    async fn get_by_id(
-        &self,
-        worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
-    ) -> Result<VersionedWorkerId, WorkerError>;
-
     async fn create(
         &self,
         worker_id: &WorkerId,
@@ -559,19 +553,6 @@ impl WorkerServiceDefault {
 
 #[async_trait]
 impl WorkerService for WorkerServiceDefault {
-    async fn get_by_id(
-        &self,
-        worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
-    ) -> Result<VersionedWorkerId, WorkerError> {
-        self.check_authorization(&worker_id.template_id, &ProjectAction::ViewWorker, auth)
-            .await?;
-        Ok(VersionedWorkerId {
-            worker_id: worker_id.clone(),
-            template_version_used: 0,
-        })
-    }
-
     async fn create(
         &self,
         worker_id: &WorkerId,
@@ -1309,17 +1290,6 @@ pub struct WorkerServiceNoOp {}
 
 #[async_trait]
 impl WorkerService for WorkerServiceNoOp {
-    async fn get_by_id(
-        &self,
-        worker_id: &WorkerId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<VersionedWorkerId, WorkerError> {
-        Ok(VersionedWorkerId {
-            worker_id: worker_id.clone(),
-            template_version_used: 0,
-        })
-    }
-
     async fn create(
         &self,
         worker_id: &WorkerId,

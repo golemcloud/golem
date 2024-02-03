@@ -1,4 +1,3 @@
-use std::str::FromStr;
 use std::sync::Arc;
 
 use cloud_common::auth::GolemSecurityScheme;
@@ -174,29 +173,6 @@ pub struct WorkerApi {
 
 #[OpenApi(prefix_path = "/v2/templates", tag = ApiTags::Worker)]
 impl WorkerApi {
-    /// Get a versioned worker id by it's template id and worker name
-    ///
-    /// This endpoint just returns the components of a worker identifier based on a textual workerId of the format templateId.workerName
-    /// These components are:
-    ///
-    /// - `rawTemplateId` the same as the templateId part of the input string
-    /// - `workerName` the same as the workerName part of the input string
-    /// - `templateVersionUsed` is the specific template version the worker is running with
-    #[oai(path = "/workers/:worker_id", method = "get")]
-    async fn get_worker_by_id(
-        &self,
-        worker_id: Path<String>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<VersionedWorkerId>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let worker_id: WorkerId = golem_common::model::WorkerId::from_str(&worker_id.0)
-            .map_err(WorkerError::bad_request)?
-            .into();
-        let worker = self.worker_service.get_by_id(&worker_id, &auth).await?;
-
-        Ok(Json(worker))
-    }
-
     /// Launch a new worker.
     ///
     /// Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
