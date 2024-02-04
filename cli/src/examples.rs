@@ -5,8 +5,7 @@ use golem_examples::model::{
 };
 use golem_examples::*;
 
-use crate::model::{ExampleDescription, GolemError};
-use crate::GolemResult;
+use crate::model::{ExampleDescription, GolemError, GolemResult};
 
 pub fn process_new(
     example_name: ExampleName,

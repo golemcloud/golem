@@ -4,31 +4,17 @@ use std::fmt::Debug;
 
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{Level, Verbosity};
+use golem_cli::model::*;
 use golem_client::Context;
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
-use model::*;
 use reqwest::Url;
 use tracing_subscriber::FmtSubscriber;
 
-use crate::clients::template::TemplateClientLive;
-use crate::clients::worker::WorkerClientLive;
-use crate::template::{TemplateHandler, TemplateHandlerLive, TemplateSubcommand};
-use crate::worker::{WorkerHandler, WorkerHandlerLive, WorkerSubcommand};
-
-pub mod clients;
-mod examples;
-pub mod model;
-mod template;
-mod worker;
-
-pub fn parse_key_val(
-    s: &str,
-) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let pos = s
-        .find('=')
-        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
-    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
-}
+use golem_cli::clients::template::TemplateClientLive;
+use golem_cli::clients::worker::WorkerClientLive;
+use golem_cli::examples;
+use golem_cli::template::{TemplateHandler, TemplateHandlerLive, TemplateSubcommand};
+use golem_cli::worker::{WorkerHandler, WorkerHandlerLive, WorkerSubcommand};
 
 #[derive(Subcommand, Debug)]
 #[command()]

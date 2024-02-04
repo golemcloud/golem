@@ -5,12 +5,11 @@ use golem_client::model::{
     Export, ExportFunction, ExportInstance, FunctionParameter, FunctionResult, NameOptionTypePair,
     NameTypePair, Template, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::fs::File;
 use tracing::info;
 
-use crate::model::{GolemError, PathBufOrStdin, TemplateName};
-use crate::RawTemplateId;
+use crate::model::{GolemError, PathBufOrStdin, RawTemplateId, TemplateName};
 
 #[async_trait]
 pub trait TemplateClient {
@@ -32,7 +31,7 @@ pub struct TemplateClientLive<C: golem_client::api::TemplateClient + Sync + Send
     pub client: C,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TemplateView {
     pub template_id: String,

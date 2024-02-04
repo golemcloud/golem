@@ -21,7 +21,7 @@ pub enum WorkerSubcommand {
         #[arg(short, long)]
         worker_name: WorkerName,
 
-        #[arg(short, long, value_parser = parse_key_val)]
+        #[arg(short, long, value_parser = parse_key_val, value_name = "ENV=VAL")]
         env: Vec<(String, String)>,
 
         #[arg(value_name = "args")]

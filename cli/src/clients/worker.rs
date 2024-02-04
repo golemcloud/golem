@@ -15,8 +15,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
 use tracing::{debug, info};
 
-use crate::model::{GolemError, InvocationKey, RawTemplateId};
-use crate::WorkerName;
+use crate::model::{GolemError, InvocationKey, RawTemplateId, WorkerName};
 
 #[async_trait]
 pub trait WorkerClient {
