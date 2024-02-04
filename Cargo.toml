@@ -38,8 +38,10 @@ exclude = [
     "test-templates/variant-service",
     "test-templates/write-stderr",
     "test-templates/write-stdout",
+    "golem-openapi-client-generator",
     "golem-client",
-    "golem-openapi-client-generator"
+    "golem-cli",
+    "libtest-mimic",
 ]
 
 [workspace.dependencies]
