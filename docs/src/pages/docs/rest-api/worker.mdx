@@ -2,31 +2,6 @@
 
 The worker API allows to launch new workers, query and manipulate their status, and invoke their exported functions.
 
-## Get a versioned worker id by it's template id and worker name
-
-| Path                                | Method | Protected |
-| ----------------------------------- | ------ | --------- |
-| `/v2/templates/workers/{worker_id}` | GET    | Yes       |
-
-This endpoint just returns the components of a worker identifier based on a textual workerId of the format templateId.workerName
-These components are:
-
-- `rawTemplateId` the same as the templateId part of the input string
-- `workerName` the same as the workerName part of the input string
-- `templateVersionUsed` is the specific template version the worker is running with
-
-**Example Response JSON**
-
-```json copy
-{
-  "workerId": {
-    "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
-    "workerName": "string"
-  },
-  "templateVersionUsed": 0
-}
-```
-
 ## Launch a new worker.
 
 | Path                                  | Method | Protected |

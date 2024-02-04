@@ -5,7 +5,6 @@ import { OpenAPIV3 } from "openapi-types"
 import OpenAPISampler from "openapi-sampler"
 
 const SPEC_SRC = "./openapi/cloud-spec.yaml"
-const PROD_SPEC_URL = "https://release.api.golem.cloud/specs"
 const GEN_PATH = "./src/pages/docs/rest-api"
 
 main().catch(e => console.error("Failed to update API Docs", e))
@@ -16,25 +15,30 @@ main().catch(e => console.error("Failed to update API Docs", e))
 async function main() {
   const args = process.argv.slice(2)
 
-  if (args.length !== 1 || !["--prod", "--local"].includes(args[0])) {
-    throw new Error("Invalid args: must be --prod or --local")
+  if (args.length !== 1 || !["--prod", "--dev", "--local"].includes(args[0])) {
+    throw new Error("Invalid args: must be one of --prod --dev --local")
   }
 
   const [mode] = args
 
-  if (mode === "--prod") {
-    console.log("Updating REST API docs from production OpenAPI spec at:", PROD_SPEC_URL)
-    await writeOpenApiDocs(PROD_SPEC_URL)
-    const response = await fetch(PROD_SPEC_URL)
+  if (mode === "--local") {
+    console.log("Updating REST API docs from local OpenAPI spec at:", SPEC_SRC)
+    await writeOpenApiDocs(SPEC_SRC)
+  } else {
+    let specUrl =
+      mode === "--prod"
+        ? "https://release.api.golem.cloud/specs"
+        : "https://release.dev-api.golem.cloud/specs"
+
+    console.log("Updating REST API docs from OpenAPI spec at:", specUrl)
+    await writeOpenApiDocs(specUrl)
+    const response = await fetch(specUrl)
     if (!response.ok) {
       throw new Error(`Error fetching data: ${response.status}`)
     }
 
     const textContent = await response.text()
     await writeFile(SPEC_SRC, textContent)
-  } else {
-    console.log("Updating REST API docs from local OpenAPI spec at:", SPEC_SRC)
-    await writeOpenApiDocs(SPEC_SRC)
   }
 }
 

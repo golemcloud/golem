@@ -10,6 +10,7 @@
     "lint": "next lint",
     "fix": "next lint --fix . && prettier --log-level silent --write .",
     "generateLocal": "bun run openapi/gen-openapi.ts --local && bun run fix",
+    "generateDev": "bun run openapi/gen-openapi.ts --dev && bun run fix",
     "generateProd": "bun run openapi/gen-openapi.ts --prod && bun run fix"
   },
   "dependencies": {
