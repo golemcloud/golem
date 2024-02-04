@@ -46,7 +46,7 @@ pub struct GolemError(pub String);
 
 impl From<reqwest::Error> for GolemError {
     fn from(error: reqwest::Error) -> Self {
-        GolemError(format!("Unexpected reqwest error: {error}"))
+        GolemError(format!("Unexpected client error: {error}"))
     }
 }
 
@@ -57,11 +57,11 @@ impl<T: crate::clients::errors::ResponseContentErrorMapper> From<golem_client::E
         match value {
             golem_client::Error::Reqwest(error) => GolemError::from(error),
             golem_client::Error::Serde(error) => {
-                GolemError(format!("Unexpected serde error: {error}"))
+                GolemError(format!("Unexpected serialization error: {error}"))
             }
             golem_client::Error::Item(data) => {
                 let error_str = crate::clients::errors::ResponseContentErrorMapper::map(data);
-                GolemError(format!("Response error: {error_str}"))
+                GolemError(error_str)
             }
             golem_client::Error::Unexpected { code, data } => {
                 match String::from_utf8(Vec::from(data)) {
