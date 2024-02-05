@@ -311,6 +311,8 @@ fn worker_connect((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> 
 
     assert_eq!(line, "Sample text written to the output");
 
+    child.kill()?;
+
     Ok(())
 }
 
