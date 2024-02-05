@@ -1,19 +1,28 @@
-use crate::context::{EnvConfig, NETWORK};
+use crate::context::{DbType, EnvConfig, NETWORK};
 use libtest_mimic::Failed;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use testcontainers::{clients, Container, RunnableImage};
 
-pub struct Postgres<'docker_client> {
-    host: String,
-    port: u16,
-    local_port: u16,
-    _node: Container<'docker_client, testcontainers_modules::postgres::Postgres>,
+pub struct Db<'docker_client> {
+    inner: DbInner<'docker_client>,
 }
 
-impl<'docker_client> Postgres<'docker_client> {
-    fn test_started(&self) -> Result<(), Failed> {
+pub enum DbInner<'docker_client> {
+    Sqlite(PathBuf),
+    Postgres {
+        host: String,
+        port: u16,
+        local_port: u16,
+        _node: Container<'docker_client, testcontainers_modules::postgres::Postgres>,
+    },
+}
+
+impl<'docker_client> Db<'docker_client> {
+    fn test_started(local_port: u16) -> Result<(), Failed> {
         let mut conn =
-            ::postgres::Client::connect(&self.connection_string(), ::postgres::NoTls).unwrap();
+            ::postgres::Client::connect(&Db::connection_string(local_port), ::postgres::NoTls)
+                .unwrap();
 
         let _ = conn.query("SELECT version()", &[])?;
         Ok(())
@@ -22,12 +31,41 @@ impl<'docker_client> Postgres<'docker_client> {
     pub fn start(
         docker: &'docker_client clients::Cli,
         env_config: &EnvConfig,
-    ) -> Result<Postgres<'docker_client>, Failed> {
+    ) -> Result<Db<'docker_client>, Failed> {
+        match &env_config.db_type {
+            DbType::Sqlite => Db::prepare_sqlite(),
+            DbType::Postgres => Db::start_postgres(docker, env_config),
+        }
+    }
+
+    fn prepare_sqlite() -> Result<Db<'docker_client>, Failed> {
+        let path = PathBuf::from("../target/golem_test_db");
+
+        if path.exists() {
+            std::fs::remove_file(&path)?
+        }
+
+        Ok(Db {
+            inner: DbInner::Sqlite(path),
+        })
+    }
+
+    fn start_postgres(
+        docker: &'docker_client clients::Cli,
+        env_config: &EnvConfig,
+    ) -> Result<Db<'docker_client>, Failed> {
+        println!("Starting Postgres in docker");
+
         let name = "golem_postgres";
         let image = RunnableImage::from(testcontainers_modules::postgres::Postgres::default())
-            .with_tag("12")
-            .with_container_name(name)
-            .with_network(NETWORK);
+            .with_tag("12");
+
+        let image = if env_config.local_golem {
+            image
+        } else {
+            image.with_container_name(name).with_network(NETWORK)
+        };
+
         let node = docker.run(image);
 
         let host = if env_config.local_golem {
@@ -42,33 +80,70 @@ impl<'docker_client> Postgres<'docker_client> {
             5432
         };
 
-        let res = Postgres {
-            host: host.to_string(),
-            port,
-            local_port: node.get_host_port_ipv4(5432),
-            _node: node,
+        let local_port = node.get_host_port_ipv4(5432);
+
+        let res = Db {
+            inner: DbInner::Postgres {
+                host: host.to_string(),
+                port,
+                local_port,
+                _node: node,
+            },
         };
 
-        res.test_started()?;
+        Db::test_started(local_port)?;
 
         Ok(res)
     }
 
-    pub fn connection_string(&self) -> String {
+    fn connection_string(local_port: u16) -> String {
         format!(
             "postgres://postgres:postgres@127.0.0.1:{}/postgres",
-            self.local_port,
+            local_port,
         )
     }
 
-    pub fn info(&self) -> PostgresInfo {
-        PostgresInfo {
-            host: self.host.clone(),
-            port: self.port,
-            local_port: self.local_port,
-            database_name: "postgres".to_owned(),
-            username: "postgres".to_owned(),
-            password: "postgres".to_owned(),
+    pub fn info(&self) -> DbInfo {
+        match &self.inner {
+            DbInner::Sqlite(path) => DbInfo::Sqlite(path.clone()),
+            DbInner::Postgres {
+                host,
+                port,
+                local_port,
+                _node: _,
+            } => DbInfo::Postgres(PostgresInfo {
+                host: host.clone(),
+                port: port.clone(),
+                local_port: local_port.clone(),
+                database_name: "postgres".to_owned(),
+                username: "postgres".to_owned(),
+                password: "postgres".to_owned(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum DbInfo {
+    Sqlite(PathBuf),
+    Postgres(PostgresInfo),
+}
+
+impl DbInfo {
+    pub fn env(&self) -> HashMap<String, String> {
+        match self {
+            DbInfo::Postgres(pg) => pg.env(),
+            DbInfo::Sqlite(db_path) => [
+                ("GOLEM__DB__TYPE".to_string(), "Sqlite".to_string()),
+                (
+                    "GOLEM__DB__CONFIG__DATABASE".to_string(),
+                    db_path
+                        .to_str()
+                        .expect("Invalid Sqlite database path")
+                        .to_string(),
+                ),
+            ]
+            .into(),
         }
     }
 }
@@ -119,15 +194,5 @@ impl PostgresInfo {
                 self.password.clone(),
             ),
         ])
-    }
-}
-
-pub trait DbInfo {
-    fn env(&self) -> HashMap<String, String>;
-}
-
-impl DbInfo for PostgresInfo {
-    fn env(&self) -> HashMap<String, String> {
-        self.env()
     }
 }
