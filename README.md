@@ -15,7 +15,7 @@ Afterwards,
 cargo install golem-cli
 
 # template is your compiled code written in Rust, C, etc
-# https://www.golem.cloud/learn/rust helps you write some code and create a template - as an example
+# https://learn.golem.cloud/docs/building-templates helps you write some code and create a template - as an example
 golem-cli template add <location-to-template-file> 
 
 # Now we need a worker corresponding from template, that can execute one of the functions in template
