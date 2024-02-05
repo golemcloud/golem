@@ -24,6 +24,13 @@ With `QUIET=true` you can hide services output:
 QUIET=true cargo test
 ```
 
+### Running integration tests without docker
+
+Docker is used to run `Postgres` for `golem-services`. You can configure tests to use `Sqlite` DB with `GOLEM_TEST_DB=Sqlite`.
+```shell
+GOLEM_TEST_DB=Sqlite RUST_LOG=info cargo test
+```
+
 ## Local Testing
 
 To spin up services using the latest code
