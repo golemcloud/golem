@@ -8,7 +8,7 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Command, Error, FromArgMatches};
 use derive_more::{Display, FromStr};
 use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use uuid::Uuid;
@@ -208,7 +208,7 @@ pub enum TemplateIdOrName {
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
 pub struct WorkerName(pub String); // TODO: Validate
 
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Serialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Serialize, Deserialize)]
 pub struct InvocationKey(pub String); // TODO: Validate
 
 #[derive(Clone)]
