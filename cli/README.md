@@ -24,7 +24,7 @@ cargo install golem-cli
 ```
 
 ## More information
-Please check the [Golem Cloud developer documentation portal](https://www.golem.cloud/learn) to learn more about how to get started with *Golem Cloud*!
+Please check the [Golem Cloud developer documentation portal](https://learn.golem.cloud) to learn more about how to get started with *Golem Cloud*!
 
 ## Contributing
 Find details [here](CONTRIBUTING.md)
