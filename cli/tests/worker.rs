@@ -98,14 +98,23 @@ fn worker_new_instance(
         make_template(&context, &format!("{name} worker new instance"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_new_instance");
     let cfg = &cli.config;
-    let worker_id: VersionedWorkerId = cli.run(&[
+    let worker_id: Result<VersionedWorkerId, Failed> = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('T', "template-id"),
         &template_id,
-    ])?;
+    ]);
+
+    let worker_id = match worker_id {
+        Ok(id) => id,
+        Err(e) => {
+            println!("Worker add failed: {e:?}");
+            std::thread::sleep(Duration::from_secs(6000));
+            panic!("PNIC")
+        }
+    };
 
     assert_eq!(worker_id.worker_id.template_id.to_string(), template_id);
     assert_eq!(worker_id.worker_id.worker_name, worker_name);

@@ -1,4 +1,4 @@
-use crate::context::GolemServiceInfo;
+use crate::context::golem_service::GolemServiceInfo;
 use libtest_mimic::Failed;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
