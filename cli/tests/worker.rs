@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 fn make(suffix: &str, name: &str, cli: CliLive, context: Arc<ContextInfo>) -> Vec<Trial> {
-    let ctx = (context.clone(), name.to_string(), cli);
+    let ctx = (context, name.to_string(), cli);
     vec![
         Trial::test_in_context(
             format!("worker_new_instance{suffix}"),

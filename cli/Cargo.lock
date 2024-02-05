@@ -1149,6 +1149,7 @@ dependencies = [
 [[package]]
 name = "libtest-mimic"
 version = "0.7.0"
+source = "git+https://github.com/senia-psm/libtest-mimic.git?branch=async_and_context_tests#904a9367691b7eb47dc25a876391ee4a958c0319"
 dependencies = [
  "clap",
  "escape8259",

@@ -9,7 +9,6 @@ mod template;
 mod worker;
 
 fn run(context: &Context<'_>) -> Conclusion {
-    println!("Hello, world!");
     let args = Arguments::from_args();
 
     let context = Arc::new(context.info());
