@@ -18,7 +18,7 @@ database = "golem"
 [templates.store]
 object_prefix = ""
 
-[worker_connect_cache]
+[worker_executor_client_cache]
 max_capacity = 1000
 time_to_idle = "4h"
 

@@ -20,7 +20,6 @@ use golem_api_grpc::proto::golem::workerexecutor::{
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, ShardId, TemplateId, WorkerStatus,
 };
-use poem_openapi::types::ToJSON;
 use serde_json::Value;
 use tokio::time::sleep;
 use tokio_stream::Stream;
@@ -227,7 +226,7 @@ impl WorkerServiceDefault {
                                 routing_table.number_of_shards.value,
                             ),
                             worker_id,
-                            err.to_json_string()
+                            err
                         ))
                     })?;
                 Ok(Some(worker_executor_client))

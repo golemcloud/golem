@@ -17,7 +17,7 @@ pub struct DbSqliteConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct WorkerConnectCacheConig {
+pub struct WorkerExecutorClientCacheConfig {
     pub max_capacity: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
@@ -32,7 +32,7 @@ pub struct CloudServiceConfig {
     pub db: DbConfig,
     pub templates: TemplatesConfig,
     pub routing_table: RoutingTableConfig,
-    pub worker_connect_cache: WorkerConnectCacheConig,
+    pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]

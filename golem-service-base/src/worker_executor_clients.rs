@@ -1,4 +1,4 @@
-use crate::model::{GolemError, GolemErrorUnknown, Pod};
+use crate::model::Pod;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -7,11 +7,11 @@ use tonic::transport::Channel;
 
 #[async_trait]
 pub trait WorkerExecutorClients {
-    async fn lookup(&self, pod: Pod) -> Result<WorkerExecutorClient<Channel>, GolemError>;
+    async fn lookup(&self, pod: Pod) -> Result<WorkerExecutorClient<Channel>, String>;
 }
 
 pub struct WorkerExecutorClientsDefault {
-    cache: Cache<Pod, (), WorkerExecutorClient<Channel>, GolemError>,
+    cache: Cache<Pod, (), WorkerExecutorClient<Channel>, String>,
 }
 
 impl WorkerExecutorClientsDefault {
@@ -24,7 +24,7 @@ impl WorkerExecutorClientsDefault {
                     ttl: time_to_idle,
                     period: Duration::from_secs(60),
                 },
-                "worker_connect_client",
+                "worker_executor_client",
             ),
         }
     }
@@ -32,17 +32,14 @@ impl WorkerExecutorClientsDefault {
 
 #[async_trait]
 impl WorkerExecutorClients for WorkerExecutorClientsDefault {
-    async fn lookup(&self, pod: Pod) -> Result<WorkerExecutorClient<Channel>, GolemError> {
+    async fn lookup(&self, pod: Pod) -> Result<WorkerExecutorClient<Channel>, String> {
         self.cache
             .get_or_insert_simple(&pod.clone(), || {
                 Box::pin(async move {
                     let uri: http_02::Uri = pod.uri().to_string().parse().unwrap();
-
-                    WorkerExecutorClient::connect(uri).await.map_err(|e| {
-                        GolemError::Unknown(GolemErrorUnknown {
-                            details: e.to_string(),
-                        })
-                    })
+                    WorkerExecutorClient::connect(uri)
+                        .await
+                        .map_err(|e| e.to_string())
                 })
             })
             .await
