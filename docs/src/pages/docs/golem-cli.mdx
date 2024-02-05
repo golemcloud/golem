@@ -1,6 +1,18 @@
+import { Callout } from "nextra/components"
+
 # Golem CLI
 
-Golem CLI is a command-line interface for interacting with Golem Cloud Services. Golem CLI allows users to upload their templates, launch new workers based on these templates and call functions on running workers.
+Golem CLI is a command-line interface for interacting with Golem. Golem CLI allows users to upload their templates, launch new workers based on these templates and call functions on running workers.
+
+<Callout type="info">
+  The Golem CLI is used to interact with your own deployment using the open source version of Golem.
+  The Golem Cloud CLI is used to interact with the hosted Golem Cloud service.
+  {/* prettier-ignore */}
+  The Golem Cloud CLI includes all the functionality of the Golem CLI, but also includes additional
+  functionality specific to the Golem Cloud service. For these examples we will use `golem-cli`
+  unless referring to functionality specific to Golem Cloud but you should use `golem-cloud-cli`
+  instead if you are using Golem Cloud.
+</Callout>
 
 ## The main functions of the CLI are:
 
@@ -17,7 +29,11 @@ Golem CLI is a command-line interface for interacting with Golem Cloud Services.
 - managing permissions for projects and accounts
 - managing (transferring) ownership of projects
 
+<Callout type="info">These functions are specific to Golem Cloud.</Callout>
+
 ## Registration
+
+<Callout type="info">This functionality is specific to Golem Cloud.</Callout>
 
 A new user can launch the binary and create a new account on Golem Cloud by signing up with their Github account via the oauth2 protocol.
 
@@ -26,7 +42,7 @@ A new user can launch the binary and create a new account on Golem Cloud by sign
 1. Users runs any Golem CLI command that requires an account, initiating authentication.
 
    ```bash
-   golem-cli account get
+   golem-cloud-cli account get
     >>
     >>  Application requests to perform OAuth2
     >>  authorization.
@@ -88,7 +104,7 @@ Optionally you can also specify a package name:
 
 - `--package-name NAME` which should be in a `pack:name` format. If not specified the default should will be `golem:component`.
 
-The command prints out the **instructions** specific to the generated source that describes how to compile it to a WASM file ready to be uploaded to **Golem Cloud**.
+The command prints out the **instructions** specific to the generated source that describes how to compile it to a WASM file ready to be uploaded to **Golem**.
 
 ### `golem-cli template add`
 
@@ -96,8 +112,10 @@ Once you have the compiled WASM you have to **upload** it to the system before y
 
 Required parameters:
 
-- `--template-name NAME` is the name of the template in the **Golem Cloud**. You can use the same name you used for instantiating the example, but it is not necessary.
+- `--template-name NAME` is the name of the template in **Golem**. You can use the same name you used for instantiating the example, but it is not necessary.
 - `template.wasm` the path to the compiled WASM program
+
+<Callout type="info">Projects are specific to Golem Cloud.</Callout>
 
 Optionally you can also organise your templates into separate **projects**. If not specified, each new template is added to the **default project** of your account.
 
@@ -134,6 +152,8 @@ Or:
 
 - `--template-name` if you only know its name.
 
+<Callout type="info">Projects are specific to Golem Cloud.</Callout>
+
 Note that template names are only unique within a project. If you have multiple **projects** with templates you also have to specify which project you mean, either by its name or its ID:
 
 - `--project-name NAME`
@@ -150,7 +170,7 @@ The newly created worker will always use the **latest version** of the template 
 
 The `worker invoke-and-await` command executes an **exported function** of a **worker** and waits for its return value.
 
-This is the primary command to execute something in **Golem Cloud** if you are also interested in its result value. Alternatively you can use `worker invoke` to just trigger the execution of a function without waiting for it. This is useful for long-running functions where you don't want to block until they finish running.
+This is the primary command to execute something in **Golem** if you are also interested in its result value. Alternatively you can use `worker invoke` to just trigger the execution of a function without waiting for it. This is useful for long-running functions where you don't want to block until they finish running.
 
 When invoking a function you have to specify the template your worker is based on (as worker names are only unique within a template's scope!). This can be done in multiple ways, as described above.
 
@@ -161,6 +181,8 @@ Either specify:
 Or:
 
 - `--template-name` if you only know its name.
+
+<Callout type="info">Projects are specific to Golem Cloud.</Callout>
 
 Note that template names are only unique within a project. If you have multiple **projects** with templates you also have to specify which project you mean, either by its name or its ID:
 
@@ -207,7 +229,7 @@ To use this command you need to specify the template and the worker name, the sa
 
 ### Deployment
 
-The deployment facilities of Golem CLI allow developers to create, deploy, manage, and interact with user-defined templates within Golem Cloud. There is optional `--project-name` parameters in all deployment commands. If no project is specified, the default project for the account is used.
+The deployment facilities of Golem CLI allow developers to create, deploy, manage, and interact with user-defined templates within Golem. There is optional `--project-name` parameters in all deployment commands. If no project is specified, the default project for the account is used.
 
 | golem-cli template add --template-name &lt;text&gt; &lt;template.wasm&gt;                                                                                                                | Adds a new template to the registry in the specified project. Returns new template details.                                                                                                       |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -224,30 +246,36 @@ The deployment facilities of Golem CLI allow developers to create, deploy, manag
 
 ### Projects
 
+<Callout type="info">Projects are specific to Golem Cloud.</Callout>
+
 The projects facilities of Golem CLI allow developers to create and manage projects, which are collections of templates that are owned by an account within Golem Cloud.
 
 When a new user account is created, an automatic default project is created for this user. When a user is working with templates and workers and doesn't specify the project, the default one is assumed.
 
-| golem-cli project list [--project-name &lt;text&gt;]                                   | Lists all projects the user has access to.    |
-| -------------------------------------------------------------------------------------- | --------------------------------------------- |
-| golem-cli project add --project-name &lt;text&gt; [--project-description &lt;text&gt;] | Creates new project owned by current account. |
-| golem-cli project get-default                                                          | Shows default project details.                |
+| golem-cloud-cli project list [--project-name &lt;text&gt;]                                   | Lists all projects the user has access to.    |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| golem-cloud-cli project add --project-name &lt;text&gt; [--project-description &lt;text&gt;] | Creates new project owned by current account. |
+| golem-cloud-cli project get-default                                                          | Shows default project details.                |
 
 ### Sharing
 
+<Callout type="info">Sharing is specific to Golem Cloud.</Callout>
+
 The sharing facilities of Golem CLI allow developers to share either account- or project-level access with other accounts on Golem Cloud.
 
-| golem-cli share --project-name &lt;text&gt; --recipient-account-id &lt;text&gt; --project-policy-id &lt;text&gt; | Share project access with a given account using specified project policy.          |
-| ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| golem-cli share --project-name &lt;text&gt; --recipient-account-id &lt;text&gt; --project-actions &lt;text&gt;   | Share project access with a given account using specified list of allowed actions. |
+| golem-cloud-cli share --project-name &lt;text&gt; --recipient-account-id &lt;text&gt; --project-policy-id &lt;text&gt; | Share project access with a given account using specified project policy.          |
+| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| golem-cloud-cli share --project-name &lt;text&gt; --recipient-account-id &lt;text&gt; --project-actions &lt;text&gt;   | Share project access with a given account using specified list of allowed actions. |
 
 ### Tokens
 
+<Callout type="info">Tokens are specific to Golem Cloud.</Callout>
+
 The tokens facility of Golem CLI allow developers to create and manage tokens, which are API keys that can be used in programmatic scenarios for interacting with Golem Cloud Services.
 
-| golem-cli token list                               | Lists all tokens that the user created.                                 |
-| -------------------------------------------------- | ----------------------------------------------------------------------- |
-| golem-cli token add [--expires-at &lt;instant&gt;] | Creates a new token with the optional expiration.Returns token details. |
+| golem-cloud-cli token list                               | Lists all tokens that the user created.                                 |
+| -------------------------------------------------------- | ----------------------------------------------------------------------- |
+| golem-cloud-cli token add [--expires-at &lt;instant&gt;] | Creates a new token with the optional expiration.Returns token details. |
 
 ### Examples
 
@@ -259,8 +287,10 @@ Templates allow developers to create example component source code for different
 
 ### Account
 
+<Callout type="info">Accounts are specific to Golem Cloud.</Callout>
+
 Account command allows users to get or update account details.
 
-| golem-cli account get                                                                 | Get current account details. Can also be used to troubleshoot login issues. |
-| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| golem-cli account update [--account-name &lt;text&gt;] [--account-email &lt;text&gt;] | Updates account name and/or email.                                          |
+| golem-cloud-cli account get                                                                 | Get current account details. Can also be used to troubleshoot login issues. |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| golem-cloud-cli account update [--account-name &lt;text&gt;] [--account-email &lt;text&gt;] | Updates account name and/or email.                                          |

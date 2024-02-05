@@ -1,22 +1,22 @@
 # Why Golem?
 
-Golem Cloud is an evolution of serverless computing that allows workers to be long-lived and stateful. Through a new paradigm called _durable computing_, workers deployed onto Golem Cloud can survive hardware failures, upgrades, and updates, offering a reliable foundation for building distributed, stateful applications.
+Golem is an evolution of serverless computing that allows workers to be long-lived and stateful. Through a new paradigm called _durable computing_, workers deployed onto Golem can survive hardware failures, upgrades, and updates, offering a reliable foundation for building distributed, stateful applications.
 
-Golem Cloud does not let you build anything you couldn't build before, with great expertise and enough time and resources. However, Golem Cloud does radically simplify the way you build many classes of cloud applications.
+Golem does not let you build anything you couldn't build before, with great expertise and enough time and resources. However, Golem does radically simplify the way you build many classes of cloud applications.
 
 ## Benefits
 
-Golem Cloud shares many of the benefits of serverless computing, including faster development, lower maintenance overhead, and no need for ops.
+Golem shares many of the benefits of serverless computing, including faster development, lower maintenance overhead, and no need for ops.
 
-However, there are additional benefits that are unique to Golem Cloud, including:
+However, there are additional benefits that are unique to Golem, including:
 
-- **Durable State**. Golem Cloud lets you store session information, shopping carts, sensor data, user events, and much more in memory, because all workers state is durable. This not only lets you reduce your dependency on databases and dramatically simplify application code, but can also improve performance.
-- **Indefinite Life**. Workers deployed to Golem Cloud can run indefinitely. Though the node they are executing on might go down, the workers will be transferred to another node and resume execution where they left off. Durable computation can radically simplify orchestration processes and eliminate the need for event sourcing.
-- **Distributed Computing**. Workers deployed to Golem Cloud can call other workers, which makes them equivalent in expressive power to distributed, persistent actors. As such, workers deployed to Golem Cloud can solve virtually any problem in distributed computing, using techniques pioneered by actor frameworks such as Akka or Dapr.
+- **Durable State**. Golem lets you store session information, shopping carts, sensor data, user events, and much more in memory, because all workers state is durable. This not only lets you reduce your dependency on databases and dramatically simplify application code, but can also improve performance.
+- **Indefinite Life**. Workers deployed to Golem can run indefinitely. Though the node they are executing on might go down, the workers will be transferred to another node and resume execution where they left off. Durable computation can radically simplify orchestration processes and eliminate the need for event sourcing.
+- **Distributed Computing**. Workers deployed to Golem can call other workers, which makes them equivalent in expressive power to distributed, persistent actors. As such, workers deployed to Golem can solve virtually any problem in distributed computing, using techniques pioneered by actor frameworks such as Akka or Dapr.
 
 ## Examples
 
-In the following examples, you will learn how several different types of applications could be written for Golem Cloud, and how this would simplify architecture.
+In the following examples, you will learn how several different types of applications could be written for Golem, and how this would simplify architecture.
 
 ### Order Processing
 
@@ -43,7 +43,7 @@ In order to compensate for these failure scenarios, we would traditionally switc
 
 While industry-proven and reliable, this approach ends up significantly increasing our development and maintenance costs, and turns what could be a simple and short program into many disparate services, all introducing additional overhead and points of failure.
 
-With Golem Cloud, the entire order processing process can be written and deployed as a simple serverless worker. The worker will run invincibly with durable state, allowing us to focus on business logic and disregard the complexities of reliable, distributed, stateful computation in the cloud.
+With Golem, the entire order processing process can be written and deployed as a simple serverless worker. The worker will run invincibly with durable state, allowing us to focus on business logic and disregard the complexities of reliable, distributed, stateful computation in the cloud.
 
 ### Session Management
 
@@ -62,4 +62,4 @@ One way of solving this problem would be to use a relational database in order t
 
 In the end, a traditional solution to the problem of session management is likely to be highly tailored to the specific nature of the game and the audience size, and likely to involve some kind of event-sourcing, potentially with CQRS, in order to ensure consistency and recoverability in the event of unanticipated failures.
 
-With Golem Cloud, the entire game session can be deployed as a single serverless worker, which responds to updates in game state and new bets. Since the data is stored in memory and latency of workers in Golem Cloud is very low, performance can be very high, without sacrificing the durability guarantees of other approaches based on ACID databases or event-sourcing.
+With Golem, the entire game session can be deployed as a single serverless worker, which responds to updates in game state and new bets. Since the data is stored in memory and latency of workers in Golem is very low, performance can be very high, without sacrificing the durability guarantees of other approaches based on ACID databases or event-sourcing.

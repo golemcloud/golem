@@ -2,31 +2,63 @@ import { Callout } from "nextra/components"
 
 # Quickstart
 
-This guide will get you up and running in the Golem Cloud in minutes.
+This guide will get you up and running in Golem in minutes.
 
 ### Install Golem CLI
 
-Golem CLI is a command-line application that allows you to deploy new invincible workers onto Golem Cloud, as well as manage your account, projects, templates, and API tokens.
+Golem CLI is a command-line application that allows you to deploy new invincible workers onto Golem.
 
-In order to download the command-line application, you must first [register for the Developer Mode preview](https://golem.cloud/sign-up). You will then be provided with a link to download Golem CLI.
+To install `golem-cli` you currently need to use `cargo`, Rust's build tool.
 
-After downloading Golem CLI, you need to place the application on your path, so you can run it from anywhere.
-
-### Authenticate
-
-You need to create an account and authenticate yourself before using any Golem commands. This is easy to do with Github OAuth2. Lets do it right now by using the following command:
+To get `cargo` on your system, we recommend to use [rustup](https://rustup.rs/):
 
 ```bash filename="Terminal" copy
-golem-cli account get
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup install stable
+rustup default stable
 ```
 
-Once you authenticate, Golem CLI will cache an API token in a local directory named `$HOME/.golem`. This token will allow you to use Golem CLI without further authentication.
+Then you can install `golem-cli` with the following command:
+
+```bash filename="Terminal" copy
+cargo install golem-cli
+```
+
+<Callout type="info">
+  If you want to try out the hosted version of Golem you can [register for the Developer Mode preview](https://golem.cloud/sign-up). You will then be provided with a link to download the Golem Cloud CLI.
+  {/* prettier-ignore */}
+  You need to create an account and authenticate yourself before using any Golem Cloud commands. This is easy to do with Github OAuth2. Lets do it right now by using the following command:
+
+```bash filename="Terminal" copy
+golem-cloud-cli account get
+```
+
+Once you authenticate, Golem Cloud CLI will cache an API token in a local directory named `$HOME/.golem`. This token will allow you to use Golem Cloud CLI without further authentication.
+
+We will use `golem-cli` as opposed to `golem-cloud-cli` in all examples unless they are specific to Golem Cloud, but `golem-cloud-cli` supports all commands supported by `golem-cli`.
+
+</Callout>
+
+### Setting up Golem
+
+To use the open source version of Golem you need to deploy it in your own infrastructure.
+
+To get started we recommend using the Docker Compose file from the [Golem Docker examples](https://github.com/golemcloud/golem-services/blob/main/docker-examples/docker-compose.yaml). You will need to have [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) installed on your system.
+
+Once you have Docker Compose installed, you can start Golem with the following command:
+
+```bash filename="Terminal" copy
+curl -sSL https://raw.githubusercontent.com/golemcloud/golem-services/main/docker-examples/docker-compose.yaml > docker-compose.yaml
+docker-compose up
+```
+
+<Callout type="info">If you are using the hosted version of Golem, you can skip this step.</Callout>
 
 ### Building an Example
 
-Golem Cloud runs templates that are WebAssembly programs. Templates are like applications, except they may expose functions that can be called externally.
+Golem runs templates that are WebAssembly programs. Templates are like applications, except they may expose functions that can be called externally.
 
-To deploy to Golem Cloud, you must first [build a template](/docs/building-templates) using any programming language and toolchain that can build WebAssembly components.
+To deploy to Golem, you must first [build a template](/docs/building-templates) using any programming language and toolchain that can build WebAssembly components.
 
 To get started quickly, you can use Golem CLI to create a template from an example:
 
@@ -54,19 +86,20 @@ This will write the resulting template to `shopping_cart/target/wasm32-wasi/rele
 
 ### Uploading Your Template
 
-To upload your template to Golem Cloud, you can use the `template add` command. Navigate to `shopping_cart/target/wasm32-wasi/release` and then do:
+To upload your template to Golem, you can use the `template add` command. Navigate to `shopping_cart/target/wasm32-wasi/release` and then do:
 
 ```bash filename="Terminal" copy
 golem-cli template add --template-name shopping-cart shopping_cart.wasm
 ```
 
-Uploading a template to Golem Cloud does not actually execute the template. Instead, it only makes it available for execution to Golem Cloud.
+Uploading a template to Golem does not actually execute the template. Instead, it only makes it available for execution to Golem
+.
 
 Every separate execution of your template is referred to as a _worker_ based on that template.
 
 ### Create Workers
 
-In Golem Cloud, every worker has a unique id, which is arbitrary text that you define. If you don't need a meaningful id for workers, you can generate a UUID.
+In Golem, every worker has a unique id, which is arbitrary text that you define. If you don't need a meaningful id for workers, you can generate a UUID.
 
 Once you have chosen a worker id, you can launch the worker either explicitly, or by invoking any function on the worker (for example, a “main” function).
 
@@ -82,7 +115,7 @@ When you add a template you will see some basic information about the template s
 
 ### Invoking Workers
 
-Thanks to the WebAssembly component model, your Golem Cloud applications are not just an executable. Rather, they may export functions that can be called from the outside. Exported functions allow your workers to be given instructions or queried for their state.
+Thanks to the WebAssembly component model, your Golem applications are not just an executable. Rather, they may export functions that can be called from the outside. Exported functions allow your workers to be given instructions or queried for their state.
 
 Here, we invoke the function `initialize_cart` on the worker with a single string parameter:
 
@@ -100,9 +133,9 @@ Check the [Template interface](/docs/template-interface) section to learn about 
 
 ### Next Steps
 
-In this guide, you have learned how to build and deploy invincible serverless workers on Golem Cloud, and seen how you can interact with them as they execute.
+In this guide, you have learned how to build and deploy invincible serverless workers on Golem, and seen how you can interact with them as they execute.
 
-Take your next steps with Golem Cloud by exploring the following resources:
+Take your next steps with Golem by exploring the following resources:
 
 - [Building Templates](/docs/building-templates) describes you can use different **programming languages** for building Golem templates
 - [Promises](/docs/promises) are a way to block your program until an **external condition** fulfills it.

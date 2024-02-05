@@ -1,10 +1,18 @@
+import { Callout } from "nextra/components"
 import { Card, Cards } from "nextra/components"
 
 # REST API
 
-The Golem REST API is located at [https://release.api.golem.cloud](https://release.api.golem.cloud/v2). For all API calls, the user must provide a token for authentication. To obtain the golem token, the user should register an external oauth2 token with the Golem service using the `v2/oauth2` endpoint.
+The Golem Cloud REST API is located at [https://release.api.golem.cloud](https://release.api.golem.cloud/v2). For all API calls, the user must provide a token for authentication. To obtain the golem token, the user should register an external oauth2 token with the Golem service using the `v2/oauth2` endpoint.
+
+<Callout type="info">
+  This is the location for the Golem REST API if you are using Golem Cloud. If you are deploying
+  Golem yourself using the open source version the location will be based on your own deployment.
+</Callout>
 
 # Authentication
+
+<Callout type="info">Authentication is only required for Golem Cloud.</Callout>
 
 All endpoints (except for `/v2/oauth2` ) requires authorization header `Authorization: bearer <token-secret>` where `token-secret` is one of:
 
@@ -25,3 +33,8 @@ This section contains the full reference of all user facing Golem Cloud endpoint
   <Card title="Token API" href="/docs/rest-api/token" />
   <Card title="Worker API" href="/docs/rest-api/worker" />
 </Cards>
+
+<Callout type="info">
+  The account, login, project, project grant, project policy, and token APIs are only available for
+  Golem Cloud.
+</Callout>
