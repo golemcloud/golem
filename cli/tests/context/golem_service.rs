@@ -104,7 +104,7 @@ impl<'docker_client> GolemService<'docker_client> {
         docker: &'docker_client clients::Cli,
         env_config: &EnvConfig,
         shard_manager: &ShardManagerInfo,
-        db: &impl DbInfo,
+        db: &DbInfo,
     ) -> Result<GolemService<'docker_client>, Failed> {
         if env_config.local_golem {
             GolemService::start_process(env_config, shard_manager, db)
@@ -117,7 +117,7 @@ impl<'docker_client> GolemService<'docker_client> {
         docker: &'docker_client clients::Cli,
         env_config: &EnvConfig,
         shard_manager: &ShardManagerInfo,
-        db: &impl DbInfo,
+        db: &DbInfo,
     ) -> Result<GolemService<'docker_client>, Failed> {
         println!("Starting Golem Service docker with shard manager: {shard_manager:?}");
 
@@ -146,7 +146,7 @@ impl<'docker_client> GolemService<'docker_client> {
         http_port: u16,
         env_config: &EnvConfig,
         shard_manager: &ShardManagerInfo,
-        db: &impl DbInfo,
+        db: &DbInfo,
     ) -> HashMap<String, String> {
         let log_level = if env_config.verbose { "debug" } else { "info" };
 
@@ -188,7 +188,7 @@ impl<'docker_client> GolemService<'docker_client> {
     fn start_process(
         env_config: &EnvConfig,
         shard_manager: &ShardManagerInfo,
-        db: &impl DbInfo,
+        db: &DbInfo,
     ) -> Result<GolemService<'docker_client>, Failed> {
         println!("Starting Golem Service");
 
