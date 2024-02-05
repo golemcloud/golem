@@ -3,6 +3,7 @@ use figment::Figment;
 use golem_service_base::config::TemplateStoreConfig;
 use golem_service_base::routing_table::RoutingTableConfig;
 use serde::Deserialize;
+use std::time::Duration;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct TemplatesConfig {
@@ -16,6 +17,13 @@ pub struct DbSqliteConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct WorkerExecutorClientCacheConfig {
+    pub max_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub time_to_idle: Duration,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct CloudServiceConfig {
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
@@ -24,6 +32,7 @@ pub struct CloudServiceConfig {
     pub db: DbConfig,
     pub templates: TemplatesConfig,
     pub routing_table: RoutingTableConfig,
+    pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]

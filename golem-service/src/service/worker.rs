@@ -215,7 +215,7 @@ impl WorkerServiceDefault {
             Some(pod) => {
                 let worker_executor_client = self
                     .worker_executor_clients
-                    .lookup(pod)
+                    .lookup(pod.clone())
                     .await
                     .map_err(|err| {
                         WorkerError::Internal(format!(
