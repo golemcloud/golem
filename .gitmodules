@@ -7,3 +7,6 @@
 [submodule "golem-openapi-client-generator"]
 	path = golem-openapi-client-generator
 	url = git@github.com:golemcloud/golem-openapi-client-generator.git
+[submodule "golem-cli"]
+	path = golem-cli
+	url = git@github.com:golemcloud/golem-cli.git

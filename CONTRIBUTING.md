@@ -1,3 +1,29 @@
+## Submodules
+
+To initialise git submodules you can use this command:
+```shell
+git submodule update --init --recursive
+```
+
+## Running integration tests
+
+Integration tests are stored in `golem-cli/tests` directory.
+
+You can run all tests with
+```shell
+./scripts/it.sh
+```
+
+To run individual tests you should first build all executables with `./scripts/build-all.sh` and then run tests in `golem-cli` directories:
+```shell
+cargo test worker_new_instance
+```
+
+With `QUIET=true` you can hide services output:
+```shell
+QUIET=true cargo test
+```
+
 ## Local Testing
 
 To spin up services using the latest code

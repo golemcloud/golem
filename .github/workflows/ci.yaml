@@ -259,7 +259,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             golem-openapi-client-generator/target/
-            golem-client/target/
+            golem-cli/target/
           key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
@@ -295,11 +295,18 @@ jobs:
       - name: Generate Golem client
         working-directory: golem-openapi-client-generator
         run: |
+          expected_version=$( ../scripts/expected-client-version.sh )
           cargo build
-          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-service.yaml --output-directory ../golem-client --name "golem-client" --client-version "0.0.0"
-      - name: Compile Golem client
-        working-directory: golem-client
-        run: cargo build
+          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-service.yaml --output-directory ../golem-client --name "golem-client" --client-version "${expected_version}"
+      - name: Integration tests
+        working-directory: golem-cli
+        env:
+          CI: true
+        run: |
+          mkdir -p ./.cargo
+          echo 'paths = ["../golem-client"]' > ./.cargo/config.toml
+          cargo build
+          RUST_LOG=info cargo test
   publish:
     needs: [worker-tests, integration-tests]
     if: "startsWith(github.ref, 'refs/tags/v')"
