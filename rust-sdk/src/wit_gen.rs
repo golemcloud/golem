@@ -377,27 +377,48 @@ fn write_to_file(
     content: Vec<String>,
     ast_span: Span,
 ) -> Result<()> {
-    let mut file = File::create(file_name.clone())
-        .map_err(|e| syn::Error::new(ast_span, format!("Error while creating file {}", e)))?;
 
-    file.write_all(
+    let new_content = 
         format!(
-            "package {}
+        "package {}
 
 interface api {{
-    {}
+{}
 }}
 
 world golem-service {{
     export api
 }}",
-            package_name,
-            content.join("\n")
-        )
-        .trim()
-        .as_bytes(),
-    )
-    .map_err(|e| syn::Error::new(ast_span, format!("Error while writing to file {}", e)))?;
+        package_name,
+        content.join("\n"));
+
+    match File::open(file_name.clone()) {
+        Ok(mut file) => {
+            let mut old_content = String::new();
+
+            file.read_to_string(&mut old_content)
+                .map_err(|e| syn::Error::new(ast_span, format!("Error while reading from file {}", e)))?;
+
+            if old_content == new_content {
+                // do nothing
+                Ok(())
+            } else {
+                // recreate file
+                create_and_write_to_file(file_name, new_content, ast_span)
+            }
+        },
+        Err(_) =>  {
+            create_and_write_to_file(file_name, new_content, ast_span)
+        }
+    }    
+}
+
+fn create_and_write_to_file(file_name: String, new_content: String, ast_span: Span) -> Result<()> {
+    let mut file = File::create(file_name.clone())
+        .map_err(|e| syn::Error::new(ast_span, format!("Error while creating file {}", e)))?;
+
+    file.write_all(new_content.trim().as_bytes())
+        .map_err(|e| syn::Error::new(ast_span, format!("Error while writing to file {}", e)))?;
 
     Ok(())
 }
