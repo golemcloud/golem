@@ -5,6 +5,19 @@ To spin up services using the latest code
 ```bash
 # Clone golem-services
 cd golem-services
+
+# init & update git submodules
+git submodule init  #only has to be done once
+git submodule update
+
+# init & update wasmtime submodules
+cd wasmtime/crates/wasi-common
+git submodule init #only has to be done once
+git submodule update
+
+# get back to root golem-services
+cd ../../..
+
 # Find more info below if you are having issues running this command(example: Running from MAC may fail)
 # Target has to be x86_64-unknown-linux-gnu or aarch64-unknown-linux-gnu-gcc
 cargo build --release --target x86_64-unknown-linux-gnu
