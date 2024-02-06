@@ -11,3 +11,6 @@ description = "Worker Bridge acts as a bridge between external API gateways and 
 
 [dependencies]
 golem-common = { path = "../golem-common" }
+
+regex = "1.10.3"
+
