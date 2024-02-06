@@ -2071,6 +2071,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-worker-bridge"
+version = "0.0.0"
+dependencies = [
+ "golem-common",
+]
+
+[[package]]
 name = "golem-worker-executor"
 version = "0.0.0"
 dependencies = [
