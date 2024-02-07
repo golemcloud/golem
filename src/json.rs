@@ -6,24 +6,23 @@ use std::str::FromStr;
 
 use crate::Value;
 
-// TODO: reduce clones
-// TODO: get rid of unwraps
-
 pub fn function_parameters(
     value: &JsonValue,
-    expected_parameters: Vec<AnalysedFunctionParameter>,
+    expected_parameters: &[AnalysedFunctionParameter],
 ) -> Result<Vec<Value>, Vec<String>> {
     let parameters = value
         .as_array()
         .ok_or(vec!["Expecting an array for fn_params".to_string()])?;
 
     let mut results = vec![];
-    let errors = vec![];
+    let mut errors = vec![];
 
     if parameters.len() == expected_parameters.len() {
         for (json, fp) in parameters.iter().zip(expected_parameters.iter()) {
-            let result = validate_function_parameter(json, fp.typ.clone())?;
-            results.push(result);
+            match validate_function_parameter(json, &fp.typ) {
+                Ok(result) => results.push(result),
+                Err(err) => errors.extend(err),
+            }
         }
 
         if errors.is_empty() {
@@ -42,7 +41,7 @@ pub fn function_parameters(
 
 pub fn function_result(
     values: Vec<Value>,
-    expected_types: Vec<AnalysedFunctionResult>,
+    expected_types: &[AnalysedFunctionResult],
 ) -> Result<JsonValue, Vec<String>> {
     if values.len() != expected_types.len() {
         Err(vec![format!(
@@ -54,8 +53,8 @@ pub fn function_result(
         let mut results = vec![];
         let mut errors = vec![];
 
-        for (value, expected) in values.iter().zip(expected_types.iter()) {
-            let result = validate_function_result(value, expected.typ.clone());
+        for (value, expected) in values.into_iter().zip(expected_types.iter()) {
+            let result = validate_function_result(value, &expected.typ);
 
             match result {
                 Ok(value) => results.push(value),
@@ -91,7 +90,7 @@ pub fn function_result(
 
 fn validate_function_parameter(
     input_json: &JsonValue,
-    expected_type: AnalysedType,
+    expected_type: &AnalysedType,
 ) -> Result<Value, Vec<String>> {
     match expected_type {
         AnalysedType::Bool => get_bool(input_json),
@@ -104,7 +103,13 @@ fn validate_function_parameter(
         AnalysedType::S64 => get_s64(input_json),
         AnalysedType::U64 => get_u64(input_json).map(Value::U64),
         AnalysedType::F64 => {
-            bigdecimal(input_json).map(|num| Value::F64(num.to_string().parse().unwrap()))
+            let num = bigdecimal(input_json)?;
+            let value = Value::F64(
+                num.to_string()
+                    .parse()
+                    .map_err(|err| vec![format!("Failed to parse f64: {}", err)])?,
+            );
+            Ok(value)
         }
         AnalysedType::F32 => get_f32(input_json),
         AnalysedType::Chr => get_char(input_json).map(Value::Char),
@@ -114,21 +119,16 @@ fn validate_function_parameter(
 
         AnalysedType::Flags(names) => get_flag(input_json, names).map(Value::Flags),
 
-        AnalysedType::List(elem) => get_list(input_json, *elem).map(Value::List),
+        AnalysedType::List(elem) => get_list(input_json, elem).map(Value::List),
 
-        AnalysedType::Option(elem) => {
-            get_option(input_json, *elem).map(Value::Option)
-        }
+        AnalysedType::Option(elem) => get_option(input_json, elem).map(Value::Option),
 
-        AnalysedType::Result { ok, error } => {
-            get_result(input_json, ok.map(|t| *t), error.map(|t| *t))
-                .map(Value::Result)
-        }
+        AnalysedType::Result { ok, error } => get_result(input_json, ok, error).map(Value::Result),
 
-        AnalysedType::Record(fields) => get_record(input_json, &fields).map(Value::Record),
+        AnalysedType::Record(fields) => get_record(input_json, fields).map(Value::Record),
 
         AnalysedType::Variant(cases) => {
-            get_variant(input_json, &cases).map(|result| Value::Variant {
+            get_variant(input_json, cases).map(|result| Value::Variant {
                 case_idx: result.0,
                 case_value: result.1,
             })
@@ -153,73 +153,73 @@ fn get_bool(json: &JsonValue) -> Result<Value, Vec<String>> {
 fn get_s8(json: &JsonValue) -> Result<Value, Vec<String>> {
     ensure_range(
         json,
-        BigDecimal::from_i8(i8::MIN).unwrap(),
-        BigDecimal::from_i8(i8::MAX).unwrap(),
+        BigDecimal::from_i8(i8::MIN).expect("Failed to convert i8::MIN to BigDecimal"),
+        BigDecimal::from_i8(i8::MAX).expect("Failed to convert i8::MAX to BigDecimal"),
     )
-    .map(|num| Value::S8(num.to_i8().unwrap()))
+    .map(|num| Value::S8(num.to_i8().expect("Failed to convert BigDecimal to i8")))
 }
 
 fn get_u8(json: &JsonValue) -> Result<Value, Vec<String>> {
     ensure_range(
         json,
-        BigDecimal::from_u8(u8::MIN).unwrap(),
-        BigDecimal::from_u8(u8::MAX).unwrap(),
+        BigDecimal::from_u8(u8::MIN).expect("Failed to convert u8::MIN to BigDecimal"),
+        BigDecimal::from_u8(u8::MAX).expect("Failed to convert u8::MAX to BigDecimal"),
     )
-    .map(|num| Value::U8(num.to_u8().unwrap()))
+    .map(|num| Value::U8(num.to_u8().expect("Failed to convert BigDecimal to u8")))
 }
 
 fn get_s16(json: &JsonValue) -> Result<Value, Vec<String>> {
     ensure_range(
         json,
-        BigDecimal::from_i16(i16::MIN).unwrap(),
-        BigDecimal::from_i16(i16::MAX).unwrap(),
+        BigDecimal::from_i16(i16::MIN).expect("Failed to convert i16::MIN to BigDecimal"),
+        BigDecimal::from_i16(i16::MAX).expect("Failed to convert i16::MAX to BigDecimal"),
     )
-    .map(|num| Value::S16(num.to_i16().unwrap()))
+    .map(|num| Value::S16(num.to_i16().expect("Failed to convert BigDecimal to i16")))
 }
 
 fn get_u16(json: &JsonValue) -> Result<Value, Vec<String>> {
     ensure_range(
         json,
-        BigDecimal::from_u16(u16::MIN).unwrap(),
-        BigDecimal::from_u16(u16::MAX).unwrap(),
+        BigDecimal::from_u16(u16::MIN).expect("Failed to convert u16::MIN to BigDecimal"),
+        BigDecimal::from_u16(u16::MAX).expect("Failed to convert u16::MAX to BigDecimal"),
     )
-    .map(|num| Value::U16(num.to_u16().unwrap()))
+    .map(|num| Value::U16(num.to_u16().expect("Failed to convert BigDecimal to u16")))
 }
 
 fn get_s32(json: &JsonValue) -> Result<Value, Vec<String>> {
     ensure_range(
         json,
-        BigDecimal::from_i32(i32::MIN).unwrap(),
-        BigDecimal::from_i32(i32::MAX).unwrap(),
+        BigDecimal::from_i32(i32::MIN).expect("Failed to convert i32::MIN to BigDecimal"),
+        BigDecimal::from_i32(i32::MAX).expect("Failed to convert i32::MAX to BigDecimal"),
     )
-    .map(|num| Value::S32(num.to_i32().unwrap()))
+    .map(|num| Value::S32(num.to_i32().expect("Failed to convert BigDecimal to i32")))
 }
 
 fn get_u32(json: &JsonValue) -> Result<Value, Vec<String>> {
     ensure_range(
         json,
-        BigDecimal::from_u32(u32::MIN).unwrap(),
-        BigDecimal::from_u32(u32::MAX).unwrap(),
+        BigDecimal::from_u32(u32::MIN).expect("Failed to convert u32::MIN to BigDecimal"),
+        BigDecimal::from_u32(u32::MAX).expect("Failed to convert u32::MAX to BigDecimal"),
     )
-    .map(|num| Value::U32(num.to_u32().unwrap()))
+    .map(|num| Value::U32(num.to_u32().expect("Failed to convert BigDecimal to u32")))
 }
 
 fn get_s64(json: &JsonValue) -> Result<Value, Vec<String>> {
     ensure_range(
         json,
-        BigDecimal::from_i64(i64::MIN).unwrap(),
-        BigDecimal::from_i64(i64::MAX).unwrap(),
+        BigDecimal::from_i64(i64::MIN).expect("Failed to convert i64::MIN to BigDecimal"),
+        BigDecimal::from_i64(i64::MAX).expect("Failed to convert i64::MAX to BigDecimal"),
     )
-    .map(|num| Value::S64(num.to_i64().unwrap()))
+    .map(|num| Value::S64(num.to_i64().expect("Failed to convert BigDecimal to i64")))
 }
 
 fn get_f32(json: &JsonValue) -> Result<Value, Vec<String>> {
     ensure_range(
         json,
-        BigDecimal::from_f32(f32::MIN).unwrap(),
-        BigDecimal::from_f32(f32::MAX).unwrap(),
+        BigDecimal::from_f32(f32::MIN).expect("Failed to convert f32::MIN to BigDecimal"),
+        BigDecimal::from_f32(f32::MAX).expect("Failed to convert f32::MAX to BigDecimal"),
     )
-    .map(|num| Value::F32(num.to_f32().unwrap()))
+    .map(|num| Value::F32(num.to_f32().expect("Failed to convert BigDecimal to f32")))
 }
 
 fn ensure_range(
@@ -326,11 +326,11 @@ fn type_description(value: &JsonValue) -> &'static str {
 
 fn get_result(
     input_json: &JsonValue,
-    ok_type: Option<AnalysedType>,
-    err_type: Option<AnalysedType>,
+    ok_type: &Option<Box<AnalysedType>>,
+    err_type: &Option<Box<AnalysedType>>,
 ) -> Result<Result<Box<Value>, Box<Value>>, Vec<String>> {
     fn validate(
-        typ: Option<AnalysedType>,
+        typ: &Option<Box<AnalysedType>>,
         input_json: &JsonValue,
     ) -> Result<Box<Value>, Vec<String>> {
         if let Some(typ) = typ {
@@ -353,7 +353,7 @@ fn get_result(
 
 fn get_option(
     input_json: &JsonValue,
-    tpe: AnalysedType,
+    tpe: &AnalysedType,
 ) -> Result<Option<Box<Value>>, Vec<String>> {
     match input_json.as_null() {
         Some(_) => Ok(None),
@@ -362,7 +362,7 @@ fn get_option(
     }
 }
 
-fn get_list(input_json: &JsonValue, tpe: AnalysedType) -> Result<Vec<Value>, Vec<String>> {
+fn get_list(input_json: &JsonValue, tpe: &AnalysedType) -> Result<Vec<Value>, Vec<String>> {
     let json_array = input_json
         .as_array()
         .ok_or(vec![format!("Input {} is not an array", input_json)])?;
@@ -371,7 +371,7 @@ fn get_list(input_json: &JsonValue, tpe: AnalysedType) -> Result<Vec<Value>, Vec
     let mut vals: Vec<Value> = vec![];
 
     for json in json_array {
-        match validate_function_parameter(json, tpe.clone()) {
+        match validate_function_parameter(json, tpe) {
             Ok(result) => vals.push(result),
             Err(errs) => errors.extend(errs),
         }
@@ -384,7 +384,7 @@ fn get_list(input_json: &JsonValue, tpe: AnalysedType) -> Result<Vec<Value>, Vec
     }
 }
 
-fn get_tuple(input_json: &JsonValue, types: Vec<AnalysedType>) -> Result<Vec<Value>, Vec<String>> {
+fn get_tuple(input_json: &JsonValue, types: &[AnalysedType]) -> Result<Vec<Value>, Vec<String>> {
     let json_array = input_json.as_array().ok_or(vec![format!(
         "Input {} is not an array representing tuple",
         input_json
@@ -401,7 +401,7 @@ fn get_tuple(input_json: &JsonValue, types: Vec<AnalysedType>) -> Result<Vec<Val
     let mut vals: Vec<Value> = vec![];
 
     for (json, tpe) in json_array.iter().zip(types.iter()) {
-        match validate_function_parameter(json, tpe.clone()) {
+        match validate_function_parameter(json, tpe) {
             Ok(result) => vals.push(result),
             Err(errs) => errors.extend(errs),
         }
@@ -428,7 +428,7 @@ fn get_record(
 
     for (name, tpe) in name_type_pairs {
         if let Some(json_value) = json_map.get(name) {
-            match validate_function_parameter(json_value, tpe.clone()) {
+            match validate_function_parameter(json_value, tpe) {
                 Ok(result) => vals.push(result),
                 Err(value_errors) => errors.extend(
                     value_errors
@@ -452,7 +452,7 @@ fn get_record(
     }
 }
 
-fn get_enum(input_json: &JsonValue, names: Vec<String>) -> Result<u32, Vec<String>> {
+fn get_enum(input_json: &JsonValue, names: &[String]) -> Result<u32, Vec<String>> {
     let input_enum_value = input_json
         .as_str()
         .ok_or(vec![format!("Input {} is not string", input_json)])?;
@@ -476,7 +476,7 @@ fn get_enum(input_json: &JsonValue, names: Vec<String>) -> Result<u32, Vec<Strin
     }
 }
 
-fn get_flag(input_json: &JsonValue, names: Vec<String>) -> Result<Vec<bool>, Vec<String>> {
+fn get_flag(input_json: &JsonValue, names: &[String]) -> Result<Vec<bool>, Vec<String>> {
     let input_flag_values = input_json.as_array().ok_or(vec![format!(
         "Input {} is not an array to be parsed as flags",
         input_json
@@ -530,36 +530,41 @@ fn get_variant(
     }?;
 
     match possible_mapping_indexed.get(key) {
-        Some((index, Some(tpe))) => validate_function_parameter(json, tpe.clone())
-            .map(|result| (*index as u32, Box::new(result))),
+        Some((index, Some(tpe))) => {
+            validate_function_parameter(json, tpe).map(|result| (*index as u32, Box::new(result)))
+        }
         Some((_, None)) => Err(vec![format!("Unknown json {} in the variant", input_json)]),
         None => Err(vec![format!("Unknown key {} in the variant", key)]),
     }
 }
 
 fn validate_function_result(
-    val: &Value,
-    expected_type: AnalysedType,
+    val: Value,
+    expected_type: &AnalysedType,
 ) -> Result<JsonValue, Vec<String>> {
     match val {
-        Value::Bool(bool) => Ok(serde_json::Value::Bool(*bool)),
-        Value::S8(value) => Ok(serde_json::Value::Number(Number::from(*value))),
-        Value::U8(value) => Ok(serde_json::Value::Number(Number::from(*value))),
-        Value::U32(value) => Ok(serde_json::Value::Number(Number::from(*value))),
-        Value::S16(value) => Ok(serde_json::Value::Number(Number::from(*value))),
-        Value::U16(value) => Ok(serde_json::Value::Number(Number::from(*value))),
-        Value::S32(value) => Ok(serde_json::Value::Number(Number::from(*value))),
-        Value::S64(value) => Ok(serde_json::Value::Number(Number::from(*value))),
-        Value::U64(value) => Ok(serde_json::Value::Number(Number::from(*value))),
+        Value::Bool(bool) => Ok(serde_json::Value::Bool(bool)),
+        Value::S8(value) => Ok(serde_json::Value::Number(Number::from(value))),
+        Value::U8(value) => Ok(serde_json::Value::Number(Number::from(value))),
+        Value::U32(value) => Ok(serde_json::Value::Number(Number::from(value))),
+        Value::S16(value) => Ok(serde_json::Value::Number(Number::from(value))),
+        Value::U16(value) => Ok(serde_json::Value::Number(Number::from(value))),
+        Value::S32(value) => Ok(serde_json::Value::Number(Number::from(value))),
+        Value::S64(value) => Ok(serde_json::Value::Number(Number::from(value))),
+        Value::U64(value) => Ok(serde_json::Value::Number(Number::from(value))),
         Value::F32(value) => Ok(serde_json::Value::Number(
-            Number::from_f64(*value as f64).unwrap(),
+            Number::from_f64(value as f64)
+                .ok_or(vec![format!("Unsupported floating point value: {value}")])?,
         )),
-        Value::F64(value) => Ok(serde_json::Value::Number(Number::from_f64(*value).unwrap())),
-        Value::Char(value) => Ok(serde_json::Value::Number(Number::from(*value as u32))),
+        Value::F64(value) => Ok(serde_json::Value::Number(
+            Number::from_f64(value)
+                .ok_or(vec![format!("Unsupported floating point value: {value}")])?,
+        )),
+        Value::Char(value) => Ok(serde_json::Value::Number(Number::from(value as u32))),
         Value::String(value) => Ok(serde_json::Value::String(value.to_string())),
 
         Value::Enum(value) => match expected_type {
-            AnalysedType::Enum(names) => match names.get(*value as usize) {
+            AnalysedType::Enum(names) => match names.get(value as usize) {
                 Some(str) => Ok(serde_json::Value::String(str.clone())),
                 None => Err(vec![format!("Invalid enum {}", value)]),
             },
@@ -567,8 +572,8 @@ fn validate_function_result(
         },
 
         Value::Option(value) => match expected_type {
-            AnalysedType::Option(elem) => match &value {
-                Some(value) => validate_function_result(value, *elem),
+            AnalysedType::Option(elem) => match value {
+                Some(value) => validate_function_result(*value, elem),
                 None => Ok(serde_json::Value::Null),
             },
 
@@ -588,8 +593,8 @@ fn validate_function_result(
                 let mut errors = vec![];
                 let mut results = vec![];
 
-                for (v, tpe) in values.iter().zip(types.iter()) {
-                    match validate_function_result(v, tpe.clone()) {
+                for (value, tpe) in values.into_iter().zip(types.iter()) {
+                    match validate_function_result(value, tpe) {
                         Ok(result) => results.push(result),
                         Err(errs) => errors.extend(errs),
                     }
@@ -610,8 +615,8 @@ fn validate_function_result(
                 let mut errors = vec![];
                 let mut results = vec![];
 
-                for v in values.clone() {
-                    match validate_function_result(&v, (*elem).clone()) {
+                for value in values {
+                    match validate_function_result(value, elem) {
                         Ok(value) => results.push(value),
                         Err(errs) => errors.extend(errs),
                     }
@@ -636,10 +641,10 @@ fn validate_function_result(
                 let mut errors = vec![];
                 let mut results = serde_json::Map::new();
 
-                for (v, (field_name, typ)) in values.iter().zip(fields) {
-                    match validate_function_result(v, typ) {
+                for (value, (field_name, typ)) in values.into_iter().zip(fields) {
+                    match validate_function_result(value, typ) {
                         Ok(res) => {
-                            results.insert(field_name, res);
+                            results.insert(field_name.clone(), res);
                         }
                         Err(errs) => errors.extend(errs),
                     }
@@ -660,15 +665,15 @@ fn validate_function_result(
             case_value,
         } => match expected_type {
             AnalysedType::Variant(cases) => {
-                if (*case_idx as usize) < cases.len() {
-                    let (case_name, case_type) = match cases.get(*case_idx as usize) {
+                if (case_idx as usize) < cases.len() {
+                    let (case_name, case_type) = match cases.get(case_idx as usize) {
                         Some(tpe) => Ok(tpe),
                         None => Err(vec!["Variant not found in the expected types.".to_string()]),
                     }?;
 
                     match case_type {
                         Some(tpe) => {
-                            let result = validate_function_result(case_value, tpe.clone())?;
+                            let result = validate_function_result(*case_value, tpe)?;
                             let mut map = serde_json::Map::new();
                             map.insert(case_name.clone(), result);
                             Ok(serde_json::Value::Object(map))
@@ -697,7 +702,7 @@ fn validate_function_result(
                 } else {
                     for (enabled, name) in values.iter().zip(names) {
                         if *enabled {
-                            result.push(JsonValue::String(name));
+                            result.push(JsonValue::String(name.clone()));
                         }
                     }
 
@@ -713,7 +718,7 @@ fn validate_function_result(
                     let mut map: serde_json::Map<String, serde_json::Value> =
                         serde_json::Map::new();
 
-                    let result = validate_function_result(value, *ok_type)?;
+                    let result = validate_function_result(*value, ok_type)?;
                     map.insert("ok".to_string(), result);
                     Ok(serde_json::Value::Object(map))
                 }
@@ -731,7 +736,7 @@ fn validate_function_result(
                     let mut map: serde_json::Map<String, serde_json::Value> =
                         serde_json::Map::new();
 
-                    let result = validate_function_result(value, *err_type)?;
+                    let result = validate_function_result(*value, err_type)?;
                     map.insert("err".to_string(), result);
 
                     Ok(serde_json::Value::Object(map))

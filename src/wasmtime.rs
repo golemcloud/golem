@@ -4,6 +4,7 @@ use wasmtime::component::{
 };
 
 pub enum EncodingError {
+    ValueMissing { details: String },
     ParamTypeMismatch,
     ValueMismatch { details: String },
     Unknown { details: String },
@@ -273,15 +274,15 @@ pub fn encode_output(value: &Val) -> Result<Value, EncodingError> {
         },
         Val::Result(result) => match result.value() {
             Ok(value) => {
-                let encoded_output = encode_output(value.ok_or(EncodingError::Unknown {
+                let encoded_output = encode_output(value.ok_or(EncodingError::ValueMissing {
                     details: "Missing Ok value in result".to_string(),
-                })?)?; // TODO: error
+                })?)?;
                 Ok(Value::Result(Ok(Box::new(encoded_output))))
             }
             Err(value) => {
-                let encoded_output = encode_output(value.ok_or(EncodingError::Unknown {
+                let encoded_output = encode_output(value.ok_or(EncodingError::ValueMissing {
                     details: "Missing Err value in result".to_string(),
-                })?)?; // TODO: error
+                })?)?;
                 Ok(Value::Result(Err(Box::new(encoded_output))))
             }
         },
@@ -312,20 +313,20 @@ pub fn encode_output(value: &Val) -> Result<Value, EncodingError> {
 
 #[allow(unused)]
 pub struct WasmVariant {
-    ty: wasmtime::component::types::Variant,
+    ty: types::Variant,
     discriminant: u32,
     value: Option<Box<Val>>,
 }
 
 #[allow(unused)]
 pub struct WasmEnum {
-    ty: wasmtime::component::types::Variant,
+    ty: types::Variant,
     discriminant: u32,
 }
 
 #[allow(unused)]
 pub struct WasmFlags {
-    ty: wasmtime::component::types::Flags,
+    ty: types::Flags,
     count: u32,
     value: Box<[u32]>,
 }
