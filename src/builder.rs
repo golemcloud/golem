@@ -166,18 +166,25 @@ impl WitValueBuilder {
             WitNode::OptionValue(ref mut result_item) => {
                 *result_item = items.first().copied();
             }
-            WitNode::ResultValue(ref mut result_item) => {
-                match result_item {
-                    Ok(idx) => {
-                        *idx = items.first().copied().expect("finish_seq called with no items for result")
-                    }
-                    Err(idx) => {
-                        *idx = items.first().copied().expect("finish_seq called with no items for result")
-                    }
+            WitNode::ResultValue(ref mut result_item) => match result_item {
+                Ok(idx) => {
+                    *idx = items
+                        .first()
+                        .copied()
+                        .expect("finish_seq called with no items for result")
                 }
-            }
+                Err(idx) => {
+                    *idx = items
+                        .first()
+                        .copied()
+                        .expect("finish_seq called with no items for result")
+                }
+            },
             WitNode::VariantValue((_, ref mut result_item)) => {
-                *result_item = items.first().copied().expect("finish_seq called with no items for variant");
+                *result_item = items
+                    .first()
+                    .copied()
+                    .expect("finish_seq called with no items for variant");
             }
             _ => {
                 panic!("finish_seq called on a node that is neither a list nor a tuple");
@@ -196,7 +203,6 @@ impl NodeBuilder for WitValueBuilder {
     fn parent_builder(&mut self) -> &mut WitValueBuilder {
         self
     }
-
 
     fn u8(mut self, value: u8) -> Self::Result {
         let _ = self.add_u8(value);
@@ -281,7 +287,7 @@ impl NodeBuilder for WitValueBuilder {
     fn variant(mut self, case_idx: u32) -> WitValueItemBuilder<WitValueBuilder> {
         let variant_idx = self.add_variant(case_idx, -1);
         WitValueItemBuilder {
-            child_items_builder: WitValueChildItemsBuilder::new(self, variant_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, variant_idx),
         }
     }
 
@@ -298,7 +304,7 @@ impl NodeBuilder for WitValueBuilder {
     fn option_some(mut self) -> WitValueItemBuilder<Self> {
         let option_idx = self.add_option();
         WitValueItemBuilder {
-            child_items_builder: WitValueChildItemsBuilder::new(self, option_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, option_idx),
         }
     }
 
@@ -310,14 +316,14 @@ impl NodeBuilder for WitValueBuilder {
     fn result_ok(mut self) -> WitValueItemBuilder<Self> {
         let result_idx = self.add_result_ok();
         WitValueItemBuilder {
-            child_items_builder: WitValueChildItemsBuilder::new(self, result_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, result_idx),
         }
     }
 
     fn result_err(mut self) -> WitValueItemBuilder<Self> {
         let result_idx = self.add_result_err();
         WitValueItemBuilder {
-            child_items_builder: WitValueChildItemsBuilder::new(self, result_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, result_idx),
         }
     }
 
@@ -334,7 +340,11 @@ pub struct WitValueChildItemsBuilder<ParentBuilder: NodeBuilder> {
 
 impl<ParentBuilder: NodeBuilder> WitValueChildItemsBuilder<ParentBuilder> {
     fn new(builder: ParentBuilder, target_idx: TypeIndex) -> Self {
-        Self { builder, target_idx, items: Vec::new() }
+        Self {
+            builder,
+            target_idx,
+            items: Vec::new(),
+        }
     }
 
     fn add_item(&mut self, item_type_index: i32) {
@@ -343,12 +353,14 @@ impl<ParentBuilder: NodeBuilder> WitValueChildItemsBuilder<ParentBuilder> {
 
     pub fn item(self) -> WitValueItemBuilder<ParentBuilder> {
         WitValueItemBuilder {
-            child_items_builder: self
+            child_items_builder: self,
         }
     }
 
     pub fn finish(mut self) -> ParentBuilder::Result {
-        self.builder.parent_builder().finish_seq(self.items, self.target_idx);
+        self.builder
+            .parent_builder()
+            .finish_seq(self.items, self.target_idx);
         self.builder.finish()
     }
 }
@@ -464,7 +476,7 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueItemBuilder<ParentBuild
         let variant_idx = self.parent_builder().add_variant(case_idx, -1);
         self.child_items_builder.add_item(variant_idx);
         WitValueItemBuilder {
-            child_items_builder: WitValueChildItemsBuilder::new(self, variant_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, variant_idx),
         }
     }
 
@@ -484,7 +496,7 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueItemBuilder<ParentBuild
         let option_idx = self.parent_builder().add_option();
         self.child_items_builder.add_item(option_idx);
         WitValueItemBuilder {
-            child_items_builder: WitValueChildItemsBuilder::new(self, option_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, option_idx),
         }
     }
 
@@ -498,7 +510,7 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueItemBuilder<ParentBuild
         let result_idx = self.parent_builder().add_result_ok();
         self.child_items_builder.add_item(result_idx);
         WitValueItemBuilder {
-            child_items_builder: WitValueChildItemsBuilder::new(self, result_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, result_idx),
         }
     }
 
@@ -506,7 +518,7 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueItemBuilder<ParentBuild
         let result_idx = self.parent_builder().add_result_err();
         self.child_items_builder.add_item(result_idx);
         WitValueItemBuilder {
-            child_items_builder: WitValueChildItemsBuilder::new(self, result_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, result_idx),
         }
     }
 

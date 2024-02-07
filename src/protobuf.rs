@@ -313,8 +313,8 @@ impl TryFrom<Val> for super::WitValue {
     type Error = String;
 
     fn try_from(value: Val) -> Result<Self, Self::Error> {
-        let value: Value = value.into();
-        value.into()
+        let value: Value = value.try_into()?;
+        Ok(value.into())
     }
 }
 
@@ -343,19 +343,68 @@ impl TryFrom<Val> for Value {
             Some(val::Val::List(ValList { values })) => Ok(Value::List(
                 values
                     .into_iter()
-                    .map(|value| value.try_into())
+                    .map(|value| value.try_into().map(Box::new))
                     .collect::<Result<Vec<_>, _>>()?,
             )),
+            Some(val::Val::Tuple(ValTuple { values })) => Ok(Value::Tuple(
+                values
+                    .into_iter()
+                    .map(|value| value.try_into().map(Box::new))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Some(val::Val::Record(ValRecord { values })) => Ok(Value::Record(
+                values
+                    .into_iter()
+                    .map(|value| value.try_into().map(Box::new))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Some(val::Val::Variant(variant)) => {
+                let discriminant = variant.discriminant as u32;
+                let value = variant
+                    .value
+                    .ok_or("Protobuf ValVariant has no value".to_string())?;
+                Ok(Value::Variant(discriminant, Box::new((*value).try_into()?)))
+            }
+            Some(val::Val::Enum(ValEnum { discriminant })) => Ok(Value::Enum(discriminant as u32)),
+            Some(val::Val::Flags(ValFlags { count, value })) => {
+                let mut flags = vec![false; count as usize];
+                for i in value {
+                    flags[i as usize] = true;
+                }
+                Ok(Value::Flags(flags))
+            }
+            Some(val::Val::Option(inner)) => {
+                let ValOption {
+                    discriminant,
+                    value,
+                } = *inner;
+                match (discriminant, value) {
+                    (0, None) => Ok(Value::Option(None)),
+                    (1, Some(value)) => Ok(Value::Option(Some(Box::new((*value).try_into()?)))),
+                    _ => Err("Protobuf ValOption has invalid discriminant or value".to_string()),
+                }
+            }
+            Some(val::Val::Result(inner)) => {
+                let ValResult {
+                    discriminant,
+                    value,
+                } = *inner;
+                match (discriminant, value) {
+                    (0, Some(value)) => Ok(Value::Result(Ok(Box::new((*value).try_into()?)))),
+                    (1, Some(value)) => Ok(Value::Result(Err(Box::new((*value).try_into()?)))),
+                    _ => Err("Protobuf ValResult has invalid discriminant or value".to_string()),
+                }
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::WitValue;
+    use super::{Val, WitValue};
     use crate::Value;
     use proptest::prelude::*;
-    use proptest_arbitrary_interop::{arb, arb_sized};
+    use proptest_arbitrary_interop::arb_sized;
 
     const CASES: u32 = 10000;
     const SIZE: usize = 4096;
@@ -366,10 +415,20 @@ mod tests {
             cases: CASES, .. ProptestConfig::default()
         })]
         #[test]
-        fn round_trip(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(&v))) {
+        fn round_trip_wit_value(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(&v))) {
             let wit_value: crate::WitValue = value.clone().into();
             let protobuf_wit_value: WitValue = wit_value.into();
             let round_trip_wit_value: crate::WitValue = protobuf_wit_value.try_into().unwrap();
+            let round_trip_value: Value = round_trip_wit_value.into();
+            prop_assert_eq!(value, round_trip_value);
+        }
+
+        #[test]
+        fn round_trip_val(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(&v))) {
+            let wit_value: crate::WitValue = value.clone().into();
+
+            let protobuf_val: Val = wit_value.into();
+            let round_trip_wit_value: crate::WitValue = protobuf_val.try_into().unwrap();
             let round_trip_value: Value = round_trip_wit_value.into();
             prop_assert_eq!(value, round_trip_value);
         }

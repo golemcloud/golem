@@ -1,14 +1,14 @@
 #[allow(unused)]
+#[rustfmt::skip]
 mod bindings;
 mod builder;
 
 #[cfg(feature = "protobuf")]
 pub mod protobuf;
 
-
+use crate::builder::WitValueBuilder;
 pub use bindings::golem::rpc::types::{WitNode, WitValue};
 pub use builder::{NodeBuilder, WitValueExtensions};
-use crate::builder::WitValueBuilder;
 
 pub type TypeIndex = i32;
 
@@ -97,7 +97,7 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> TypeIndex {
             let inner_idx = build_wit_value(*value, builder);
             builder.finish_seq(vec![inner_idx], variant_idx);
             variant_idx
-        },
+        }
         Value::Enum(value) => builder.add_enum_value(value),
         Value::Flags(values) => builder.add_flags(values),
         Value::Option(value) => {
@@ -107,21 +107,19 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> TypeIndex {
                 builder.finish_seq(vec![inner_idx], option_idx);
             }
             option_idx
-        },
-        Value::Result(result) => {
-            match result {
-                Ok(ok) => {
-                    let result_idx = builder.add_result_ok();
-                    let inner_idx = build_wit_value(*ok, builder);
-                    builder.finish_seq(vec![inner_idx], result_idx);
-                    result_idx
-                },
-                Err(err) => {
-                    let result_idx = builder.add_result_err();
-                    let inner_idx = build_wit_value(*err, builder);
-                    builder.finish_seq(vec![inner_idx], result_idx);
-                    result_idx
-                }
+        }
+        Value::Result(result) => match result {
+            Ok(ok) => {
+                let result_idx = builder.add_result_ok();
+                let inner_idx = build_wit_value(*ok, builder);
+                builder.finish_seq(vec![inner_idx], result_idx);
+                result_idx
+            }
+            Err(err) => {
+                let result_idx = builder.add_result_err();
+                let inner_idx = build_wit_value(*err, builder);
+                builder.finish_seq(vec![inner_idx], result_idx);
+                result_idx
             }
         },
     }
@@ -140,7 +138,7 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
             let mut fields = Vec::new();
             for index in field_indices {
                 let value = build_tree(&nodes[*index as usize], nodes);
-                fields.push( Box::new(value));
+                fields.push(Box::new(value));
             }
             Value::Record(fields)
         }
@@ -148,12 +146,8 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
             let value = build_tree(&nodes[*inner_idx as usize], nodes);
             Value::Variant(name.clone(), Box::new(value))
         }
-        WitNode::EnumValue(value) => {
-            Value::Enum(value.clone())
-        }
-        WitNode::FlagsValue(values) => {
-            Value::Flags(values.clone())
-        }
+        WitNode::EnumValue(value) => Value::Enum(value.clone()),
+        WitNode::FlagsValue(values) => Value::Flags(values.clone()),
         WitNode::TupleValue(indices) => {
             let mut values = Vec::new();
             for index in indices {
@@ -174,9 +168,7 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
             let value = build_tree(&nodes[*index as usize], nodes);
             Value::Option(Some(Box::new(value)))
         }
-        WitNode::OptionValue(None) => {
-            Value::Option(None)
-        }
+        WitNode::OptionValue(None) => Value::Option(None),
         WitNode::ResultValue(Ok(index)) => {
             let value = build_tree(&nodes[*index as usize], nodes);
             Value::Result(Ok(Box::new(value)))
@@ -211,12 +203,12 @@ impl<'a> arbitrary::Arbitrary<'a> for WitValue {
 
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::*;
-    use proptest_arbitrary_interop::{arb, arb_sized};
     use crate::{Value, WitValue};
+    use proptest::prelude::*;
+    use proptest_arbitrary_interop::arb_sized;
 
-    const CASES : u32 = 10000;
-    const SIZE : usize = 4096;
+    const CASES: u32 = 10000;
+    const SIZE: usize = 4096;
 
     proptest! {
 
