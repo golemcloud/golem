@@ -7,7 +7,7 @@ use crate::api_spec::ResponseMapping;
 use crate::evaluator::{EvaluationError, Evaluator};
 use crate::expr::Expr;
 use crate::resolved_variables::ResolvedVariables;
-use crate::typed_json::TypedJson;
+use crate::typed_json::ValueTyped;
 use crate::worker_request_executor::WorkerResponse;
 
 // Getting a gateway http response from a worker response should never fail
@@ -21,8 +21,8 @@ pub trait GetGatewayResponse {
 }
 
 pub struct GatewayResponse {
-    pub body: TypedJson,
-    pub status: TypedJson,
+    pub body: ValueTyped,
+    pub status: ValueTyped,
     pub headers: ResolvedHeaders,
 }
 
@@ -69,7 +69,7 @@ impl GatewayResponse {
 
 #[derive(Default)]
 pub struct ResolvedHeaders {
-    pub headers: HashMap<String, TypedJson>,
+    pub headers: HashMap<String, ValueTyped>,
 }
 
 impl ResolvedHeaders {
@@ -91,7 +91,7 @@ impl ResolvedHeaders {
         header_mapping: &HashMap<String, Expr>,
         gateway_variables: &ResolvedVariables,
     ) -> Result<ResolvedHeaders, EvaluationError> {
-        let mut resolved_headers: HashMap<String, TypedJson> = HashMap::new();
+        let mut resolved_headers: HashMap<String, ValueTyped> = HashMap::new();
 
         for (header_name, value_expr) in header_mapping {
             let value = value_expr.evaluate(gateway_variables)?;
@@ -129,31 +129,31 @@ impl GetGatewayResponse for WorkerResponse {
                         headers,
                     },
                     Err(err) => GatewayResponse {
-                        body: TypedJson::String(format!(
+                        body: ValueTyped::String(format!(
                             "Unable to obtain a response from the result of worker function error: {}",
                             err
                         )),
-                        status: TypedJson::U64(500),
+                        status: ValueTyped::U64(500),
                         headers,
                     },
                 }
             } else {
                 GatewayResponse {
-                    body: TypedJson::String(format!(
+                    body: ValueTyped::String(format!(
                         "Unable to resolve a status code based on the status code expression {:?}",
                         response_mapping.status,
                     )),
-                    status: TypedJson::U64(400),
+                    status: ValueTyped::U64(400),
                     headers,
                 }
             }
         } else {
             GatewayResponse {
-                body: TypedJson::String(format!(
+                body: ValueTyped::String(format!(
                     "Unable to resolve headers based on the header expressions {:?}",
                     response_mapping.status,
                 )),
-                status: TypedJson::U64(500),
+                status: ValueTyped::U64(500),
                 headers: ResolvedHeaders::default(),
             }
         }

@@ -4,7 +4,7 @@ use crate::api_request_route_resolver::ResolvedRoute;
 use crate::evaluator::{Evaluator, Primitive};
 use golem_api_grpc::proto::golem::worker::val::Val;
 use crate::api_spec::ResponseMapping;
-use crate::typed_json::TypedJson;
+use crate::typed_json::ValueTyped;
 use crate::worker::WorkerName;
 
 #[derive(PartialEq, Debug, Clone)]
@@ -20,7 +20,7 @@ impl GolemWorkerRequest {
     pub fn from_resolved_route(
         resolved_route: &ResolvedRoute,
     ) -> Result<GolemWorkerRequest, String> {
-        let worker_id: TypedJson = resolved_route
+        let worker_id: ValueTyped = resolved_route
             .route_definition
             .binding
             .worker_id

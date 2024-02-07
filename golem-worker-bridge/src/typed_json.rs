@@ -4,13 +4,13 @@ use http;
 use nom::ParseTo;
 use serde_json::Value;
 
-// More of a typed JSON, for its primitives
-// Anything other than primitives are just represented using JSON itself
+// More of a typed serde_json::Value but typed for its primitives
+// Anything other than primitives are just represented using JSON (i.e, non recursive) itself
 // This is to ensure that there exists a reasonable safety when evaluating
 // expressions such as `response.x > response.y`, that we don't want to
 // consider x and y as strings if they were actually numbers
 #[derive(PartialEq, Debug, Clone)]
-pub enum TypedJson {
+pub enum ValueTyped {
     Boolean(bool),
     Float(f64),
     U64(u64),
@@ -19,25 +19,25 @@ pub enum TypedJson {
     ComplexJson(Value),
 }
 
-impl Display for TypedJson {
+impl Display for ValueTyped {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TypedJson::Boolean(bool) => {
+            ValueTyped::Boolean(bool) => {
                 write!(f, "{}", bool)
             }
-            TypedJson::Float(float) => {
+            ValueTyped::Float(float) => {
                 write!(f, "{}", float)
             }
-            TypedJson::U64(u64) => {
+            ValueTyped::U64(u64) => {
                 write!(f, "{}", u64)
             }
-            TypedJson::I64(i64) => {
+            ValueTyped::I64(i64) => {
                 write!(f, "{}", i64)
             }
-            TypedJson::ComplexJson(json) => {
+            ValueTyped::ComplexJson(json) => {
                 write!(f, "{}", json)
             }
-            TypedJson::String(string) => {
+            ValueTyped::String(string) => {
                 write!(f, "{}", string)
             }
         }
@@ -45,8 +45,8 @@ impl Display for TypedJson {
 }
 
 pub enum VariantComparisonError {
-    UnrelatedTypes(TypedJson, TypedJson, ComparisonOp),
-    ComplexTypeComparison(TypedJson, ComparisonOp),
+    UnrelatedTypes(ValueTyped, ValueTyped, ComparisonOp),
+    ComplexTypeComparison(ValueTyped, ComparisonOp),
 }
 
 impl Display for VariantComparisonError {
@@ -96,35 +96,35 @@ impl Display for ComparisonOp {
     }
 }
 
-impl TypedJson {
+impl ValueTyped {
     pub fn get_http_status_code(&self) -> Option<http::status::StatusCode> {
-        let variant = TypedJson::get_primitive_string(self)?;
+        let variant = ValueTyped::get_primitive_string(self)?;
         let possible_status_code = variant.parse::<u16>().ok()?;
         http::status::StatusCode::from_u16(possible_status_code).ok()
     }
 
-    pub fn get_primitive_variant(input: &str) -> TypedJson {
+    pub fn get_primitive_variant(input: &str) -> ValueTyped {
         if let Ok(u64) = input.parse::<u64>() {
-            TypedJson::U64(u64)
+            ValueTyped::U64(u64)
         } else if let Ok(i64) = input.parse::<i64>() {
-            TypedJson::I64(i64)
+            ValueTyped::I64(i64)
         } else if let Ok(f64) = input.parse::<f64>() {
-            TypedJson::Float(f64)
+            ValueTyped::Float(f64)
         } else if let Ok(bool) = input.parse::<bool>() {
-            TypedJson::Boolean(bool)
+            ValueTyped::Boolean(bool)
         } else {
-            TypedJson::String(input.to_string())
+            ValueTyped::String(input.to_string())
         }
     }
 
     pub fn get_primitive_string(&self) -> Option<String> {
         match self {
-            TypedJson::Boolean(bool) => Some(bool.to_string()),
-            TypedJson::Float(f) => Some(f.to_string()),
-            TypedJson::String(string) => Some(string.clone()),
-            TypedJson::U64(u64) => Some(u64.to_string()),
-            TypedJson::I64(i64) => Some(i64.to_string()),
-            TypedJson::ComplexJson(value) => match value {
+            ValueTyped::Boolean(bool) => Some(bool.to_string()),
+            ValueTyped::Float(f) => Some(f.to_string()),
+            ValueTyped::String(string) => Some(string.clone()),
+            ValueTyped::U64(u64) => Some(u64.to_string()),
+            ValueTyped::I64(i64) => Some(i64.to_string()),
+            ValueTyped::ComplexJson(value) => match value {
                 Value::Number(number) => Some(number.to_string()),
                 Value::String(string) => Some(string.clone()),
                 Value::Bool(bool) => Some(bool.to_string()),
@@ -137,41 +137,41 @@ impl TypedJson {
 
     pub fn get_primitive_bool(&self) -> Option<bool> {
         match self {
-            TypedJson::Boolean(bool) => Some(*bool),
-            TypedJson::String(value) => value.parse().ok(),
+            ValueTyped::Boolean(bool) => Some(*bool),
+            ValueTyped::String(value) => value.parse().ok(),
             _ => None,
         }
     }
 
     pub fn get_json(&self) -> Option<Value> {
         match self {
-            TypedJson::ComplexJson(json) => Some(json.clone()),
+            ValueTyped::ComplexJson(json) => Some(json.clone()),
             _ => None,
         }
     }
 
     pub fn convert_to_json(&self) -> Value {
         match self {
-            TypedJson::Boolean(bool) => Value::Bool(*bool),
-            TypedJson::String(string) => Value::String(string.clone()),
-            TypedJson::Float(float) => serde_json::Number::from_f64(*float)
+            ValueTyped::Boolean(bool) => Value::Bool(*bool),
+            ValueTyped::String(string) => Value::String(string.clone()),
+            ValueTyped::Float(float) => serde_json::Number::from_f64(*float)
                 .map(Value::Number)
                 .unwrap_or(Value::String(float.to_string())),
-            TypedJson::I64(i64) => Value::Number(serde_json::Number::from(*i64)),
-            TypedJson::U64(u64) => Value::Number(serde_json::Number::from(*u64)),
-            TypedJson::ComplexJson(json) => json.clone(),
+            ValueTyped::I64(i64) => Value::Number(serde_json::Number::from(*i64)),
+            ValueTyped::U64(u64) => Value::Number(serde_json::Number::from(*u64)),
+            ValueTyped::ComplexJson(json) => json.clone(),
         }
     }
 
-    pub fn greater_than(&self, that: TypedJson) -> Result<bool, VariantComparisonError> {
+    pub fn greater_than(&self, that: ValueTyped) -> Result<bool, VariantComparisonError> {
         match (self, that) {
             // There won't be coercsions at primitve level
-            (TypedJson::Float(f1), TypedJson::Float(f2)) => Ok(f1 > &f2),
-            (TypedJson::U64(i1), TypedJson::U64(i2)) => Ok(i1 > &i2),
-            (TypedJson::I64(i1), TypedJson::I64(f2)) => Ok(i1 > &f2),
-            (TypedJson::String(s1), TypedJson::String(s2)) => Ok(s1 > &s2),
-            (TypedJson::Boolean(left), TypedJson::Boolean(right)) => Ok(*left & !right),
-            (TypedJson::ComplexJson(_), t2 @ TypedJson::ComplexJson(_)) => Err(
+            (ValueTyped::Float(f1), ValueTyped::Float(f2)) => Ok(f1 > &f2),
+            (ValueTyped::U64(i1), ValueTyped::U64(i2)) => Ok(i1 > &i2),
+            (ValueTyped::I64(i1), ValueTyped::I64(f2)) => Ok(i1 > &f2),
+            (ValueTyped::String(s1), ValueTyped::String(s2)) => Ok(s1 > &s2),
+            (ValueTyped::Boolean(left), ValueTyped::Boolean(right)) => Ok(*left & !right),
+            (ValueTyped::ComplexJson(_), t2 @ ValueTyped::ComplexJson(_)) => Err(
                 VariantComparisonError::ComplexTypeComparison(t2, ComparisonOp::GreaterThan),
             ),
             (t1, t2) => Err(VariantComparisonError::UnrelatedTypes(
@@ -182,15 +182,15 @@ impl TypedJson {
         }
     }
 
-    pub fn greater_than_or_equal_to(&self, that: TypedJson) -> Result<bool, VariantComparisonError> {
+    pub fn greater_than_or_equal_to(&self, that: ValueTyped) -> Result<bool, VariantComparisonError> {
         match (self, that) {
             // There won't be coercsions at primitve level
-            (TypedJson::Float(f1), TypedJson::Float(f2)) => Ok(f1 >= &f2),
-            (TypedJson::U64(i1), TypedJson::U64(i2)) => Ok(i1 >= &i2),
-            (TypedJson::I64(i1), TypedJson::I64(f2)) => Ok(i1 >= &f2),
-            (TypedJson::String(s1), TypedJson::String(s2)) => Ok(s1 >= &s2),
-            (TypedJson::Boolean(left), TypedJson::Boolean(right)) => Ok(*left >= right),
-            (TypedJson::ComplexJson(_), t2 @ TypedJson::ComplexJson(_)) => {
+            (ValueTyped::Float(f1), ValueTyped::Float(f2)) => Ok(f1 >= &f2),
+            (ValueTyped::U64(i1), ValueTyped::U64(i2)) => Ok(i1 >= &i2),
+            (ValueTyped::I64(i1), ValueTyped::I64(f2)) => Ok(i1 >= &f2),
+            (ValueTyped::String(s1), ValueTyped::String(s2)) => Ok(s1 >= &s2),
+            (ValueTyped::Boolean(left), ValueTyped::Boolean(right)) => Ok(*left >= right),
+            (ValueTyped::ComplexJson(_), t2 @ ValueTyped::ComplexJson(_)) => {
                 Err(VariantComparisonError::ComplexTypeComparison(
                     t2,
                     ComparisonOp::GreaterThanOrEqualTo,
@@ -204,15 +204,15 @@ impl TypedJson {
         }
     }
 
-    pub fn equal_to(&self, that: TypedJson) -> Result<bool, VariantComparisonError> {
+    pub fn equal_to(&self, that: ValueTyped) -> Result<bool, VariantComparisonError> {
         match (self, that) {
             // There won't be coercsions at primitve level
-            (TypedJson::Float(f1), TypedJson::Float(f2)) => Ok(*f1 == f2),
-            (TypedJson::U64(i1), TypedJson::U64(i2)) => Ok(*i1 == i2),
-            (TypedJson::I64(i1), TypedJson::I64(f2)) => Ok(*i1 == f2),
-            (TypedJson::String(s1), TypedJson::String(s2)) => Ok(*s1 == s2),
-            (TypedJson::Boolean(left), TypedJson::Boolean(right)) => Ok(*left == right),
-            (TypedJson::ComplexJson(_), t2 @ TypedJson::ComplexJson(_)) => Err(
+            (ValueTyped::Float(f1), ValueTyped::Float(f2)) => Ok(*f1 == f2),
+            (ValueTyped::U64(i1), ValueTyped::U64(i2)) => Ok(*i1 == i2),
+            (ValueTyped::I64(i1), ValueTyped::I64(f2)) => Ok(*i1 == f2),
+            (ValueTyped::String(s1), ValueTyped::String(s2)) => Ok(*s1 == s2),
+            (ValueTyped::Boolean(left), ValueTyped::Boolean(right)) => Ok(*left == right),
+            (ValueTyped::ComplexJson(_), t2 @ ValueTyped::ComplexJson(_)) => Err(
                 VariantComparisonError::ComplexTypeComparison(t2, ComparisonOp::EqualTo),
             ),
             (t1, t2) => Err(VariantComparisonError::UnrelatedTypes(
@@ -223,14 +223,14 @@ impl TypedJson {
         }
     }
 
-    pub fn less_than(&self, that: TypedJson) -> Result<bool, VariantComparisonError> {
+    pub fn less_than(&self, that: ValueTyped) -> Result<bool, VariantComparisonError> {
         match (self, that) {
-            (TypedJson::Float(f1), TypedJson::Float(f2)) => Ok(f1 < &f2),
-            (TypedJson::U64(i1), TypedJson::U64(i2)) => Ok(i1 < &i2),
-            (TypedJson::I64(i1), TypedJson::I64(f2)) => Ok(i1 < &f2),
-            (TypedJson::String(s1), TypedJson::String(s2)) => Ok(s1 < &s2),
-            (TypedJson::Boolean(left), TypedJson::Boolean(right)) => Ok(*left == right),
-            (TypedJson::ComplexJson(_), t2 @ TypedJson::ComplexJson(_)) => Err(
+            (ValueTyped::Float(f1), ValueTyped::Float(f2)) => Ok(f1 < &f2),
+            (ValueTyped::U64(i1), ValueTyped::U64(i2)) => Ok(i1 < &i2),
+            (ValueTyped::I64(i1), ValueTyped::I64(f2)) => Ok(i1 < &f2),
+            (ValueTyped::String(s1), ValueTyped::String(s2)) => Ok(s1 < &s2),
+            (ValueTyped::Boolean(left), ValueTyped::Boolean(right)) => Ok(*left == right),
+            (ValueTyped::ComplexJson(_), t2 @ ValueTyped::ComplexJson(_)) => Err(
                 VariantComparisonError::ComplexTypeComparison(t2, ComparisonOp::LessThan),
             ),
             (t1, t2) => Err(VariantComparisonError::UnrelatedTypes(
@@ -241,14 +241,14 @@ impl TypedJson {
         }
     }
 
-    pub fn less_than_or_equal_to(&self, that: TypedJson) -> Result<bool, VariantComparisonError> {
+    pub fn less_than_or_equal_to(&self, that: ValueTyped) -> Result<bool, VariantComparisonError> {
         match (self, that) {
-            (TypedJson::Float(f1), TypedJson::Float(f2)) => Ok(f1 <= &f2),
-            (TypedJson::U64(i1), TypedJson::U64(i2)) => Ok(i1 <= &i2),
-            (TypedJson::I64(i1), TypedJson::I64(f2)) => Ok(i1 <= &f2),
-            (TypedJson::String(s1), TypedJson::String(s2)) => Ok(s1 <= &s2),
-            (TypedJson::Boolean(left), TypedJson::Boolean(right)) => Ok(*left <= right),
-            (TypedJson::ComplexJson(_), t2 @ TypedJson::ComplexJson(_)) => Err(
+            (ValueTyped::Float(f1), ValueTyped::Float(f2)) => Ok(f1 <= &f2),
+            (ValueTyped::U64(i1), ValueTyped::U64(i2)) => Ok(i1 <= &i2),
+            (ValueTyped::I64(i1), ValueTyped::I64(f2)) => Ok(i1 <= &f2),
+            (ValueTyped::String(s1), ValueTyped::String(s2)) => Ok(s1 <= &s2),
+            (ValueTyped::Boolean(left), ValueTyped::Boolean(right)) => Ok(*left <= right),
+            (ValueTyped::ComplexJson(_), t2 @ ValueTyped::ComplexJson(_)) => Err(
                 VariantComparisonError::ComplexTypeComparison(t2, ComparisonOp::LessThanOrEqualTo),
             ),
             (t1, t2) => Err(VariantComparisonError::UnrelatedTypes(
@@ -259,27 +259,27 @@ impl TypedJson {
         }
     }
 
-    pub fn from_json(input: &serde_json::Value) -> TypedJson {
+    pub fn from_json(input: &serde_json::Value) -> ValueTyped {
         match input {
-            array @ Value::Array(_) => TypedJson::ComplexJson(array.clone()),
-            Value::Bool(bool) => TypedJson::Boolean(*bool),
-            Value::String(string) => TypedJson::from_string(string.as_str()),
-            Value::Number(number) => TypedJson::from_string(number.to_string().as_str()),
-            map @ Value::Object(_) => TypedJson::ComplexJson(map.clone()),
-            null @ Value::Null => TypedJson::ComplexJson(null.clone()),
+            array @ Value::Array(_) => ValueTyped::ComplexJson(array.clone()),
+            Value::Bool(bool) => ValueTyped::Boolean(*bool),
+            Value::String(string) => ValueTyped::from_string(string.as_str()),
+            Value::Number(number) => ValueTyped::from_string(number.to_string().as_str()),
+            map @ Value::Object(_) => ValueTyped::ComplexJson(map.clone()),
+            null @ Value::Null => ValueTyped::ComplexJson(null.clone()),
         }
     }
 
-    pub fn from_string(input: &str) -> TypedJson {
+    pub fn from_string(input: &str) -> ValueTyped {
         if let Ok(u64) = input.parse::<u64>() {
-            return TypedJson::U64(u64);
+            return ValueTyped::U64(u64);
         } else if let Ok(i64_value) = input.parse::<i64>() {
-            return TypedJson::I64(i64_value);
+            return ValueTyped::I64(i64_value);
         } else if let Ok(f64_value) = input.parse::<f64>() {
-            return TypedJson::Float(f64_value);
+            return ValueTyped::Float(f64_value);
         }
 
         // If parsing as a number fails, treat it as a string
-        TypedJson::String(input.to_string())
+        ValueTyped::String(input.to_string())
     }
 }

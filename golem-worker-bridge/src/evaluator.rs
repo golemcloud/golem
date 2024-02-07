@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::tokeniser::tokeniser::{Token, Tokenizer};
 use crate::expr::Expr;
 use crate::resolved_variables::{ResolvedVariables, Path};
-use crate::typed_json::TypedJson;
+use crate::typed_json::ValueTyped;
 
 pub trait Evaluator<T> {
     fn evaluate(&self, resolved_variables: &ResolvedVariables) -> Result<T, EvaluationError>;
@@ -148,8 +148,8 @@ impl Evaluator<Value> for Expr {
                     let left = go(&left, resolved_variables)?;
                     let right = go(&right, resolved_variables)?;
 
-                    let result = TypedJson::from_json(&left)
-                        .equal_to(TypedJson::from_json(&right))
+                    let result = ValueTyped::from_json(&left)
+                        .equal_to(ValueTyped::from_json(&right))
                         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
                     Ok(Value::Bool(result))
@@ -158,8 +158,8 @@ impl Evaluator<Value> for Expr {
                     let left = go(&left, resolved_variables)?;
                     let right = go(&right, resolved_variables)?;
 
-                    let result = TypedJson::from_json(&left)
-                        .greater_than(TypedJson::from_json(&right))
+                    let result = ValueTyped::from_json(&left)
+                        .greater_than(ValueTyped::from_json(&right))
                         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
                     Ok(Value::Bool(result))
@@ -168,8 +168,8 @@ impl Evaluator<Value> for Expr {
                     let left = go(&left, resolved_variables)?;
                     let right = go(&right, resolved_variables)?;
 
-                    let result = TypedJson::from_json(&left)
-                        .greater_than_or_equal_to(TypedJson::from_json(&right))
+                    let result = ValueTyped::from_json(&left)
+                        .greater_than_or_equal_to(ValueTyped::from_json(&right))
                         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
                     Ok(Value::Bool(result))
@@ -177,8 +177,8 @@ impl Evaluator<Value> for Expr {
                 Expr::LessThan(left, right) => {
                     let left = go(&left, resolved_variables)?;
                     let right = go(&right, resolved_variables)?;
-                    let result = TypedJson::from_json(&left)
-                        .less_than(TypedJson::from_json(&right))
+                    let result = ValueTyped::from_json(&left)
+                        .less_than(ValueTyped::from_json(&right))
                         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
                     Ok(Value::Bool(result))
@@ -186,8 +186,8 @@ impl Evaluator<Value> for Expr {
                 Expr::LessThanOrEqualTo(left, right) => {
                     let left = go(&left, resolved_variables)?;
                     let right = go(&right, resolved_variables)?;
-                    let result = TypedJson::from_json(&left)
-                        .less_than_or_equal_to(TypedJson::from_json(&right))
+                    let result = ValueTyped::from_json(&left)
+                        .less_than_or_equal_to(ValueTyped::from_json(&right))
                         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
                     Ok(Value::Bool(result))
@@ -247,7 +247,7 @@ impl Evaluator<Value> for Expr {
                         }
                     }
 
-                    Ok(TypedJson::ComplexJson(Value::Object(map)))
+                    Ok(ValueTyped::ComplexJson(Value::Object(map)))
                 }
 
                 Expr::Concat(exprs) => {
@@ -267,19 +267,19 @@ impl Evaluator<Value> for Expr {
                         }
                     }
 
-                    Ok(TypedJson::String(result))
+                    Ok(ValueTyped::String(result))
                 }
 
-                Expr::Literal(literal) => Ok(TypedJson::get_primitive_variant(literal.as_str())),
+                Expr::Literal(literal) => Ok(ValueTyped::get_primitive_variant(literal.as_str())),
 
                 Expr::PathVar(path_var) => match resolved_variables.get_key(path_var.as_str()) {
                     Some(value) => match value {
                         Value::Number(number) => {
-                            Ok(TypedJson::from_string(number.to_string().as_str()))
+                            Ok(Value::Number(number))
                         }
-                        Value::String(string) => Ok(TypedJson::from_string(string.as_str())),
-                        Value::Bool(bool) => Ok(TypedJson::from_string(bool.to_string().as_str())),
-                        value => Ok(TypedJson::ComplexJson(value.clone())),
+                        Value::String(string) => Ok(ValueTyped::from_string(string.as_str())),
+                        Value::Bool(bool) => Ok(ValueTyped::from_string(bool.to_string().as_str())),
+                        value => Ok(ValueTyped::ComplexJson(value.clone())),
                     },
 
                     None => Err(EvaluationError::Message(format!(
@@ -300,11 +300,11 @@ mod tests {
     use crate::expr::Expr;
     use crate::resolved_variables::{ResolvedVariables, Path};
     use crate::tokeniser::tokeniser::Token;
-    use crate::typed_json::TypedJson;
+    use crate::typed_json::ValueTyped;
 
     fn test_expr(
         expr: Expr,
-        expected: Result<TypedJson, EvaluationError>,
+        expected: Result<ValueTyped, EvaluationError>,
         resolved_variables: &ResolvedVariables,
     ) {
         let result = expr.evaluate(resolved_variables);
@@ -315,7 +315,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    fn test_expr_ok(expr: Expr, expected: TypedJson, resolved_variables: &ResolvedVariables) {
+    fn test_expr_ok(expr: Expr, expected: ValueTyped, resolved_variables: &ResolvedVariables) {
         test_expr(expr, Ok(expected), resolved_variables);
     }
 
@@ -326,7 +326,7 @@ mod tests {
     fn test_expr_str_ok(expr: &str, expected: &str, resolved_variables: &ResolvedVariables) {
         test_expr_ok(
             Expr::from_primitive_string(expr).expect("Failed to parse expr"),
-            TypedJson::from_string(expected),
+            ValueTyped::from_string(expected),
             resolved_variables,
         );
     }
