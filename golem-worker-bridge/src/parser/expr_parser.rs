@@ -5,7 +5,7 @@ use strum_macros::Display;
 use super::*;
 use crate::expr::*;
 use crate::tokeniser::cursor::TokenCursor;
-use crate::tokeniser::tokenizer::{Token, TokeniserResult, Tokenizer};
+use crate::tokeniser::tokeniser::{Token, TokeniserResult, Tokenizer};
 
 #[derive(Clone, Debug)]
 pub struct ExprParser {}
