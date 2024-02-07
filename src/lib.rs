@@ -8,7 +8,7 @@ mod builder;
 
 /// Conversion to and from JSON, in the presence of golem-wasm-ast generated type information
 #[cfg(feature = "json")]
-mod json;
+pub mod json;
 
 /// Protobuf-defined value types and conversion to them
 #[cfg(feature = "protobuf")]
@@ -24,7 +24,7 @@ pub use builder::{NodeBuilder, WitValueExtensions};
 /// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-enum Value {
+pub enum Value {
     Bool(bool),
     U8(u8),
     U16(u16),
@@ -144,7 +144,7 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> TypeIndex {
 
 impl From<WitValue> for Value {
     fn from(value: WitValue) -> Self {
-        assert!(value.nodes.len() > 0);
+        assert!(!value.nodes.is_empty());
         build_tree(&value.nodes[0], &value.nodes)
     }
 }
@@ -166,7 +166,7 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
                 case_value: Box::new(value),
             }
         }
-        WitNode::EnumValue(value) => Value::Enum(value.clone()),
+        WitNode::EnumValue(value) => Value::Enum(*value),
         WitNode::FlagsValue(values) => Value::Flags(values.clone()),
         WitNode::TupleValue(indices) => {
             let mut values = Vec::new();
@@ -236,7 +236,7 @@ mod tests {
             cases: CASES, .. ProptestConfig::default()
         })]
         #[test]
-        fn round_trip(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(&v))) {
+        fn round_trip(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(v))) {
             let wit_value: WitValue = value.clone().into();
             let round_trip_value: Value = wit_value.into();
             prop_assert_eq!(value, round_trip_value);

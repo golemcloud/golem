@@ -3,7 +3,7 @@ use wasmtime::component::{
     types, Enum, Flags, List, OptionVal, Record, ResultVal, Tuple, Type, Val, Variant,
 };
 
-enum EncodingError {
+pub enum EncodingError {
     ParamTypeMismatch,
     ValueMismatch { details: String },
     Unknown { details: String },
@@ -122,7 +122,7 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
                         details: format!("could not get type information for case {}", name),
                     }),
                 }?;
-                let decoded_value = decode_param(&case_value, case_ty)?;
+                let decoded_value = decode_param(case_value, case_ty)?;
                 let variant = Variant::new(ty, name, Some(decoded_value))
                     .expect("Type mismatch in decode_param");
                 Ok(Val::Variant(variant))
@@ -149,7 +149,7 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
         Type::Option(ty) => match param {
             Value::Option(value) => match value {
                 Some(value) => {
-                    let decoded_value = decode_param(&value, &ty.ty())?;
+                    let decoded_value = decode_param(value, &ty.ty())?;
                     let option = OptionVal::new(ty, Some(decoded_value))
                         .expect("Type mismatch in decode_param");
                     Ok(Val::Option(option))
@@ -167,7 +167,7 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
                     let ok_ty = ty.ok().ok_or(EncodingError::ValueMismatch {
                         details: "could not get ok type".to_string(),
                     })?;
-                    let decoded_value = decode_param(&value, &ok_ty)?;
+                    let decoded_value = decode_param(value, &ok_ty)?;
                     let result = ResultVal::new(ty, Ok(Some(decoded_value)))
                         .expect("Type mismatch in decode_param");
                     Ok(Val::Result(result))
@@ -176,7 +176,7 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
                     let err_ty = ty.err().ok_or(EncodingError::ValueMismatch {
                         details: "could not get err type".to_string(),
                     })?;
-                    let decoded_value = decode_param(&value, &err_ty)?;
+                    let decoded_value = decode_param(value, &err_ty)?;
                     let result = ResultVal::new(ty, Err(Some(decoded_value)))
                         .expect("Type mismatch in decode_param");
                     Ok(Val::Result(result))
@@ -237,7 +237,7 @@ pub fn encode_output(value: &Val) -> Result<Value, EncodingError> {
             let encoded_values = tuple
                 .values()
                 .iter()
-                .map(|value| encode_output(value))
+                .map(encode_output)
                 .collect::<Result<Vec<Value>, EncodingError>>()?;
             Ok(Value::Tuple(encoded_values))
         }

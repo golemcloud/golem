@@ -18,7 +18,7 @@ pub fn function_parameters(
         .ok_or(vec!["Expecting an array for fn_params".to_string()])?;
 
     let mut results = vec![];
-    let mut errors = vec![];
+    let errors = vec![];
 
     if parameters.len() == expected_parameters.len() {
         for (json, fp) in parameters.iter().zip(expected_parameters.iter()) {
@@ -55,7 +55,7 @@ pub fn function_result(
         let mut errors = vec![];
 
         for (value, expected) in values.iter().zip(expected_types.iter()) {
-            let result = validate_function_result(&value, expected.typ.clone());
+            let result = validate_function_result(value, expected.typ.clone());
 
             match result {
                 Ok(value) => results.push(value),
@@ -117,12 +117,12 @@ fn validate_function_parameter(
         AnalysedType::List(elem) => get_list(input_json, *elem).map(Value::List),
 
         AnalysedType::Option(elem) => {
-            get_option(input_json, *elem).map(|result| Value::Option(result))
+            get_option(input_json, *elem).map(Value::Option)
         }
 
         AnalysedType::Result { ok, error } => {
             get_result(input_json, ok.map(|t| *t), error.map(|t| *t))
-                .map(|result| Value::Result(result))
+                .map(Value::Result)
         }
 
         AnalysedType::Record(fields) => get_record(input_json, &fields).map(Value::Record),
@@ -713,7 +713,7 @@ fn validate_function_result(
                     let mut map: serde_json::Map<String, serde_json::Value> =
                         serde_json::Map::new();
 
-                    let result = validate_function_result(&value, *ok_type)?;
+                    let result = validate_function_result(value, *ok_type)?;
                     map.insert("ok".to_string(), result);
                     Ok(serde_json::Value::Object(map))
                 }
@@ -731,7 +731,7 @@ fn validate_function_result(
                     let mut map: serde_json::Map<String, serde_json::Value> =
                         serde_json::Map::new();
 
-                    let result = validate_function_result(&value, *err_type)?;
+                    let result = validate_function_result(value, *err_type)?;
                     map.insert("err".to_string(), result);
 
                     Ok(serde_json::Value::Object(map))
@@ -745,8 +745,6 @@ fn validate_function_result(
 
                     Ok(serde_json::Value::Object(map))
                 }
-
-                _ => Err(vec!["Invalid discriminant for Result type.".to_string()]),
             },
 
             _ => Err(vec!["Unexpected type; expected a Result type.".to_string()]),

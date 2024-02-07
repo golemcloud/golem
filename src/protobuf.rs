@@ -438,7 +438,7 @@ mod tests {
             cases: CASES, .. ProptestConfig::default()
         })]
         #[test]
-        fn round_trip_wit_value(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(&v))) {
+        fn round_trip_wit_value(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(v))) {
             let wit_value: crate::WitValue = value.clone().into();
             let protobuf_wit_value: WitValue = wit_value.into();
             let round_trip_wit_value: crate::WitValue = protobuf_wit_value.try_into().unwrap();
@@ -447,7 +447,7 @@ mod tests {
         }
 
         #[test]
-        fn round_trip_val(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(&v))) {
+        fn round_trip_val(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(v))) {
             let wit_value: crate::WitValue = value.clone().into();
 
             let protobuf_val: Val = wit_value.into();
