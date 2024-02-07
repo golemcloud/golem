@@ -1,6 +1,6 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display, Formatter};
+use std::str::FromStr;
 
-use crate::auth::authorised_request;
 use async_trait::async_trait;
 use golem_common::config::RetryConfig;
 use golem_common::model::{CallingConvention, InvocationKey, PromiseId, TemplateId, WorkerId};
@@ -18,10 +18,11 @@ use poem_openapi::types::ToJSON;
 use tonic::Status;
 use tracing::info;
 use uuid::Uuid;
-
-use crate::gateway_config::ComponentServiceConfig;
-use crate::model::WorkerName;
+use crate::app_config::TemplateServiceConfig;
 use crate::UriBackConversion;
+
+#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+pub struct WorkerName(pub String);
 
 #[async_trait]
 pub trait WorkerService {
@@ -58,7 +59,7 @@ pub struct WorkerServiceDefault {
 }
 
 impl WorkerServiceDefault {
-    pub fn new(config: &ComponentServiceConfig) -> Self {
+    pub fn new(config: &TemplateServiceConfig) -> Self {
         Self {
             uri: config.uri(),
             access_token: config.access_token,
@@ -91,8 +92,7 @@ impl WorkerService for WorkerServiceDefault {
                 Box::pin(async move {
                     let mut client = WorkerServiceClient::connect(uri.as_http_02()).await?;
 
-                    let request = authorised_request(
-                        GetInvocationKeyRequest {
+                    let request = GetInvocationKeyRequest {
                             worker_id: Some(
                                 WorkerId {
                                     template_id: template_id.clone(),
@@ -100,9 +100,7 @@ impl WorkerService for WorkerServiceDefault {
                                 }
                                     .into(),
                             ),
-                        },
-                        access_token,
-                    );
+                        };
 
                     let response = client.get_invocation_key(request).await?.into_inner();
 
@@ -169,7 +167,7 @@ impl WorkerService for WorkerServiceDefault {
              )| {
                 Box::pin(async move {
                     let mut client = WorkerServiceClient::connect(uri.as_http_02()).await?;
-                    let request = authorised_request(
+                    let request =     
                         InvokeAndAwaitRequestJson {
                             worker_id: Some(
                                 WorkerId {
