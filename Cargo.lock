@@ -2080,9 +2080,12 @@ dependencies = [
 name = "golem-worker-bridge"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "bincode 2.0.0-rc.3",
  "derive_more",
+ "golem-api-grpc",
  "golem-common",
+ "http 1.0.0",
  "nom",
  "poem",
  "poem-openapi",
@@ -2092,6 +2095,9 @@ dependencies = [
  "serde_yaml",
  "strum",
  "strum_macros",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
