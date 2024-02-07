@@ -8,7 +8,6 @@ use crate::api_spec::ResponseMapping;
 use crate::evaluator::{EvaluationError, Evaluator};
 use crate::expr::Expr;
 use crate::resolved_variables::ResolvedVariables;
-use crate::typed_json::ValueTyped;
 use crate::worker_request_executor::WorkerResponse;
 
 // Getting a gateway http response from a worker response should never fail

@@ -98,12 +98,6 @@ impl Display for ComparisonOp {
 }
 
 impl ValueTyped {
-    pub fn get_http_status_code(&self) -> Option<http::status::StatusCode> {
-        let variant = ValueTyped::get_primitive_string(self)?;
-        let possible_status_code = variant.parse::<u16>().ok()?;
-        http::status::StatusCode::from_u16(possible_status_code).ok()
-    }
-
     pub fn get_primitive_variant(input: &str) -> ValueTyped {
         if let Ok(u64) = input.parse::<u64>() {
             ValueTyped::U64(u64)

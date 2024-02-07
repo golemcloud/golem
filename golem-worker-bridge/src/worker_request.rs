@@ -4,7 +4,7 @@ use crate::api_request_route_resolver::ResolvedRoute;
 use crate::evaluator::{Evaluator, Primitive};
 use golem_api_grpc::proto::golem::worker::val::Val;
 use crate::api_spec::ResponseMapping;
-use crate::typed_json::ValueTyped;
+use crate::value_typed::ValueTyped;
 use crate::worker::WorkerName;
 
 #[derive(PartialEq, Debug, Clone)]

@@ -10,7 +10,7 @@ mod worker;
 mod app_config;
 mod worker_request;
 mod evaluator;
-mod typed_json;
+mod value_typed;
 mod worker_bridge_reponse;
 mod typed_comparison;
 

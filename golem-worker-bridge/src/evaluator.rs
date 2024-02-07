@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::tokeniser::tokeniser::{Token, Tokenizer};
 use crate::expr::Expr;
 use crate::resolved_variables::{ResolvedVariables, Path};
-use crate::typed_json::ValueTyped;
+use crate::value_typed::ValueTyped;
 
 pub trait Evaluator<T> {
     fn evaluate(&self, resolved_variables: &ResolvedVariables) -> Result<T, EvaluationError>;
@@ -291,7 +291,7 @@ mod tests {
     use crate::expr::Expr;
     use crate::resolved_variables::{ResolvedVariables, Path};
     use crate::tokeniser::tokeniser::Token;
-    use crate::typed_json::ValueTyped;
+    use crate::value_typed::ValueTyped;
 
     fn test_expr(
         expr: Expr,
