@@ -32,21 +32,17 @@ message WitNode {
   }
 }
 
-message NameTypeIndex {
-  string name = 1;
-  int32 index = 2;
-}
-
 message WitRecordNode {
-  repeated NameTypeIndex fields = 1;
+  repeated int32 fields = 1;
 }
 
 message WitVariantNode {
-  NameTypeIndex variant = 1;
+  uint32 case_index = 1;
+  int32 case_value = 2;
 }
 
 message WitEnumNode {
-  string value = 1;
+  uint32 value = 1;
 }
 
 message WitFlagsNode {

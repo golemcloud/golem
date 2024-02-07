@@ -1,3 +1,4 @@
+#[allow(unused)]
 mod bindings;
 mod builder;
 
@@ -30,9 +31,9 @@ enum Value {
     String(String),
     List(Vec<Box<Value>>),
     Tuple(Vec<Box<Value>>),
-    Record(Vec<(String, Box<Value>)>),
-    Variant(String, Box<Value>),
-    Enum(String),
+    Record(Vec<Box<Value>>),
+    Variant(u32, Box<Value>),
+    Enum(u32),
     Flags(Vec<bool>),
     Option(Option<Box<Value>>),
     Result(Result<Box<Value>, Box<Value>>),
@@ -84,20 +85,20 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> TypeIndex {
         Value::Record(fields) => {
             let record_idx = builder.add_record();
             let mut items = Vec::new();
-            for (name, value) in fields {
+            for value in fields {
                 let item_idx = build_wit_value(*value, builder);
-                items.push((name, item_idx));
+                items.push(item_idx);
             }
-            builder.finish_record(items, record_idx);
+            builder.finish_seq(items, record_idx);
             record_idx
         }
-        Value::Variant(name, value) => {
-            let variant_idx = builder.add_variant(&name, -1);
+        Value::Variant(case_idx, value) => {
+            let variant_idx = builder.add_variant(case_idx, -1);
             let inner_idx = build_wit_value(*value, builder);
             builder.finish_seq(vec![inner_idx], variant_idx);
             variant_idx
         },
-        Value::Enum(value) => builder.add_enum_value(&value),
+        Value::Enum(value) => builder.add_enum_value(value),
         Value::Flags(values) => builder.add_flags(values),
         Value::Option(value) => {
             let option_idx = builder.add_option();
@@ -137,9 +138,9 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
     match node {
         WitNode::RecordValue(field_indices) => {
             let mut fields = Vec::new();
-            for (name, index) in field_indices {
+            for index in field_indices {
                 let value = build_tree(&nodes[*index as usize], nodes);
-                fields.push((name.clone(), Box::new(value)));
+                fields.push( Box::new(value));
             }
             Value::Record(fields)
         }

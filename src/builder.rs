@@ -1,4 +1,3 @@
-// TODO: get rid of clones in the builder
 // TODO: get rid of the Vec<Item> for single-item cases
 
 use crate::{TypeIndex, WitNode, WitValue};
@@ -34,13 +33,13 @@ pub trait NodeBuilder: Sized {
     fn char(self, value: char) -> Self::Result;
     fn bool(self, value: bool) -> Self::Result;
     fn string(self, value: &str) -> Self::Result;
-    fn enum_value(self, value: &str) -> Self::Result;
+    fn enum_value(self, value: u32) -> Self::Result;
     fn flags(self, values: Vec<bool>) -> Self::Result;
 
-    fn record(self) -> WitValueRecordBuilder<Self>;
-    fn variant(self, name: &str) -> WitValueItemBuilder<Self>;
-    fn tuple(self) -> WitValueSeqBuilder<Self>;
-    fn list(self) -> WitValueSeqBuilder<Self>;
+    fn record(self) -> WitValueChildItemsBuilder<Self>;
+    fn variant(self, case_idx: u32) -> WitValueItemBuilder<Self>;
+    fn tuple(self) -> WitValueChildItemsBuilder<Self>;
+    fn list(self) -> WitValueChildItemsBuilder<Self>;
 
     fn option_some(self) -> WitValueItemBuilder<Self>;
     fn option_none(self) -> Self::Result;
@@ -121,12 +120,12 @@ impl WitValueBuilder {
         self.add(WitNode::RecordValue(Vec::new()))
     }
 
-    pub(crate) fn add_variant(&mut self, name: &str, target_idx: TypeIndex) -> TypeIndex {
-        self.add(WitNode::VariantValue((name.to_string(), target_idx)))
+    pub(crate) fn add_variant(&mut self, idx: u32, target_idx: TypeIndex) -> TypeIndex {
+        self.add(WitNode::VariantValue((idx, target_idx)))
     }
 
-    pub(crate) fn add_enum_value(&mut self, value: &str) -> TypeIndex {
-        self.add(WitNode::EnumValue(value.to_string()))
+    pub(crate) fn add_enum_value(&mut self, value: u32) -> TypeIndex {
+        self.add(WitNode::EnumValue(value))
     }
 
     pub(crate) fn add_flags(&mut self, values: Vec<bool>) -> TypeIndex {
@@ -153,16 +152,11 @@ impl WitValueBuilder {
         self.add(WitNode::ResultValue(Err(-1)))
     }
 
-    pub(crate) fn finish_record(&mut self, fields: Vec<(String, TypeIndex)>, target_idx: TypeIndex) {
-        if let WitNode::RecordValue(ref mut result_fields) = &mut self.nodes[target_idx as usize] {
-            *result_fields = fields;
-        } else {
-            panic!("finish_record called on non-record node");
-        }
-    }
-
     pub(crate) fn finish_seq(&mut self, items: Vec<TypeIndex>, target_idx: TypeIndex) {
         match &mut self.nodes[target_idx as usize] {
+            WitNode::RecordValue(ref mut result_items) => {
+                *result_items = items;
+            }
             WitNode::TupleValue(ref mut result_items) => {
                 *result_items = items;
             }
@@ -269,7 +263,7 @@ impl NodeBuilder for WitValueBuilder {
         self.build()
     }
 
-    fn enum_value(mut self, value: &str) -> Self::Result {
+    fn enum_value(mut self, value: u32) -> Self::Result {
         let _ = self.add_enum_value(value);
         self.build()
     }
@@ -279,32 +273,32 @@ impl NodeBuilder for WitValueBuilder {
         self.build()
     }
 
-    fn record(mut self) -> WitValueRecordBuilder<WitValueBuilder> {
+    fn record(mut self) -> WitValueChildItemsBuilder<WitValueBuilder> {
         let idx = self.add_record();
-        WitValueRecordBuilder::new(self, idx)
+        WitValueChildItemsBuilder::new(self, idx)
     }
 
-    fn variant(mut self, name: &str) -> WitValueItemBuilder<WitValueBuilder> {
-        let variant_idx = self.add_variant(name, -1);
+    fn variant(mut self, case_idx: u32) -> WitValueItemBuilder<WitValueBuilder> {
+        let variant_idx = self.add_variant(case_idx, -1);
         WitValueItemBuilder {
-            seq_builder: WitValueSeqBuilder::new(self, variant_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, variant_idx)
         }
     }
 
-    fn tuple(mut self) -> WitValueSeqBuilder<WitValueBuilder> {
+    fn tuple(mut self) -> WitValueChildItemsBuilder<WitValueBuilder> {
         let tuple_idx = self.add_tuple();
-        WitValueSeqBuilder::new(self, tuple_idx)
+        WitValueChildItemsBuilder::new(self, tuple_idx)
     }
 
-    fn list(mut self) -> WitValueSeqBuilder<WitValueBuilder> {
+    fn list(mut self) -> WitValueChildItemsBuilder<WitValueBuilder> {
         let tuple_idx = self.add_list();
-        WitValueSeqBuilder::new(self, tuple_idx)
+        WitValueChildItemsBuilder::new(self, tuple_idx)
     }
 
     fn option_some(mut self) -> WitValueItemBuilder<Self> {
         let option_idx = self.add_option();
         WitValueItemBuilder {
-            seq_builder: WitValueSeqBuilder::new(self, option_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, option_idx)
         }
     }
 
@@ -316,14 +310,14 @@ impl NodeBuilder for WitValueBuilder {
     fn result_ok(mut self) -> WitValueItemBuilder<Self> {
         let result_idx = self.add_result_ok();
         WitValueItemBuilder {
-            seq_builder: WitValueSeqBuilder::new(self, result_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, result_idx)
         }
     }
 
     fn result_err(mut self) -> WitValueItemBuilder<Self> {
         let result_idx = self.add_result_err();
         WitValueItemBuilder {
-            seq_builder: WitValueSeqBuilder::new(self, result_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, result_idx)
         }
     }
 
@@ -332,205 +326,13 @@ impl NodeBuilder for WitValueBuilder {
     }
 }
 
-pub struct WitValueRecordBuilder<ParentBuilder> {
-    builder: ParentBuilder,
-    target_idx: TypeIndex,
-    fields: Vec<(String, TypeIndex)>,
-}
-
-impl<ParentBuilder: NodeBuilder> WitValueRecordBuilder<ParentBuilder> {
-    fn new(builder: ParentBuilder, target_idx: TypeIndex) -> Self {
-        Self { builder, target_idx, fields: Vec::new() }
-    }
-
-    fn add_field(&mut self, field_name: String, field_type_index: i32) {
-        self.fields.push((field_name, field_type_index));
-    }
-
-    pub fn field(self, field_name: &str) -> WitValueRecordFieldBuilder<ParentBuilder> {
-        WitValueRecordFieldBuilder {
-            record_builder: self,
-            field_name: field_name.to_string(),
-        }
-    }
-
-    pub fn finish(mut self) -> ParentBuilder::Result {
-        self.builder.parent_builder().finish_record(self.fields, self.target_idx);
-        self.builder.finish()
-    }
-}
-
-pub struct WitValueRecordFieldBuilder<ParentBuilder: NodeBuilder> {
-    record_builder: WitValueRecordBuilder<ParentBuilder>,
-    field_name: String,
-}
-
-impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueRecordFieldBuilder<ParentBuilder> {
-    type Result = WitValueRecordBuilder<ParentBuilder>;
-
-    fn parent_builder(&mut self) -> &mut WitValueBuilder {
-        self.record_builder.builder.parent_builder()
-    }
-
-
-    fn u8(mut self, value: u8) -> Self::Result {
-        let field_type_index = self.parent_builder().add_u8(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn u16(mut self, value: u16) -> Self::Result {
-        let field_type_index = self.parent_builder().add_u16(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn u32(mut self, value: u32) -> Self::Result {
-        let field_type_index = self.parent_builder().add_u32(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn u64(mut self, value: u64) -> Self::Result {
-        let field_type_index = self.parent_builder().add_u64(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn s8(mut self, value: i8) -> Self::Result {
-        let field_type_index = self.parent_builder().add_s8(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn s16(mut self, value: i16) -> Self::Result {
-        let field_type_index = self.parent_builder().add_s16(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn s32(mut self, value: i32) -> Self::Result {
-        let field_type_index = self.parent_builder().add_s32(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn s64(mut self, value: i64) -> Self::Result {
-        let field_type_index = self.parent_builder().add_s64(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn f32(mut self, value: f32) -> Self::Result {
-        let field_type_index = self.parent_builder().add_f32(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn f64(mut self, value: f64) -> Self::Result {
-        let field_type_index = self.parent_builder().add_f64(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn char(mut self, value: char) -> Self::Result {
-        let field_type_index = self.parent_builder().add_char(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn bool(mut self, value: bool) -> Self::Result {
-        let field_type_index = self.parent_builder().add_bool(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn string(mut self, value: &str) -> Self::Result {
-        let field_type_index = self.parent_builder().add_string(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn enum_value(mut self, value: &str) -> Self::Result {
-        let field_type_index = self.parent_builder().add_enum_value(value);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn flags(mut self, values: Vec<bool>) -> Self::Result {
-        let field_type_index = self.parent_builder().add_flags(values);
-        self.record_builder.add_field(self.field_name, field_type_index);
-        self.record_builder
-    }
-
-    fn record(mut self) -> WitValueRecordBuilder<WitValueRecordFieldBuilder<ParentBuilder>> {
-        let target_idx = self.parent_builder().add_record();
-        self.record_builder.add_field(self.field_name.clone(), target_idx);
-        WitValueRecordBuilder::new(self, target_idx)
-    }
-
-    fn variant(mut self, name: &str) -> WitValueItemBuilder<WitValueRecordFieldBuilder<ParentBuilder>> {
-        let variant_idx = self.parent_builder().add_variant(name, -1);
-        self.record_builder.add_field(self.field_name.clone(), variant_idx);
-        WitValueItemBuilder {
-            seq_builder: WitValueSeqBuilder::new(self, variant_idx)
-        }
-    }
-
-    fn tuple(mut self) -> WitValueSeqBuilder<WitValueRecordFieldBuilder<ParentBuilder>> {
-        let target_idx = self.parent_builder().add_tuple();
-        self.record_builder.add_field(self.field_name.clone(), target_idx);
-        WitValueSeqBuilder::new(self, target_idx)
-    }
-
-    fn list(mut self) -> WitValueSeqBuilder<WitValueRecordFieldBuilder<ParentBuilder>> {
-        let target_idx = self.parent_builder().add_list();
-        self.record_builder.add_field(self.field_name.clone(), target_idx);
-        WitValueSeqBuilder::new(self, target_idx)
-    }
-
-    fn option_some(mut self) -> WitValueItemBuilder<Self> {
-        let option_idx = self.parent_builder().add_option();
-        self.record_builder.add_field(self.field_name.clone(), option_idx);
-        WitValueItemBuilder {
-            seq_builder: WitValueSeqBuilder::new(self, option_idx)
-        }
-    }
-
-    fn option_none(mut self) -> Self::Result {
-        let option_idx = self.parent_builder().add_option();
-        self.record_builder.add_field(self.field_name, option_idx);
-        self.record_builder
-    }
-
-    fn result_ok(mut self) -> WitValueItemBuilder<Self> {
-        let result_idx = self.parent_builder().add_result_ok();
-        self.record_builder.add_field(self.field_name.clone(), result_idx);
-        WitValueItemBuilder {
-            seq_builder: WitValueSeqBuilder::new(self, result_idx)
-        }
-    }
-
-    fn result_err(mut self) -> WitValueItemBuilder<Self> {
-        let result_idx = self.parent_builder().add_result_err();
-        self.record_builder.add_field(self.field_name.clone(), result_idx);
-        WitValueItemBuilder {
-            seq_builder: WitValueSeqBuilder::new(self, result_idx)
-        }
-    }
-
-    fn finish(self) -> Self::Result {
-        self.record_builder
-    }
-}
-
-pub struct WitValueSeqBuilder<ParentBuilder: NodeBuilder> {
+pub struct WitValueChildItemsBuilder<ParentBuilder: NodeBuilder> {
     builder: ParentBuilder,
     target_idx: TypeIndex,
     items: Vec<TypeIndex>,
 }
 
-impl<ParentBuilder: NodeBuilder> WitValueSeqBuilder<ParentBuilder> {
+impl<ParentBuilder: NodeBuilder> WitValueChildItemsBuilder<ParentBuilder> {
     fn new(builder: ParentBuilder, target_idx: TypeIndex) -> Self {
         Self { builder, target_idx, items: Vec::new() }
     }
@@ -541,7 +343,7 @@ impl<ParentBuilder: NodeBuilder> WitValueSeqBuilder<ParentBuilder> {
 
     pub fn item(self) -> WitValueItemBuilder<ParentBuilder> {
         WitValueItemBuilder {
-            seq_builder: self
+            child_items_builder: self
         }
     }
 
@@ -552,163 +354,163 @@ impl<ParentBuilder: NodeBuilder> WitValueSeqBuilder<ParentBuilder> {
 }
 
 pub struct WitValueItemBuilder<ParentBuilder: NodeBuilder> {
-    seq_builder: WitValueSeqBuilder<ParentBuilder>,
+    child_items_builder: WitValueChildItemsBuilder<ParentBuilder>,
 }
 
 impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueItemBuilder<ParentBuilder> {
-    type Result = WitValueSeqBuilder<ParentBuilder>;
+    type Result = WitValueChildItemsBuilder<ParentBuilder>;
 
     fn parent_builder(&mut self) -> &mut WitValueBuilder {
-        self.seq_builder.builder.parent_builder()
+        self.child_items_builder.builder.parent_builder()
     }
 
     fn u8(mut self, value: u8) -> Self::Result {
         let item_type_index = self.parent_builder().add_u8(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn u16(mut self, value: u16) -> Self::Result {
         let item_type_index = self.parent_builder().add_u16(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn u32(mut self, value: u32) -> Self::Result {
         let item_type_index = self.parent_builder().add_u32(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn u64(mut self, value: u64) -> Self::Result {
         let item_type_index = self.parent_builder().add_u64(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn s8(mut self, value: i8) -> Self::Result {
         let item_type_index = self.parent_builder().add_s8(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn s16(mut self, value: i16) -> Self::Result {
         let item_type_index = self.parent_builder().add_s16(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn s32(mut self, value: i32) -> Self::Result {
         let item_type_index = self.parent_builder().add_s32(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn s64(mut self, value: i64) -> Self::Result {
         let item_type_index = self.parent_builder().add_s64(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn f32(mut self, value: f32) -> Self::Result {
         let item_type_index = self.parent_builder().add_f32(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn f64(mut self, value: f64) -> Self::Result {
         let item_type_index = self.parent_builder().add_f64(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn char(mut self, value: char) -> Self::Result {
         let item_type_index = self.parent_builder().add_char(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn bool(mut self, value: bool) -> Self::Result {
         let item_type_index = self.parent_builder().add_bool(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn string(mut self, value: &str) -> Self::Result {
         let item_type_index = self.parent_builder().add_string(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
-    fn enum_value(mut self, value: &str) -> Self::Result {
+    fn enum_value(mut self, value: u32) -> Self::Result {
         let item_type_index = self.parent_builder().add_enum_value(value);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
     fn flags(mut self, values: Vec<bool>) -> Self::Result {
         let item_type_index = self.parent_builder().add_flags(values);
-        self.seq_builder.add_item(item_type_index);
-        self.seq_builder
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
     }
 
-    fn record(mut self) -> WitValueRecordBuilder<WitValueItemBuilder<ParentBuilder>> {
+    fn record(mut self) -> WitValueChildItemsBuilder<WitValueItemBuilder<ParentBuilder>> {
         let target_idx = self.parent_builder().add_record();
-        self.seq_builder.add_item(target_idx);
-        WitValueRecordBuilder::new(self, target_idx)
+        self.child_items_builder.add_item(target_idx);
+        WitValueChildItemsBuilder::new(self, target_idx)
     }
 
-    fn variant(mut self, name: &str) -> WitValueItemBuilder<WitValueItemBuilder<ParentBuilder>> {
-        let variant_idx = self.parent_builder().add_variant(name, -1);
-        self.seq_builder.add_item(variant_idx);
+    fn variant(mut self, case_idx: u32) -> WitValueItemBuilder<WitValueItemBuilder<ParentBuilder>> {
+        let variant_idx = self.parent_builder().add_variant(case_idx, -1);
+        self.child_items_builder.add_item(variant_idx);
         WitValueItemBuilder {
-            seq_builder: WitValueSeqBuilder::new(self, variant_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, variant_idx)
         }
     }
 
-    fn tuple(mut self) -> WitValueSeqBuilder<Self> {
+    fn tuple(mut self) -> WitValueChildItemsBuilder<Self> {
         let target_idx = self.parent_builder().add_tuple();
-        self.seq_builder.add_item(target_idx);
-        WitValueSeqBuilder::new(self, target_idx)
+        self.child_items_builder.add_item(target_idx);
+        WitValueChildItemsBuilder::new(self, target_idx)
     }
 
-    fn list(mut self) -> WitValueSeqBuilder<Self> {
+    fn list(mut self) -> WitValueChildItemsBuilder<Self> {
         let target_idx = self.parent_builder().add_list();
-        self.seq_builder.add_item(target_idx);
-        WitValueSeqBuilder::new(self, target_idx)
+        self.child_items_builder.add_item(target_idx);
+        WitValueChildItemsBuilder::new(self, target_idx)
     }
 
     fn option_some(mut self) -> WitValueItemBuilder<Self> {
         let option_idx = self.parent_builder().add_option();
-        self.seq_builder.add_item(option_idx);
+        self.child_items_builder.add_item(option_idx);
         WitValueItemBuilder {
-            seq_builder: WitValueSeqBuilder::new(self, option_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, option_idx)
         }
     }
 
     fn option_none(mut self) -> Self::Result {
         let option_idx = self.parent_builder().add_option();
-        self.seq_builder.add_item(option_idx);
-        self.seq_builder
+        self.child_items_builder.add_item(option_idx);
+        self.child_items_builder
     }
 
     fn result_ok(mut self) -> WitValueItemBuilder<Self> {
         let result_idx = self.parent_builder().add_result_ok();
-        self.seq_builder.add_item(result_idx);
+        self.child_items_builder.add_item(result_idx);
         WitValueItemBuilder {
-            seq_builder: WitValueSeqBuilder::new(self, result_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, result_idx)
         }
     }
 
     fn result_err(mut self) -> WitValueItemBuilder<Self> {
         let result_idx = self.parent_builder().add_result_err();
-        self.seq_builder.add_item(result_idx);
+        self.child_items_builder.add_item(result_idx);
         WitValueItemBuilder {
-            seq_builder: WitValueSeqBuilder::new(self, result_idx)
+            child_items_builder: WitValueChildItemsBuilder::new(self, result_idx)
         }
     }
 
     fn finish(self) -> Self::Result {
-        self.seq_builder
+        self.child_items_builder
     }
 }

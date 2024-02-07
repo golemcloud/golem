@@ -8,16 +8,17 @@ pub mod golem {
       #[doc(hidden)]
       #[cfg(target_arch = "wasm32")]
       static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+      pub type TypeIndex = i32;
       #[derive(Clone)]
       pub enum WitNode{
-        RecordValue(wit_bindgen::rt::vec::Vec::<(wit_bindgen::rt::string::String,i32,)>),
-        VariantValue((wit_bindgen::rt::string::String,i32,)),
-        EnumValue(wit_bindgen::rt::string::String),
+        RecordValue(wit_bindgen::rt::vec::Vec::<TypeIndex>),
+        VariantValue((u32,TypeIndex,)),
+        EnumValue(u32),
         FlagsValue(wit_bindgen::rt::vec::Vec::<bool>),
-        TupleValue(wit_bindgen::rt::vec::Vec::<i32>),
-        ListValue(wit_bindgen::rt::vec::Vec::<i32>),
-        OptionValue(Option<i32>),
-        ResultValue(Result<i32,i32>),
+        TupleValue(wit_bindgen::rt::vec::Vec::<TypeIndex>),
+        ListValue(wit_bindgen::rt::vec::Vec::<TypeIndex>),
+        OptionValue(Option<TypeIndex>),
+        ResultValue(Result<TypeIndex,TypeIndex>),
         PrimU8(u8),
         PrimU16(u16),
         PrimU32(u32),
@@ -280,47 +281,65 @@ pub mod golem {
             let vec0 = function_name;
             let ptr0 = vec0.as_ptr() as i32;
             let len0 = vec0.len() as i32;
-            let vec13 = function_params;
-            let len13 = vec13.len() as i32;
-            let layout13 = alloc::Layout::from_size_align_unchecked(vec13.len() * 8, 4);
-            let result13 = if layout13.size() != 0
+            let vec9 = function_params;
+            let len9 = vec9.len() as i32;
+            let layout9 = alloc::Layout::from_size_align_unchecked(vec9.len() * 8, 4);
+            let result9 = if layout9.size() != 0
             {
-              let ptr = alloc::alloc(layout13);
+              let ptr = alloc::alloc(layout9);
               if ptr.is_null()
               {
-                alloc::handle_alloc_error(layout13);
+                alloc::handle_alloc_error(layout9);
               }
               ptr
             }else {{
               ::core::ptr::null_mut()
             }};
-            for (i, e) in vec13.into_iter().enumerate() {
-              let base = result13 as i32 + (i as i32) * 8;
+            for (i, e) in vec9.into_iter().enumerate() {
+              let base = result9 as i32 + (i as i32) * 8;
               {
                 let WitValue{ nodes:nodes1, } = e;
-                let vec12 = nodes1;
-                let len12 = vec12.len() as i32;
-                let layout12 = alloc::Layout::from_size_align_unchecked(vec12.len() * 24, 8);
-                let result12 = if layout12.size() != 0
+                let vec8 = nodes1;
+                let len8 = vec8.len() as i32;
+                let layout8 = alloc::Layout::from_size_align_unchecked(vec8.len() * 16, 8);
+                let result8 = if layout8.size() != 0
                 {
-                  let ptr = alloc::alloc(layout12);
+                  let ptr = alloc::alloc(layout8);
                   if ptr.is_null()
                   {
-                    alloc::handle_alloc_error(layout12);
+                    alloc::handle_alloc_error(layout8);
                   }
                   ptr
                 }else {{
                   ::core::ptr::null_mut()
                 }};
-                for (i, e) in vec12.into_iter().enumerate() {
-                  let base = result12 as i32 + (i as i32) * 24;
+                for (i, e) in vec8.into_iter().enumerate() {
+                  let base = result8 as i32 + (i as i32) * 16;
                   {
                     match e {
                       WitNode::RecordValue(e) => {
                         *((base + 0) as *mut u8) = (0i32) as u8;
+                        let vec2 = e;
+                        let ptr2 = vec2.as_ptr() as i32;
+                        let len2 = vec2.len() as i32;
+                        *((base + 12) as *mut i32) = len2;
+                        *((base + 8) as *mut i32) = ptr2;
+                      },
+                      WitNode::VariantValue(e) => {
+                        *((base + 0) as *mut u8) = (1i32) as u8;
+                        let (t3_0, t3_1, ) = e;
+                        *((base + 8) as *mut i32) = wit_bindgen::rt::as_i32(t3_0);
+                        *((base + 12) as *mut i32) = wit_bindgen::rt::as_i32(t3_1);
+                      },
+                      WitNode::EnumValue(e) => {
+                        *((base + 0) as *mut u8) = (2i32) as u8;
+                        *((base + 8) as *mut i32) = wit_bindgen::rt::as_i32(e);
+                      },
+                      WitNode::FlagsValue(e) => {
+                        *((base + 0) as *mut u8) = (3i32) as u8;
                         let vec4 = e;
                         let len4 = vec4.len() as i32;
-                        let layout4 = alloc::Layout::from_size_align_unchecked(vec4.len() * 12, 4);
+                        let layout4 = alloc::Layout::from_size_align_unchecked(vec4.len() * 1, 1);
                         let result4 = if layout4.size() != 0
                         {
                           let ptr = alloc::alloc(layout4);
@@ -333,80 +352,30 @@ pub mod golem {
                           ::core::ptr::null_mut()
                         }};
                         for (i, e) in vec4.into_iter().enumerate() {
-                          let base = result4 as i32 + (i as i32) * 12;
+                          let base = result4 as i32 + (i as i32) * 1;
                           {
-                            let (t2_0, t2_1, ) = e;
-                            let vec3 = t2_0;
-                            let ptr3 = vec3.as_ptr() as i32;
-                            let len3 = vec3.len() as i32;
-                            *((base + 4) as *mut i32) = len3;
-                            *((base + 0) as *mut i32) = ptr3;
-                            *((base + 8) as *mut i32) = wit_bindgen::rt::as_i32(t2_1);
+                            *((base + 0) as *mut u8) = (match e { true => 1, false => 0 }) as u8;
                           }
                         }
                         *((base + 12) as *mut i32) = len4;
                         *((base + 8) as *mut i32) = result4 as i32;
                         cleanup_list.extend_from_slice(&[(result4, layout4),]);
                       },
-                      WitNode::VariantValue(e) => {
-                        *((base + 0) as *mut u8) = (1i32) as u8;
-                        let (t5_0, t5_1, ) = e;
-                        let vec6 = t5_0;
+                      WitNode::TupleValue(e) => {
+                        *((base + 0) as *mut u8) = (4i32) as u8;
+                        let vec5 = e;
+                        let ptr5 = vec5.as_ptr() as i32;
+                        let len5 = vec5.len() as i32;
+                        *((base + 12) as *mut i32) = len5;
+                        *((base + 8) as *mut i32) = ptr5;
+                      },
+                      WitNode::ListValue(e) => {
+                        *((base + 0) as *mut u8) = (5i32) as u8;
+                        let vec6 = e;
                         let ptr6 = vec6.as_ptr() as i32;
                         let len6 = vec6.len() as i32;
                         *((base + 12) as *mut i32) = len6;
                         *((base + 8) as *mut i32) = ptr6;
-                        *((base + 16) as *mut i32) = wit_bindgen::rt::as_i32(t5_1);
-                      },
-                      WitNode::EnumValue(e) => {
-                        *((base + 0) as *mut u8) = (2i32) as u8;
-                        let vec7 = e;
-                        let ptr7 = vec7.as_ptr() as i32;
-                        let len7 = vec7.len() as i32;
-                        *((base + 12) as *mut i32) = len7;
-                        *((base + 8) as *mut i32) = ptr7;
-                      },
-                      WitNode::FlagsValue(e) => {
-                        *((base + 0) as *mut u8) = (3i32) as u8;
-                        let vec8 = e;
-                        let len8 = vec8.len() as i32;
-                        let layout8 = alloc::Layout::from_size_align_unchecked(vec8.len() * 1, 1);
-                        let result8 = if layout8.size() != 0
-                        {
-                          let ptr = alloc::alloc(layout8);
-                          if ptr.is_null()
-                          {
-                            alloc::handle_alloc_error(layout8);
-                          }
-                          ptr
-                        }else {{
-                          ::core::ptr::null_mut()
-                        }};
-                        for (i, e) in vec8.into_iter().enumerate() {
-                          let base = result8 as i32 + (i as i32) * 1;
-                          {
-                            *((base + 0) as *mut u8) = (match e { true => 1, false => 0 }) as u8;
-                          }
-                        }
-                        *((base + 12) as *mut i32) = len8;
-                        *((base + 8) as *mut i32) = result8 as i32;
-                        cleanup_list.extend_from_slice(&[(result8, layout8),]);
-                      },
-                      WitNode::TupleValue(e) => {
-                        *((base + 0) as *mut u8) = (4i32) as u8;
-                        let vec9 = e;
-                        let ptr9 = vec9.as_ptr() as i32;
-                        let len9 = vec9.len() as i32;
-                        *((base + 12) as *mut i32) = len9;
-                        *((base + 8) as *mut i32) = ptr9;
-                      },
-                      WitNode::ListValue(e) => {
-                        *((base + 0) as *mut u8) = (5i32) as u8;
-                        let vec10 = e;
-                        let ptr10 = vec10.as_ptr() as i32;
-                        let len10 = vec10.len() as i32;
-                        *((base + 12) as *mut i32) = len10;
-                        *((base + 8) as *mut i32) = ptr10;
                       },
                       WitNode::OptionValue(e) => {
                         *((base + 0) as *mut u8) = (6i32) as u8;
@@ -483,21 +452,21 @@ pub mod golem {
                           },
                           WitNode::PrimString(e) => {
                             *((base + 0) as *mut u8) = (20i32) as u8;
-                            let vec11 = e;
-                            let ptr11 = vec11.as_ptr() as i32;
-                            let len11 = vec11.len() as i32;
-                            *((base + 12) as *mut i32) = len11;
-                            *((base + 8) as *mut i32) = ptr11;
+                            let vec7 = e;
+                            let ptr7 = vec7.as_ptr() as i32;
+                            let len7 = vec7.len() as i32;
+                            *((base + 12) as *mut i32) = len7;
+                            *((base + 8) as *mut i32) = ptr7;
                           },
                         }
                       }
                     }
-                    *((base + 4) as *mut i32) = len12;
-                    *((base + 0) as *mut i32) = result12 as i32;
-                    cleanup_list.extend_from_slice(&[(result12, layout12),]);
+                    *((base + 4) as *mut i32) = len8;
+                    *((base + 0) as *mut i32) = result8 as i32;
+                    cleanup_list.extend_from_slice(&[(result8, layout8),]);
                   }
                 }
-                let ptr14 = ret_area.as_mut_ptr() as i32;
+                let ptr10 = ret_area.as_mut_ptr() as i32;
                 #[cfg(target_arch = "wasm32")]
                 #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
                 extern "C" {
@@ -507,10 +476,10 @@ pub mod golem {
                 
                 #[cfg(not(target_arch = "wasm32"))]
                 fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
-                wit_import((self).handle() as i32, ptr0, len0, result13 as i32, len13, ptr14);
-                let l15 = i32::from(*((ptr14 + 0) as *const u8));
-                if layout13.size() != 0 {
-                  alloc::dealloc(result13, layout13);
+                wit_import((self).handle() as i32, ptr0, len0, result9 as i32, len9, ptr10);
+                let l11 = i32::from(*((ptr10 + 0) as *const u8));
+                if layout9.size() != 0 {
+                  alloc::dealloc(result9, layout9);
                 }
                 for (ptr, layout) in cleanup_list {
                   
@@ -521,273 +490,251 @@ pub mod golem {
                   }
                   
                 }
-                match l15 {
+                match l11 {
                   0 => {
                     let e = {
-                      let l16 = *((ptr14 + 4) as *const i32);
-                      let l17 = *((ptr14 + 8) as *const i32);
-                      let base64 = l16;
-                      let len64 = l17;
-                      let mut result64 = Vec::with_capacity(len64 as usize);
-                      for i in 0..len64 {
-                        let base = base64 + i * 24;
-                        let e64 = {
-                          let l18 = i32::from(*((base + 0) as *const u8));
-                          let v63 = match l18 {
+                      let l12 = *((ptr10 + 4) as *const i32);
+                      let l13 = *((ptr10 + 8) as *const i32);
+                      let base52 = l12;
+                      let len52 = l13;
+                      let mut result52 = Vec::with_capacity(len52 as usize);
+                      for i in 0..len52 {
+                        let base = base52 + i * 16;
+                        let e52 = {
+                          let l14 = i32::from(*((base + 0) as *const u8));
+                          let v51 = match l14 {
                             0 => {
-                              let e63 = {
-                                let l19 = *((base + 8) as *const i32);
-                                let l20 = *((base + 12) as *const i32);
-                                let base25 = l19;
-                                let len25 = l20;
-                                let mut result25 = Vec::with_capacity(len25 as usize);
-                                for i in 0..len25 {
-                                  let base = base25 + i * 12;
-                                  let e25 = {
-                                    let l21 = *((base + 0) as *const i32);
-                                    let l22 = *((base + 4) as *const i32);
-                                    let len23 = l22 as usize;
-                                    let bytes23 = Vec::from_raw_parts(l21 as *mut _, len23, len23);
-                                    let l24 = *((base + 8) as *const i32);
-                                    
-                                    (wit_bindgen::rt::string_lift(bytes23), l24)
-                                  };
-                                  result25.push(e25);
-                                }
-                                wit_bindgen::rt::dealloc(base25, (len25 as usize) * 12, 4);
+                              let e51 = {
+                                let l15 = *((base + 8) as *const i32);
+                                let l16 = *((base + 12) as *const i32);
+                                let len17 = l16 as usize;
                                 
-                                result25
+                                Vec::from_raw_parts(l15 as *mut _, len17, len17)
                               };
-                              WitNode::RecordValue(e63)
+                              WitNode::RecordValue(e51)
                             }
                             1 => {
-                              let e63 = {
-                                let l26 = *((base + 8) as *const i32);
-                                let l27 = *((base + 12) as *const i32);
-                                let len28 = l27 as usize;
-                                let bytes28 = Vec::from_raw_parts(l26 as *mut _, len28, len28);
-                                let l29 = *((base + 16) as *const i32);
+                              let e51 = {
+                                let l18 = *((base + 8) as *const i32);
+                                let l19 = *((base + 12) as *const i32);
                                 
-                                (wit_bindgen::rt::string_lift(bytes28), l29)
+                                (l18 as u32, l19)
                               };
-                              WitNode::VariantValue(e63)
+                              WitNode::VariantValue(e51)
                             }
                             2 => {
-                              let e63 = {
-                                let l30 = *((base + 8) as *const i32);
-                                let l31 = *((base + 12) as *const i32);
-                                let len32 = l31 as usize;
-                                let bytes32 = Vec::from_raw_parts(l30 as *mut _, len32, len32);
+                              let e51 = {
+                                let l20 = *((base + 8) as *const i32);
                                 
-                                wit_bindgen::rt::string_lift(bytes32)
+                                l20 as u32
                               };
-                              WitNode::EnumValue(e63)
+                              WitNode::EnumValue(e51)
                             }
                             3 => {
-                              let e63 = {
-                                let l33 = *((base + 8) as *const i32);
-                                let l34 = *((base + 12) as *const i32);
-                                let base36 = l33;
-                                let len36 = l34;
-                                let mut result36 = Vec::with_capacity(len36 as usize);
-                                for i in 0..len36 {
-                                  let base = base36 + i * 1;
-                                  let e36 = {
-                                    let l35 = i32::from(*((base + 0) as *const u8));
+                              let e51 = {
+                                let l21 = *((base + 8) as *const i32);
+                                let l22 = *((base + 12) as *const i32);
+                                let base24 = l21;
+                                let len24 = l22;
+                                let mut result24 = Vec::with_capacity(len24 as usize);
+                                for i in 0..len24 {
+                                  let base = base24 + i * 1;
+                                  let e24 = {
+                                    let l23 = i32::from(*((base + 0) as *const u8));
                                     
-                                    wit_bindgen::rt::bool_lift(l35 as u8)
+                                    wit_bindgen::rt::bool_lift(l23 as u8)
                                   };
-                                  result36.push(e36);
+                                  result24.push(e24);
                                 }
-                                wit_bindgen::rt::dealloc(base36, (len36 as usize) * 1, 1);
+                                wit_bindgen::rt::dealloc(base24, (len24 as usize) * 1, 1);
                                 
-                                result36
+                                result24
                               };
-                              WitNode::FlagsValue(e63)
+                              WitNode::FlagsValue(e51)
                             }
                             4 => {
-                              let e63 = {
-                                let l37 = *((base + 8) as *const i32);
-                                let l38 = *((base + 12) as *const i32);
-                                let len39 = l38 as usize;
+                              let e51 = {
+                                let l25 = *((base + 8) as *const i32);
+                                let l26 = *((base + 12) as *const i32);
+                                let len27 = l26 as usize;
                                 
-                                Vec::from_raw_parts(l37 as *mut _, len39, len39)
+                                Vec::from_raw_parts(l25 as *mut _, len27, len27)
                               };
-                              WitNode::TupleValue(e63)
+                              WitNode::TupleValue(e51)
                             }
                             5 => {
-                              let e63 = {
-                                let l40 = *((base + 8) as *const i32);
-                                let l41 = *((base + 12) as *const i32);
-                                let len42 = l41 as usize;
+                              let e51 = {
+                                let l28 = *((base + 8) as *const i32);
+                                let l29 = *((base + 12) as *const i32);
+                                let len30 = l29 as usize;
                                 
-                                Vec::from_raw_parts(l40 as *mut _, len42, len42)
+                                Vec::from_raw_parts(l28 as *mut _, len30, len30)
                               };
-                              WitNode::ListValue(e63)
+                              WitNode::ListValue(e51)
                             }
                             6 => {
-                              let e63 = {
-                                let l43 = i32::from(*((base + 8) as *const u8));
+                              let e51 = {
+                                let l31 = i32::from(*((base + 8) as *const u8));
                                 
-                                match l43 {
+                                match l31 {
                                   0 => None,
                                   1 => {
                                     let e = {
-                                      let l44 = *((base + 12) as *const i32);
+                                      let l32 = *((base + 12) as *const i32);
                                       
-                                      l44
+                                      l32
                                     };
                                     Some(e)
                                   }
                                   _ => wit_bindgen::rt::invalid_enum_discriminant(),
                                 }
                               };
-                              WitNode::OptionValue(e63)
+                              WitNode::OptionValue(e51)
                             }
                             7 => {
-                              let e63 = {
-                                let l45 = i32::from(*((base + 8) as *const u8));
+                              let e51 = {
+                                let l33 = i32::from(*((base + 8) as *const u8));
                                 
-                                match l45 {
+                                match l33 {
                                   0 => {
                                     let e = {
-                                      let l46 = *((base + 12) as *const i32);
+                                      let l34 = *((base + 12) as *const i32);
                                       
-                                      l46
+                                      l34
                                     };
                                     Ok(e)
                                   }
                                   1 => {
                                     let e = {
-                                      let l47 = *((base + 12) as *const i32);
+                                      let l35 = *((base + 12) as *const i32);
                                       
-                                      l47
+                                      l35
                                     };
                                     Err(e)
                                   }
                                   _ => wit_bindgen::rt::invalid_enum_discriminant(),
                                 }
                               };
-                              WitNode::ResultValue(e63)
+                              WitNode::ResultValue(e51)
                             }
                             8 => {
-                              let e63 = {
-                                let l48 = i32::from(*((base + 8) as *const u8));
+                              let e51 = {
+                                let l36 = i32::from(*((base + 8) as *const u8));
                                 
-                                l48 as u8
+                                l36 as u8
                               };
-                              WitNode::PrimU8(e63)
+                              WitNode::PrimU8(e51)
                             }
                             9 => {
-                              let e63 = {
-                                let l49 = i32::from(*((base + 8) as *const u16));
+                              let e51 = {
+                                let l37 = i32::from(*((base + 8) as *const u16));
                                 
-                                l49 as u16
+                                l37 as u16
                               };
-                              WitNode::PrimU16(e63)
+                              WitNode::PrimU16(e51)
                             }
                             10 => {
-                              let e63 = {
-                                let l50 = *((base + 8) as *const i32);
+                              let e51 = {
+                                let l38 = *((base + 8) as *const i32);
                                 
-                                l50 as u32
+                                l38 as u32
                               };
-                              WitNode::PrimU32(e63)
+                              WitNode::PrimU32(e51)
                             }
                             11 => {
-                              let e63 = {
-                                let l51 = *((base + 8) as *const i64);
+                              let e51 = {
+                                let l39 = *((base + 8) as *const i64);
                                 
-                                l51 as u64
+                                l39 as u64
                               };
-                              WitNode::PrimU64(e63)
+                              WitNode::PrimU64(e51)
                             }
                             12 => {
-                              let e63 = {
-                                let l52 = i32::from(*((base + 8) as *const i8));
+                              let e51 = {
+                                let l40 = i32::from(*((base + 8) as *const i8));
                                 
-                                l52 as i8
+                                l40 as i8
                               };
-                              WitNode::PrimS8(e63)
+                              WitNode::PrimS8(e51)
                             }
                             13 => {
-                              let e63 = {
-                                let l53 = i32::from(*((base + 8) as *const i16));
+                              let e51 = {
+                                let l41 = i32::from(*((base + 8) as *const i16));
                                 
-                                l53 as i16
+                                l41 as i16
                               };
-                              WitNode::PrimS16(e63)
+                              WitNode::PrimS16(e51)
                             }
                             14 => {
-                              let e63 = {
-                                let l54 = *((base + 8) as *const i32);
+                              let e51 = {
+                                let l42 = *((base + 8) as *const i32);
                                 
-                                l54
+                                l42
                               };
-                              WitNode::PrimS32(e63)
+                              WitNode::PrimS32(e51)
                             }
                             15 => {
-                              let e63 = {
-                                let l55 = *((base + 8) as *const i64);
+                              let e51 = {
+                                let l43 = *((base + 8) as *const i64);
                                 
-                                l55
+                                l43
                               };
-                              WitNode::PrimS64(e63)
+                              WitNode::PrimS64(e51)
                             }
                             16 => {
-                              let e63 = {
-                                let l56 = *((base + 8) as *const f32);
+                              let e51 = {
+                                let l44 = *((base + 8) as *const f32);
                                 
-                                l56
+                                l44
                               };
-                              WitNode::PrimFloat32(e63)
+                              WitNode::PrimFloat32(e51)
                             }
                             17 => {
-                              let e63 = {
-                                let l57 = *((base + 8) as *const f64);
+                              let e51 = {
+                                let l45 = *((base + 8) as *const f64);
                                 
-                                l57
+                                l45
                               };
-                              WitNode::PrimFloat64(e63)
+                              WitNode::PrimFloat64(e51)
                             }
                             18 => {
-                              let e63 = {
-                                let l58 = *((base + 8) as *const i32);
+                              let e51 = {
+                                let l46 = *((base + 8) as *const i32);
                                 
-                                wit_bindgen::rt::char_lift(l58 as u32)
+                                wit_bindgen::rt::char_lift(l46 as u32)
                               };
-                              WitNode::PrimChar(e63)
+                              WitNode::PrimChar(e51)
                             }
                             19 => {
-                              let e63 = {
-                                let l59 = i32::from(*((base + 8) as *const u8));
+                              let e51 = {
+                                let l47 = i32::from(*((base + 8) as *const u8));
                                 
-                                wit_bindgen::rt::bool_lift(l59 as u8)
+                                wit_bindgen::rt::bool_lift(l47 as u8)
                               };
-                              WitNode::PrimBool(e63)
+                              WitNode::PrimBool(e51)
                             }
                             n => {
                               debug_assert_eq!(n, 20, "invalid enum discriminant");
-                              let e63 = {
-                                let l60 = *((base + 8) as *const i32);
-                                let l61 = *((base + 12) as *const i32);
-                                let len62 = l61 as usize;
-                                let bytes62 = Vec::from_raw_parts(l60 as *mut _, len62, len62);
+                              let e51 = {
+                                let l48 = *((base + 8) as *const i32);
+                                let l49 = *((base + 12) as *const i32);
+                                let len50 = l49 as usize;
+                                let bytes50 = Vec::from_raw_parts(l48 as *mut _, len50, len50);
                                 
-                                wit_bindgen::rt::string_lift(bytes62)
+                                wit_bindgen::rt::string_lift(bytes50)
                               };
-                              WitNode::PrimString(e63)
+                              WitNode::PrimString(e51)
                             }
                           };
                           
-                          v63
+                          v51
                         };
-                        result64.push(e64);
+                        result52.push(e52);
                       }
-                      wit_bindgen::rt::dealloc(base64, (len64 as usize) * 24, 8);
+                      wit_bindgen::rt::dealloc(base52, (len52 as usize) * 16, 8);
                       
                       WitValue{
-                        nodes: result64,
+                        nodes: result52,
                       }
                     };
                     Ok(e)
@@ -810,7 +757,7 @@ pub mod golem {
     #[cfg(target_arch = "wasm32")]
     #[link_section = "component-type:wit-value"]
     #[doc(hidden)]
-    pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1483] = [3, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 0, 97, 115, 109, 13, 0, 1, 0, 7, 140, 5, 1, 65, 2, 1, 66, 26, 1, 111, 2, 115, 122, 1, 112, 0, 1, 112, 127, 1, 112, 122, 1, 107, 122, 1, 106, 1, 122, 1, 122, 1, 113, 21, 12, 114, 101, 99, 111, 114, 100, 45, 118, 97, 108, 117, 101, 1, 1, 0, 13, 118, 97, 114, 105, 97, 110, 116, 45, 118, 97, 108, 117, 101, 1, 0, 0, 10, 101, 110, 117, 109, 45, 118, 97, 108, 117, 101, 1, 115, 0, 11, 102, 108, 97, 103, 115, 45, 118, 97, 108, 117, 101, 1, 2, 0, 11, 116, 117, 112, 108, 101, 45, 118, 97, 108, 117, 101, 1, 3, 0, 10, 108, 105, 115, 116, 45, 118, 97, 108, 117, 101, 1, 3, 0, 12, 111, 112, 116, 105, 111, 110, 45, 118, 97, 108, 117, 101, 1, 4, 0, 12, 114, 101, 115, 117, 108, 116, 45, 118, 97, 108, 117, 101, 1, 5, 0, 7, 112, 114, 105, 109, 45, 117, 56, 1, 125, 0, 8, 112, 114, 105, 109, 45, 117, 49, 54, 1, 123, 0, 8, 112, 114, 105, 109, 45, 117, 51, 50, 1, 121, 0, 8, 112, 114, 105, 109, 45, 117, 54, 52, 1, 119, 0, 7, 112, 114, 105, 109, 45, 115, 56, 1, 126, 0, 8, 112, 114, 105, 109, 45, 115, 49, 54, 1, 124, 0, 8, 112, 114, 105, 109, 45, 115, 51, 50, 1, 122, 0, 8, 112, 114, 105, 109, 45, 115, 54, 52, 1, 120, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 51, 50, 1, 118, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 54, 52, 1, 117, 0, 9, 112, 114, 105, 109, 45, 99, 104, 97, 114, 1, 116, 0, 9, 112, 114, 105, 109, 45, 98, 111, 111, 108, 1, 127, 0, 11, 112, 114, 105, 109, 45, 115, 116, 114, 105, 110, 103, 1, 115, 0, 4, 0, 8, 119, 105, 116, 45, 110, 111, 100, 101, 3, 0, 6, 1, 112, 7, 1, 114, 1, 5, 110, 111, 100, 101, 115, 8, 4, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 3, 0, 9, 1, 114, 1, 5, 118, 97, 108, 117, 101, 115, 4, 0, 3, 117, 114, 105, 3, 0, 11, 4, 0, 8, 119, 97, 115, 109, 45, 114, 112, 99, 3, 1, 1, 105, 13, 1, 64, 1, 8, 108, 111, 99, 97, 116, 105, 111, 110, 12, 0, 14, 4, 0, 21, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 119, 97, 115, 109, 45, 114, 112, 99, 1, 15, 1, 104, 13, 1, 112, 115, 1, 106, 1, 115, 0, 1, 64, 3, 4, 115, 101, 108, 102, 16, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 17, 0, 18, 4, 0, 38, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 45, 106, 115, 111, 110, 1, 19, 1, 112, 10, 1, 106, 1, 10, 0, 1, 64, 3, 4, 115, 101, 108, 102, 16, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 20, 0, 21, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 1, 22, 4, 1, 21, 103, 111, 108, 101, 109, 58, 114, 112, 99, 47, 116, 121, 112, 101, 115, 64, 48, 46, 49, 46, 48, 5, 0, 11, 11, 1, 0, 5, 116, 121, 112, 101, 115, 3, 0, 0, 7, 173, 5, 1, 65, 2, 1, 65, 2, 1, 66, 26, 1, 111, 2, 115, 122, 1, 112, 0, 1, 112, 127, 1, 112, 122, 1, 107, 122, 1, 106, 1, 122, 1, 122, 1, 113, 21, 12, 114, 101, 99, 111, 114, 100, 45, 118, 97, 108, 117, 101, 1, 1, 0, 13, 118, 97, 114, 105, 97, 110, 116, 45, 118, 97, 108, 117, 101, 1, 0, 0, 10, 101, 110, 117, 109, 45, 118, 97, 108, 117, 101, 1, 115, 0, 11, 102, 108, 97, 103, 115, 45, 118, 97, 108, 117, 101, 1, 2, 0, 11, 116, 117, 112, 108, 101, 45, 118, 97, 108, 117, 101, 1, 3, 0, 10, 108, 105, 115, 116, 45, 118, 97, 108, 117, 101, 1, 3, 0, 12, 111, 112, 116, 105, 111, 110, 45, 118, 97, 108, 117, 101, 1, 4, 0, 12, 114, 101, 115, 117, 108, 116, 45, 118, 97, 108, 117, 101, 1, 5, 0, 7, 112, 114, 105, 109, 45, 117, 56, 1, 125, 0, 8, 112, 114, 105, 109, 45, 117, 49, 54, 1, 123, 0, 8, 112, 114, 105, 109, 45, 117, 51, 50, 1, 121, 0, 8, 112, 114, 105, 109, 45, 117, 54, 52, 1, 119, 0, 7, 112, 114, 105, 109, 45, 115, 56, 1, 126, 0, 8, 112, 114, 105, 109, 45, 115, 49, 54, 1, 124, 0, 8, 112, 114, 105, 109, 45, 115, 51, 50, 1, 122, 0, 8, 112, 114, 105, 109, 45, 115, 54, 52, 1, 120, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 51, 50, 1, 118, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 54, 52, 1, 117, 0, 9, 112, 114, 105, 109, 45, 99, 104, 97, 114, 1, 116, 0, 9, 112, 114, 105, 109, 45, 98, 111, 111, 108, 1, 127, 0, 11, 112, 114, 105, 109, 45, 115, 116, 114, 105, 110, 103, 1, 115, 0, 4, 0, 8, 119, 105, 116, 45, 110, 111, 100, 101, 3, 0, 6, 1, 112, 7, 1, 114, 1, 5, 110, 111, 100, 101, 115, 8, 4, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 3, 0, 9, 1, 114, 1, 5, 118, 97, 108, 117, 101, 115, 4, 0, 3, 117, 114, 105, 3, 0, 11, 4, 0, 8, 119, 97, 115, 109, 45, 114, 112, 99, 3, 1, 1, 105, 13, 1, 64, 1, 8, 108, 111, 99, 97, 116, 105, 111, 110, 12, 0, 14, 4, 0, 21, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 119, 97, 115, 109, 45, 114, 112, 99, 1, 15, 1, 104, 13, 1, 112, 115, 1, 106, 1, 115, 0, 1, 64, 3, 4, 115, 101, 108, 102, 16, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 17, 0, 18, 4, 0, 38, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 45, 106, 115, 111, 110, 1, 19, 1, 112, 10, 1, 106, 1, 10, 0, 1, 64, 3, 4, 115, 101, 108, 102, 16, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 20, 0, 21, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 1, 22, 3, 1, 21, 103, 111, 108, 101, 109, 58, 114, 112, 99, 47, 116, 121, 112, 101, 115, 64, 48, 46, 49, 46, 48, 5, 0, 4, 1, 25, 103, 111, 108, 101, 109, 58, 114, 112, 99, 47, 119, 105, 116, 45, 118, 97, 108, 117, 101, 64, 48, 46, 49, 46, 48, 4, 0, 11, 15, 1, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 3, 2, 0, 0, 16, 12, 112, 97, 99, 107, 97, 103, 101, 45, 100, 111, 99, 115, 0, 123, 125, 0, 70, 9, 112, 114, 111, 100, 117, 99, 101, 114, 115, 1, 12, 112, 114, 111, 99, 101, 115, 115, 101, 100, 45, 98, 121, 2, 13, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 6, 48, 46, 49, 56, 46, 50, 16, 119, 105, 116, 45, 98, 105, 110, 100, 103, 101, 110, 45, 114, 117, 115, 116, 6, 48, 46, 49, 54, 46, 48];
+    pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1513] = [3, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 0, 97, 115, 109, 13, 0, 1, 0, 7, 155, 5, 1, 65, 2, 1, 66, 27, 1, 122, 4, 0, 10, 116, 121, 112, 101, 45, 105, 110, 100, 101, 120, 3, 0, 0, 1, 112, 1, 1, 111, 2, 121, 1, 1, 112, 127, 1, 107, 1, 1, 106, 1, 1, 1, 1, 1, 113, 21, 12, 114, 101, 99, 111, 114, 100, 45, 118, 97, 108, 117, 101, 1, 2, 0, 13, 118, 97, 114, 105, 97, 110, 116, 45, 118, 97, 108, 117, 101, 1, 3, 0, 10, 101, 110, 117, 109, 45, 118, 97, 108, 117, 101, 1, 121, 0, 11, 102, 108, 97, 103, 115, 45, 118, 97, 108, 117, 101, 1, 4, 0, 11, 116, 117, 112, 108, 101, 45, 118, 97, 108, 117, 101, 1, 2, 0, 10, 108, 105, 115, 116, 45, 118, 97, 108, 117, 101, 1, 2, 0, 12, 111, 112, 116, 105, 111, 110, 45, 118, 97, 108, 117, 101, 1, 5, 0, 12, 114, 101, 115, 117, 108, 116, 45, 118, 97, 108, 117, 101, 1, 6, 0, 7, 112, 114, 105, 109, 45, 117, 56, 1, 125, 0, 8, 112, 114, 105, 109, 45, 117, 49, 54, 1, 123, 0, 8, 112, 114, 105, 109, 45, 117, 51, 50, 1, 121, 0, 8, 112, 114, 105, 109, 45, 117, 54, 52, 1, 119, 0, 7, 112, 114, 105, 109, 45, 115, 56, 1, 126, 0, 8, 112, 114, 105, 109, 45, 115, 49, 54, 1, 124, 0, 8, 112, 114, 105, 109, 45, 115, 51, 50, 1, 122, 0, 8, 112, 114, 105, 109, 45, 115, 54, 52, 1, 120, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 51, 50, 1, 118, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 54, 52, 1, 117, 0, 9, 112, 114, 105, 109, 45, 99, 104, 97, 114, 1, 116, 0, 9, 112, 114, 105, 109, 45, 98, 111, 111, 108, 1, 127, 0, 11, 112, 114, 105, 109, 45, 115, 116, 114, 105, 110, 103, 1, 115, 0, 4, 0, 8, 119, 105, 116, 45, 110, 111, 100, 101, 3, 0, 7, 1, 112, 8, 1, 114, 1, 5, 110, 111, 100, 101, 115, 9, 4, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 3, 0, 10, 1, 114, 1, 5, 118, 97, 108, 117, 101, 115, 4, 0, 3, 117, 114, 105, 3, 0, 12, 4, 0, 8, 119, 97, 115, 109, 45, 114, 112, 99, 3, 1, 1, 105, 14, 1, 64, 1, 8, 108, 111, 99, 97, 116, 105, 111, 110, 13, 0, 15, 4, 0, 21, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 119, 97, 115, 109, 45, 114, 112, 99, 1, 16, 1, 104, 14, 1, 112, 115, 1, 106, 1, 115, 0, 1, 64, 3, 4, 115, 101, 108, 102, 17, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 18, 0, 19, 4, 0, 38, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 45, 106, 115, 111, 110, 1, 20, 1, 112, 11, 1, 106, 1, 11, 0, 1, 64, 3, 4, 115, 101, 108, 102, 17, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 21, 0, 22, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 1, 23, 4, 1, 21, 103, 111, 108, 101, 109, 58, 114, 112, 99, 47, 116, 121, 112, 101, 115, 64, 48, 46, 49, 46, 48, 5, 0, 11, 11, 1, 0, 5, 116, 121, 112, 101, 115, 3, 0, 0, 7, 188, 5, 1, 65, 2, 1, 65, 2, 1, 66, 27, 1, 122, 4, 0, 10, 116, 121, 112, 101, 45, 105, 110, 100, 101, 120, 3, 0, 0, 1, 112, 1, 1, 111, 2, 121, 1, 1, 112, 127, 1, 107, 1, 1, 106, 1, 1, 1, 1, 1, 113, 21, 12, 114, 101, 99, 111, 114, 100, 45, 118, 97, 108, 117, 101, 1, 2, 0, 13, 118, 97, 114, 105, 97, 110, 116, 45, 118, 97, 108, 117, 101, 1, 3, 0, 10, 101, 110, 117, 109, 45, 118, 97, 108, 117, 101, 1, 121, 0, 11, 102, 108, 97, 103, 115, 45, 118, 97, 108, 117, 101, 1, 4, 0, 11, 116, 117, 112, 108, 101, 45, 118, 97, 108, 117, 101, 1, 2, 0, 10, 108, 105, 115, 116, 45, 118, 97, 108, 117, 101, 1, 2, 0, 12, 111, 112, 116, 105, 111, 110, 45, 118, 97, 108, 117, 101, 1, 5, 0, 12, 114, 101, 115, 117, 108, 116, 45, 118, 97, 108, 117, 101, 1, 6, 0, 7, 112, 114, 105, 109, 45, 117, 56, 1, 125, 0, 8, 112, 114, 105, 109, 45, 117, 49, 54, 1, 123, 0, 8, 112, 114, 105, 109, 45, 117, 51, 50, 1, 121, 0, 8, 112, 114, 105, 109, 45, 117, 54, 52, 1, 119, 0, 7, 112, 114, 105, 109, 45, 115, 56, 1, 126, 0, 8, 112, 114, 105, 109, 45, 115, 49, 54, 1, 124, 0, 8, 112, 114, 105, 109, 45, 115, 51, 50, 1, 122, 0, 8, 112, 114, 105, 109, 45, 115, 54, 52, 1, 120, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 51, 50, 1, 118, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 54, 52, 1, 117, 0, 9, 112, 114, 105, 109, 45, 99, 104, 97, 114, 1, 116, 0, 9, 112, 114, 105, 109, 45, 98, 111, 111, 108, 1, 127, 0, 11, 112, 114, 105, 109, 45, 115, 116, 114, 105, 110, 103, 1, 115, 0, 4, 0, 8, 119, 105, 116, 45, 110, 111, 100, 101, 3, 0, 7, 1, 112, 8, 1, 114, 1, 5, 110, 111, 100, 101, 115, 9, 4, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 3, 0, 10, 1, 114, 1, 5, 118, 97, 108, 117, 101, 115, 4, 0, 3, 117, 114, 105, 3, 0, 12, 4, 0, 8, 119, 97, 115, 109, 45, 114, 112, 99, 3, 1, 1, 105, 14, 1, 64, 1, 8, 108, 111, 99, 97, 116, 105, 111, 110, 13, 0, 15, 4, 0, 21, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 119, 97, 115, 109, 45, 114, 112, 99, 1, 16, 1, 104, 14, 1, 112, 115, 1, 106, 1, 115, 0, 1, 64, 3, 4, 115, 101, 108, 102, 17, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 18, 0, 19, 4, 0, 38, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 45, 106, 115, 111, 110, 1, 20, 1, 112, 11, 1, 106, 1, 11, 0, 1, 64, 3, 4, 115, 101, 108, 102, 17, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 21, 0, 22, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 1, 23, 3, 1, 21, 103, 111, 108, 101, 109, 58, 114, 112, 99, 47, 116, 121, 112, 101, 115, 64, 48, 46, 49, 46, 48, 5, 0, 4, 1, 25, 103, 111, 108, 101, 109, 58, 114, 112, 99, 47, 119, 105, 116, 45, 118, 97, 108, 117, 101, 64, 48, 46, 49, 46, 48, 4, 0, 11, 15, 1, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 3, 2, 0, 0, 16, 12, 112, 97, 99, 107, 97, 103, 101, 45, 100, 111, 99, 115, 0, 123, 125, 0, 70, 9, 112, 114, 111, 100, 117, 99, 101, 114, 115, 1, 12, 112, 114, 111, 99, 101, 115, 115, 101, 100, 45, 98, 121, 2, 13, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 6, 48, 46, 49, 56, 46, 50, 16, 119, 105, 116, 45, 98, 105, 110, 100, 103, 101, 110, 45, 114, 117, 115, 116, 6, 48, 46, 49, 54, 46, 48];
     
     #[inline(never)]
     #[doc(hidden)]
