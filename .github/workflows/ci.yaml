@@ -166,6 +166,37 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-service.outputs.tags }}
           labels: ${{ steps.meta-golem-service.outputs.labels }}
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check formatting
+        run: cargo fmt -- --check
+      - name: Clippy
+        run: cargo clippy -- -Dwarnings
+      - name: Unit tests
+        run: cargo test --lib --bins --all-features
   worker-tests:
     runs-on: ubuntu-latest
     steps:
@@ -182,7 +213,6 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
-
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -197,12 +227,6 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
-      - name: Check formatting
-        run: cargo fmt -- --check
-      - name: Clippy
-        run: cargo clippy -- -Dwarnings
-      - name: Unit tests
-        run: cargo test --lib --bins --all-features
       - name: "Worker Executor integration tests"
         run: WASMTIME_BACKTRACE_DETAILS=1 cargo test --package golem-worker-executor-base --test '*' -- --nocapture
   build:
@@ -308,7 +332,7 @@ jobs:
           cargo build
           RUST_LOG=info cargo test
   publish:
-    needs: [worker-tests, integration-tests]
+    needs: [unit-tests, worker-tests, integration-tests]
     if: "startsWith(github.ref, 'refs/tags/v')"
     runs-on: ubuntu-latest
     steps:
