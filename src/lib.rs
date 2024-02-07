@@ -1,18 +1,27 @@
+// TODO: only use in stub mode, otherwise use host bindings
 #[allow(unused)]
 #[rustfmt::skip]
 mod bindings;
+
+/// A builder interface for WitValue instances
 mod builder;
 
+/// Conversion to and from JSON, in the presence of golem-wasm-ast generated type information
+#[cfg(feature = "json")]
+mod json;
+
+/// Protobuf-defined value types and conversion to them
 #[cfg(feature = "protobuf")]
 pub mod protobuf;
 
+#[cfg(feature = "wasmtime")]
+pub mod wasmtime;
+
 use crate::builder::WitValueBuilder;
-pub use bindings::golem::rpc::types::{WitNode, WitValue};
+pub use bindings::golem::rpc::types::{TypeIndex, WitNode, WitValue};
 pub use builder::{NodeBuilder, WitValueExtensions};
 
-pub type TypeIndex = i32;
-
-// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
+/// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 enum Value {
@@ -21,18 +30,21 @@ enum Value {
     U16(u16),
     U32(u32),
     U64(u64),
-    I8(i8),
-    I16(i16),
-    I32(i32),
-    I64(i64),
+    S8(i8),
+    S16(i16),
+    S32(i32),
+    S64(i64),
     F32(f32),
     F64(f64),
     Char(char),
     String(String),
-    List(Vec<Box<Value>>),
-    Tuple(Vec<Box<Value>>),
-    Record(Vec<Box<Value>>),
-    Variant(u32, Box<Value>),
+    List(Vec<Value>),
+    Tuple(Vec<Value>),
+    Record(Vec<Value>),
+    Variant {
+        case_idx: u32,
+        case_value: Box<Value>,
+    },
     Enum(u32),
     Flags(Vec<bool>),
     Option(Option<Box<Value>>),
@@ -54,10 +66,10 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> TypeIndex {
         Value::U16(value) => builder.add_u16(value),
         Value::U32(value) => builder.add_u32(value),
         Value::U64(value) => builder.add_u64(value),
-        Value::I8(value) => builder.add_s8(value),
-        Value::I16(value) => builder.add_s16(value),
-        Value::I32(value) => builder.add_s32(value),
-        Value::I64(value) => builder.add_s64(value),
+        Value::S8(value) => builder.add_s8(value),
+        Value::S16(value) => builder.add_s16(value),
+        Value::S32(value) => builder.add_s32(value),
+        Value::S64(value) => builder.add_s64(value),
         Value::F32(value) => builder.add_f32(value),
         Value::F64(value) => builder.add_f64(value),
         Value::Char(value) => builder.add_char(value),
@@ -66,7 +78,7 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> TypeIndex {
             let list_idx = builder.add_list();
             let mut items = Vec::new();
             for value in values {
-                let item_idx = build_wit_value(*value, builder);
+                let item_idx = build_wit_value(value, builder);
                 items.push(item_idx);
             }
             builder.finish_seq(items, list_idx);
@@ -76,7 +88,7 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> TypeIndex {
             let tuple_idx = builder.add_tuple();
             let mut items = Vec::new();
             for value in values {
-                let item_idx = build_wit_value(*value, builder);
+                let item_idx = build_wit_value(value, builder);
                 items.push(item_idx);
             }
             builder.finish_seq(items, tuple_idx);
@@ -86,27 +98,32 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> TypeIndex {
             let record_idx = builder.add_record();
             let mut items = Vec::new();
             for value in fields {
-                let item_idx = build_wit_value(*value, builder);
+                let item_idx = build_wit_value(value, builder);
                 items.push(item_idx);
             }
             builder.finish_seq(items, record_idx);
             record_idx
         }
-        Value::Variant(case_idx, value) => {
+        Value::Variant {
+            case_idx,
+            case_value,
+        } => {
             let variant_idx = builder.add_variant(case_idx, -1);
-            let inner_idx = build_wit_value(*value, builder);
+            let inner_idx = build_wit_value(*case_value, builder);
             builder.finish_seq(vec![inner_idx], variant_idx);
             variant_idx
         }
         Value::Enum(value) => builder.add_enum_value(value),
         Value::Flags(values) => builder.add_flags(values),
         Value::Option(value) => {
-            let option_idx = builder.add_option();
             if let Some(value) = value {
+                let option_idx = builder.add_option_some();
                 let inner_idx = build_wit_value(*value, builder);
                 builder.finish_seq(vec![inner_idx], option_idx);
+                option_idx
+            } else {
+                builder.add_option_none()
             }
-            option_idx
         }
         Value::Result(result) => match result {
             Ok(ok) => {
@@ -138,13 +155,16 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
             let mut fields = Vec::new();
             for index in field_indices {
                 let value = build_tree(&nodes[*index as usize], nodes);
-                fields.push(Box::new(value));
+                fields.push(value);
             }
             Value::Record(fields)
         }
-        WitNode::VariantValue((name, inner_idx)) => {
+        WitNode::VariantValue((case_idx, inner_idx)) => {
             let value = build_tree(&nodes[*inner_idx as usize], nodes);
-            Value::Variant(name.clone(), Box::new(value))
+            Value::Variant {
+                case_idx: *case_idx,
+                case_value: Box::new(value),
+            }
         }
         WitNode::EnumValue(value) => Value::Enum(value.clone()),
         WitNode::FlagsValue(values) => Value::Flags(values.clone()),
@@ -152,7 +172,7 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
             let mut values = Vec::new();
             for index in indices {
                 let value = build_tree(&nodes[*index as usize], nodes);
-                values.push(Box::new(value));
+                values.push(value);
             }
             Value::Tuple(values)
         }
@@ -160,7 +180,7 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
             let mut values = Vec::new();
             for index in indices {
                 let value = build_tree(&nodes[*index as usize], nodes);
-                values.push(Box::new(value));
+                values.push(value);
             }
             Value::List(values)
         }
@@ -181,10 +201,10 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
         WitNode::PrimU16(value) => Value::U16(*value),
         WitNode::PrimU32(value) => Value::U32(*value),
         WitNode::PrimU64(value) => Value::U64(*value),
-        WitNode::PrimS8(value) => Value::I8(*value),
-        WitNode::PrimS16(value) => Value::I16(*value),
-        WitNode::PrimS32(value) => Value::I32(*value),
-        WitNode::PrimS64(value) => Value::I64(*value),
+        WitNode::PrimS8(value) => Value::S8(*value),
+        WitNode::PrimS16(value) => Value::S16(*value),
+        WitNode::PrimS32(value) => Value::S32(*value),
+        WitNode::PrimS64(value) => Value::S64(*value),
         WitNode::PrimFloat32(value) => Value::F32(*value),
         WitNode::PrimFloat64(value) => Value::F64(*value),
         WitNode::PrimChar(value) => Value::Char(*value),

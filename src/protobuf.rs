@@ -1,4 +1,5 @@
 use crate::Value;
+use golem_wasm_ast::analysis::AnalysedFunctionParameter;
 include!(concat!(env!("OUT_DIR"), "/wasm.rpc.rs"));
 
 // Conversion from WIT WitValue to Protobuf WitValue
@@ -216,16 +217,16 @@ impl From<Value> for Val {
             Value::U64(value) => Val {
                 val: Some(val::Val::U64(value as i64)),
             },
-            Value::I8(value) => Val {
+            Value::S8(value) => Val {
                 val: Some(val::Val::S8(value as i32)),
             },
-            Value::I16(value) => Val {
+            Value::S16(value) => Val {
                 val: Some(val::Val::S16(value as i32)),
             },
-            Value::I32(value) => Val {
+            Value::S32(value) => Val {
                 val: Some(val::Val::S32(value)),
             },
-            Value::I64(value) => Val {
+            Value::S64(value) => Val {
                 val: Some(val::Val::S64(value)),
             },
             Value::F32(value) => Val {
@@ -242,23 +243,26 @@ impl From<Value> for Val {
             },
             Value::List(items) => Val {
                 val: Some(val::Val::List(ValList {
-                    values: items.into_iter().map(|item| (*item).into()).collect(),
+                    values: items.into_iter().map(|item| item.into()).collect(),
                 })),
             },
             Value::Tuple(items) => Val {
                 val: Some(val::Val::Tuple(ValTuple {
-                    values: items.into_iter().map(|item| (*item).into()).collect(),
+                    values: items.into_iter().map(|item| item.into()).collect(),
                 })),
             },
             Value::Record(fields) => Val {
                 val: Some(val::Val::Record(ValRecord {
-                    values: fields.into_iter().map(|value| (*value).into()).collect(),
+                    values: fields.into_iter().map(|value| value.into()).collect(),
                 })),
             },
-            Value::Variant(case_idx, value) => Val {
+            Value::Variant {
+                case_idx,
+                case_value,
+            } => Val {
                 val: Some(val::Val::Variant(Box::new(ValVariant {
                     discriminant: case_idx as i32,
-                    value: Some(Box::new((*value).into())),
+                    value: Some(Box::new((*case_value).into())),
                 }))),
             },
             Value::Enum(value) => Val {
@@ -329,10 +333,10 @@ impl TryFrom<Val> for Value {
             Some(val::Val::U16(value)) => Ok(Value::U16(value as u16)),
             Some(val::Val::U32(value)) => Ok(Value::U32(value as u32)),
             Some(val::Val::U64(value)) => Ok(Value::U64(value as u64)),
-            Some(val::Val::S8(value)) => Ok(Value::I8(value as i8)),
-            Some(val::Val::S16(value)) => Ok(Value::I16(value as i16)),
-            Some(val::Val::S32(value)) => Ok(Value::I32(value)),
-            Some(val::Val::S64(value)) => Ok(Value::I64(value)),
+            Some(val::Val::S8(value)) => Ok(Value::S8(value as i8)),
+            Some(val::Val::S16(value)) => Ok(Value::S16(value as i16)),
+            Some(val::Val::S32(value)) => Ok(Value::S32(value)),
+            Some(val::Val::S64(value)) => Ok(Value::S64(value)),
             Some(val::Val::F32(value)) => Ok(Value::F32(value)),
             Some(val::Val::F64(value)) => Ok(Value::F64(value)),
             Some(val::Val::Char(value)) => Ok(Value::Char(
@@ -343,19 +347,19 @@ impl TryFrom<Val> for Value {
             Some(val::Val::List(ValList { values })) => Ok(Value::List(
                 values
                     .into_iter()
-                    .map(|value| value.try_into().map(Box::new))
+                    .map(|value| value.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
             )),
             Some(val::Val::Tuple(ValTuple { values })) => Ok(Value::Tuple(
                 values
                     .into_iter()
-                    .map(|value| value.try_into().map(Box::new))
+                    .map(|value| value.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
             )),
             Some(val::Val::Record(ValRecord { values })) => Ok(Value::Record(
                 values
                     .into_iter()
-                    .map(|value| value.try_into().map(Box::new))
+                    .map(|value| value.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
             )),
             Some(val::Val::Variant(variant)) => {
@@ -363,7 +367,10 @@ impl TryFrom<Val> for Value {
                 let value = variant
                     .value
                     .ok_or("Protobuf ValVariant has no value".to_string())?;
-                Ok(Value::Variant(discriminant, Box::new((*value).try_into()?)))
+                Ok(Value::Variant {
+                    case_idx: discriminant,
+                    case_value: Box::new((*value).try_into()?),
+                })
             }
             Some(val::Val::Enum(ValEnum { discriminant })) => Ok(Value::Enum(discriminant as u32)),
             Some(val::Val::Flags(ValFlags { count, value })) => {
@@ -396,6 +403,22 @@ impl TryFrom<Val> for Value {
                 }
             }
         }
+    }
+}
+
+#[cfg(feature = "typeinfo")]
+pub fn function_parameters(
+    parameters: Vec<Val>,
+    expected_parameters: Vec<AnalysedFunctionParameter>,
+) -> Result<Vec<Val>, Vec<String>> {
+    if parameters.len() == expected_parameters.len() {
+        Ok(parameters)
+    } else {
+        Err(vec![format!(
+            "Unexpected number of parameters (got {}, expected: {})",
+            parameters.len(),
+            expected_parameters.len()
+        )])
     }
 }
 
