@@ -69,7 +69,7 @@ impl GatewayResponse {
 
 #[derive(Default)]
 pub struct ResolvedHeaders {
-    pub headers: HashMap<String, ValueTyped>,
+    pub headers: HashMap<String, String>,
 }
 
 impl ResolvedHeaders {
@@ -77,16 +77,15 @@ impl ResolvedHeaders {
         let mut headers = HashMap::new();
 
         for (key, value) in &self.headers {
-            let value = value
-                .get_primitive_string()
-                .ok_or(format!("{} is not a string to be part of a header", value))?;
-
-            headers.insert(key.clone(), value);
+            headers.insert(key.clone(), *value);
         }
 
         Ok(headers)
     }
 
+    // Takes an expression (part of the API definition) and resolves it to a value
+    // Example: In API definition, user may define a header as "X-Request-${worker-response.value}" to be added
+    // to the response. Here we resolve the expression based on the resolved variables (from the response of the worker)
     fn from(
         header_mapping: &HashMap<String, Expr>,
         gateway_variables: &ResolvedVariables,
@@ -95,8 +94,13 @@ impl ResolvedHeaders {
 
         for (header_name, value_expr) in header_mapping {
             let value = value_expr.evaluate(gateway_variables)?;
-            resolved_headers.insert(header_name.clone(), value);
+
+            let value_str =
+                value.as_str().ok_or(EvaluationError::Message(format!("Header value is not a string")))?;
+
+            resolved_headers.insert(header_name.clone(), value_str.to_string());
         }
+
 
         Ok(ResolvedHeaders {
             headers: resolved_headers,
