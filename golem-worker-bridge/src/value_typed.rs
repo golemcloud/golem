@@ -1,7 +1,6 @@
 use std::fmt::Display;
 
 use http;
-use nom::ParseTo;
 use serde_json::Value;
 
 // More of a typed serde_json::Value but typed for its primitives

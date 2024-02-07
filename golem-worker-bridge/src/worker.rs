@@ -16,6 +16,7 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_common::retries::with_retries;
 use http::Uri;
 use poem_openapi::types::ToJSON;
+use serde_json::Value;
 use tonic::Status;
 use tracing::info;
 use uuid::Uuid;
@@ -130,7 +131,7 @@ impl WorkerService for WorkerServiceDefault {
         parameters: serde_json::Value,
         invocation_key: InvocationKey,
         use_stdio: bool,
-    ) -> Result<Vec<Val>, WorkerError> {
+    ) -> Result<Value, WorkerError> {
         let calling_convention = if use_stdio {
             CallingConvention::Stdio
         } else {
@@ -184,14 +185,18 @@ impl WorkerService for WorkerServiceDefault {
                             calling_convention: calling_convention.clone().into(),
                         };
 
-                    let response = client.invoke_and_await(request).await?.into_inner();
+                    let response = client.invoke_and_await_json(request).await?.into_inner();
 
                     match response.result {
                         None => Err("Empty response".to_string().into()),
-                        Some(invoke_and_await_response::Result::Success(result)) => {
-                            Ok(result.result)
+                        Some(invoke_and_await_response_json::Result::Success(result)) => {
+                            let value: Result<Value, String> =
+                                serde_json::from_str(&result.result_json).map_err(|err| {
+                                    format!("Failed to deserialize result JSON: {err}").to_string()
+                                });
+                            Ok(value?)
                         }
-                        Some(invoke_and_await_response::Result::Error(error)) => {
+                        Some(invoke_and_await_response_json::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }

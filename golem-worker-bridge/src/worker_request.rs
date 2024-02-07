@@ -30,8 +30,7 @@ impl GolemWorkerRequest {
             .evaluate(&resolved_route.resolved_variables)
             .map_err(|err| err.to_string())?;
 
-        // TODO; Once we make use of golem_common::Val directly, we don't need this conversion to JSON
-        let mut function_params: Vec<serde_json::Value> = vec![];
+        let mut function_params: Vec<Value> = vec![];
 
         for expr in &resolved_route.route_definition.binding.function_params {
             let variant = expr
