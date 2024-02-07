@@ -90,7 +90,6 @@ impl<'t> Evaluator<String> for Primitive<'t> {
 }
 
 impl Evaluator<Value> for Expr {
-    // TODO; Bring type variant retruning Result<Variant, EvaluationError>
     fn evaluate(&self, resolved_variables: &ResolvedVariables) -> Result<Value, EvaluationError> {
         let expr: &Expr = self;
 

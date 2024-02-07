@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use hyper::http::Method;
 
-use crate::api_request::InputApiRequest;
+use crate::api_request::InputHttpRequest;
 use crate::api_spec::{ApiDefinition, MethodPattern, Route};
 use crate::resolved_variables::ResolvedVariables;
 
@@ -15,7 +15,7 @@ pub struct ResolvedRoute {
     pub resolved_variables: ResolvedVariables,
 }
 
-impl<'a> RouteResolver for InputApiRequest<'a> {
+impl<'a> RouteResolver for InputHttpRequest<'a> {
     fn resolve(&self, api_definition: &ApiDefinition) -> Option<ResolvedRoute> {
         let api_request = self;
         let routes = &api_definition.routes;
@@ -38,7 +38,7 @@ impl<'a> RouteResolver for InputApiRequest<'a> {
             if match_method(request_method, spec_method)
                 && match_literals(&request_path_components, &spec_path_literals)
             {
-                let request_details: ResolvedVariables = ResolvedVariables::from_request(
+                let request_details: ResolvedVariables = ResolvedVariables::from_http_request(
                     request_body,
                     request_header,
                     request_query_values,

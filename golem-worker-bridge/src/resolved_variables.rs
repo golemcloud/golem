@@ -39,8 +39,8 @@ impl ResolvedVariables {
         vars
     }
 
-    pub fn from_request(
-        request_body: &serde_json::Value,
+    pub fn from_http_request(
+        request_body: &Value,
         request_header: &HeaderMap,
         request_query_variables: HashMap<String, String>,
         spec_query_variables: Vec<String>,
@@ -391,18 +391,18 @@ pub enum PathComponent {
 }
 
 impl PathComponent {
-    pub fn get_index(&self) -> Option<&Index> {
+    fn get_index(&self) -> Option<&Index> {
         match self {
             PathComponent::KeyName(_) => None,
             PathComponent::Index(index) => Some(index),
         }
     }
 
-    pub fn key_name(input: &str) -> PathComponent {
+    fn key_name(input: &str) -> PathComponent {
         PathComponent::KeyName(KeyName(input.to_string()))
     }
 
-    pub fn index(index: usize) -> PathComponent {
+    fn index(index: usize) -> PathComponent {
         PathComponent::Index(Index(index))
     }
 }

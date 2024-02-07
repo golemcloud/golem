@@ -7,7 +7,7 @@ use crate::api_request_route_resolver::RouteResolver;
 use crate::api_spec::ApiDefinition;
 use crate::worker_request::GolemWorkerRequest;
 
-pub struct InputApiRequest<'a> {
+pub struct InputHttpRequest<'a> {
     pub input_path: ApiInputPath<'a>,
     pub headers: &'a HeaderMap,
     pub req_method: &'a Method,
@@ -17,7 +17,7 @@ pub struct InputApiRequest<'a> {
 #[derive(PartialEq, Debug, Display, FromStr, Into)]
 pub struct WorkerRequestResolutionError(pub String);
 
-impl<'a> InputApiRequest<'a> {
+impl<'a> InputHttpRequest<'a> {
     pub fn to_worker_request(
         &self,
         api_definition: &ApiDefinition,
@@ -89,8 +89,8 @@ mod tests {
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
 
     use super::*;
-    use crate::api_request::{ApiInputPath, InputApiRequest};
-    use crate::type_variant::Variant;
+    use crate::api_request::{ApiInputPath, InputHttpRequest};
+    use crate::value_typed::ValueTyped;
 
     #[test]
     fn test_worker_request_resolution() {
@@ -830,8 +830,8 @@ mod tests {
         query_path: Option<&'a str>,
         headers: &'a HeaderMap,
         req_body: serde_json::Value,
-    ) -> InputApiRequest<'a> {
-        InputApiRequest {
+    ) -> InputHttpRequest<'a> {
+        InputHttpRequest {
             input_path: ApiInputPath {
                 base_path,
                 query_path,

@@ -1,10 +1,9 @@
+use serde_json::Value;
 use golem_common::model::TemplateId;
 
 use crate::api_request_route_resolver::ResolvedRoute;
 use crate::evaluator::{Evaluator, Primitive};
-use golem_api_grpc::proto::golem::worker::val::Val;
 use crate::api_spec::ResponseMapping;
-use crate::value_typed::ValueTyped;
 use crate::worker::WorkerName;
 
 #[derive(PartialEq, Debug, Clone)]
@@ -12,7 +11,7 @@ pub struct GolemWorkerRequest {
     pub template: TemplateId,
     pub worker_id: String,
     pub function: String,
-    pub function_params: Val,
+    pub function_params: Value,
     pub response_mapping: Option<ResponseMapping>,
 }
 
@@ -20,7 +19,7 @@ impl GolemWorkerRequest {
     pub fn from_resolved_route(
         resolved_route: &ResolvedRoute,
     ) -> Result<GolemWorkerRequest, String> {
-        let worker_id: ValueTyped = resolved_route
+        let worker_id: Value = resolved_route
             .route_definition
             .binding
             .worker_id
@@ -44,11 +43,13 @@ impl GolemWorkerRequest {
             function_params.push(json);
         }
 
+        let worker_id_str = worker_id.as_str().ok_or(format!("Worker id is not evaluated to a valid string. {}", worker_id))?;
+
         Ok(GolemWorkerRequest {
-            worker_id,
+            worker_id: worker_id_str.to_string(),
             template: resolved_route.route_definition.binding.template.clone(),
             function: function_name,
-            function_params: Val,
+            function_params: Value::Array(function_params),
             response_mapping: resolved_route.route_definition.binding.response.clone(),
         })
     }
