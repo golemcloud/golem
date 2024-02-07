@@ -7,3 +7,4 @@ mod api_request_route_resolver;
 mod resolved_variables;
 mod worker_request_executor;
 mod worker;
+mod app_config;

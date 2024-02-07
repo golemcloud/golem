@@ -30,3 +30,5 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "std", "json"] }
 http = "1.0.0"
 tonic = "0.10.2"
+figment = { workspace = true }
+url = { workspace = true }

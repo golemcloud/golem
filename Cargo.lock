@@ -2083,6 +2083,7 @@ dependencies = [
  "async-trait",
  "bincode 2.0.0-rc.3",
  "derive_more",
+ "figment",
  "golem-api-grpc",
  "golem-common",
  "http 1.0.0",
@@ -2098,6 +2099,7 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
