@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use hyper::{HeaderMap, StatusCode};
-use poem::{Body, Response, ResponseParts};
+use poem::{Body, get, Response, ResponseParts};
+use serde_json::Value;
 
 use crate::api_spec::ResponseMapping;
 use crate::evaluator::{EvaluationError, Evaluator};
@@ -12,21 +13,21 @@ use crate::worker_request_executor::WorkerResponse;
 
 // Getting a gateway http response from a worker response should never fail
 // and all failure scenarios to be captured in status code and response body
-pub trait GetGatewayResponse {
-    fn to_gateway_response(
+pub trait GetWorkerBridgeResponse {
+    fn to_worker_bridge_response(
         &self,
         response_mapping: &ResponseMapping,
-        input_gateway_variables: &ResolvedVariables,
-    ) -> GatewayResponse;
+        resolved_variables: &ResolvedVariables,
+    ) -> WorkerBridgeResponse;
 }
 
-pub struct GatewayResponse {
-    pub body: ValueTyped,
-    pub status: ValueTyped,
+pub struct WorkerBridgeResponse {
+    pub body: Value,
+    pub status: StatusCode,
     pub headers: ResolvedHeaders,
 }
 
-impl GatewayResponse {
+impl WorkerBridgeResponse {
     pub fn to_http_response(&self) -> Response {
         if let Some(status_code) = self.status.get_http_status_code() {
             let headers: Result<HeaderMap, String> =
@@ -77,20 +78,19 @@ impl ResolvedHeaders {
         let mut headers = HashMap::new();
 
         for (key, value) in &self.headers {
-            headers.insert(key.clone(), *value);
+            headers.insert(key.clone(), value.clone());
         }
 
         Ok(headers)
     }
 
-    // Takes an expression (part of the API definition) and resolves it to a value
     // Example: In API definition, user may define a header as "X-Request-${worker-response.value}" to be added
-    // to the response. Here we resolve the expression based on the resolved variables (from the response of the worker)
+    // to the http response. Here we resolve the expression based on the resolved variables (that was formed from the response of the worker)
     fn from(
         header_mapping: &HashMap<String, Expr>,
         gateway_variables: &ResolvedVariables,
     ) -> Result<ResolvedHeaders, EvaluationError> {
-        let mut resolved_headers: HashMap<String, ValueTyped> = HashMap::new();
+        let mut resolved_headers: HashMap<String, String> = HashMap::new();
 
         for (header_name, value_expr) in header_mapping {
             let value = value_expr.evaluate(gateway_variables)?;
@@ -108,58 +108,46 @@ impl ResolvedHeaders {
     }
 }
 
-impl GetGatewayResponse for WorkerResponse {
-    fn to_gateway_response(
+impl GetWorkerBridgeResponse for WorkerResponse {
+    fn to_worker_bridge_response(
         &self,
         response_mapping: &ResponseMapping,
         input_gateway_variables: &ResolvedVariables,
-    ) -> GatewayResponse {
+    ) -> Result<WorkerBridgeResponse, EvaluationError> {
         let variables = {
             let mut response_variables = ResolvedVariables::from_worker_response(self);
             response_variables.extend(input_gateway_variables);
             response_variables
         };
 
-        let status_result = response_mapping.status.evaluate(&variables);
+        let status_code = get_status_code(&response_mapping.status, &variables)?;
 
-        let headers_result = ResolvedHeaders::from(&response_mapping.headers, &variables);
+        let headers = ResolvedHeaders::from(&response_mapping.headers, &variables)?;
 
-        if let Ok(headers) = headers_result {
-            if let Ok(status) = status_result {
-                match response_mapping.body.evaluate(&variables) {
-                    Ok(body) => GatewayResponse {
-                        body,
-                        status,
-                        headers,
-                    },
-                    Err(err) => GatewayResponse {
-                        body: ValueTyped::String(format!(
-                            "Unable to obtain a response from the result of worker function error: {}",
-                            err
-                        )),
-                        status: ValueTyped::U64(500),
-                        headers,
-                    },
-                }
-            } else {
-                GatewayResponse {
-                    body: ValueTyped::String(format!(
-                        "Unable to resolve a status code based on the status code expression {:?}",
-                        response_mapping.status,
-                    )),
-                    status: ValueTyped::U64(400),
-                    headers,
-                }
-            }
-        } else {
-            GatewayResponse {
-                body: ValueTyped::String(format!(
-                    "Unable to resolve headers based on the header expressions {:?}",
-                    response_mapping.status,
-                )),
-                status: ValueTyped::U64(500),
-                headers: ResolvedHeaders::default(),
-            }
-        }
+        let response_body = response_mapping.body.evaluate(&variables)?;
+
+        Ok(WorkerBridgeResponse {
+            body: response_body,
+            status: status_code,
+            headers,
+        })
     }
+}
+
+fn get_status_code(status_expr: &Expr, resolved_variables: &ResolvedVariables) -> Result<StatusCode, EvaluationError> {
+    let status_value = status_expr.evaluate(resolved_variables)?;
+    let status_str = status_value.as_str().ok_or(EvaluationError::Message(format!(
+        "Status Code Expression is evaluated to a complex value. It is resolved to {:?}",
+        status_value
+    )))?;
+
+    let status_u16 = status_str.parse::<u16>().map_err(|e| EvaluationError::Message(format!(
+        "Invalid Status Code Expression. It is resolved to {}. Error: {}",
+        status_str, e
+    )))?;
+
+    StatusCode::from_u16(status_u16).map_err(|e| EvaluationError::Message(format!(
+        "Invalid Status Code. A valid status code cannot be formed from the evaluated status code expression {}. Error: {}",
+        status_str, e
+    )))
 }
