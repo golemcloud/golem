@@ -1,12 +1,13 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
+use derive_more::{Display, FromStr};
 
 use async_trait::async_trait;
 use golem_common::config::RetryConfig;
 use golem_common::model::{CallingConvention, InvocationKey, PromiseId, TemplateId, WorkerId};
 
 use golem_api_grpc::proto::golem::worker::worker_error::Error;
-use golem_api_grpc::proto::golem::worker::worker_execution_error;
+use golem_api_grpc::proto::golem::worker::{invoke_and_await_response, worker_execution_error};
 use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
     get_invocation_key_response, invoke_and_await_response_json, invoke_response,
@@ -18,6 +19,7 @@ use poem_openapi::types::ToJSON;
 use tonic::Status;
 use tracing::info;
 use uuid::Uuid;
+use golem_api_grpc::proto::golem::worker::Val;
 use crate::app_config::TemplateServiceConfig;
 use crate::UriBackConversion;
 
@@ -40,7 +42,7 @@ pub trait WorkerService {
         parameters: serde_json::Value,
         invocation_key: InvocationKey,
         use_stdio: bool,
-    ) -> Result<serde_json::Value, WorkerError>;
+    ) -> Result<Vec<Val>, WorkerError>;
 
     async fn invoke(
         &self,
@@ -128,7 +130,7 @@ impl WorkerService for WorkerServiceDefault {
         parameters: serde_json::Value,
         invocation_key: InvocationKey,
         use_stdio: bool,
-    ) -> Result<serde_json::Value, WorkerError> {
+    ) -> Result<Vec<Val>, WorkerError> {
         let calling_convention = if use_stdio {
             CallingConvention::Stdio
         } else {
@@ -167,7 +169,7 @@ impl WorkerService for WorkerServiceDefault {
              )| {
                 Box::pin(async move {
                     let mut client = WorkerServiceClient::connect(uri.as_http_02()).await?;
-                    let request =     
+                    let request =
                         InvokeAndAwaitRequestJson {
                             worker_id: Some(
                                 WorkerId {
@@ -180,22 +182,16 @@ impl WorkerService for WorkerServiceDefault {
                             function: function.clone(),
                             invoke_parameters_json: parameters.to_json_string(),
                             calling_convention: calling_convention.clone().into(),
-                        },
-                        access_token,
-                    );
+                        };
 
-                    let response = client.invoke_and_await_json(request).await?.into_inner();
+                    let response = client.invoke_and_await(request).await?.into_inner();
 
                     match response.result {
                         None => Err("Empty response".to_string().into()),
-                        Some(invoke_and_await_response_json::Result::Success(result)) => {
-                            let value: Result<serde_json::Value, String> =
-                                serde_json::from_str(&result.result_json).map_err(|err| {
-                                    format!("Failed to deserialize result JSON: {err}").to_string()
-                                });
-                            Ok(value?)
+                        Some(invoke_and_await_response::Result::Success(result)) => {
+                            Ok(result.result)
                         }
-                        Some(invoke_and_await_response_json::Result::Error(error)) => {
+                        Some(invoke_and_await_response::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }
@@ -235,7 +231,7 @@ impl WorkerService for WorkerServiceDefault {
             |(uri, worker_name, template_id, function, parameters, access_token)| {
                 Box::pin(async move {
                     let mut client = WorkerServiceClient::connect(uri.as_http_02()).await?;
-                    let request = authorised_request(
+                    let request =
                         InvokeRequestJson {
                             worker_id: Some(
                                 WorkerId {
@@ -246,9 +242,8 @@ impl WorkerService for WorkerServiceDefault {
                             ),
                             function: function.clone(),
                             invoke_parameters_json: parameters.to_json_string(),
-                        },
-                        access_token,
-                    );
+                        };
+
                     let response = client.invoke_json(request).await?.into_inner();
 
                     match response.result {

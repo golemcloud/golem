@@ -4,7 +4,7 @@ use hyper::http::Method;
 
 use crate::api_request::InputApiRequest;
 use crate::api_spec::{ApiDefinition, MethodPattern, Route};
-use crate::gateway_variables::GatewayVariables;
+use crate::resolved_variables::ResolvedVariables;
 
 pub trait RouteResolver {
     fn resolve(&self, api_specification: &ApiDefinition) -> Option<ResolvedRoute>;
@@ -12,7 +12,7 @@ pub trait RouteResolver {
 
 pub struct ResolvedRoute {
     pub route_definition: Route,
-    pub resolved_variables: GatewayVariables,
+    pub resolved_variables: ResolvedVariables,
 }
 
 impl<'a> RouteResolver for InputApiRequest<'a> {
@@ -38,7 +38,7 @@ impl<'a> RouteResolver for InputApiRequest<'a> {
             if match_method(request_method, spec_method)
                 && match_literals(&request_path_components, &spec_path_literals)
             {
-                let request_details: GatewayVariables = GatewayVariables::from_request(
+                let request_details: ResolvedVariables = ResolvedVariables::from_request(
                     request_body,
                     request_header,
                     request_query_values,

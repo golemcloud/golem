@@ -7,31 +7,31 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::tokeniser::cursor::TokenCursor;
-use crate::tokeniser::tokenizer::{Token, Tokenizer};
+use crate::tokeniser::tokeniser::{Token, Tokenizer};
 use crate::worker_request_executor::WorkerResponse;
 
+// Data that represent the resolved variables
+// Values are often resolved from input request, or output response of a worker, both of which are JSON.
 #[derive(Debug, Clone)]
-pub struct GatewayVariables {
-    // TODO; Change to Map<String, Val> instead of Jsons
-    // String can be "request" or "worker" as of now
+pub struct ResolvedVariables {
     pub variables: HashMap<Path, Value>,
 }
 
-impl Default for GatewayVariables {
+impl Default for ResolvedVariables {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl GatewayVariables {
-    pub fn new() -> GatewayVariables {
-        GatewayVariables {
+impl ResolvedVariables {
+    pub fn new() -> ResolvedVariables {
+        ResolvedVariables {
             variables: HashMap::new(),
         }
     }
 
-    pub fn from_worker_response(worker_response: &WorkerResponse) -> GatewayVariables {
-        let mut vars: GatewayVariables = GatewayVariables::new();
+    pub fn from_worker_response(worker_response: &WorkerResponse) -> ResolvedVariables {
+        let mut vars: ResolvedVariables = ResolvedVariables::new();
         let path = Path::from_string_unsafe(Token::WorkerResponse.to_string().as_str());
 
         vars.insert(path, worker_response.result.clone());
@@ -46,8 +46,8 @@ impl GatewayVariables {
         spec_query_variables: Vec<String>,
         request_path_values: &HashMap<usize, String>,
         spec_path_variables: &HashMap<usize, String>,
-    ) -> Result<GatewayVariables, Vec<String>> {
-        let mut gateway_variables = GatewayVariables::new();
+    ) -> Result<ResolvedVariables, Vec<String>> {
+        let mut gateway_variables = ResolvedVariables::new();
 
         let mut headers: serde_json::Map<String, Value> = serde_json::Map::new();
 
@@ -61,13 +61,13 @@ impl GatewayVariables {
         }
 
         let request_headers = serde_json::Value::Object(headers.clone());
-        let mut request_query_values = GatewayVariables::get_request_query_values(
+        let mut request_query_values = ResolvedVariables::get_request_query_values(
             request_query_variables,
             spec_query_variables,
         )?;
 
         let request_path_values =
-            GatewayVariables::get_request_path_values(request_path_values, spec_path_variables)?;
+            ResolvedVariables::get_request_path_values(request_path_values, spec_path_variables)?;
 
         request_query_values.extend(request_path_values);
 
@@ -137,7 +137,7 @@ impl GatewayVariables {
         }
     }
 
-    pub fn extend(&mut self, that: &GatewayVariables) {
+    pub fn extend(&mut self, that: &ResolvedVariables) {
         self.variables.extend(that.variables.clone());
     }
 

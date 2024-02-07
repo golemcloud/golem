@@ -8,6 +8,11 @@ mod resolved_variables;
 mod worker_request_executor;
 mod worker;
 mod app_config;
+mod worker_request;
+mod evaluator;
+mod typed_json;
+mod worker_bridge_reponse;
+mod typed_comparison;
 
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;

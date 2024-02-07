@@ -33,3 +33,4 @@ tonic = "0.10.2"
 figment = { workspace = true }
 url = { workspace = true }
 http_02 = { package = "http", version = "0.2.11" }
+hyper = { workspace = true }
