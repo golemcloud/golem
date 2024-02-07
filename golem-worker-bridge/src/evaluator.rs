@@ -247,7 +247,7 @@ impl Evaluator<Value> for Expr {
                         }
                     }
 
-                    Ok(ValueTyped::ComplexJson(Value::Object(map)))
+                    Ok(Value::Object(map))
                 }
 
                 Expr::Concat(exprs) => {
@@ -267,26 +267,17 @@ impl Evaluator<Value> for Expr {
                         }
                     }
 
-                    Ok(ValueTyped::String(result))
+                    Ok(Value::String(result))
                 }
 
-                Expr::Literal(literal) => Ok(ValueTyped::get_primitive_variant(literal.as_str())),
+                Expr::Literal(literal) => Ok(Value::String(literal)),
 
-                Expr::PathVar(path_var) => match resolved_variables.get_key(path_var.as_str()) {
-                    Some(value) => match value {
-                        Value::Number(number) => {
-                            Ok(Value::Number(number))
-                        }
-                        Value::String(string) => Ok(ValueTyped::from_string(string.as_str())),
-                        Value::Bool(bool) => Ok(ValueTyped::from_string(bool.to_string().as_str())),
-                        value => Ok(ValueTyped::ComplexJson(value.clone())),
-                    },
-
-                    None => Err(EvaluationError::Message(format!(
-                        "No value for the place holder {}",
-                        path_var,
-                    ))),
-                },
+                Expr::PathVar(path_var) => {
+                    resolved_variables.get_key(path_var.as_str()).ok_or(EvaluationError::Message(format!(
+                        "The result doesn't contain the field {}",
+                        path_var
+                    )))
+                }
             }
         }
 

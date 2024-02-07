@@ -5,10 +5,11 @@ use nom::ParseTo;
 use serde_json::Value;
 
 // More of a typed serde_json::Value but typed for its primitives
-// Anything other than primitives are just represented using JSON (i.e, non recursive) itself
+// Anything other than primitives are just represented using JSON (i.e, non-recursive) itself
 // This is to ensure that there exists a reasonable safety when evaluating
 // expressions such as `response.x > response.y`, that we don't want to
-// consider x and y as strings if they were actually numbers
+// consider x and y as strings if they were actually numbers, while keeping it performant enough.
+// Conversion to ValueTyped should ideally be used only if type information is required (such as only when the node has comparison operator for instance)
 #[derive(PartialEq, Debug, Clone)]
 pub enum ValueTyped {
     Boolean(bool),
