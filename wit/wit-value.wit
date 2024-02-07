@@ -1,0 +1,47 @@
+package golem:rpc@0.1.0;
+
+interface types {
+  record wit-value {
+    nodes: list<wit-node>,
+  }
+
+  variant wit-node {
+    record-value(list<tuple<string, s32>>),
+    variant-value(tuple<string, s32>),
+    enum-value(string),
+    flags-value(list<bool>),
+    tuple-value(list<s32>),
+    list-value(list<s32>),
+    option-value(option<s32>),
+    result-value(result<s32, s32>),
+    prim-u8(u8),
+    prim-u16(u16),
+    prim-u32(u32),
+    prim-u64(u64),
+    prim-s8(s8),
+    prim-s16(s16),
+    prim-s32(s32),
+    prim-s64(s64),
+    prim-float32(float32),
+    prim-float64(float64),
+    prim-char(char),
+    prim-bool(bool),
+    prim-string(string),
+  }
+
+
+  record uri {
+    value: string,
+  }
+
+  resource wasm-rpc {
+    constructor(location: uri);
+
+    invoke-and-await-json: func(function-name: string, function-params: list<string>) -> result<string>;
+    invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> result<wit-value>;
+  }
+}
+
+world wit-value {
+    import types;
+}
