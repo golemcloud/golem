@@ -13,4 +13,9 @@ description = "Worker Bridge acts as a bridge between external API gateways and 
 golem-common = { path = "../golem-common" }
 
 regex = "1.10.3"
-
+bincode = "2.0.0-rc.3"
+serde = { version = "1.0.196", features = ["derive"] }
+serde_json = "1.0.113"
+serde_yaml = "0.9.31"
+strum = "0.26.1"
+strum_macros = "0.26.1"
