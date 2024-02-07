@@ -1,0 +1,18 @@
+workerExecutor:
+  image: golemservices/golem-worker-executor:latest
+  imagePullPolicy: Always
+  replica: 1
+#  nodeSelector:
+
+shardManager:
+  image: golemservices/golem-shard-manager:latest
+  imagePullPolicy: Always
+#  nodeSelector:
+
+golemService:
+  image: golemservices/golem-service:latest
+  imagePullPolicy: Always
+  replica: 1
+#  nodeSelector:
+
+env: default

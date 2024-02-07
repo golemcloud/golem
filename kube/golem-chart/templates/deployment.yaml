@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-worker-executor-{{.Values.env}}
+  namespace: {{.Values.env}}
+  labels:
+    env: {{.Values.env}}
+spec:
+  replicas: {{ .Values.workerExecutor.replica }}
+  selector:
+    matchLabels:
+      app: worker-executor-app-{{.Values.env}}
+  template:
+    metadata:
+      labels:
+        app: worker-executor-app-{{.Values.env}}
+        env: {{.Values.env}}
+    spec:
+{{- if .Values.workerExecutor.nodeSelector }}
+      nodeSelector: {{- .Values.workerExecutor.nodeSelector | toYaml | nindent 8 }}
+{{- end }}
+      containers:
+        - name: worker-executor-app-{{.Values.env}}
+          image: "{{ .Values.workerExecutor.image }}"
+          imagePullPolicy: {{.Values.workerExecutor.imagePullPolicy}}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: service-inst
+              containerPort: 9000
+          livenessProbe:
+            httpGet:
+              path: "/healthcheck"
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 5
+            initialDelaySeconds: 45
+            timeoutSeconds: 2
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-shard-manager-{{.Values.env}}
+  namespace: {{.Values.env}}
+  labels:
+    env: {{.Values.env}}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: shard-manager-app-{{.Values.env}}
+  template:
+    metadata:
+      labels:
+        app: shard-manager-app-{{.Values.env}}
+        env: {{.Values.env}}
+    spec:
+{{- if .Values.workerExecutor.nodeSelector }}
+      nodeSelector: {{- .Values.workerExecutor.nodeSelector | toYaml | nindent 8 }}
+{{- end }}
+      containers:
+        - name: shard-manager-app-{{.Values.env}}
+          image: "{{ .Values.shardManager.image }}"
+          imagePullPolicy: {{.Values.shardManager.imagePullPolicy}}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: grpc
+              containerPort: 9001
+          livenessProbe:
+            httpGet:
+              path: "/healthcheck"
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 5
+            initialDelaySeconds: 20
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-golem-service-{{.Values.env}}
+  namespace: {{.Values.env}}
+  labels:
+    env: {{.Values.env}}
+spec:
+  replicas: {{ .Values.golemService.replica }}
+  selector:
+    matchLabels:
+      app: golem-service-app-{{.Values.env}}
+  template:
+    metadata:
+      labels:
+        app: golem-service-app-{{.Values.env}}
+        env: {{.Values.env}}
+    spec:
+{{- if .Values.golemService.nodeSelector }}
+      nodeSelector: {{- .Values.golemService.nodeSelector | toYaml | nindent 8 }}
+{{- end }}
+      containers:
+        - name: golem-service-app-{{.Values.env}}
+          image: "{{ .Values.golemService.image }}"
+          imagePullPolicy: {{.Values.golemService.imagePullPolicy}}
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: "/healthcheck"
+              port: http
+            periodSeconds: 10
+            failureThreshold: 5
+            initialDelaySeconds: 20
+          readinessProbe:
+            httpGet:
+              path: "/healthcheck"
+              port: http
+            periodSeconds: 10
+            failureThreshold: 5
+            initialDelaySeconds: 20
