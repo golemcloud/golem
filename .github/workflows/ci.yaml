@@ -74,6 +74,7 @@ jobs:
             ${{ matrix.platform.target }}/release/golem-shard-manager \
             ${{ matrix.platform.target }}/release/worker-executor \
             ${{ matrix.platform.target }}/release/golem-service  \
+            ${{ matrix.platform.target }}/release/golem-worker-bridge  \
       - uses: actions/upload-artifact@v4
         name: Upload Targets
         with:
@@ -166,6 +167,20 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-service.outputs.tags }}
           labels: ${{ steps.meta-golem-service.outputs.labels }}
+      - name: Extract metadata (tags, labels) for golem worker bridge
+        id: meta-golem-worker-bridge
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-worker-bridge
+      - name: Build and push cloud server image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-worker-bridge/docker/Dockerfile
+          push: true
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ steps.meta-golem-worker-bridge.outputs.tags }}
+          labels: ${{ steps.meta-golem-worker-bridge.outputs.labels }}
   unit-tests:
     runs-on: ubuntu-latest
     steps:
