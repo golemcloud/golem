@@ -22,14 +22,15 @@ Below given are the step by step instructions to follow to try all of this in Lo
 
 ### Step 1: Spin up Golem
 
-```scala
+```bash
 // Choose any docker-comppose file in api-gateway-examples folder
 docker-compose up
+#golem-serviec, workerbride, worker-executor, shard-manager, redis, sqlite
 ```
 
 ### Step 2: Deploy shopping cart example
 
-```scala
+```bash
 # Note down the template id, say "c467b83d-cb27-4296-b48a-ee85114cdb7"
 golem-cli template add --template-name mytemplate test-templates/shopping-cart.wasm
 
@@ -39,7 +40,7 @@ golem-cli worker invoke-and-await  --template-name mytemplate --worker-name mywo
 
 ### Step 3: Register the endpoint definition
 
-```scala
+```bash
 {
   "id": "my-api",
   "version": "0.0.1",
@@ -61,9 +62,16 @@ golem-cli worker invoke-and-await  --template-name mytemplate --worker-name mywo
 
 ```
 
+```bash
+
+# register with worker bridge
+curl -X PUT http://localhost:9005/v1/api/definitions -H "Content-Type: application/json"  -d @endpoint_definition.json
+
+```
+
 Step 4: Install Tyk API gateway
 
-```scala
+```bash
 git clone https://github.com/TykTechnologies/tyk-gateway-docker
 cd tyk-gateway-docker
 docker-compose up
@@ -73,7 +81,7 @@ You can choose to edit existing apis here, or have a new one. Refer to Tyk's doc
 
 An example configuration is:
 
-```scala
+```json
 {
     "name": "Tyk Test Keyless API",
     "api_id": "keyless",
@@ -137,12 +145,29 @@ the worker bridge will then forward the request to the actual worker instance.
 
 However, inorder for this to work, we need to set a middleware that adds an extra header called "X-API-Definition-Id" whose
 value is the id of the endpoint definition that we registered with the worker bridge. In our example, it is "my-api".
+Tyk can make use of middleware injection or transformations to inject this header
+
+```js
+var testJSVMData = new TykJS.TykMiddleware.NewMiddleware({});
+
+testJSVMData.NewProcessRequest(function(request, session, config) {
+
+    log(JSON.stringify(request.Headers))
+
+    request.SetHeaders['X-API-Definition-Id'] = 'my-api';
+
+	return testJSVMData.ReturnData(request, {});
+});
+
+
+```
+
 This is how the worker bridge knows which endpoints it needs to serve for the requests forwarded from API Gateway.
 
 With all this in place, you can now make requests to the API Gateway and see the worker bridge forwarding the requests to the actual worker instance.
 
 
-```scala
+```bash
 
 
 curl -X GET http://localhost:8080/hmmm -H "X-Tyk-Authorization: foo" -H "X-API-Definition-Id: my-api"
