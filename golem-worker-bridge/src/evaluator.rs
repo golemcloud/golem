@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::tokeniser::tokeniser::{Token, Tokenizer};
 use crate::expr::Expr;
-use crate::resolved_variables::{ResolvedVariables, Path};
+use crate::resolved_variables::{Path, ResolvedVariables};
 use crate::value_typed::ValueTyped;
 
 pub trait Evaluator<T> {
@@ -122,25 +122,35 @@ impl Evaluator<Value> for Expr {
                 Expr::SelectIndex(expr, index) => {
                     let evaluation_result = go(&expr, resolved_variables)?;
 
-                    evaluation_result.as_array().ok_or(EvaluationError::Message(format!(
-                        "Result is not an array to get the index {}",
-                        index
-                    )))?.get(index).ok_or(EvaluationError::Message(format!(
-                        "The array doesn't contain {} elements",
-                        index
-                    ))).cloned()
+                    evaluation_result
+                        .as_array()
+                        .ok_or(EvaluationError::Message(format!(
+                            "Result is not an array to get the index {}",
+                            index
+                        )))?
+                        .get(index)
+                        .ok_or(EvaluationError::Message(format!(
+                            "The array doesn't contain {} elements",
+                            index
+                        )))
+                        .cloned()
                 }
 
                 Expr::SelectField(expr, field_name) => {
                     let evaluation_result = go(&expr, resolved_variables)?;
 
-                    evaluation_result.as_object().ok_or(EvaluationError::Message(format!(
-                        "Result is not an object to get the field {}",
-                        field_name
-                    )))?.get(&field_name).ok_or(EvaluationError::Message(format!(
-                        "The result doesn't contain the field {}",
-                        field_name
-                    ))).cloned()
+                    evaluation_result
+                        .as_object()
+                        .ok_or(EvaluationError::Message(format!(
+                            "Result is not an object to get the field {}",
+                            field_name
+                        )))?
+                        .get(&field_name)
+                        .ok_or(EvaluationError::Message(format!(
+                            "The result doesn't contain the field {}",
+                            field_name
+                        )))
+                        .cloned()
                 }
 
                 Expr::EqualTo(left, right) => {
@@ -271,12 +281,13 @@ impl Evaluator<Value> for Expr {
 
                 Expr::Literal(literal) => Ok(Value::String(literal)),
 
-                Expr::PathVar(path_var) => {
-                    resolved_variables.get_key(path_var.as_str()).ok_or(EvaluationError::Message(format!(
+                Expr::PathVar(path_var) => resolved_variables
+                    .get_key(path_var.as_str())
+                    .ok_or(EvaluationError::Message(format!(
                         "The result doesn't contain the field {}",
                         path_var
-                    ))).cloned()
-                }
+                    )))
+                    .cloned(),
             }
         }
 
@@ -288,7 +299,7 @@ impl Evaluator<Value> for Expr {
 mod tests {
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expr::Expr;
-    use crate::resolved_variables::{ResolvedVariables, Path};
+    use crate::resolved_variables::{Path, ResolvedVariables};
     use crate::tokeniser::tokeniser::Token;
     use crate::value_typed::ValueTyped;
 
@@ -309,7 +320,11 @@ mod tests {
         test_expr(expr, Ok(expected), resolved_variables);
     }
 
-    fn test_expr_err(expr: Expr, expected: EvaluationError, resolved_variables: &ResolvedVariables) {
+    fn test_expr_err(
+        expr: Expr,
+        expected: EvaluationError,
+        resolved_variables: &ResolvedVariables,
+    ) {
         test_expr(expr, Err(expected), resolved_variables);
     }
 

@@ -57,7 +57,6 @@ impl TemplateServiceConfig {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -74,7 +73,6 @@ mod tests {
             "GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN",
             "5C832D93-FF85-4A8F-9803-513950FDFDB1",
         );
-
 
         // The rest can be loaded from the toml
         let config = super::WorkerBridgeConfig::default();

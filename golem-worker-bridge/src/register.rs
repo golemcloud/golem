@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Mutex;
 
+use crate::api_definition::{ApiDefinition, ApiDefinitionId};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
 use tracing::{debug, info};
-use crate::api_definition::{ApiDefinition, ApiDefinitionId};
 
 const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 
@@ -20,14 +20,9 @@ pub trait RegisterApiDefinition {
         api_definition_id: &ApiDefinitionId,
     ) -> Result<Option<ApiDefinition>, Box<dyn Error>>;
 
-    async fn delete(
-        &self,
-        api_definition_id: &ApiDefinitionId,
-    ) -> Result<bool, Box<dyn Error>>;
+    async fn delete(&self, api_definition_id: &ApiDefinitionId) -> Result<bool, Box<dyn Error>>;
 
-    async fn get_all(
-        &self,
-    ) -> Result<Vec<ApiDefinition>, Box<dyn Error>>;
+    async fn get_all(&self) -> Result<Vec<ApiDefinition>, Box<dyn Error>>;
 }
 
 pub struct InMemoryRegistry {
@@ -47,26 +42,20 @@ impl RegisterApiDefinition for InMemoryRegistry {
     async fn register(&self, definition: &ApiDefinition) -> Result<(), Box<dyn Error>> {
         let mut registry = self.registry.lock().unwrap();
 
-        let key: ApiDefinitionId = definition.id.clone() ;
+        let key: ApiDefinitionId = definition.id.clone();
 
         registry.insert(key, definition.clone());
 
         Ok(())
     }
 
-    async fn get(
-        &self,
-        api_id: &ApiDefinitionId,
-    ) -> Result<Option<ApiDefinition>, Box<dyn Error>> {
+    async fn get(&self, api_id: &ApiDefinitionId) -> Result<Option<ApiDefinition>, Box<dyn Error>> {
         let registry = self.registry.lock().unwrap();
 
         Ok(registry.get(api_id).cloned())
     }
 
-    async fn delete(
-        &self,
-        api_id: &ApiDefinitionId,
-    ) -> Result<bool, Box<dyn Error>> {
+    async fn delete(&self, api_id: &ApiDefinitionId) -> Result<bool, Box<dyn Error>> {
         let mut registry = self.registry.lock().unwrap();
 
         let result = registry.remove(api_id);
@@ -74,15 +63,10 @@ impl RegisterApiDefinition for InMemoryRegistry {
         Ok(result.is_some())
     }
 
-    async fn get_all(
-        &self,
-    ) -> Result<Vec<ApiDefinition>, Box<dyn Error>> {
+    async fn get_all(&self) -> Result<Vec<ApiDefinition>, Box<dyn Error>> {
         let registry = self.registry.lock().unwrap();
 
-        let result: Vec<ApiDefinition> = registry
-            .values()
-            .cloned()
-            .collect();
+        let result: Vec<ApiDefinition> = registry.values().cloned().collect();
 
         Ok(result)
     }
@@ -102,13 +86,9 @@ impl RedisApiRegistry {
 #[async_trait]
 impl RegisterApiDefinition for RedisApiRegistry {
     async fn register(&self, definition: &ApiDefinition) -> Result<(), Box<dyn Error>> {
-        debug!(
-            "Register account: id: {}",
-            definition.id
-        );
-        let definition_key = get_api_definition_redis_key(
-            &definition.id,
-        );
+        debug!("Register account: id: {}", definition.id);
+
+        let definition_key = get_api_definition_redis_key(&definition.id);
 
         let definition_value = self.pool.serialize(definition).map_err(|e| e.to_string())?;
 
@@ -116,17 +96,13 @@ impl RegisterApiDefinition for RedisApiRegistry {
             .with("persistence", "register_definition")
             .set(definition_key, definition_value, None, None, false)
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+
+        Ok(())
     }
 
-    async fn get(
-        &self,
-        api_id: &ApiDefinitionId,
-    ) -> Result<Option<ApiDefinition>, Box<dyn Error>> {
-        info!(
-            "Get account: id: {}",
-            api_id
-        );
+    async fn get(&self, api_id: &ApiDefinitionId) -> Result<Option<ApiDefinition>, Box<dyn Error>> {
+        info!("Get account: id: {}", api_id);
         let key = get_api_definition_redis_key(api_id);
         let value: Option<Bytes> = self
             .pool
@@ -147,20 +123,12 @@ impl RegisterApiDefinition for RedisApiRegistry {
         }
     }
 
-    async fn get_all(
-        &self,
-    ) -> Result<Vec<ApiDefinition>, Box<dyn Error>> {
+    async fn get_all(&self) -> Result<Vec<ApiDefinition>, Box<dyn Error>> {
         unimplemented!("get_all")
     }
 
-    async fn delete(
-        &self,
-        api_id: &ApiDefinitionId,
-    ) -> Result<bool, Box<dyn Error>> {
-        debug!(
-            "Delete account: id: {}",
-            api_id
-        );
+    async fn delete(&self, api_id: &ApiDefinitionId) -> Result<bool, Box<dyn Error>> {
+        debug!("Delete account: id: {}", api_id);
         let definition_key = get_api_definition_redis_key(api_id);
 
         let definition_delete: u32 = self
@@ -174,19 +142,14 @@ impl RegisterApiDefinition for RedisApiRegistry {
     }
 }
 
-fn get_api_definition_redis_key(
-    api_id: &ApiDefinitionId,
-) -> String {
-    format!(
-        "{}:definition:{}",
-        API_DEFINITION_REDIS_NAMESPACE, api_id
-    )
+fn get_api_definition_redis_key(api_id: &ApiDefinitionId) -> String {
+    format!("{}:definition:{}", API_DEFINITION_REDIS_NAMESPACE, api_id)
 }
 
 #[cfg(test)]
 mod tests {
-    use golem_common::config::RedisConfig;
     use crate::api_definition::{ApiDefinition, ApiDefinitionId};
+    use golem_common::config::RedisConfig;
 
     use crate::register::{
         get_api_definition_redis_key, InMemoryRegistry, RedisApiRegistry, RegisterApiDefinition,
@@ -221,7 +184,6 @@ mod tests {
     pub async fn test_in_memory_register() {
         let registry = InMemoryRegistry::default();
 
-
         let api_id1 = ApiDefinitionId("api1".to_string());
 
         let api_definition1 = get_simple_api_definition_example(
@@ -238,55 +200,27 @@ mod tests {
             "cart-${path.cart-id}",
         );
 
-
         registry.register(&api_definition1).await.unwrap();
 
         registry.register(&api_definition2).await.unwrap();
 
-        let api_definition1_result1 = registry
-            .get(&api_id1)
-            .await
-            .unwrap_or(None);
+        let api_definition1_result1 = registry.get(&api_id1).await.unwrap_or(None);
 
-        let api_definition2_result1 = registry
-            .get(&api_id2)
-            .await
-            .unwrap_or(None);
+        let api_definition2_result1 = registry.get(&api_id2).await.unwrap_or(None);
 
-        let api_definition_result2 = registry
-            .get_all()
-            .await
-            .unwrap_or(vec![]);
+        let api_definition_result2 = registry.get_all().await.unwrap_or(vec![]);
 
-        let delete1_result = registry
-            .delete(&api_id1)
-            .await
-            .unwrap_or(false);
+        let delete1_result = registry.delete(&api_id1).await.unwrap_or(false);
 
-        let api_definition1_result3 = registry
-            .get(&api_id1)
-            .await
-            .unwrap_or(None);
+        let api_definition1_result3 = registry.get(&api_id1).await.unwrap_or(None);
 
-        let api_definition_result3 = registry
-            .get_all()
-            .await
-            .unwrap_or(vec![]);
+        let api_definition_result3 = registry.get_all().await.unwrap_or(vec![]);
 
-        let delete2_result = registry
-            .delete(&api_id2)
-            .await
-            .unwrap_or(false);
+        let delete2_result = registry.delete(&api_id2).await.unwrap_or(false);
 
-        let api_definition2_result3 = registry
-            .get(&api_id2)
-            .await
-            .unwrap_or(None);
+        let api_definition2_result3 = registry.get(&api_id2).await.unwrap_or(None);
 
-        let api_definition_result4 = registry
-            .get_all()
-            .await
-            .unwrap_or(vec![]);
+        let api_definition_result4 = registry.get_all().await.unwrap_or(vec![]);
 
         assert!(api_definition1_result1.is_some());
         assert!(!api_definition_result2.is_empty());
@@ -332,50 +266,23 @@ mod tests {
 
         registry.register(&api_definition2).await.unwrap();
 
-        let api_definition1_result1 = registry
-            .get(&api_id1)
-            .await
-            .unwrap_or(None);
+        let api_definition1_result1 = registry.get(&api_id1).await.unwrap_or(None);
 
-        let api_definition2_result1 = registry
-            .get(&api_id2)
-            .await
-            .unwrap_or(None);
+        let api_definition2_result1 = registry.get(&api_id2).await.unwrap_or(None);
 
-        let api_definition_result2 = registry
-            .get_all()
-            .await
-            .unwrap_or(vec![]);
+        let api_definition_result2 = registry.get_all().await.unwrap_or(vec![]);
 
-        let delete1_result = registry
-            .delete(&api_id1)
-            .await
-            .unwrap_or(false);
+        let delete1_result = registry.delete(&api_id1).await.unwrap_or(false);
 
-        let api_definition1_result3 = registry
-            .get(&api_id1)
-            .await
-            .unwrap_or(None);
+        let api_definition1_result3 = registry.get(&api_id1).await.unwrap_or(None);
 
-        let api_definition_result3 = registry
-            .get_all()
-            .await
-            .unwrap_or(vec![]);
+        let api_definition_result3 = registry.get_all().await.unwrap_or(vec![]);
 
-        let delete2_result = registry
-            .delete(&api_id2)
-            .await
-            .unwrap_or(false);
+        let delete2_result = registry.delete(&api_id2).await.unwrap_or(false);
 
-        let api_definition2_result3 = registry
-            .get(&api_id2)
-            .await
-            .unwrap_or(None);
+        let api_definition2_result3 = registry.get(&api_id2).await.unwrap_or(None);
 
-        let api_definition_result4 = registry
-            .get_all()
-            .await
-            .unwrap_or(vec![]);
+        let api_definition_result4 = registry.get_all().await.unwrap_or(vec![]);
 
         assert!(api_definition1_result1.is_some());
         assert!(!api_definition_result2.is_empty());

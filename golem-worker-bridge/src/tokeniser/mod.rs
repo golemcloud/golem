@@ -1,2 +1,2 @@
-pub mod tokeniser;
 pub mod cursor;
+pub mod tokeniser;

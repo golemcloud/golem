@@ -3,10 +3,6 @@ use std::collections::HashMap;
 use derive_more::{Display, FromStr, Into};
 use hyper::http::{HeaderMap, Method};
 
-use crate::api_request_route_resolver::RouteResolver;
-use crate::api_definition::ApiDefinition;
-use crate::worker_request::GolemWorkerRequest;
-
 // An input request from external API gateways, that is then resolved to a worker request, using API definitions
 pub struct InputHttpRequest<'a> {
     pub input_path: ApiInputPath<'a>,
@@ -17,24 +13,6 @@ pub struct InputHttpRequest<'a> {
 
 #[derive(PartialEq, Debug, Display, FromStr, Into)]
 pub struct WorkerRequestResolutionError(pub String);
-
-impl<'a> InputHttpRequest<'a> {
-    pub fn to_worker_request(
-        &self,
-        api_definition: &ApiDefinition,
-    ) -> Result<GolemWorkerRequest, WorkerRequestResolutionError> {
-        let optional_route = self.resolve(api_definition);
-
-        match optional_route {
-            Some(resolved_route) => GolemWorkerRequest::from_resolved_route(&resolved_route)
-                .map_err(WorkerRequestResolutionError),
-
-            None => Err(WorkerRequestResolutionError(
-                "Cannot find a binding for the request".to_string(),
-            )),
-        }
-    }
-}
 
 pub struct ApiInputPath<'a> {
     pub base_path: &'a str,
@@ -86,6 +64,9 @@ impl<'a> ApiInputPath<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::api_definition::ApiDefinition;
+    use crate::worker_request::GolemWorkerRequest;
+
     use golem_common::model::TemplateId;
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
 
@@ -147,9 +128,9 @@ mod tests {
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: serde_json::Value::Array(vec![
-                serde_json::Value::Object(expected_map),
-            ]),
+            function_params: serde_json::Value::Array(vec![serde_json::Value::Object(
+                expected_map,
+            )]),
             response_mapping: None,
         };
 
@@ -184,9 +165,9 @@ mod tests {
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: serde_json::Value::Array(vec![
-                serde_json::Value::Object(expected_map),
-            ]),
+            function_params: serde_json::Value::Array(vec![serde_json::Value::Object(
+                expected_map,
+            )]),
             response_mapping: None,
         };
 
@@ -404,9 +385,9 @@ mod tests {
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: serde_json::Value::Array(vec![
-                serde_json::Value::String("address".to_string()),
-            ]),
+            function_params: serde_json::Value::Array(vec![serde_json::Value::String(
+                "address".to_string(),
+            )]),
             response_mapping: None,
         };
 
@@ -437,9 +418,7 @@ mod tests {
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: serde_json::Value::Array(vec![
-                serde_json::Value::Bool(true),
-            ]),
+            function_params: serde_json::Value::Array(vec![serde_json::Value::Bool(true)]),
             response_mapping: None,
         };
 
@@ -470,9 +449,7 @@ mod tests {
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: serde_json::Value::Array(vec![
-                serde_json::Value::Bool(true),
-            ]),
+            function_params: serde_json::Value::Array(vec![serde_json::Value::Bool(true)]),
             response_mapping: None,
         };
 
@@ -503,9 +480,9 @@ mod tests {
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: serde_json::Value::Array(vec![
-                serde_json::Value::Number(serde_json::Number::from(1)),
-            ]),
+            function_params: serde_json::Value::Array(vec![serde_json::Value::Number(
+                serde_json::Number::from(1),
+            )]),
             response_mapping: None,
         };
 
@@ -539,9 +516,9 @@ mod tests {
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: serde_json::Value::Array(vec![
-                serde_json::Value::Number(serde_json::Number::from(0)),
-            ]),
+            function_params: serde_json::Value::Array(vec![serde_json::Value::Number(
+                serde_json::Number::from(0),
+            )]),
             response_mapping: None,
         };
 
@@ -727,9 +704,9 @@ mod tests {
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: serde_json::Value::Array(vec![
-                serde_json::Value::Object(request_body.clone()),
-            ]),
+            function_params: serde_json::Value::Array(vec![serde_json::Value::Object(
+                request_body.clone(),
+            )]),
             response_mapping: None,
         };
 

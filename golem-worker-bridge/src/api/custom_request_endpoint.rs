@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
+use crate::api_definition::ApiDefinitionId;
 use async_trait::async_trait;
 use hyper::header::HOST;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
-use crate::api_definition::ApiDefinitionId;
 
-use crate::http_request::{ApiInputPath, InputHttpRequest};
 use crate::api_request_route_resolver::RouteResolver;
+use crate::http_request::{ApiInputPath, InputHttpRequest};
 use crate::register::RegisterApiDefinition;
 use crate::worker_bridge_reponse::GetWorkerBridgeResponse;
 use crate::worker_request::GolemWorkerRequest;
@@ -72,9 +72,9 @@ impl CustomRequestEndpoint {
             req_body: json_request_body,
         };
 
-        let api_definition_id_res =
-            headers.get( "X-API-Definition-Id").ok_or("Missing X-API-Definition-Id header");
-
+        let api_definition_id_res = headers
+            .get("X-API-Definition-Id")
+            .ok_or("Missing X-API-Definition-Id header");
 
         let api_definition_id_header = match api_definition_id_res {
             Ok(api_definition_id) => api_definition_id,
@@ -86,36 +86,25 @@ impl CustomRequestEndpoint {
             }
         };
 
-        let api_definition_id_string =
-            api_definition_id_header.to_str().map_err(|e| format!("Invalid X-API-Definition-Id header: {}", e));
-
+        let api_definition_id_string = api_definition_id_header
+            .to_str()
+            .map_err(|e| format!("Invalid X-API-Definition-Id header: {}", e));
 
         let api_definition_id = match api_definition_id_string {
-            Ok(api_definition_id) => {
-                ApiDefinitionId(api_definition_id.to_string())
-            }
+            Ok(api_definition_id) => ApiDefinitionId(api_definition_id.to_string()),
             Err(err) => {
                 error!("Invalid X-API-Definition-Id header: {}", err);
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from_string(err.to_string()))
+                    .body(Body::from_string(err.to_string()));
             }
         };
 
         // Get ApiSpec corresponding to the API Definition Id
-        let api_definition = match self
-            .definition_service
-            .get(
-                &api_definition_id,
-            )
-            .await
-        {
+        let api_definition = match self.definition_service.get(&api_definition_id).await {
             Ok(Some(api_definition)) => api_definition,
             Ok(None) => {
-                error!(
-                    "API request definition id {} not found",
-                    &api_definition_id
-                );
+                error!("API request definition id {} not found", &api_definition_id);
 
                 return Response::builder()
                     .status(StatusCode::NOT_FOUND)
@@ -125,10 +114,7 @@ impl CustomRequestEndpoint {
                     )));
             }
             Err(err) => {
-                error!(
-                    "API request id: {} - error: {}",
-                    &api_definition_id, err
-                );
+                error!("API request id: {} - error: {}", &api_definition_id, err);
                 return Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
                     .body(Body::from_string("Internal error".to_string()));
@@ -172,26 +158,24 @@ impl CustomRequestEndpoint {
 
                 match golem_worker_request.response_mapping {
                     Some(response_mapping) => {
-                        let worker_bridge_response = worker_response
-                            .to_worker_bridge_response(&response_mapping, &resolved_route.resolved_variables);
+                        let worker_bridge_response = worker_response.to_worker_bridge_response(
+                            &response_mapping,
+                            &resolved_route.resolved_variables,
+                        );
 
                         match worker_bridge_response {
-                            Ok(worker_bridge_response) => {
-                                worker_bridge_response.to_http_response()
-                            }
+                            Ok(worker_bridge_response) => worker_bridge_response.to_http_response(),
                             Err(e) => {
                                 error!(
                                     "API request id: {} - request error: {}",
                                     &api_definition_id, e
                                 );
-                                Response::builder()
-                                    .status(StatusCode::BAD_REQUEST)
-                                    .body(Body::from_string(
-                                        format!("Bad request {}", e).to_string(),
-                                    ))
+                                Response::builder().status(StatusCode::BAD_REQUEST).body(
+                                    Body::from_string(format!("Bad request {}", e).to_string()),
+                                )
                             }
                         }
-                    },
+                    }
                     None => {
                         let body: Body = Body::from_json(worker_response.result).unwrap();
                         Response::builder().body(body)
@@ -202,8 +186,7 @@ impl CustomRequestEndpoint {
             None => {
                 error!(
                     "API request id: {} - request error: {}",
-                    &api_definition_id,
-                    "Unable to find a route"
+                    &api_definition_id, "Unable to find a route"
                 );
 
                 Response::builder()

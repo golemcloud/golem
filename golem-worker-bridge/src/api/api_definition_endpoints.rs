@@ -21,12 +21,8 @@ pub struct ApiDefinitionEndpoints {
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl ApiDefinitionEndpoints {
-    pub fn new(
-        definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
-    ) -> Self {
-        Self {
-            definition_service,
-        }
+    pub fn new(definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>) -> Self {
+        Self { definition_service }
     }
 
     #[oai(path = "/", method = "put")]
@@ -36,10 +32,7 @@ impl ApiDefinitionEndpoints {
     ) -> Result<Json<ApiDefinition>, ApiEndpointError> {
         let api_definition_id = &payload.id;
 
-        info!(
-            "Save API definition - id: {}",
-            api_definition_id
-        );
+        info!("Save API definition - id: {}", api_definition_id);
 
         let definition: api_definition::ApiDefinition = payload
             .0
@@ -80,10 +73,7 @@ impl ApiDefinitionEndpoints {
         let api_definition_id_optional = api_definition_id_query.0;
 
         if let Some(api_definition_id) = api_definition_id_optional {
-            info!(
-                "Get API definition - id: {}",
-                 api_definition_id
-            );
+            info!("Get API definition - id: {}", api_definition_id);
 
             let data = self
                 .definition_service
@@ -93,9 +83,8 @@ impl ApiDefinitionEndpoints {
 
             let values: Vec<ApiDefinition> = match data {
                 Some(d) => {
-                    let definition: ApiDefinition = d
-                        .try_into()
-                        .map_err(ApiEndpointError::internal)?;
+                    let definition: ApiDefinition =
+                        d.try_into().map_err(ApiEndpointError::internal)?;
                     vec![definition]
                 }
                 None => vec![],
@@ -114,9 +103,7 @@ impl ApiDefinitionEndpoints {
             let mut values: Vec<ApiDefinition> = vec![];
 
             for d in data {
-                let definition: ApiDefinition = d
-                    .try_into()
-                    .map_err(ApiEndpointError::internal)?;
+                let definition: ApiDefinition = d.try_into().map_err(ApiEndpointError::internal)?;
                 values.push(definition);
             }
 
@@ -131,10 +118,7 @@ impl ApiDefinitionEndpoints {
     ) -> Result<Json<String>, ApiEndpointError> {
         let api_definition_id = api_definition_id_query.0;
 
-        info!(
-            "Delete API definition - id: {}",
-            api_definition_id
-        );
+        info!("Delete API definition - id: {}", api_definition_id);
 
         let data = self
             .definition_service
@@ -250,7 +234,8 @@ impl TryInto<api_definition::Route> for Route {
     type Error = String;
 
     fn try_into(self) -> Result<api_definition::Route, Self::Error> {
-        let path = api_definition::PathPattern::from(self.path.as_str()).map_err(|e| e.to_string())?;
+        let path =
+            api_definition::PathPattern::from(self.path.as_str()).map_err(|e| e.to_string())?;
         let binding = self.binding.try_into()?;
 
         Ok(api_definition::Route {

@@ -1,6 +1,5 @@
 use std::fmt::Display;
 
-use http;
 use serde_json::Value;
 
 // More of a typed serde_json::Value but typed for its primitives
@@ -176,7 +175,10 @@ impl ValueTyped {
         }
     }
 
-    pub fn greater_than_or_equal_to(&self, that: ValueTyped) -> Result<bool, VariantComparisonError> {
+    pub fn greater_than_or_equal_to(
+        &self,
+        that: ValueTyped,
+    ) -> Result<bool, VariantComparisonError> {
         match (self, that) {
             // There won't be coercsions at primitve level
             (ValueTyped::Float(f1), ValueTyped::Float(f2)) => Ok(f1 >= &f2),

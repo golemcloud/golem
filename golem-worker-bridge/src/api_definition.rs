@@ -2,18 +2,16 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 
+use crate::expr::*;
+use crate::parser::path_pattern_parser::PathPatternParser;
+use crate::parser::{GolemParser, ParseError};
 use bincode::{Decode, Encode};
-use derive_more::{Display};
-use golem_common::model::{TemplateId};
+use derive_more::Display;
+use golem_common::model::TemplateId;
 use poem_openapi::{Enum, NewType};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use Iterator;
-use poem_openapi::types::Type;
-
-use crate::expr::*;
-use crate::parser::path_pattern_parser::PathPatternParser;
-use crate::parser::{GolemParser, ParseError};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +38,6 @@ pub struct ResponseMapping {
     pub headers: HashMap<String, Expr>,
 }
 
-
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct ApiDefinitionId(pub String);
 
@@ -51,7 +48,7 @@ impl Display for ApiDefinitionId {
 }
 
 #[derive(
-Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display, Encode, Decode, Enum,
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display, Encode, Decode, Enum,
 )]
 pub enum MethodPattern {
     Get,
@@ -267,8 +264,8 @@ impl Iterator for PathPattern {
 
 impl<'de> Deserialize<'de> for PathPattern {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
+    where
+        D: serde::Deserializer<'de>,
     {
         let value = Value::deserialize(deserializer)?;
 
@@ -285,8 +282,8 @@ impl<'de> Deserialize<'de> for PathPattern {
 
 impl Serialize for PathPattern {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
+    where
+        S: Serializer,
     {
         let value = Value::String(self.to_string());
         Value::serialize(&value, serializer)
@@ -299,7 +296,6 @@ pub struct Route {
     pub path: PathPattern,
     pub binding: GolemWorkerBinding,
 }
-
 
 #[cfg(test)]
 mod tests {

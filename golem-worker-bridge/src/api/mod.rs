@@ -4,9 +4,9 @@ pub mod custom_request_endpoint;
 
 use std::sync::Arc;
 
+use crate::api::api_definition_endpoints::ApiDefinitionEndpoints;
 use poem::Route;
 use poem_openapi::OpenApiService;
-use crate::api::api_definition_endpoints::ApiDefinitionEndpoints;
 
 use crate::register::RegisterApiDefinition;
 use crate::worker_request_executor::WorkerRequestExecutor;
@@ -24,11 +24,7 @@ pub struct ManagementOpenApiService {
 
 pub fn management_open_api_service(services: ApiServices) -> ManagementOpenApiService {
     let api_service = OpenApiService::new(
-        (
-            ApiDefinitionEndpoints::new(
-                services.definition_service.clone(),
-            )
-        ),
+        ApiDefinitionEndpoints::new(services.definition_service.clone()),
         "Golem Api Gateway Management API",
         "1.0",
     );

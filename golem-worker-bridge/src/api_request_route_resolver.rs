@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use hyper::http::Method;
 
-use crate::http_request::InputHttpRequest;
 use crate::api_definition::{ApiDefinition, MethodPattern, Route};
+use crate::http_request::InputHttpRequest;
 use crate::resolved_variables::ResolvedVariables;
 
 pub trait RouteResolver {
@@ -46,7 +46,7 @@ impl<'a> RouteResolver for InputHttpRequest<'a> {
                     &request_path_components,
                     &spec_path_variables,
                 )
-                    .ok()?;
+                .ok()?;
 
                 let resolved_binding = ResolvedRoute {
                     route_definition: route.clone(),

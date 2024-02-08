@@ -73,8 +73,8 @@ impl InternalExprResult {
     }
 
     fn incomplete<F>(scope: ExpressionContext, f: F) -> InternalExprResult
-        where
-            F: Fn(Expr) -> InternalExprResult + 'static,
+    where
+        F: Fn(Expr) -> InternalExprResult + 'static,
     {
         InternalExprResult::InComplete(
             scope,
@@ -428,8 +428,8 @@ fn capture_expr_between<F>(
     prev_expression: InternalExprResult,
     get_expr: F,
 ) -> Result<InternalExprResult, ParseError>
-    where
-        F: FnOnce(&mut TokenCursor, Context, InternalExprResult) -> Result<Expr, ParseError>,
+where
+    F: FnOnce(&mut TokenCursor, Context, InternalExprResult) -> Result<Expr, ParseError>,
 {
     let optional_captured_string = match capture_until {
         Some(last_token) => cursor.capture_string_between(capture_from, last_token),
@@ -457,8 +457,8 @@ fn build_with_last_complete_expr<F>(
     last_expression: InternalExprResult,
     complete_expression: F,
 ) -> Result<InternalExprResult, ParseError>
-    where
-        F: Fn(Expr, Expr) -> InternalExprResult + 'static,
+where
+    F: Fn(Expr, Expr) -> InternalExprResult + 'static,
 {
     match last_expression {
         InternalExprResult::Complete(prev_complete_expr) => {

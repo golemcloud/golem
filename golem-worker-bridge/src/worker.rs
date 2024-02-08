@@ -1,13 +1,14 @@
-use std::fmt::{Debug, Display, Formatter};
-use std::str::FromStr;
 use derive_more::{Display, FromStr};
+use std::fmt::{Debug, Display};
 
 use async_trait::async_trait;
 use golem_common::config::RetryConfig;
 use golem_common::model::{CallingConvention, InvocationKey, PromiseId, TemplateId, WorkerId};
 
+use crate::app_config::TemplateServiceConfig;
+use crate::UriBackConversion;
 use golem_api_grpc::proto::golem::worker::worker_error::Error;
-use golem_api_grpc::proto::golem::worker::{invoke_and_await_response, worker_execution_error};
+use golem_api_grpc::proto::golem::worker::worker_execution_error;
 use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
     get_invocation_key_response, invoke_and_await_response_json, invoke_response,
@@ -20,9 +21,6 @@ use serde_json::Value;
 use tonic::Status;
 use tracing::info;
 use uuid::Uuid;
-use golem_api_grpc::proto::golem::worker::Val;
-use crate::app_config::TemplateServiceConfig;
-use crate::UriBackConversion;
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
 pub struct WorkerName(pub String);
@@ -91,19 +89,19 @@ impl WorkerService for WorkerServiceDefault {
                 template_id.clone(),
                 self.access_token,
             ),
-            |(uri, worker_name, template_id, access_token)| {
+            |(uri, worker_name, template_id, _)| {
                 Box::pin(async move {
                     let mut client = WorkerServiceClient::connect(uri.as_http_02()).await?;
 
                     let request = GetInvocationKeyRequest {
-                            worker_id: Some(
-                                WorkerId {
-                                    template_id: template_id.clone(),
-                                    worker_name: worker_name.0.clone(),
-                                }
-                                    .into(),
-                            ),
-                        };
+                        worker_id: Some(
+                            WorkerId {
+                                template_id: template_id.clone(),
+                                worker_name: worker_name.0.clone(),
+                            }
+                            .into(),
+                        ),
+                    };
 
                     let response = client.get_invocation_key(request).await?.into_inner();
 
@@ -120,7 +118,7 @@ impl WorkerService for WorkerServiceDefault {
             },
             WorkerError::is_retriable,
         )
-            .await
+        .await
     }
 
     async fn invoke_and_await(
@@ -159,31 +157,30 @@ impl WorkerService for WorkerServiceDefault {
                 self.access_token,
             ),
             |(
-                 uri,
-                 worker_name,
-                 template_id,
-                 function,
-                 parameters,
-                 invocation_key,
-                 calling_convention,
-                 access_token,
-             )| {
+                uri,
+                worker_name,
+                template_id,
+                function,
+                parameters,
+                invocation_key,
+                calling_convention,
+                _,
+            )| {
                 Box::pin(async move {
                     let mut client = WorkerServiceClient::connect(uri.as_http_02()).await?;
-                    let request =
-                        InvokeAndAwaitRequestJson {
-                            worker_id: Some(
-                                WorkerId {
-                                    template_id: template_id.clone(),
-                                    worker_name: worker_name.clone(),
-                                }
-                                    .into(),
-                            ),
-                            invocation_key: Some(invocation_key.clone().into()),
-                            function: function.clone(),
-                            invoke_parameters_json: parameters.to_json_string(),
-                            calling_convention: calling_convention.clone().into(),
-                        };
+                    let request = InvokeAndAwaitRequestJson {
+                        worker_id: Some(
+                            WorkerId {
+                                template_id: template_id.clone(),
+                                worker_name: worker_name.clone(),
+                            }
+                            .into(),
+                        ),
+                        invocation_key: Some(invocation_key.clone().into()),
+                        function: function.clone(),
+                        invoke_parameters_json: parameters.to_json_string(),
+                        calling_convention: calling_convention.clone().into(),
+                    };
 
                     let response = client.invoke_and_await_json(request).await?.into_inner();
 
@@ -204,7 +201,7 @@ impl WorkerService for WorkerServiceDefault {
             },
             WorkerError::is_retriable,
         )
-            .await
+        .await
     }
 
     async fn invoke(
@@ -233,21 +230,20 @@ impl WorkerService for WorkerServiceDefault {
                 parameters.clone(),
                 self.access_token,
             ),
-            |(uri, worker_name, template_id, function, parameters, access_token)| {
+            |(uri, worker_name, template_id, function, parameters, _)| {
                 Box::pin(async move {
                     let mut client = WorkerServiceClient::connect(uri.as_http_02()).await?;
-                    let request =
-                        InvokeRequestJson {
-                            worker_id: Some(
-                                WorkerId {
-                                    template_id: template_id.clone(),
-                                    worker_name: worker_name.clone(),
-                                }
-                                    .into(),
-                            ),
-                            function: function.clone(),
-                            invoke_parameters_json: parameters.to_json_string(),
-                        };
+                    let request = InvokeRequestJson {
+                        worker_id: Some(
+                            WorkerId {
+                                template_id: template_id.clone(),
+                                worker_name: worker_name.clone(),
+                            }
+                            .into(),
+                        ),
+                        function: function.clone(),
+                        invoke_parameters_json: parameters.to_json_string(),
+                    };
 
                     let response = client.invoke_json(request).await?.into_inner();
 
@@ -260,7 +256,7 @@ impl WorkerService for WorkerServiceDefault {
             },
             WorkerError::is_retriable,
         )
-            .await
+        .await
     }
 }
 
@@ -311,11 +307,11 @@ impl Display for WorkerError {
                 }
                 Some(Error::InternalError(golem_error)) => match &golem_error.error {
                     Some(worker_execution_error::Error::InvalidRequest(
-                             golem_api_grpc::proto::golem::worker::InvalidRequest { details },
-                         )) => write!(f, "Invalid request: {details}"),
+                        golem_api_grpc::proto::golem::worker::InvalidRequest { details },
+                    )) => write!(f, "Invalid request: {details}"),
                     Some(worker_execution_error::Error::WorkerAlreadyExists(
-                             golem_api_grpc::proto::golem::worker::WorkerAlreadyExists { worker_id },
-                         )) => write!(
+                        golem_api_grpc::proto::golem::worker::WorkerAlreadyExists { worker_id },
+                    )) => write!(
                         f,
                         "Worker already exists: {}",
                         worker_id
@@ -325,8 +321,8 @@ impl Display for WorkerError {
                             .unwrap_or("?".to_string())
                     ),
                     Some(worker_execution_error::Error::WorkerNotFound(
-                             golem_api_grpc::proto::golem::worker::WorkerNotFound { worker_id },
-                         )) => write!(
+                        golem_api_grpc::proto::golem::worker::WorkerNotFound { worker_id },
+                    )) => write!(
                         f,
                         "Worker not found: {}",
                         worker_id
@@ -336,11 +332,11 @@ impl Display for WorkerError {
                             .unwrap_or("?".to_string())
                     ),
                     Some(worker_execution_error::Error::WorkerCreationFailed(
-                             golem_api_grpc::proto::golem::worker::WorkerCreationFailed {
-                                 worker_id,
-                                 details,
-                             },
-                         )) => write!(
+                        golem_api_grpc::proto::golem::worker::WorkerCreationFailed {
+                            worker_id,
+                            details,
+                        },
+                    )) => write!(
                         f,
                         "Failed to create worker: {}: {details}",
                         worker_id
@@ -350,8 +346,8 @@ impl Display for WorkerError {
                             .unwrap_or("?".to_string())
                     ),
                     Some(worker_execution_error::Error::FailedToResumeWorker(
-                             golem_api_grpc::proto::golem::worker::FailedToResumeWorker { worker_id },
-                         )) => write!(
+                        golem_api_grpc::proto::golem::worker::FailedToResumeWorker { worker_id },
+                    )) => write!(
                         f,
                         "Failed to resume worker: {}",
                         worker_id
@@ -361,12 +357,12 @@ impl Display for WorkerError {
                             .unwrap_or("?".to_string())
                     ),
                     Some(worker_execution_error::Error::TemplateDownloadFailed(
-                             golem_api_grpc::proto::golem::worker::TemplateDownloadFailed {
-                                 template_id,
-                                 template_version,
-                                 reason,
-                             },
-                         )) => write!(
+                        golem_api_grpc::proto::golem::worker::TemplateDownloadFailed {
+                            template_id,
+                            template_version,
+                            reason,
+                        },
+                    )) => write!(
                         f,
                         "Failed to download template: {}#{}: {reason}",
                         template_id
@@ -377,12 +373,12 @@ impl Display for WorkerError {
                         template_version
                     ),
                     Some(worker_execution_error::Error::TemplateParseFailed(
-                             golem_api_grpc::proto::golem::worker::TemplateParseFailed {
-                                 template_id,
-                                 template_version,
-                                 reason,
-                             },
-                         )) => write!(
+                        golem_api_grpc::proto::golem::worker::TemplateParseFailed {
+                            template_id,
+                            template_version,
+                            reason,
+                        },
+                    )) => write!(
                         f,
                         "Failed to parse downloaded template: {}#{}: {reason}",
                         template_id
@@ -393,11 +389,11 @@ impl Display for WorkerError {
                         template_version
                     ),
                     Some(worker_execution_error::Error::GetLatestVersionOfTemplateFailed(
-                             golem_api_grpc::proto::golem::worker::GetLatestVersionOfTemplateFailed {
-                                 template_id,
-                                 reason,
-                             },
-                         )) => write!(
+                        golem_api_grpc::proto::golem::worker::GetLatestVersionOfTemplateFailed {
+                            template_id,
+                            reason,
+                        },
+                    )) => write!(
                         f,
                         "Failed to get latest version of template {}: {reason}",
                         template_id
@@ -407,8 +403,8 @@ impl Display for WorkerError {
                             .unwrap_or("?".to_string()),
                     ),
                     Some(worker_execution_error::Error::PromiseNotFound(
-                             golem_api_grpc::proto::golem::worker::PromiseNotFound { promise_id },
-                         )) => {
+                        golem_api_grpc::proto::golem::worker::PromiseNotFound { promise_id },
+                    )) => {
                         let promise_id: Option<PromiseId> = promise_id
                             .as_ref()
                             .and_then(|id| id.clone().try_into().ok());
@@ -421,8 +417,8 @@ impl Display for WorkerError {
                         )
                     }
                     Some(worker_execution_error::Error::PromiseDropped(
-                             golem_api_grpc::proto::golem::worker::PromiseDropped { promise_id },
-                         )) => {
+                        golem_api_grpc::proto::golem::worker::PromiseDropped { promise_id },
+                    )) => {
                         let promise_id: Option<PromiseId> = promise_id
                             .as_ref()
                             .and_then(|id| id.clone().try_into().ok());
@@ -435,10 +431,10 @@ impl Display for WorkerError {
                         )
                     }
                     Some(worker_execution_error::Error::PromiseAlreadyCompleted(
-                             golem_api_grpc::proto::golem::worker::PromiseAlreadyCompleted {
-                                 promise_id,
-                             },
-                         )) => {
+                        golem_api_grpc::proto::golem::worker::PromiseAlreadyCompleted {
+                            promise_id,
+                        },
+                    )) => {
                         let promise_id: Option<PromiseId> = promise_id
                             .as_ref()
                             .and_then(|id| id.clone().try_into().ok());
@@ -451,10 +447,10 @@ impl Display for WorkerError {
                         )
                     }
                     Some(worker_execution_error::Error::Interrupted(
-                             golem_api_grpc::proto::golem::worker::Interrupted {
-                                 recover_immediately,
-                             },
-                         )) => {
+                        golem_api_grpc::proto::golem::worker::Interrupted {
+                            recover_immediately,
+                        },
+                    )) => {
                         if *recover_immediately {
                             write!(f, "Interrupted: simulated crash")
                         } else {
@@ -468,23 +464,23 @@ impl Display for WorkerError {
                         write!(f, "No value in message")
                     }
                     Some(worker_execution_error::Error::ValueMismatch(
-                             golem_api_grpc::proto::golem::worker::ValueMismatch { details },
-                         )) => write!(f, "Value mismatch: {details}"),
+                        golem_api_grpc::proto::golem::worker::ValueMismatch { details },
+                    )) => write!(f, "Value mismatch: {details}"),
                     Some(worker_execution_error::Error::UnexpectedOplogEntry(
-                             golem_api_grpc::proto::golem::worker::UnexpectedOplogEntry {
-                                 expected,
-                                 got,
-                             },
-                         )) => write!(f, "Unexpected oplog entry: expected {expected}, got {got}"),
+                        golem_api_grpc::proto::golem::worker::UnexpectedOplogEntry {
+                            expected,
+                            got,
+                        },
+                    )) => write!(f, "Unexpected oplog entry: expected {expected}, got {got}"),
                     Some(worker_execution_error::Error::RuntimeError(
-                             golem_api_grpc::proto::golem::worker::RuntimeError { details },
-                         )) => write!(f, "Runtime error: {details}"),
+                        golem_api_grpc::proto::golem::worker::RuntimeError { details },
+                    )) => write!(f, "Runtime error: {details}"),
                     Some(worker_execution_error::Error::InvalidShardId(
-                             golem_api_grpc::proto::golem::worker::InvalidShardId {
-                                 shard_id,
-                                 shard_ids,
-                             },
-                         )) => write!(
+                        golem_api_grpc::proto::golem::worker::InvalidShardId {
+                            shard_id,
+                            shard_ids,
+                        },
+                    )) => write!(
                         f,
                         "{} is not in shards {:?}",
                         shard_id
@@ -503,8 +499,8 @@ impl Display for WorkerError {
                         write!(f, "The previously invoked function exited")
                     }
                     Some(worker_execution_error::Error::Unknown(
-                             golem_api_grpc::proto::golem::worker::UnknownError { details },
-                         )) => {
+                        golem_api_grpc::proto::golem::worker::UnknownError { details },
+                    )) => {
                         write!(f, "Unknown error: {details}")
                     }
                     None => write!(f, "Unknown golem error"),

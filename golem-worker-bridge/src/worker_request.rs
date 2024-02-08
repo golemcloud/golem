@@ -1,10 +1,9 @@
-use serde_json::Value;
 use golem_common::model::TemplateId;
+use serde_json::Value;
 
+use crate::api_definition::ResponseMapping;
 use crate::api_request_route_resolver::ResolvedRoute;
 use crate::evaluator::{Evaluator, Primitive};
-use crate::api_definition::ResponseMapping;
-use crate::worker::WorkerName;
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct GolemWorkerRequest {
@@ -40,7 +39,10 @@ impl GolemWorkerRequest {
             function_params.push(json);
         }
 
-        let worker_id_str = worker_id.as_str().ok_or(format!("Worker id is not evaluated to a valid string. {}", worker_id))?;
+        let worker_id_str = worker_id.as_str().ok_or(format!(
+            "Worker id is not evaluated to a valid string. {}",
+            worker_id
+        ))?;
 
         Ok(GolemWorkerRequest {
             worker_id: worker_id_str.to_string(),
