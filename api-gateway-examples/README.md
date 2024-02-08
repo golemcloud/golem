@@ -8,38 +8,10 @@ worker instance that's running in Golem.
 We define the endpoint definitions and send it to worker bridge. This definition is merely the set of endpoints,
 and the actual function that needs to be executed by the particular worker instance to serve the endpoint
 
-Here is an example:
-
-```json
-
-{
-  "id": "my-api",
-  "version": "0.0.1",
-  "routes": [
-    {
-      "method": "Get",
-      "path": "/",
-      "binding": {
-        "type": "wit-worker",
-        "template": "c467b83d-cb27-4296-b48a-ee85114cdb71",
-        "workerId": "myworker2",
-        "functionName": "golem:it/api/get-cart-contents",
-        "functionParams": []
-      }
-    }
-  ]
-}
-
-
-```
 
 Registration of this endpoint definition is pretty simple. The details of how much you can configure can be discussed later.
 Currently, we are just focusing on the basic registration of the endpoint definition.
 
-```scala
-cd api-gateway-examples
-curl -X PUT http://localhost:9005/v1/api/definitions -H "Content-Type: application/json"  -d @endpoint_definition.json
-```
 
 ## Integration with Tyk API Gateway
 
@@ -83,10 +55,134 @@ to forward request to the worker bridge. Let's say we choose Tyk as the API Gate
 }
 
 ```
-See the target_url. This is the URL of the worker bridge that is ready to serve your custom requests. The worker bridge will then forward the request to the actual worker instance.
+
+Below given are the step by step instructions to follow to try all of this in Local.
+
+### Step 1: Spin up Golem
+
+```scala
+// Choose any docker-comppose file in api-gateway-examples folder
+docker-compose up
+```
+
+### Step 2: Deploy shopping cart example
+
+```scala
+# Note down the template id, say "c467b83d-cb27-4296-b48a-ee85114cdb7"
+golem-cli template add --template-name mytemplate test-templates/shopping-cart.wasm
+
+# Note down the worker-name, here it is myworker
+golem-cli worker invoke-and-await  --template-name mytemplate --worker-name myworker --function golem:it/api/add-item --parameters '[{"product-id" : "hmm", "name" : "hmm" , "price" : 10, "quantity" : 2}]'
+```
+
+### Step 3: Register the endpoint definition
+
+```scala
+{
+  "id": "my-api",
+  "version": "0.0.1",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "/",
+      "binding": {
+        "type": "wit-worker",
+        "template": "c467b83d-cb27-4296-b48a-ee85114cdb71", // Note down the template id
+        "workerId": "myworker",
+        "functionName": "golem:it/api/get-cart-contents",
+        "functionParams": []
+      }
+    }
+  ]
+}
+
+
+```
+
+Step 4: Install Tyk API gateway
+
+```scala
+git clone https://github.com/TykTechnologies/tyk-gateway-docker
+cd tyk-gateway-docker
+docker-compose up
+```
+
+You can choose to edit existing apis here, or have a new one. Refer to Tyk's documentations for this
+
+An example configuration is:
+
+```scala
+{
+    "name": "Tyk Test Keyless API",
+    "api_id": "keyless",
+    "org_id": "default",
+    "definition": {
+        "location": "header",
+        "key": "version"
+    },
+  "extended_paths": {
+    "ignored": [],
+    "white_list": [],
+    "black_list": [],
+    "cache": ["get"],
+    "transform": [],
+    "transform_headers": [
+      {
+        "delete_headers": ["authorization"],
+        "add_headers": {"x-widgets-secret": "the-secret-widget-key-is-secret"},
+        "path": "/",
+        "method": "GET"
+      }
+    ]
+  }
+,
+    "use_keyless": true,
+    "version_data": {
+        "not_versioned": true,
+        "versions": {
+            "Default": {
+                "name": "Default"
+            }
+        }
+    },
+    "custom_middleware": {
+        "pre": [
+          {
+            "name": "testJSVMData",
+            "path": "./middleware/injectHeader.js",
+            "require_session": false,
+            "raw_body_only": false
+          }
+        ]
+  },
+    "driver": "otto",
+    "proxy": {
+        "listen_path": "/",
+        "target_url": "http://192.168.18.202:9006/",
+        "strip_listen_path": true
+    }
+}
+
+```
+
+You can see target_url here which is http://192.168.18.100:9006/. Note that Tyk's network and Golem's network are different and therefore it is important 
+to know the actual IP address of your machine for 1 network to talk to the other. 9006 is the port where worker-bridge is running.
+
+Once you make changes, you will need to compose up again to see the changes. Or you can use the Tyk's dashboard to make changes.
+
+The target URL is url of the worker bridge that is ready to serve your custom requests. Once this is registerd, 
+the worker bridge will then forward the request to the actual worker instance.
+
 However, inorder for this to work, we need to set a middleware that adds an extra header called "X-API-Definition-Id" whose
 value is the id of the endpoint definition that we registered with the worker bridge. In our example, it is "my-api".
 This is how the worker bridge knows which endpoints it needs to serve for the requests forwarded from API Gateway.
 
-Below given are the step by step instructions to follow to try all of this in Local.
+With all this in place, you can now make requests to the API Gateway and see the worker bridge forwarding the requests to the actual worker instance.
 
+
+```scala
+
+
+curl -X GET http://localhost:8080/hmmm -H "X-Tyk-Authorization: foo" -H "X-API-Definition-Id: my-api"
+
+[[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
