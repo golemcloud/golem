@@ -47,7 +47,7 @@ async fn get_api_services(config: &WorkerBridgeConfig) -> Result<ApiServices, st
 
     let request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send> =
         Arc::new(WorkerRequestExecutorDefault {
-            worker_service: WorkerServiceDefault::new(&config.component_service),
+            worker_service: WorkerServiceDefault::new(&config.template_service),
         });
 
     Ok(ApiServices {

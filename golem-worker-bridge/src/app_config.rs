@@ -10,7 +10,7 @@ use uuid::Uuid;
 pub struct WorkerBridgeConfig {
     pub environment: String,
     pub redis: RedisConfig,
-    pub component_service: TemplateServiceConfig,
+    pub template_service: TemplateServiceConfig,
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
     pub management_port: u16,
