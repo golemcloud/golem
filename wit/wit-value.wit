@@ -9,13 +9,13 @@ interface types {
 
   variant wit-node {
     record-value(list<type-index>),
-    variant-value(tuple<u32, type-index>),
+    variant-value(tuple<u32, option<type-index>>),
     enum-value(u32),
     flags-value(list<bool>),
     tuple-value(list<type-index>),
     list-value(list<type-index>),
     option-value(option<type-index>),
-    result-value(result<type-index, type-index>),
+    result-value(result<option<type-index>, option<type-index>>),
     prim-u8(u8),
     prim-u16(u16),
     prim-u32(u32),

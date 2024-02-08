@@ -4,7 +4,6 @@ use wasmtime::component::{
 };
 
 pub enum EncodingError {
-    ValueMissing { details: String },
     ParamTypeMismatch,
     ValueMismatch { details: String },
     Unknown { details: String },
@@ -123,9 +122,12 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
                         details: format!("could not get type information for case {}", name),
                     }),
                 }?;
-                let decoded_value = decode_param(case_value, case_ty)?;
-                let variant = Variant::new(ty, name, Some(decoded_value))
-                    .expect("Type mismatch in decode_param");
+                let decoded_value = case_value
+                    .as_ref()
+                    .map(|v| decode_param(v, case_ty))
+                    .transpose()?;
+                let variant =
+                    Variant::new(ty, name, decoded_value).expect("Type mismatch in decode_param");
                 Ok(Val::Variant(variant))
             }
             _ => Err(EncodingError::ParamTypeMismatch),
@@ -168,8 +170,11 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
                     let ok_ty = ty.ok().ok_or(EncodingError::ValueMismatch {
                         details: "could not get ok type".to_string(),
                     })?;
-                    let decoded_value = decode_param(value, &ok_ty)?;
-                    let result = ResultVal::new(ty, Ok(Some(decoded_value)))
+                    let decoded_value = value
+                        .as_ref()
+                        .map(|v| decode_param(v, &ok_ty))
+                        .transpose()?;
+                    let result = ResultVal::new(ty, Ok(decoded_value))
                         .expect("Type mismatch in decode_param");
                     Ok(Val::Result(result))
                 }
@@ -177,8 +182,11 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
                     let err_ty = ty.err().ok_or(EncodingError::ValueMismatch {
                         details: "could not get err type".to_string(),
                     })?;
-                    let decoded_value = decode_param(value, &err_ty)?;
-                    let result = ResultVal::new(ty, Err(Some(decoded_value)))
+                    let decoded_value = value
+                        .as_ref()
+                        .map(|v| decode_param(v, &err_ty))
+                        .transpose()?;
+                    let result = ResultVal::new(ty, Err(decoded_value))
                         .expect("Type mismatch in decode_param");
                     Ok(Val::Result(result))
                 }
@@ -249,12 +257,10 @@ pub fn encode_output(value: &Val) -> Result<Value, EncodingError> {
                 discriminant,
                 value,
             } = wasm_variant;
-            let encoded_output = encode_output(value.as_ref().ok_or(EncodingError::Unknown {
-                details: "Missing value in variant".to_string(),
-            })?)?;
+            let encoded_output = value.map(|v| encode_output(&v)).transpose()?;
             Ok(Value::Variant {
                 case_idx: discriminant,
-                case_value: Box::new(encoded_output),
+                case_value: encoded_output.map(Box::new),
             })
         }
         Val::Enum(enum0) => {
@@ -274,16 +280,12 @@ pub fn encode_output(value: &Val) -> Result<Value, EncodingError> {
         },
         Val::Result(result) => match result.value() {
             Ok(value) => {
-                let encoded_output = encode_output(value.ok_or(EncodingError::ValueMissing {
-                    details: "Missing Ok value in result".to_string(),
-                })?)?;
-                Ok(Value::Result(Ok(Box::new(encoded_output))))
+                let encoded_output = value.map(encode_output).transpose()?;
+                Ok(Value::Result(Ok(encoded_output.map(Box::new))))
             }
             Err(value) => {
-                let encoded_output = encode_output(value.ok_or(EncodingError::ValueMissing {
-                    details: "Missing Err value in result".to_string(),
-                })?)?;
-                Ok(Value::Result(Err(Box::new(encoded_output))))
+                let encoded_output = value.map(encode_output).transpose()?;
+                Ok(Value::Result(Err(encoded_output.map(Box::new))))
             }
         },
         Val::Flags(flags) => {

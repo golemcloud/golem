@@ -324,19 +324,24 @@ fn type_description(value: &JsonValue) -> &'static str {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn get_result(
     input_json: &JsonValue,
     ok_type: &Option<Box<AnalysedType>>,
     err_type: &Option<Box<AnalysedType>>,
-) -> Result<Result<Box<Value>, Box<Value>>, Vec<String>> {
+) -> Result<Result<Option<Box<Value>>, Option<Box<Value>>>, Vec<String>> {
     fn validate(
         typ: &Option<Box<AnalysedType>>,
         input_json: &JsonValue,
-    ) -> Result<Box<Value>, Vec<String>> {
+    ) -> Result<Option<Box<Value>>, Vec<String>> {
         if let Some(typ) = typ {
-            validate_function_parameter(input_json, typ).map(Box::new)
+            validate_function_parameter(input_json, typ).map(|v| Some(Box::new(v)))
+        } else if input_json.is_null() {
+            Ok(None)
         } else {
-            Err(vec!["The type of ok is absent".to_string()])
+            Err(vec![
+                "The type of ok is absent, but some JSON value was provided".to_string(),
+            ])
         }
     }
 
@@ -511,7 +516,7 @@ fn get_flag(input_json: &JsonValue, names: &[String]) -> Result<Vec<bool>, Vec<S
 fn get_variant(
     input_json: &JsonValue,
     types: &[(String, Option<AnalysedType>)],
-) -> Result<(u32, Box<Value>), Vec<String>> {
+) -> Result<(u32, Option<Box<Value>>), Vec<String>> {
     let mut possible_mapping_indexed: HashMap<&String, (usize, &Option<AnalysedType>)> =
         HashMap::new();
 
@@ -530,11 +535,11 @@ fn get_variant(
     }?;
 
     match possible_mapping_indexed.get(key) {
-        Some((index, Some(tpe))) => {
-            validate_function_parameter(json, tpe).map(|result| (*index as u32, Box::new(result)))
-        }
-        Some((_, None)) => Err(vec![format!("Unknown json {} in the variant", input_json)]),
-        None => Err(vec![format!("Unknown key {} in the variant", key)]),
+        Some((index, Some(tpe))) => validate_function_parameter(json, tpe)
+            .map(|result| (*index as u32, Some(Box::new(result)))),
+        Some((index, None)) if json.is_null() => Ok((*index as u32, None)),
+        Some((_, None)) => Err(vec![format!("Unit variant {key} has non-null JSON value")]),
+        None => Err(vec![format!("Unknown key {key} in the variant")]),
     }
 }
 
@@ -672,13 +677,20 @@ fn validate_function_result(
                     }?;
 
                     match case_type {
-                        Some(tpe) => {
-                            let result = validate_function_result(*case_value, tpe)?;
-                            let mut map = serde_json::Map::new();
-                            map.insert(case_name.clone(), result);
-                            Ok(serde_json::Value::Object(map))
-                        }
-                        None => Err(vec!["Missing inner type information.".to_string()]),
+                        Some(tpe) => match case_value {
+                            Some(case_value) => {
+                                let result = validate_function_result(*case_value, tpe)?;
+                                let mut map = serde_json::Map::new();
+                                map.insert(case_name.clone(), result);
+                                Ok(serde_json::Value::Object(map))
+                            }
+                            None => Err(vec![format!("Missing value for case {case_name}")]),
+                        },
+                        None => Ok(JsonValue::Object(
+                            vec![(case_name.clone(), JsonValue::Null)]
+                                .into_iter()
+                                .collect(),
+                        )),
                     }
                 } else {
                     Err(vec![
@@ -714,7 +726,7 @@ fn validate_function_result(
 
         Value::Result(value) => match expected_type {
             AnalysedType::Result { ok, error } => match (value, ok, error) {
-                (Ok(value), Some(ok_type), _) => {
+                (Ok(Some(value)), Some(ok_type), _) => {
                     let mut map: serde_json::Map<String, serde_json::Value> =
                         serde_json::Map::new();
 
@@ -723,7 +735,9 @@ fn validate_function_result(
                     Ok(serde_json::Value::Object(map))
                 }
 
-                (Ok(_), None, _) => {
+                (Ok(None), Some(_), _) => Err(vec!["Non-unit ok result has no value".to_string()]),
+
+                (Ok(None), None, _) => {
                     let mut map: serde_json::Map<String, serde_json::Value> =
                         serde_json::Map::new();
 
@@ -732,7 +746,9 @@ fn validate_function_result(
                     Ok(serde_json::Value::Object(map))
                 }
 
-                (Err(value), _, Some(err_type)) => {
+                (Ok(Some(_)), None, _) => Err(vec!["Unit ok result has a value".to_string()]),
+
+                (Err(Some(value)), _, Some(err_type)) => {
                     let mut map: serde_json::Map<String, serde_json::Value> =
                         serde_json::Map::new();
 
@@ -742,7 +758,11 @@ fn validate_function_result(
                     Ok(serde_json::Value::Object(map))
                 }
 
-                (Err(_), _, None) => {
+                (Err(None), _, Some(_)) => {
+                    Err(vec!["Non-unit error result has no value".to_string()])
+                }
+
+                (Err(None), _, None) => {
                     let mut map: serde_json::Map<String, serde_json::Value> =
                         serde_json::Map::new();
 
@@ -750,6 +770,8 @@ fn validate_function_result(
 
                     Ok(serde_json::Value::Object(map))
                 }
+
+                (Err(Some(_)), _, None) => Err(vec!["Unit error result has a value".to_string()]),
             },
 
             _ => Err(vec!["Unexpected type; expected a Result type.".to_string()]),
@@ -855,14 +877,14 @@ mod tests {
         fn test_list_u8_param(value: Vec<u8>) {
             let json = JsonValue::Array(value.iter().map(|v| JsonValue::Number(Number::from(*v))).collect());
             let result = validate_function_parameter(&json, &AnalysedType::List(Box::new(AnalysedType::U8)));
-            prop_assert_eq!(result, Ok(Value::List(value.into_iter().map(|v| Value::U8(v)).collect())));
+            prop_assert_eq!(result, Ok(Value::List(value.into_iter().map(Value::U8).collect())));
         }
 
         #[test]
         fn test_list_list_u64_param(value: Vec<Vec<u64>>) {
             let json = JsonValue::Array(value.iter().map(|v| JsonValue::Array(v.iter().map(|n| JsonValue::Number(Number::from(*n))).collect())).collect());
             let result = validate_function_parameter(&json, &AnalysedType::List(Box::new(AnalysedType::List(Box::new(AnalysedType::U64)))));
-            prop_assert_eq!(result, Ok(Value::List(value.into_iter().map(|v| Value::List(v.into_iter().map(|n| Value::U64(n)).collect())).collect())));
+            prop_assert_eq!(result, Ok(Value::List(value.into_iter().map(|v| Value::List(v.into_iter().map(Value::U64).collect())).collect())));
         }
 
         #[test]
@@ -945,9 +967,9 @@ mod tests {
             });
             prop_assert_eq!(result, Ok(Value::Result(
                 match value {
-                    Ok(None) => Ok(Box::new(Value::Option(None))),
-                    Ok(Some(v)) => Ok(Box::new(Value::Option(Some(Box::new(Value::S32(v)))))),
-                    Err(e) => Err(Box::new(Value::String(e))),
+                    Ok(None) => Ok(Some(Box::new(Value::Option(None)))),
+                    Ok(Some(v)) => Ok(Some(Box::new(Value::Option(Some(Box::new(Value::S32(v))))))),
+                    Err(e) => Err(Some(Box::new(Value::String(e)))),
                 }
             )));
         }
@@ -973,8 +995,8 @@ mod tests {
             prop_assert_eq!(result, Ok(Value::Variant {
                 case_idx: discriminator as u32,
                 case_value: match discriminator {
-                    0 => Box::new(Value::Tuple(vec![Value::U32(first.0), Value::U32(first.1)])),
-                    1 => Box::new(Value::String(second)),
+                    0 => Some(Box::new(Value::Tuple(vec![Value::U32(first.0), Value::U32(first.1)]))),
+                    1 => Some(Box::new(Value::String(second))),
                     _ => panic!("Invalid discriminator value"),
                 }
             }));
@@ -1099,10 +1121,10 @@ mod tests {
             let result = Value::Record(
                 value.iter().map(|(_, v)| Value::List(v.iter().map(|n| Value::U8(*n)).collect())).collect());
             let expected_type = AnalysedType::Record(
-                value.iter().map(|(k, _)| (k.clone(), AnalysedType::List(Box::new(AnalysedType::U8))).into()).collect());
+                value.iter().map(|(k, _)| (k.clone(), AnalysedType::List(Box::new(AnalysedType::U8)))).collect());
             let json = validate_function_result(result, &expected_type);
             let expected_json = JsonValue::Object(
-                value.iter().map(|(k, v)| (k.clone(), JsonValue::Array(v.iter().map(|n| JsonValue::Number(Number::from(*n))).collect())).into()).collect());
+                value.iter().map(|(k, v)| (k.clone(), JsonValue::Array(v.iter().map(|n| JsonValue::Number(Number::from(*n))).collect()))).collect());
             prop_assert_eq!(json, Ok(expected_json));
         }
 
@@ -1145,8 +1167,8 @@ mod tests {
             let value = Value::Variant {
                 case_idx: discriminator as u32,
                 case_value: match discriminator {
-                    0 => Box::new(Value::Tuple(vec![Value::U32(first.0), Value::U32(first.1)])),
-                    1 => Box::new(Value::String(second.clone())),
+                    0 => Some(Box::new(Value::Tuple(vec![Value::U32(first.0), Value::U32(first.1)]))),
+                    1 => Some(Box::new(Value::String(second.clone()))),
                     _ => panic!("Invalid discriminator value"),
                 }
             };

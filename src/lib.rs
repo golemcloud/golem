@@ -64,12 +64,12 @@ pub enum Value {
     Record(Vec<Value>),
     Variant {
         case_idx: u32,
-        case_value: Box<Value>,
+        case_value: Option<Box<Value>>,
     },
     Enum(u32),
     Flags(Vec<bool>),
     Option(Option<Box<Value>>),
-    Result(Result<Box<Value>, Box<Value>>),
+    Result(Result<Option<Box<Value>>, Option<Box<Value>>>),
 }
 
 impl From<Value> for WitValue {
@@ -127,38 +127,44 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> TypeIndex {
         }
         Value::Variant {
             case_idx,
-            case_value,
+            case_value: Some(case_value),
         } => {
             let variant_idx = builder.add_variant(case_idx, -1);
             let inner_idx = build_wit_value(*case_value, builder);
-            builder.finish_seq(vec![inner_idx], variant_idx);
+            builder.finish_child(inner_idx, variant_idx);
             variant_idx
         }
+        Value::Variant {
+            case_idx,
+            case_value: None,
+        } => builder.add_variant_unit(case_idx),
         Value::Enum(value) => builder.add_enum_value(value),
         Value::Flags(values) => builder.add_flags(values),
         Value::Option(value) => {
             if let Some(value) = value {
                 let option_idx = builder.add_option_some();
                 let inner_idx = build_wit_value(*value, builder);
-                builder.finish_seq(vec![inner_idx], option_idx);
+                builder.finish_child(inner_idx, option_idx);
                 option_idx
             } else {
                 builder.add_option_none()
             }
         }
         Value::Result(result) => match result {
-            Ok(ok) => {
+            Ok(Some(ok)) => {
                 let result_idx = builder.add_result_ok();
                 let inner_idx = build_wit_value(*ok, builder);
-                builder.finish_seq(vec![inner_idx], result_idx);
+                builder.finish_child(inner_idx, result_idx);
                 result_idx
             }
-            Err(err) => {
+            Ok(None) => builder.add_result_ok_unit(),
+            Err(Some(err)) => {
                 let result_idx = builder.add_result_err();
                 let inner_idx = build_wit_value(*err, builder);
-                builder.finish_seq(vec![inner_idx], result_idx);
+                builder.finish_child(inner_idx, result_idx);
                 result_idx
             }
+            Err(None) => builder.add_result_err_unit(),
         },
     }
 }
@@ -180,13 +186,17 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
             }
             Value::Record(fields)
         }
-        WitNode::VariantValue((case_idx, inner_idx)) => {
+        WitNode::VariantValue((case_idx, Some(inner_idx))) => {
             let value = build_tree(&nodes[*inner_idx as usize], nodes);
             Value::Variant {
                 case_idx: *case_idx,
-                case_value: Box::new(value),
+                case_value: Some(Box::new(value)),
             }
         }
+        WitNode::VariantValue((case_idx, None)) => Value::Variant {
+            case_idx: *case_idx,
+            case_value: None,
+        },
         WitNode::EnumValue(value) => Value::Enum(*value),
         WitNode::FlagsValue(values) => Value::Flags(values.clone()),
         WitNode::TupleValue(indices) => {
@@ -210,14 +220,16 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
             Value::Option(Some(Box::new(value)))
         }
         WitNode::OptionValue(None) => Value::Option(None),
-        WitNode::ResultValue(Ok(index)) => {
+        WitNode::ResultValue(Ok(Some(index))) => {
             let value = build_tree(&nodes[*index as usize], nodes);
-            Value::Result(Ok(Box::new(value)))
+            Value::Result(Ok(Some(Box::new(value))))
         }
-        WitNode::ResultValue(Err(index)) => {
+        WitNode::ResultValue(Ok(None)) => Value::Result(Ok(None)),
+        WitNode::ResultValue(Err(Some(index))) => {
             let value = build_tree(&nodes[*index as usize], nodes);
-            Value::Result(Err(Box::new(value)))
+            Value::Result(Err(Some(Box::new(value))))
         }
+        WitNode::ResultValue(Err(None)) => Value::Result(Err(None)),
         WitNode::PrimU8(value) => Value::U8(*value),
         WitNode::PrimU16(value) => Value::U16(*value),
         WitNode::PrimU32(value) => Value::U32(*value),

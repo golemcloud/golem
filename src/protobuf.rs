@@ -41,8 +41,11 @@ impl From<super::WitNode> for WitNode {
             },
             super::WitNode::ResultValue(type_idx) => WitNode {
                 value: Some(wit_node::Value::Result(WitResultNode {
-                    ok: type_idx.ok(),
-                    err: type_idx.err(),
+                    discriminant: if type_idx.is_ok() { 0 } else { 1 },
+                    value: match type_idx {
+                        Ok(index) => index,
+                        Err(index) => index,
+                    },
                 })),
             },
             super::WitNode::PrimU8(value) => WitNode {
@@ -141,11 +144,13 @@ impl TryFrom<WitNode> for super::WitNode {
             Some(wit_node::Value::Option(WitOptionNode { value })) => {
                 Ok(super::WitNode::OptionValue(value))
             }
-            Some(wit_node::Value::Result(WitResultNode { ok, err })) => match (ok, err) {
-                (Some(_), Some(_)) => Err("Protobuf WitResultNode has both ok and err".to_string()),
-                (Some(ok), None) => Ok(super::WitNode::ResultValue(Ok(ok))),
-                (None, Some(err)) => Ok(super::WitNode::ResultValue(Err(err))),
-                (None, None) => Err("Protobuf WitResultNode has neither ok nor err".to_string()),
+            Some(wit_node::Value::Result(WitResultNode {
+                discriminant,
+                value,
+            })) => match discriminant {
+                0 => Ok(super::WitNode::ResultValue(Ok(value))),
+                1 => Ok(super::WitNode::ResultValue(Err(value))),
+                _ => Err("Protobuf WitResultNode has invalid discriminant".to_string()),
             },
             Some(wit_node::Value::U8(WitPrimU8Node { value })) => {
                 Ok(super::WitNode::PrimU8(value as u8))
@@ -262,7 +267,7 @@ impl From<Value> for Val {
             } => Val {
                 val: Some(val::Val::Variant(Box::new(ValVariant {
                     discriminant: case_idx as i32,
-                    value: Some(Box::new((*case_value).into())),
+                    value: case_value.map(|case_value| Box::new((*case_value).into())),
                 }))),
             },
             Value::Enum(value) => Val {
@@ -299,13 +304,13 @@ impl From<Value> for Val {
             Value::Result(Ok(value)) => Val {
                 val: Some(val::Val::Result(Box::new(ValResult {
                     discriminant: 0,
-                    value: Some(Box::new((*value).into())),
+                    value: value.map(|value| Box::new((*value).into())),
                 }))),
             },
             Value::Result(Err(value)) => Val {
                 val: Some(val::Val::Result(Box::new(ValResult {
                     discriminant: 1,
-                    value: Some(Box::new((*value).into())),
+                    value: value.map(|value| Box::new((*value).into())),
                 }))),
             },
         }
@@ -364,13 +369,16 @@ impl TryFrom<Val> for Value {
             )),
             Some(val::Val::Variant(variant)) => {
                 let discriminant = variant.discriminant as u32;
-                let value = variant
-                    .value
-                    .ok_or("Protobuf ValVariant has no value".to_string())?;
-                Ok(Value::Variant {
-                    case_idx: discriminant,
-                    case_value: Box::new((*value).try_into()?),
-                })
+                match variant.value {
+                    Some(value) => Ok(Value::Variant {
+                        case_idx: discriminant,
+                        case_value: Some(Box::new((*value).try_into()?)),
+                    }),
+                    None => Ok(Value::Variant {
+                        case_idx: discriminant,
+                        case_value: None,
+                    }),
+                }
             }
             Some(val::Val::Enum(ValEnum { discriminant })) => Ok(Value::Enum(discriminant as u32)),
             Some(val::Val::Flags(ValFlags { count, value })) => {
@@ -397,8 +405,12 @@ impl TryFrom<Val> for Value {
                     value,
                 } = *inner;
                 match (discriminant, value) {
-                    (0, Some(value)) => Ok(Value::Result(Ok(Box::new((*value).try_into()?)))),
-                    (1, Some(value)) => Ok(Value::Result(Err(Box::new((*value).try_into()?)))),
+                    (0, Some(value)) => Ok(Value::Result(Ok(Some(Box::new((*value).try_into()?))))),
+                    (0, None) => Ok(Value::Result(Ok(None))),
+                    (1, Some(value)) => {
+                        Ok(Value::Result(Err(Some(Box::new((*value).try_into()?)))))
+                    }
+                    (1, None) => Ok(Value::Result(Err(None))),
                     _ => Err("Protobuf ValResult has invalid discriminant or value".to_string()),
                 }
             }

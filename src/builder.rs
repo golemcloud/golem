@@ -36,6 +36,7 @@ pub trait NodeBuilder: Sized {
 
     fn record(self) -> WitValueChildItemsBuilder<Self>;
     fn variant(self, case_idx: u32) -> WitValueChildBuilder<Self>;
+    fn variant_unit(self, case_idx: u32) -> Self::Result;
     fn tuple(self) -> WitValueChildItemsBuilder<Self>;
     fn list(self) -> WitValueChildItemsBuilder<Self>;
 
@@ -43,7 +44,9 @@ pub trait NodeBuilder: Sized {
     fn option_none(self) -> Self::Result;
 
     fn result_ok(self) -> WitValueChildBuilder<Self>;
+    fn result_ok_unit(self) -> Self::Result;
     fn result_err(self) -> WitValueChildBuilder<Self>;
+    fn result_err_unit(self) -> Self::Result;
 
     fn finish(self) -> Self::Result;
 }
@@ -119,7 +122,11 @@ impl WitValueBuilder {
     }
 
     pub(crate) fn add_variant(&mut self, idx: u32, target_idx: TypeIndex) -> TypeIndex {
-        self.add(WitNode::VariantValue((idx, target_idx)))
+        self.add(WitNode::VariantValue((idx, Some(target_idx))))
+    }
+
+    pub(crate) fn add_variant_unit(&mut self, idx: u32) -> TypeIndex {
+        self.add(WitNode::VariantValue((idx, None)))
     }
 
     pub(crate) fn add_enum_value(&mut self, value: u32) -> TypeIndex {
@@ -147,11 +154,19 @@ impl WitValueBuilder {
     }
 
     pub(crate) fn add_result_ok(&mut self) -> TypeIndex {
-        self.add(WitNode::ResultValue(Ok(-1)))
+        self.add(WitNode::ResultValue(Ok(Some(-1))))
+    }
+
+    pub(crate) fn add_result_ok_unit(&mut self) -> TypeIndex {
+        self.add(WitNode::ResultValue(Ok(None)))
     }
 
     pub(crate) fn add_result_err(&mut self) -> TypeIndex {
-        self.add(WitNode::ResultValue(Err(-1)))
+        self.add(WitNode::ResultValue(Err(Some(-1))))
+    }
+
+    pub(crate) fn add_result_err_unit(&mut self) -> TypeIndex {
+        self.add(WitNode::ResultValue(Err(None)))
     }
 
     pub(crate) fn finish_child(&mut self, child: TypeIndex, target_idx: TypeIndex) {
@@ -161,10 +176,15 @@ impl WitValueBuilder {
                 None => panic!("finish_child called on None option"),
             },
             WitNode::ResultValue(ref mut result_item) => match result_item {
-                Ok(idx) => *idx = child,
-                Err(idx) => *idx = child,
+                Ok(Some(idx)) => *idx = child,
+                Ok(None) => panic!("finish_child called on Ok(None) result"),
+                Err(Some(idx)) => *idx = child,
+                Err(None) => panic!("finish_child called on Err(None) result"),
             },
-            WitNode::VariantValue((_, ref mut result_item)) => *result_item = child,
+            WitNode::VariantValue((_, ref mut result_item)) => match result_item {
+                Some(idx) => *idx = child,
+                None => panic!("finish_child called on variant with no inner value"),
+            },
             _ => {
                 panic!(
                     "finish_child called on a node that is neither an option, result or variant"
@@ -184,31 +204,8 @@ impl WitValueBuilder {
             WitNode::ListValue(ref mut result_items) => {
                 *result_items = items;
             }
-            WitNode::OptionValue(ref mut result_item) => {
-                *result_item = items.first().copied();
-            }
-            WitNode::ResultValue(ref mut result_item) => match result_item {
-                Ok(idx) => {
-                    *idx = items
-                        .first()
-                        .copied()
-                        .expect("finish_seq called with no items for result")
-                }
-                Err(idx) => {
-                    *idx = items
-                        .first()
-                        .copied()
-                        .expect("finish_seq called with no items for result")
-                }
-            },
-            WitNode::VariantValue((_, ref mut result_item)) => {
-                *result_item = items
-                    .first()
-                    .copied()
-                    .expect("finish_seq called with no items for variant");
-            }
             _ => {
-                panic!("finish_seq called on a node that is neither a list nor a tuple");
+                panic!("finish_seq called on a node that is neither a record, list, or tuple");
             }
         }
     }
@@ -313,6 +310,11 @@ impl NodeBuilder for WitValueBuilder {
         }
     }
 
+    fn variant_unit(mut self, case_idx: u32) -> Self::Result {
+        let _ = self.add_variant_unit(case_idx);
+        self.build()
+    }
+
     fn tuple(mut self) -> WitValueChildItemsBuilder<WitValueBuilder> {
         let tuple_idx = self.add_tuple();
         WitValueChildItemsBuilder::new(self, tuple_idx)
@@ -344,12 +346,22 @@ impl NodeBuilder for WitValueBuilder {
         }
     }
 
+    fn result_ok_unit(mut self) -> Self::Result {
+        let _ = self.add_result_ok_unit();
+        self.build()
+    }
+
     fn result_err(mut self) -> WitValueChildBuilder<Self> {
         let result_idx = self.add_result_err();
         WitValueChildBuilder {
             builder: self,
             target_idx: result_idx,
         }
+    }
+
+    fn result_err_unit(mut self) -> Self::Result {
+        let _ = self.add_result_err_unit();
+        self.build()
     }
 
     fn finish(self) -> Self::Result {
@@ -509,6 +521,12 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueItemBuilder<ParentBuild
         }
     }
 
+    fn variant_unit(mut self, case_idx: u32) -> Self::Result {
+        let variant_idx = self.parent_builder().add_variant_unit(case_idx);
+        self.child_items_builder.add_item(variant_idx);
+        self.child_items_builder
+    }
+
     fn tuple(mut self) -> WitValueChildItemsBuilder<Self> {
         let target_idx = self.parent_builder().add_tuple();
         self.child_items_builder.add_item(target_idx);
@@ -545,6 +563,12 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueItemBuilder<ParentBuild
         }
     }
 
+    fn result_ok_unit(mut self) -> Self::Result {
+        let result_idx = self.parent_builder().add_result_ok_unit();
+        self.child_items_builder.add_item(result_idx);
+        self.child_items_builder
+    }
+
     fn result_err(mut self) -> WitValueChildBuilder<Self> {
         let result_idx = self.parent_builder().add_result_err();
         self.child_items_builder.add_item(result_idx);
@@ -552,6 +576,12 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueItemBuilder<ParentBuild
             builder: self,
             target_idx: result_idx,
         }
+    }
+
+    fn result_err_unit(mut self) -> Self::Result {
+        let result_idx = self.parent_builder().add_result_err_unit();
+        self.child_items_builder.add_item(result_idx);
+        self.child_items_builder
     }
 
     fn finish(self) -> Self::Result {
@@ -693,6 +723,13 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueChildBuilder<ParentBuil
         }
     }
 
+    fn variant_unit(mut self, case_idx: u32) -> Self::Result {
+        let variant_idx = self.parent_builder().add_variant_unit(case_idx);
+        let target_idx = self.target_idx;
+        self.parent_builder().finish_child(variant_idx, target_idx);
+        self.builder
+    }
+
     fn tuple(mut self) -> WitValueChildItemsBuilder<Self> {
         let tuple_idx = self.parent_builder().add_tuple();
         let target_idx = self.target_idx;
@@ -734,6 +771,13 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueChildBuilder<ParentBuil
         }
     }
 
+    fn result_ok_unit(mut self) -> Self::Result {
+        let result_idx = self.parent_builder().add_result_ok_unit();
+        let target_idx = self.target_idx;
+        self.parent_builder().finish_child(result_idx, target_idx);
+        self.builder
+    }
+
     fn result_err(mut self) -> WitValueChildBuilder<Self> {
         let result_idx = self.parent_builder().add_result_err();
         let target_idx = self.target_idx;
@@ -742,6 +786,13 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueChildBuilder<ParentBuil
             builder: self,
             target_idx: result_idx,
         }
+    }
+
+    fn result_err_unit(mut self) -> Self::Result {
+        let result_idx = self.parent_builder().add_result_err_unit();
+        let target_idx = self.target_idx;
+        self.parent_builder().finish_child(result_idx, target_idx);
+        self.builder
     }
 
     fn finish(self) -> Self::Result {

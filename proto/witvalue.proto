@@ -38,7 +38,7 @@ message WitRecordNode {
 
 message WitVariantNode {
   uint32 case_index = 1;
-  int32 case_value = 2;
+  optional int32 case_value = 2;
 }
 
 message WitEnumNode {
@@ -62,8 +62,8 @@ message WitOptionNode {
 }
 
 message WitResultNode {
-  optional int32 ok = 1;
-  optional int32 err = 2;
+  int32 discriminant = 1;
+  optional int32 value = 2;
 }
 
 message WitPrimU8Node {
