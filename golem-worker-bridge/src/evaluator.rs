@@ -258,7 +258,7 @@ impl Evaluator<Value> for Expr {
                                 if let Some(primitive) = value.as_str() {
                                     result.push_str(primitive)
                                 } else {
-                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} to form strings. Please check the expression", variant)));
+                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} to form strings. Please check the expression", value)));
                                 }
                             }
 
