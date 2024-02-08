@@ -18,44 +18,6 @@ Currently, we are just focusing on the basic registration of the endpoint defini
 Once you register this Endpoint definitions that relates to a specific worker and function, you can now use API Gateway
 to forward request to the worker bridge. Let's say we choose Tyk as the API Gateway. A typical API definition required by Tyk is
 
-```
-{
-    "name": "Tyk Test Keyless API",
-    "api_id": "keyless",
-    "org_id": "default",
-    "definition": {
-        "location": "header",
-        "key": "version"
-    },
-    "use_keyless": true,
-    "version_data": {
-        "not_versioned": true,
-        "versions": {
-            "Default": {
-                "name": "Default"
-            }
-        }
-    },
-    "custom_middleware": {
-        "pre": [
-          {
-            "name": "testJSVMData",
-            "path": "./middleware/injectHeader.js",
-            "require_session": false,
-            "raw_body_only": false
-          }
-        ]
-  },
-    "driver": "otto",
-    "proxy": {
-        "listen_path": "/keyless-test2/",
-        "target_url": "http://192.168.18.202:9006/",
-        "strip_listen_path": true
-    }
-}
-
-```
-
 Below given are the step by step instructions to follow to try all of this in Local.
 
 ### Step 1: Spin up Golem
