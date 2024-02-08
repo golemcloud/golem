@@ -11,8 +11,7 @@ Firstly, spin up golem services using docker-compose in [docker-examples](docker
 of common port configurations. You can  override these variables or update the existig .env file in your local if there are port conflicts and they are not meant to. Consider these examples as a simple reference for you to spin up the OSS golem services quickly and try things out. 
 
 ```
-git clone https://github.com/golemcloud/golem-services.git
-cd golem-services/docker-examples
+curl -O https://raw.githubusercontent.com/golemcloud/golem-services/main/docker-examples/docker-compose-sqlite.yaml -O https://raw.githubusercontent.com/golemcloud/golem-services/main/docker-examples/.env
 docker-compose -f docker-compose-sqlite.yaml up
 
 ```
