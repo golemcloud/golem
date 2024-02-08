@@ -76,6 +76,8 @@ impl CustomRequestEndpoint {
             .get("X-API-Definition-Id")
             .ok_or("Missing X-API-Definition-Id header");
 
+        dbg!("The headers are {}", &headers);
+
         let api_definition_id_header = match api_definition_id_res {
             Ok(api_definition_id) => api_definition_id,
             Err(err) => {
