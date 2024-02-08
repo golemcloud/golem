@@ -8,7 +8,14 @@ See [Golem Cloud](https://golem.cloud) for more information.
 
 
 Firstly, spin up golem services using docker-compose in [docker-examples](docker-examples) folder.
-Afterwards,
+
+```
+git clone https://github.com/golemcloud/golem-services.git
+cd golem-services/docker-examples
+docker-compose -f docker-compose-sqlite.yaml up
+
+```
+Afterwards in a separate terminal,
 
 ```bash
 
