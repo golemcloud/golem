@@ -27,11 +27,6 @@ spec:
           image: "{{ .Values.workerExecutor.image }}"
           imagePullPolicy: {{.Values.workerExecutor.imagePullPolicy}}
           env:
-
-{{/*            - GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION=us-east-1*/}}
-{{/*            - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT="data/templates"*/}}
-{{/*            - GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE="Local"*/}}
-
             - name: ENVIRONMENT
               value: {{.Values.env}}
             - name: REDIS_HOST
@@ -74,6 +69,12 @@ spec:
               value: {{ .Values.workerExecutor.ports.http }}
             - name: GOLEM__PORT
               value: {{ .Values.workerExecutor.ports.grpc }}
+            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
+              value: "Local"
+            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION
+              value: "us-east-1"
+            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT
+              value: "/golem/template"
           ports:
             - name: http
               containerPort: {{ .Values.workerExecutor.ports.http }}
@@ -87,6 +88,9 @@ spec:
             failureThreshold: 5
             initialDelaySeconds: 45
             timeoutSeconds: 2
+          volumeMounts:
+            - name: golem-template-store-{{.Values.env}}
+              mountPath: /golem/template
 
 ---
 
@@ -186,9 +190,6 @@ spec:
           image: "{{ .Values.golemService.image }}"
           imagePullPolicy: {{.Values.golemService.imagePullPolicy}}
           env:
-{{/*            - GOLEM__TEMPLATES__STORE__TYPE="Local"*/}}
-{{/*            - GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX=""*/}}
-{{/*            - GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH=/template_store       */}}
             - name: ENVIRONMENT
               value: {{.Values.env}}
             - name: GOLEM__ROUTING_TABLE__HOST
@@ -219,6 +220,12 @@ spec:
               value: {{ .Values.golemService.ports.http }}
             - name: GOLEM__GRPC_PORT
               value: {{ .Values.golemService.ports.grpc }}
+            - name: GOLEM__TEMPLATES__STORE__TYPE
+              value: "Local"
+            - name: GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX
+              value: ""
+            - name: GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH
+              value: "/golem/template"
           ports:
             - name: http
               containerPort: {{ .Values.golemService.ports.http }}
@@ -238,3 +245,6 @@ spec:
             periodSeconds: 10
             failureThreshold: 5
             initialDelaySeconds: 20
+          volumeMounts:
+            - name: golem-template-store-{{.Values.env}}
+              mountPath: /golem/template
