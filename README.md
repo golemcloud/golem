@@ -8,7 +8,7 @@ See [Golem Cloud](https://golem.cloud) for more information.
 
 
 Firstly, spin up golem services using docker-compose in [docker-examples](docker-examples) folder. Please note that there is .env file consisting 
-of common port configurations. You can  override these variables or update the existig .env file in your local if there are port conflicts and they are not meant to. Consider these examples as a simple reference for you to spin up the OSS golem services quickly and try things out. 
+of common port configurations. You can override these variables in .env file in your local if there are port conflicts. Consider these examples as a simple reference for you to spin up the OSS golem services quickly and try things out. You may have a different approach and a different practice on how to configure docker!
 
 ```
 curl -O https://raw.githubusercontent.com/golemcloud/golem-services/main/docker-examples/docker-compose-sqlite.yaml -O https://raw.githubusercontent.com/golemcloud/golem-services/main/docker-examples/.env
