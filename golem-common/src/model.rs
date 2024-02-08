@@ -339,7 +339,7 @@ impl ShardId {
         ((high as i64) << 32) | ((low as i64) & 0xFFFFFFFF)
     }
 
-    fn hash_string(string: &String) -> i32 {
+    fn hash_string(string: &str) -> i32 {
         let mut hash = 0;
         if hash == 0 && !string.is_empty() {
             for val in &mut string.bytes() {
