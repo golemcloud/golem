@@ -148,3 +148,11 @@ With all this in place, you can now make requests to the API Gateway and see the
 curl -X GET http://localhost:8080/hmmm -H "X-Tyk-Authorization: foo" -H "X-API-Definition-Id: my-api"
 
 [[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
+
+```
+## Generation of Open API spec
+
+Currently the requests to the gateway is forwarded as it is to worker bridge. 
+This can work in various places. However, in some cases, it is important to generate Open API spec for the endpoints that are registered with the worker bridge,
+and upload it to the gateway so that these endpoints can be further configured for authentication , authorisation, rate limits,
+caching etc using Gateway console individually. This is not a mandatory step, but can be super useful in some cases.
