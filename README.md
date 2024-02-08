@@ -7,7 +7,8 @@ See [Golem Cloud](https://golem.cloud) for more information.
 ## Getting Started
 
 
-Firstly, spin up golem services using docker-compose in [docker-examples](docker-examples) folder.
+Firstly, spin up golem services using docker-compose in [docker-examples](docker-examples) folder. Please note that there is .env file consisting 
+of common port configurations.
 
 ```
 git clone https://github.com/golemcloud/golem-services.git
