@@ -9,11 +9,156 @@ use poem_openapi::*;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
-use crate::request_data::common::{ApiEndpointError, ApiTags};
+use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::api_definition;
 use crate::api_definition::{ApiDefinitionId, MethodPattern};
 use crate::expr::Expr;
 use crate::register::RegisterApiDefinition;
+
+pub struct ApiDefinitionEndpoints {
+    pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
+}
+
+#[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
+impl ApiDefinitionEndpoints {
+    pub fn new(
+        definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
+    ) -> Self {
+        Self {
+            project_service,
+            auth_service,
+            definition_service,
+            definition_validator,
+            deployment_service,
+            domain_route,
+        }
+    }
+
+    #[oai(path = "/", method = "put")]
+    async fn create_or_update(
+        &self,
+        payload: Json<ApiDefinition>,
+    ) -> Result<Json<ApiDefinition>, ApiEndpointError> {
+        let api_definition_id = &payload.id;
+
+        info!(
+            "Save API definition - id: {}",
+            api_definition_id
+        );
+
+        let definition: api_definition::ApiDefinition = payload
+            .0
+            .clone()
+            .try_into()
+            .map_err(ApiEndpointError::bad_request)?;
+
+        self.definition_service
+            .register(&definition)
+            .await
+            .map_err(|e| {
+                error!(
+                    "API definition id: {} - register error: {}",
+                    api_definition_id, e
+                );
+                ApiEndpointError::internal(e)
+            })?;
+
+        let data = self
+            .definition_service
+            .get(api_definition_id)
+            .await
+            .map_err(ApiEndpointError::internal)?;
+
+        let definition = data.ok_or(ApiEndpointError::not_found("API Definition not found"))?;
+
+        let definition: ApiDefinition =
+            definition.try_into().map_err(ApiEndpointError::internal)?;
+
+        Ok(Json(definition))
+    }
+
+    #[oai(path = "/", method = "get")]
+    async fn get(
+        &self,
+        #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
+    ) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
+        let api_definition_id_optional = api_definition_id_query.0;
+
+        if let Some(api_definition_id) = api_definition_id_optional {
+            info!(
+                "Get API definition - id: {}",
+                 api_definition_id
+            );
+
+            let data = self
+                .definition_service
+                .get(&api_definition_id)
+                .await
+                .map_err(ApiEndpointError::internal)?;
+
+            let values: Vec<ApiDefinition> = match data {
+                Some(d) => {
+                    let definition: ApiDefinition = d
+                        .try_into()
+                        .map_err(ApiEndpointError::internal)?;
+                    vec![definition]
+                }
+                None => vec![],
+            };
+
+            Ok(Json(values))
+        } else {
+            info!("Get all API definitions");
+
+            let data = self
+                .definition_service
+                .get_all()
+                .await
+                .map_err(ApiEndpointError::internal)?;
+
+            let mut values: Vec<ApiDefinition> = vec![];
+
+            for d in data {
+                let definition: ApiDefinition = d
+                    .try_into()
+                    .map_err(ApiEndpointError::internal)?;
+                values.push(definition);
+            }
+
+            Ok(Json(values))
+        }
+    }
+
+    #[oai(path = "/", method = "delete")]
+    async fn delete(
+        &self,
+        #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
+    ) -> Result<Json<String>, ApiEndpointError> {
+        let api_definition_id = api_definition_id_query.0;
+
+        info!(
+            "Delete API definition - id: {}",
+            api_definition_id
+        );
+
+        let data = self
+            .definition_service
+            .get(&api_definition_id)
+            .await
+            .map_err(ApiEndpointError::internal)?;
+
+        if data.is_some() {
+            self.definition_service
+                .delete(&api_definition_id)
+                .await
+                .map_err(ApiEndpointError::internal)?;
+
+            return Ok(Json("API definition deleted".to_string()));
+        }
+
+        Err(ApiEndpointError::not_found("API definition not found"))
+    }
+}
 
 // Mostly this data structures that represents the actual incoming request
 // exist due to the presence of complicated Expr data type in api_definition::ApiDefiniton.
@@ -215,150 +360,5 @@ impl TryInto<api_definition::GolemWorkerBinding> for GolemWorkerBinding {
             function_params,
             response,
         })
-    }
-}
-
-pub struct ApiDefinitionApi {
-    pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
-}
-
-#[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
-impl ApiDefinitionApi {
-    pub fn new(
-        definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
-    ) -> Self {
-        Self {
-            project_service,
-            auth_service,
-            definition_service,
-            definition_validator,
-            deployment_service,
-            domain_route,
-        }
-    }
-
-    #[oai(path = "/", method = "put")]
-    async fn create_or_update(
-        &self,
-        payload: Json<ApiDefinition>,
-    ) -> Result<Json<ApiDefinition>, ApiEndpointError> {
-        let api_definition_id = &payload.id;
-
-        info!(
-            "Save API definition - id: {}",
-            api_definition_id
-        );
-
-        let definition: api_definition::ApiDefinition = payload
-            .0
-            .clone()
-            .try_into()
-            .map_err(ApiEndpointError::bad_request)?;
-
-        self.definition_service
-            .register(&definition)
-            .await
-            .map_err(|e| {
-                error!(
-                    "API definition id: {} - register error: {}",
-                    api_definition_id, e
-                );
-                ApiEndpointError::internal(e)
-            })?;
-
-        let data = self
-            .definition_service
-            .get(api_definition_id)
-            .await
-            .map_err(ApiEndpointError::internal)?;
-
-        let definition = data.ok_or(ApiEndpointError::not_found("API Definition not found"))?;
-
-        let definition: ApiDefinition =
-            definition.try_into().map_err(ApiEndpointError::internal)?;
-
-        Ok(Json(definition))
-    }
-
-    #[oai(path = "/", method = "get")]
-    async fn get(
-        &self,
-        #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
-    ) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
-        let api_definition_id_optional = api_definition_id_query.0;
-
-        if let Some(api_definition_id) = api_definition_id_optional {
-            info!(
-                "Get API definition - id: {}",
-                 api_definition_id
-            );
-
-            let data = self
-                .definition_service
-                .get(&api_definition_id)
-                .await
-                .map_err(ApiEndpointError::internal)?;
-
-            let values: Vec<ApiDefinition> = match data {
-                Some(d) => {
-                    let definition: ApiDefinition = d
-                        .try_into()
-                        .map_err(ApiEndpointError::internal)?;
-                    vec![definition]
-                }
-                None => vec![],
-            };
-
-            Ok(Json(values))
-        } else {
-            info!("Get all API definitions");
-
-            let data = self
-                .definition_service
-                .get_all()
-                .await
-                .map_err(ApiEndpointError::internal)?;
-
-            let mut values: Vec<ApiDefinition> = vec![];
-
-            for d in data {
-                let definition: ApiDefinition = d
-                    .try_into()
-                    .map_err(ApiEndpointError::internal)?;
-                values.push(definition);
-            }
-
-            Ok(Json(values))
-        }
-    }
-
-    #[oai(path = "/", method = "delete")]
-    async fn delete(
-        &self,
-        #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
-    ) -> Result<Json<String>, ApiEndpointError> {
-        let api_definition_id = api_definition_id_query.0;
-
-        info!(
-            "Delete API definition - id: {}",
-            api_definition_id
-        );
-
-        let data = self
-            .definition_service
-            .get(&api_definition_id)
-            .await
-            .map_err(ApiEndpointError::internal)?;
-
-        if data.is_some() {
-            self.definition_service
-                .delete(&api_definition_id)
-                .await
-                .map_err(ApiEndpointError::internal)?;
-
-            return Ok(Json("API definition deleted".to_string()));
-        }
-
-        Err(ApiEndpointError::not_found("API definition not found"))
     }
 }

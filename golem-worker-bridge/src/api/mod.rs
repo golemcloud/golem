@@ -1,10 +1,14 @@
+pub mod api_definition_endpoints;
+pub mod common;
+pub mod custom_request_executor;
+
 use std::sync::Arc;
 
 use poem::Route;
 use poem_openapi::OpenApiService;
+use crate::api::api_definition_endpoints::ApiDefinitionEndpoints;
 
 use crate::register::RegisterApiDefinition;
-use crate::request_data::api_definition::ApiDefinitionApi;
 use crate::worker_request_executor::WorkerRequestExecutor;
 
 #[derive(Clone)]
@@ -21,7 +25,7 @@ pub struct ManagementOpenApiService {
 pub fn management_open_api_service(services: ApiServices) -> ManagementOpenApiService {
     let api_service = OpenApiService::new(
         (
-            ApiDefinitionApi::new(
+            ApiDefinitionEndpoints::new(
                 services.definition_service.clone(),
             )
         ),
@@ -47,11 +51,10 @@ pub fn management_routes(services: ApiServices) -> Route {
 
 
 pub fn gateway_routes(services: ApiServices) -> Route {
-    let api_handler = api_gateway::ApiGatewayApi::new(
+    let custom_request_executor = custom_request_executor::CustomRequestExecutor::new(
         services.worker_request_executor,
-        services.deployment_service,
         services.definition_service,
     );
 
-    Route::new().nest("/", api_handler)
+    Route::new().nest("/", custom_request_executor)
 }

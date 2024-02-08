@@ -9,6 +9,7 @@ use poem_openapi::{Enum, NewType};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use Iterator;
+use poem_openapi::types::Type;
 
 use crate::expr::*;
 use crate::parser::path_pattern_parser::PathPatternParser;
