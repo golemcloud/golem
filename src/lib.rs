@@ -1,3 +1,5 @@
+// TODO: in all modules: Result and Variant optional types
+
 #[allow(unused)]
 #[rustfmt::skip]
 #[cfg(feature = "stub")]
@@ -38,7 +40,7 @@ bindgen!({
 });
 
 #[cfg(feature = "host")]
-pub use golem::rpc::types::{TypeIndex, WitNode, WitValue, HostWasmRpc};
+pub use golem::rpc::types::{HostWasmRpc, TypeIndex, WitNode, WitValue};
 
 /// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
 #[derive(Debug, Clone, PartialEq)]

@@ -757,925 +757,482 @@ fn validate_function_result(
     }
 }
 
-// TODO: reenable tests
-// #[cfg(test)]
-// mod tests {
-//     use serde_json::json;
-//     use std::collections::HashSet;
-//
-//     use proptest::prelude::*;
-//     use serde::Serialize;
-//     use serde_json::{Number, Value as JsonValue};
-//
-//     use crate::Value;
-//     use super::*;
-//
-//     #[derive(Debug, Clone, PartialEq)]
-//     struct RandomData {
-//         string: String,
-//         number: f64,
-//         nullable: Option<String>,
-//         collection: Vec<String>,
-//         boolean: bool,
-//         object: InnerObj,
-//     }
-//
-//     #[derive(Debug, Clone, PartialEq, Serialize)]
-//     struct InnerObj {
-//         nested: String,
-//     }
-//
-//     impl RandomData {
-//         fn get_type() -> AnalysedType {
-//             AnalysedType::Record(golem_api_grpc::proto::golem::template::TypeRecord {
-//                 fields: vec![
-//                     golem_api_grpc::proto::golem::template::NameTypePair {
-//                         name: "string".to_string(),
-//                         typ: Some(golem_api_grpc::proto::golem::template::Type {
-//                             r#type: Some(Type::Primitive(TypePrimitive {
-//                                 primitive: PrimitiveType::Str as i32,
-//                             })),
-//                         }),
-//                     },
-//                     golem_api_grpc::proto::golem::template::NameTypePair {
-//                         name: "number".to_string(),
-//                         typ: Some(golem_api_grpc::proto::golem::template::Type {
-//                             r#type: Some(Type::Primitive(TypePrimitive {
-//                                 primitive: PrimitiveType::F64 as i32,
-//                             })),
-//                         }),
-//                     },
-//                     golem_api_grpc::proto::golem::template::NameTypePair {
-//                         name: "nullable".to_string(),
-//                         typ: Some(golem_api_grpc::proto::golem::template::Type {
-//                             r#type: Some(Type::Option(Box::new(
-//                                 golem_api_grpc::proto::golem::template::TypeOption {
-//                                     elem: Some(Box::new(
-//                                         golem_api_grpc::proto::golem::template::Type {
-//                                             r#type: Some(Type::Primitive(TypePrimitive {
-//                                                 primitive: PrimitiveType::Str as i32,
-//                                             })),
-//                                         },
-//                                     )),
-//                                 },
-//                             ))),
-//                         }),
-//                     },
-//                     golem_api_grpc::proto::golem::template::NameTypePair {
-//                         name: "collection".to_string(),
-//                         typ: Some(golem_api_grpc::proto::golem::template::Type {
-//                             r#type: Some(Type::List(Box::new(
-//                                 golem_api_grpc::proto::golem::template::TypeList {
-//                                     elem: Some(Box::new(
-//                                         golem_api_grpc::proto::golem::template::Type {
-//                                             r#type: Some(Type::Primitive(TypePrimitive {
-//                                                 primitive: PrimitiveType::Str as i32,
-//                                             })),
-//                                         },
-//                                     )),
-//                                 },
-//                             ))),
-//                         }),
-//                     },
-//                     golem_api_grpc::proto::golem::template::NameTypePair {
-//                         name: "boolean".to_string(),
-//                         typ: Some(golem_api_grpc::proto::golem::template::Type {
-//                             r#type: Some(Type::Primitive(TypePrimitive {
-//                                 primitive: PrimitiveType::Bool as i32,
-//                             })),
-//                         }),
-//                     },
-//                     // one field is missing
-//                     golem_api_grpc::proto::golem::template::NameTypePair {
-//                         name: "object".to_string(),
-//                         typ: Some(golem_api_grpc::proto::golem::template::Type {
-//                             r#type: Some(Type::Record(
-//                                 golem_api_grpc::proto::golem::template::TypeRecord {
-//                                     fields: vec![
-//                                         golem_api_grpc::proto::golem::template::NameTypePair {
-//                                             name: "nested".to_string(),
-//                                             typ: Some(
-//                                                 golem_api_grpc::proto::golem::template::Type {
-//                                                     r#type: Some(Type::Primitive(TypePrimitive {
-//                                                         primitive: PrimitiveType::Str as i32,
-//                                                     })),
-//                                                 },
-//                                             ),
-//                                         },
-//                                     ],
-//                                 },
-//                             )),
-//                         }),
-//                     },
-//                 ],
-//             })
-//         }
-//     }
-//
-//     impl Arbitrary for RandomData {
-//         type Parameters = ();
-//         type Strategy = BoxedStrategy<Self>;
-//
-//         fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-//             (
-//                 any::<String>(),
-//                 any::<f64>(),
-//                 any::<Option<String>>(),
-//                 any::<Vec<String>>(),
-//                 any::<bool>(),
-//                 any::<InnerObj>(),
-//             )
-//                 .prop_map(
-//                     |(string, number, nullable, collection, boolean, object)| RandomData {
-//                         string,
-//                         number,
-//                         nullable,
-//                         collection,
-//                         boolean,
-//                         object,
-//                     },
-//                 )
-//                 .boxed()
-//         }
-//     }
-//
-//     impl Arbitrary for InnerObj {
-//         type Parameters = ();
-//         type Strategy = BoxedStrategy<Self>;
-//
-//         fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-//             any::<String>()
-//                 .prop_map(|nested| InnerObj { nested })
-//                 .boxed()
-//         }
-//     }
-//
-//     #[derive(Debug, Clone, PartialEq, Serialize)]
-//     struct FunctionOutputTestResult {
-//         val: Val,
-//         expected_type: Type,
-//     }
-//
-//     #[derive(Debug, Clone, PartialEq)]
-//     struct PrimitiveVal {
-//         val: Value,
-//         expected_type: AnalysedType,
-//     }
-//
-//     impl Arbitrary for PrimitiveVal {
-//         type Parameters = ();
-//         type Strategy = BoxedStrategy<Self>;
-//
-//         fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-//             prop_oneof![
-//                 any::<i32>().prop_map(|val| PrimitiveVal {
-//                     val: Value::S32(val),
-//                     expected_type: Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::S32 as i32
-//                     })
-//                 }),
-//                 any::<i8>().prop_map(|val| PrimitiveVal {
-//                     val: Value::S8(val as i32),
-//                     expected_type: Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::S8 as i32
-//                     })
-//                 }),
-//                 any::<i16>().prop_map(|val| PrimitiveVal {
-//                     val: Value::S16(val as i32),
-//                     expected_type: Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::S16 as i32
-//                     })
-//                 }),
-//                 any::<i64>().prop_map(|val| PrimitiveVal {
-//                     val: Value::S64(val),
-//                     expected_type: Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::S64 as i32
-//                     })
-//                 }),
-//                 any::<u8>().prop_map(|val| PrimitiveVal {
-//                     val: Value::U8(val as i32),
-//                     expected_type: Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::U8 as i32
-//                     })
-//                 }),
-//                 any::<u16>().prop_map(|val| PrimitiveVal {
-//                     val: Value::U16(val as i32),
-//                     expected_type: Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::U16 as i32
-//                     })
-//                 }),
-//                 any::<u32>().prop_map(|val| PrimitiveVal {
-//                     val: Value::U32(val as i64),
-//                     expected_type: Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::U32 as i32
-//                     })
-//                 }),
-//                 any::<u64>().prop_map(|val| PrimitiveVal {
-//                     val: Value::U64(val as i64),
-//                     expected_type: Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::U64 as i32
-//                     })
-//                 }),
-//                 any::<f32>().prop_map(|val| PrimitiveVal {
-//                     val: Value::F32(val),
-//                     expected_type: Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::F32 as i32
-//                     })
-//                 }),
-//                 any::<f64>().prop_map(|val| PrimitiveVal {
-//                     val: Value::F64(val),
-//                     expected_type: Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::F64 as i32
-//                     })
-//                 }),
-//                 any::<bool>().prop_map(|val| PrimitiveVal {
-//                     val: Value::Bool(val),
-//                     expected_type: Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::Bool as i32
-//                     })
-//                 }),
-//                 any::<u16>().prop_map(|val| val).prop_map(|_| {
-//                     PrimitiveVal {
-//                         val: Value::Char('a' as i32),
-//                         expected_type: Type::Primitive(TypePrimitive {
-//                             primitive: PrimitiveType::Chr as i32,
-//                         }),
-//                     }
-//                 }),
-//                 any::<String>().prop_map(|val| PrimitiveVal {
-//                     val: Value::String(val),
-//                     expected_type: Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::Str as i32
-//                     })
-//                 }),
-//             ]
-//             .boxed()
-//         }
-//     }
-//
-//     fn distinct_by<T, F>(vec: Vec<T>, key_fn: F) -> Vec<T>
-//     where
-//         F: Fn(&T) -> String,
-//         T: Clone + PartialEq,
-//     {
-//         let mut seen = HashSet::new();
-//         vec.into_iter()
-//             .filter(|item| seen.insert(key_fn(item)))
-//             .collect()
-//     }
-//
-//     impl Arbitrary for FunctionOutputTestResult {
-//         type Parameters = ();
-//         type Strategy = BoxedStrategy<Self>;
-//
-//         fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-//             prop_oneof![
-//                 any::<(Vec<String>, u8)>().prop_map(|(values, disc)| {
-//                     let unique_values = distinct_by(values, |x| x.clone());
-//
-//                     FunctionOutputTestResult {
-//                         val: Value::Enum(ValEnum {
-//                             discriminant: if (disc as usize) < unique_values.len() {
-//                                 disc.into()
-//                             } else {
-//                                 0
-//                             },
-//                         }),
-//                         expected_type: Type::Enum(
-//                             golem_api_grpc::proto::golem::template::TypeEnum {
-//                                 names: if unique_values.is_empty() {
-//                                     vec!["const_name".to_string()]
-//                                 } else {
-//                                     unique_values.iter().map(|name| name.to_string()).collect()
-//                                 },
-//                             },
-//                         ),
-//                     }
-//                 }),
-//                 any::<Vec<String>>().prop_map(|values| {
-//                     let unique_values = distinct_by(values, |x| x.clone());
-//
-//                     FunctionOutputTestResult {
-//                         val: Value::Flags(ValFlags {
-//                             count: unique_values.len() as i32,
-//                             value: unique_values
-//                                 .iter()
-//                                 .enumerate()
-//                                 .map(|(index, _)| index as i32)
-//                                 .collect(),
-//                         }),
-//                         expected_type: Type::Flags(
-//                             golem_api_grpc::proto::golem::template::TypeFlags {
-//                                 names: unique_values.iter().map(|name| name.to_string()).collect(),
-//                             },
-//                         ),
-//                     }
-//                 }),
-//                 any::<Vec<PrimitiveVal>>().prop_map(|values| {
-//                     let expected_type = if values.is_empty() {
-//                         Type::Primitive(TypePrimitive {
-//                             primitive: PrimitiveType::Str as i32,
-//                         })
-//                     } else {
-//                         values[0].expected_type.clone()
-//                     };
-//
-//                     let vals_with_same_type = values
-//                         .iter()
-//                         .filter(|prim| prim.expected_type == expected_type)
-//                         .cloned()
-//                         .collect::<Vec<PrimitiveVal>>();
-//
-//                     FunctionOutputTestResult {
-//                         val: Value::List(ValList {
-//                             values: vals_with_same_type
-//                                 .iter()
-//                                 .map(|prim| VVal {
-//                                     val: Some(prim.val.clone()),
-//                                 })
-//                                 .collect(),
-//                         }),
-//                         expected_type: Type::List(Box::new(
-//                             golem_api_grpc::proto::golem::template::TypeList {
-//                                 elem: Some(Box::new(
-//                                     golem_api_grpc::proto::golem::template::Type {
-//                                         r#type: expected_type.into(),
-//                                     },
-//                                 )),
-//                             },
-//                         )),
-//                     }
-//                 }),
-//                 any::<Vec<PrimitiveVal>>().prop_map(|values| FunctionOutputTestResult {
-//                     val: Value::Tuple(ValTuple {
-//                         values: values
-//                             .iter()
-//                             .map(|x| VVal {
-//                                 val: Some(x.val.clone())
-//                             })
-//                             .collect()
-//                     }),
-//                     expected_type: Type::Tuple(golem_api_grpc::proto::golem::template::TypeTuple {
-//                         elems: values
-//                             .iter()
-//                             .map(|x| golem_api_grpc::proto::golem::template::Type {
-//                                 r#type: Some(x.expected_type.clone())
-//                             })
-//                             .collect()
-//                     })
-//                 }),
-//                 any::<Vec<(String, PrimitiveVal)>>().prop_map(|values| {
-//                     let new_values = distinct_by(values, |(x, _)| x.clone());
-//
-//                     FunctionOutputTestResult {
-//                         val: {
-//                             Value::Record(ValRecord {
-//                                 values: new_values
-//                                     .iter()
-//                                     .map(|(_, val)| VVal {
-//                                         val: Some(val.val.clone()),
-//                                     })
-//                                     .collect(),
-//                             })
-//                         },
-//                         expected_type: Type::Record(
-//                             golem_api_grpc::proto::golem::template::TypeRecord {
-//                                 fields: new_values
-//                                     .iter()
-//                                     .map(|(name, val)| {
-//                                         golem_api_grpc::proto::golem::template::NameTypePair {
-//                                             name: name.to_string(),
-//                                             typ: Some(
-//                                                 golem_api_grpc::proto::golem::template::Type {
-//                                                     r#type: Some(val.expected_type.clone()),
-//                                                 },
-//                                             ),
-//                                         }
-//                                     })
-//                                     .collect(),
-//                             },
-//                         ),
-//                     }
-//                 }),
-//                 any::<PrimitiveVal>().prop_map(|val| FunctionOutputTestResult {
-//                     val: Value::Option(Box::new(ValOption {
-//                         discriminant: 1,
-//                         value: Some(Box::new(VVal {
-//                             val: Some(val.val.clone())
-//                         }))
-//                     })),
-//                     expected_type: Type::Option(Box::new(
-//                         golem_api_grpc::proto::golem::template::TypeOption {
-//                             elem: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
-//                                 r#type: Some(val.expected_type.clone())
-//                             }))
-//                         }
-//                     ))
-//                 }),
-//                 Just(FunctionOutputTestResult {
-//                     val: Value::Option(Box::new(ValOption {
-//                         discriminant: 0,
-//                         value: None
-//                     })),
-//                     expected_type: Type::Option(Box::new(
-//                         golem_api_grpc::proto::golem::template::TypeOption {
-//                             elem: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
-//                                 r#type: Some(Type::Primitive(TypePrimitive {
-//                                     primitive: PrimitiveType::Str as i32
-//                                 }))
-//                             }))
-//                         }
-//                     ))
-//                 }),
-//                 any::<PrimitiveVal>().prop_map(|val| FunctionOutputTestResult {
-//                     val: Value::Result(Box::new(ValResult {
-//                         discriminant: 0,
-//                         value: Some(Box::new(VVal {
-//                             val: Some(val.val.clone())
-//                         }))
-//                     })),
-//                     expected_type: Type::Result(Box::new(
-//                         golem_api_grpc::proto::golem::template::TypeResult {
-//                             ok: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
-//                                 r#type: Some(val.expected_type.clone())
-//                             })),
-//                             err: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
-//                                 r#type: Some(Type::Primitive(TypePrimitive {
-//                                     primitive: PrimitiveType::Str as i32
-//                                 }))
-//                             }))
-//                         }
-//                     ))
-//                 }),
-//                 any::<PrimitiveVal>().prop_map(|val| FunctionOutputTestResult {
-//                     val: Value::Result(Box::new(ValResult {
-//                         discriminant: 1,
-//                         value: Some(Box::new(VVal {
-//                             val: Some(val.val.clone())
-//                         }))
-//                     })),
-//                     expected_type: Type::Result(Box::new(
-//                         golem_api_grpc::proto::golem::template::TypeResult {
-//                             ok: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
-//                                 r#type: Some(Type::Primitive(TypePrimitive {
-//                                     primitive: PrimitiveType::Str as i32
-//                                 }))
-//                             })),
-//                             err: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
-//                                 r#type: Some(val.expected_type.clone())
-//                             }))
-//                         }
-//                     ))
-//                 }),
-//                 any::<PrimitiveVal>().prop_map(|val| FunctionOutputTestResult {
-//                     val: val.val.clone(),
-//                     expected_type: val.expected_type.clone()
-//                 }),
-//             ]
-//             .boxed()
-//         }
-//     }
-//
-//     fn test_type_checker_string(data: String) {
-//         let json = Value::String(data.clone());
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Primitive(TypePrimitive {
-//                 primitive: PrimitiveType::Str as i32,
-//             }),
-//         );
-//         assert_eq!(result, Ok(Value::String(data)));
-//     }
-//
-//     fn test_type_checker_s8(data: i32) {
-//         let json = Value::Number(Number::from(data));
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Primitive(TypePrimitive {
-//                 primitive: PrimitiveType::S8 as i32,
-//             }),
-//         );
-//         assert_eq!(result, Ok(Value::S8(data)));
-//     }
-//     fn test_type_checker_u8(data: i32) {
-//         let json = Value::Number(Number::from(data));
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Primitive(TypePrimitive {
-//                 primitive: PrimitiveType::U8 as i32,
-//             }),
-//         );
-//         assert_eq!(result, Ok(Value::U8(data)));
-//     }
-//
-//     fn test_type_checker_s16(data: i32) {
-//         let json = Value::Number(Number::from(data));
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Primitive(TypePrimitive {
-//                 primitive: PrimitiveType::S16 as i32,
-//             }),
-//         );
-//         assert_eq!(result, Ok(Value::S16(data)));
-//     }
-//
-//     fn test_type_checker_u16(data: i32) {
-//         let json = Value::Number(Number::from(data));
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Primitive(TypePrimitive {
-//                 primitive: PrimitiveType::U16 as i32,
-//             }),
-//         );
-//         assert_eq!(result, Ok(Value::U16(data)));
-//     }
-//
-//     fn test_type_checker_s32(data: i32) {
-//         let json = Value::Number(Number::from(data));
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Primitive(TypePrimitive {
-//                 primitive: PrimitiveType::S32 as i32,
-//             }),
-//         );
-//         assert_eq!(result, Ok(Value::S32(data)));
-//     }
-//
-//     fn test_type_checker_u32(data: i64) {
-//         let json = Value::Number(Number::from(data));
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Primitive(TypePrimitive {
-//                 primitive: PrimitiveType::U32 as i32,
-//             }),
-//         );
-//         assert_eq!(result, Ok(Value::U32(data)));
-//     }
-//
-//     fn test_type_checker_s64(data: i64) {
-//         let json = Value::Number(Number::from(data));
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Primitive(TypePrimitive {
-//                 primitive: PrimitiveType::S64 as i32,
-//             }),
-//         );
-//         assert_eq!(result, Ok(Value::S64(data)));
-//     }
-//
-//     fn test_type_checker_u64(data: i64) {
-//         let json = Value::Number(Number::from(data));
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Primitive(TypePrimitive {
-//                 primitive: PrimitiveType::U64 as i32,
-//             }),
-//         );
-//         assert_eq!(result, Ok(Value::U64(data)));
-//     }
-//
-//     fn test_type_checker_f32(data: f32) {
-//         let json = Value::Number(Number::from_f64(data as f64).unwrap());
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Primitive(TypePrimitive {
-//                 primitive: PrimitiveType::F32 as i32,
-//             }),
-//         );
-//         assert_eq!(result, Ok(Value::F32(data)));
-//     }
-//
-//     fn test_type_checker_f64(data: f64) {
-//         let json = Value::Number(Number::from_f64(data).unwrap());
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Primitive(TypePrimitive {
-//                 primitive: PrimitiveType::F64 as i32,
-//             }),
-//         );
-//         assert_eq!(result, Ok(Value::F64(data)));
-//     }
-//
-//     fn test_type_checker_record(data: &RandomData) {
-//         let json = serde_json::json!({
-//             "string": data.string.clone(),
-//             "number": data.number,
-//             "nullable": data.nullable.clone(),
-//             "collection": data.collection.clone(),
-//             "boolean": data.boolean,
-//             "object": data.object.clone()
-//         });
-//
-//         let result = validate_function_parameter(&json, RandomData::get_type());
-//
-//         assert_eq!(
-//             result,
-//             Ok(Value::Record(ValRecord {
-//                 values: vec![
-//                     VVal {
-//                         val: Some(Value::String(data.string.clone()))
-//                     },
-//                     VVal {
-//                         val: Some(Value::F64(data.number))
-//                     },
-//                     VVal {
-//                         val: match &data.nullable {
-//                             Some(place) => Some(Value::Option(Box::new(ValOption {
-//                                 discriminant: 1,
-//                                 value: Some(Box::new(VVal {
-//                                     val: Some(Value::String(place.clone()))
-//                                 }))
-//                             }))),
-//                             None => Some(Value::Option(Box::new(ValOption {
-//                                 discriminant: 0,
-//                                 value: None
-//                             }))),
-//                         }
-//                     },
-//                     VVal {
-//                         val: Some(Value::List(ValList {
-//                             values: data
-//                                 .collection
-//                                 .clone()
-//                                 .into_iter()
-//                                 .map(|friend| VVal {
-//                                     val: Some(Value::String(friend))
-//                                 })
-//                                 .collect()
-//                         }))
-//                     },
-//                     VVal {
-//                         val: Some(Value::Bool(data.boolean))
-//                     },
-//                     VVal {
-//                         val: Some(Value::Record(ValRecord {
-//                             values: vec![VVal {
-//                                 val: Some(Value::String(data.object.nested.clone()))
-//                             }]
-//                         }))
-//                     }
-//                 ]
-//             }))
-//         );
-//     }
-//
-//     proptest! {
-//         #[test]
-//         fn test3(data in 0..=255) {
-//             test_type_checker_u8(data);
-//         }
-//
-//         #[test]
-//         fn test_s8(data in -127..=127) {
-//             test_type_checker_s8(data);
-//         }
-//
-//         #[test]
-//         fn test4(data in -32768..=32767) {
-//             test_type_checker_s16(data);
-//         }
-//
-//         #[test]
-//         fn test5(data in 0..=65535) {
-//             test_type_checker_u16(data);
-//         }
-//
-//         #[test]
-//         fn test6(data in -2147483648..=2147483647) {
-//             test_type_checker_s32(data);
-//         }
-//
-//         #[test]
-//         fn test7(data in 0..=u32::MAX) {
-//             test_type_checker_u32(data as i64);
-//         }
-//
-//         #[test]
-//         fn test8(data in -9100645029148136..=9136655737043548_i64) {
-//             test_type_checker_s64(data);
-//         }
-//
-//         // TODO; Value::U64 takes an i64
-//         #[test]
-//         fn test9(data in 0..=i64::MAX) {
-//             test_type_checker_u64(data);
-//         }
-//
-//         #[test]
-//         fn test10(data in f32::MIN..=f32::MAX) {
-//             test_type_checker_f32(data);
-//         }
-//
-//         #[test]
-//         fn test11(data in f64::MIN..=f64::MAX) {
-//             test_type_checker_f64(data);
-//         }
-//
-//         #[test]
-//         fn test_process_record(data in any::<RandomData>()) {
-//             test_type_checker_record(&data);
-//         }
-//
-//         #[test]
-//         fn test_round_trip(fun_output in any::<FunctionOutputTestResult>()) {
-//             let validated_output = validate_function_result(&fun_output.val, fun_output.expected_type.clone());
-//
-//             let validated_input = validate_function_parameter(
-//                 &validated_output.expect("Failed to validate function result"),
-//                 fun_output.expected_type.clone(),
-//             );
-//
-//             assert_eq!(validated_input, Ok(fun_output.val.clone()));
-//         }
-//
-//         #[test]
-//         fn test_string(data in any::<String>()) {
-//             test_type_checker_string(data);
-//         }
-//     }
-//
-//     #[test]
-//     fn test_validate_function_result_stdio() {
-//         let str_val = vec![VVal {
-//             val: Some(Value::String("str".to_string())),
-//         }];
-//
-//         let res = str_val.validate_function_result(
-//             vec![FunctionResult {
-//                 name: Some("a".to_string()),
-//                 tpe: Some(golem_api_grpc::proto::golem::template::Type {
-//                     r#type: Some(Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::Str as i32,
-//                     })),
-//                 }),
-//             }],
-//             CallingConvention::Stdio,
-//         );
-//
-//         assert!(res.is_ok_and(|r| r == Value::String("str".to_string())));
-//
-//         let num_val = vec![VVal {
-//             val: Some(Value::String("12.3".to_string())),
-//         }];
-//
-//         let res = num_val.validate_function_result(
-//             vec![FunctionResult {
-//                 name: Some("a".to_string()),
-//                 tpe: Some(golem_api_grpc::proto::golem::template::Type {
-//                     r#type: Some(Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::F64 as i32,
-//                     })),
-//                 }),
-//             }],
-//             CallingConvention::Stdio,
-//         );
-//
-//         assert!(res.is_ok_and(|r| r == Value::Number(serde_json::Number::from_f64(12.3).unwrap())));
-//
-//         let bool_val = vec![VVal {
-//             val: Some(Value::String("true".to_string())),
-//         }];
-//
-//         let res = bool_val.validate_function_result(
-//             vec![FunctionResult {
-//                 name: Some("a".to_string()),
-//                 tpe: Some(golem_api_grpc::proto::golem::template::Type {
-//                     r#type: Some(Type::Primitive(TypePrimitive {
-//                         primitive: PrimitiveType::Bool as i32,
-//                     })),
-//                 }),
-//             }],
-//             CallingConvention::Stdio,
-//         );
-//
-//         assert!(res.is_ok_and(|r| r == Value::Bool(true)));
-//     }
-//
-//     #[test]
-//     fn json_null_works_as_none() {
-//         let json = Value::Null;
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Option(Box::new(
-//                 golem_api_grpc::proto::golem::template::TypeOption {
-//                     elem: Some(Box::new(golem_api_grpc::proto::golem::template::Type {
-//                         r#type: Some(Type::Primitive(TypePrimitive {
-//                             primitive: PrimitiveType::Str as i32,
-//                         })),
-//                     })),
-//                 },
-//             )),
-//         );
-//         assert_eq!(
-//             result,
-//             Ok(Value::Option(Box::new(ValOption {
-//                 discriminant: 0,
-//                 value: None
-//             })))
-//         );
-//     }
-//
-//     #[test]
-//     fn missing_field_works_as_none() {
-//         let json = Value::Object(
-//             vec![("x".to_string(), Value::String("a".to_string()))]
-//                 .into_iter()
-//                 .collect(),
-//         );
-//         let result = validate_function_parameter(
-//             &json,
-//             Type::Record(TypeRecord {
-//                 fields: vec![
-//                     NameTypePair {
-//                         name: "x".to_string(),
-//                         typ: Some(golem_api_grpc::proto::golem::template::Type {
-//                             r#type: Some(Type::Primitive(TypePrimitive {
-//                                 primitive: PrimitiveType::Str as i32,
-//                             })),
-//                         }),
-//                     },
-//                     NameTypePair {
-//                         name: "y".to_string(),
-//                         typ: Some(golem_api_grpc::proto::golem::template::Type {
-//                             r#type: Some(Type::Option(Box::new(
-//                                 golem_api_grpc::proto::golem::template::TypeOption {
-//                                     elem: Some(Box::new(
-//                                         golem_api_grpc::proto::golem::template::Type {
-//                                             r#type: Some(Type::Primitive(TypePrimitive {
-//                                                 primitive: PrimitiveType::Str as i32,
-//                                             })),
-//                                         },
-//                                     )),
-//                                 },
-//                             ))),
-//                         }),
-//                     },
-//                 ],
-//             }),
-//         );
-//         assert_eq!(
-//             result,
-//             Ok(Value::Record(ValRecord {
-//                 values: vec![
-//                     VVal {
-//                         val: Some(Value::String("a".to_string()))
-//                     },
-//                     VVal {
-//                         val: Some(Value::Option(Box::new(ValOption {
-//                             discriminant: 0,
-//                             value: None
-//                         })))
-//                     }
-//                 ]
-//             }))
-//         );
-//     }
-//
-//     #[test]
-//     fn test_get_record() {
-//         // Test case where all keys are present
-//         let input_json = json!({
-//             "key1": "value1",
-//             "key2": "value2",
-//         });
-//
-//         let key1 = "key1".to_string();
-//         let key2 = "key2".to_string();
-//
-//         let name_type_pairs: Vec<(&String, &AnalysedType)> = vec![
-//             (
-//                 &key1,
-//                 &Type::Primitive(TypePrimitive {
-//                     primitive: PrimitiveType::Str as i32,
-//                 }),
-//             ),
-//             (
-//                 &key2,
-//                 &Type::Primitive(TypePrimitive {
-//                     primitive: PrimitiveType::Str as i32,
-//                 }),
-//             ),
-//         ];
-//
-//         let result = get_record(&input_json, name_type_pairs.clone());
-//         let expected_result = Ok(ValRecord {
-//             values: vec![
-//                 VVal {
-//                     val: Some(Value::String("value1".to_string())),
-//                 },
-//                 VVal {
-//                     val: Some(Value::String("value2".to_string())),
-//                 },
-//             ],
-//         });
-//         assert_eq!(result, expected_result);
-//
-//         // Test case where a key is missing
-//         let input_json = json!({
-//             "key1": "value1",
-//         });
-//
-//         let result = get_record(&input_json, name_type_pairs.clone());
-//         assert!(result.is_err());
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use crate::json::{get_record, validate_function_parameter, validate_function_result};
+    use crate::Value;
+    use golem_wasm_ast::analysis::AnalysedType;
+    use proptest::prelude::*;
+    use serde_json::{json, Number, Value as JsonValue};
+    use std::collections::HashSet;
+
+    proptest! {
+        #[test]
+        fn test_u8_param(value: u8) {
+            let json = JsonValue::Number(Number::from(value));
+            let result = validate_function_parameter(&json, &AnalysedType::U8);
+            prop_assert_eq!(result, Ok(Value::U8(value)));
+        }
+
+        #[test]
+        fn test_u16_param(value: u16) {
+            let json = JsonValue::Number(Number::from(value));
+            let result = validate_function_parameter(&json, &AnalysedType::U16);
+            prop_assert_eq!(result, Ok(Value::U16(value)));
+        }
+
+        #[test]
+        fn test_u32_param(value: u32) {
+            let json = JsonValue::Number(Number::from(value));
+            let result = validate_function_parameter(&json, &AnalysedType::U32);
+            prop_assert_eq!(result, Ok(Value::U32(value)));
+        }
+
+        #[test]
+        fn test_u64_param(value: u64) {
+            let json = JsonValue::Number(Number::from(value));
+            let result = validate_function_parameter(&json, &AnalysedType::U64);
+            prop_assert_eq!(result, Ok(Value::U64(value)));
+        }
+
+        #[test]
+        fn test_s8_param(value: i8) {
+            let json = JsonValue::Number(Number::from(value));
+            let result = validate_function_parameter(&json, &AnalysedType::S8);
+            prop_assert_eq!(result, Ok(Value::S8(value)));
+        }
+
+        #[test]
+        fn test_s16_param(value: i16) {
+            let json = JsonValue::Number(Number::from(value));
+            let result = validate_function_parameter(&json, &AnalysedType::S16);
+            prop_assert_eq!(result, Ok(Value::S16(value)));
+        }
+
+        #[test]
+        fn test_s32_param(value: i32) {
+            let json = JsonValue::Number(Number::from(value));
+            let result = validate_function_parameter(&json, &AnalysedType::S32);
+            prop_assert_eq!(result, Ok(Value::S32(value)));
+        }
+
+        #[test]
+        fn test_s64_param(value: i64) {
+            let json = JsonValue::Number(Number::from(value));
+            let result = validate_function_parameter(&json, &AnalysedType::S64);
+            prop_assert_eq!(result, Ok(Value::S64(value)));
+        }
+
+        #[test]
+        fn test_f32_param(value: f32) {
+            let json = JsonValue::Number(Number::from_f64(value as f64).unwrap());
+            let result = validate_function_parameter(&json, &AnalysedType::F32);
+            prop_assert_eq!(result, Ok(Value::F32(value)));
+        }
+
+        #[test]
+        fn test_f64_param(value: f64) {
+            let json = JsonValue::Number(Number::from_f64(value).unwrap());
+            let result = validate_function_parameter(&json, &AnalysedType::F64);
+            prop_assert_eq!(result, Ok(Value::F64(value)));
+        }
+
+        #[test]
+        fn test_char_param(value: char) {
+            let json = JsonValue::Number(Number::from(value as u32));
+            let result = validate_function_parameter(&json, &AnalysedType::Chr);
+            prop_assert_eq!(result, Ok(Value::Char(value)));
+        }
+
+        #[test]
+        fn test_string_param(value: String) {
+            let json = JsonValue::String(value.clone());
+            let result = validate_function_parameter(&json, &AnalysedType::Str);
+            prop_assert_eq!(result, Ok(Value::String(value)));
+        }
+
+        #[test]
+        fn test_list_u8_param(value: Vec<u8>) {
+            let json = JsonValue::Array(value.iter().map(|v| JsonValue::Number(Number::from(*v))).collect());
+            let result = validate_function_parameter(&json, &AnalysedType::List(Box::new(AnalysedType::U8)));
+            prop_assert_eq!(result, Ok(Value::List(value.into_iter().map(|v| Value::U8(v)).collect())));
+        }
+
+        #[test]
+        fn test_list_list_u64_param(value: Vec<Vec<u64>>) {
+            let json = JsonValue::Array(value.iter().map(|v| JsonValue::Array(v.iter().map(|n| JsonValue::Number(Number::from(*n))).collect())).collect());
+            let result = validate_function_parameter(&json, &AnalysedType::List(Box::new(AnalysedType::List(Box::new(AnalysedType::U64)))));
+            prop_assert_eq!(result, Ok(Value::List(value.into_iter().map(|v| Value::List(v.into_iter().map(|n| Value::U64(n)).collect())).collect())));
+        }
+
+        #[test]
+        fn test_tuple_int_char_string_param(value: (i32, char, String)) {
+            let json = JsonValue::Array(
+                vec![
+                    JsonValue::Number(Number::from(value.0)),
+                    JsonValue::Number(Number::from(value.1 as u32)),
+                    JsonValue::String(value.2.clone()),
+                ]);
+            let result = validate_function_parameter(&json, &AnalysedType::Tuple(vec![
+                AnalysedType::S32,
+                AnalysedType::Chr,
+                AnalysedType::Str,
+            ]));
+            prop_assert_eq!(result, Ok(Value::Tuple(
+                vec![
+                    Value::S32(value.0),
+                    Value::Char(value.1),
+                    Value::String(value.2),
+                ])));
+        }
+
+        #[test]
+        fn test_record_bool_fields_param(value in
+            any::<Vec<(String, bool)>>().prop_filter("Keys are distinct", |pairs|
+                pairs.iter().map(|(k, _)| k).collect::<std::collections::HashSet<_>>().len() == pairs.len())
+        ) {
+            let json = JsonValue::Object(
+                value.iter().map(|(k, v)| (k.clone(), JsonValue::Bool(*v))).collect());
+            let result = validate_function_parameter(&json, &AnalysedType::Record(
+                value.iter().map(|(k, _)| (k.clone(), AnalysedType::Bool)).collect()));
+            prop_assert_eq!(result, Ok(Value::Record(
+                value.iter().map(|(_, v)| Value::Bool(*v)).collect())));
+        }
+
+        #[test]
+        fn test_flags_param(value in
+            any::<Vec<(String, bool)>>().prop_filter("Keys are distinct", |pairs|
+                pairs.iter().map(|(k, _)| k).collect::<std::collections::HashSet<_>>().len() == pairs.len())
+            ) {
+            let enabled: Vec<String> = value.iter().filter(|(_, v)| *v).map(|(k, _)| k.clone()).collect();
+            let json = JsonValue::Array(enabled.iter().map(|v| JsonValue::String(v.clone())).collect());
+            let result = validate_function_parameter(&json, &AnalysedType::Flags(
+                value.iter().map(|(k, _)| k.clone()).collect()));
+            prop_assert_eq!(result, Ok(Value::Flags(
+                value.iter().map(|(_, v)| *v).collect())
+            ));
+        }
+
+        #[test]
+        fn test_enum_param((names, idx) in (any::<HashSet<String>>().prop_filter("Name list is non empty", |names| !names.is_empty()), any::<usize>())) {
+            let names: Vec<String> = names.into_iter().collect();
+            let idx = idx % names.len();
+            let json = JsonValue::String(names[idx].clone());
+            let result = validate_function_parameter(&json, &AnalysedType::Enum(names.into_iter().collect()));
+            prop_assert_eq!(result, Ok(Value::Enum(idx as u32)));
+        }
+
+        #[test]
+        fn test_option_string_param(value: Option<String>) {
+            let json = match &value {
+                Some(v) => JsonValue::String(v.clone()),
+                None => JsonValue::Null,
+            };
+            let result = validate_function_parameter(&json, &AnalysedType::Option(Box::new(AnalysedType::Str)));
+            prop_assert_eq!(result, Ok(Value::Option(value.map(|v| Box::new(Value::String(v))))));
+        }
+
+        #[test]
+        fn test_result_option_s32_string_param(value: Result<Option<i32>, String>) {
+            let json = match &value {
+                Ok(None) => JsonValue::Object(vec![("ok".to_string(), JsonValue::Null)].into_iter().collect()),
+                Ok(Some(v)) => JsonValue::Object(vec![("ok".to_string(), JsonValue::Number(Number::from(*v)))].into_iter().collect()),
+                Err(e) => JsonValue::Object(vec![("err".to_string(), JsonValue::String(e.clone()))].into_iter().collect()),
+            };
+            let result = validate_function_parameter(&json, &AnalysedType::Result {
+                ok: Some(Box::new(AnalysedType::Option(Box::new(AnalysedType::S32)))),
+                error: Some(Box::new(AnalysedType::Str)),
+            });
+            prop_assert_eq!(result, Ok(Value::Result(
+                match value {
+                    Ok(None) => Ok(Box::new(Value::Option(None))),
+                    Ok(Some(v)) => Ok(Box::new(Value::Option(Some(Box::new(Value::S32(v)))))),
+                    Err(e) => Err(Box::new(Value::String(e))),
+                }
+            )));
+        }
+
+        #[test]
+        fn test_variant_u8tuple_string_param(first: (u32, u32), second: String, discriminator in 0i32..1i32) {
+            let json = match discriminator {
+                0 => JsonValue::Object(vec![
+                    ("first".to_string(), JsonValue::Array(vec![
+                        JsonValue::Number(Number::from(first.0)),
+                        JsonValue::Number(Number::from(first.1)),
+                    ])),
+                ].into_iter().collect()),
+                1 => JsonValue::Object(vec![
+                    ("second".to_string(), JsonValue::String(second.clone())),
+                ].into_iter().collect()),
+                _ => panic!("Invalid discriminator value"),
+            };
+            let result = validate_function_parameter(&json, &AnalysedType::Variant(vec![
+                ("first".to_string(), Some(AnalysedType::Tuple(vec![AnalysedType::U32, AnalysedType::U32]))),
+                ("second".to_string(), Some(AnalysedType::Str)),
+            ]));
+            prop_assert_eq!(result, Ok(Value::Variant {
+                case_idx: discriminator as u32,
+                case_value: match discriminator {
+                    0 => Box::new(Value::Tuple(vec![Value::U32(first.0), Value::U32(first.1)])),
+                    1 => Box::new(Value::String(second)),
+                    _ => panic!("Invalid discriminator value"),
+                }
+            }));
+        }
+
+        #[test]
+        fn test_u8_result(value: u8) {
+            let result = Value::U8(value);
+            let expected_type = AnalysedType::U8;
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
+        }
+
+        #[test]
+        fn test_u16_result(value: u16) {
+            let result = Value::U16(value);
+            let expected_type = AnalysedType::U16;
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
+        }
+
+        #[test]
+        fn test_u32_result(value: u32) {
+            let result = Value::U32(value);
+            let expected_type = AnalysedType::U32;
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
+        }
+
+        #[test]
+        fn test_u64_result(value: u64) {
+            let result = Value::U64(value);
+            let expected_type = AnalysedType::U64;
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
+        }
+
+        #[test]
+        fn test_s8_result(value: i8) {
+            let result = Value::S8(value);
+            let expected_type = AnalysedType::S8;
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
+        }
+
+        #[test]
+        fn test_s16_result(value: i16) {
+            let result = Value::S16(value);
+            let expected_type = AnalysedType::S16;
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
+        }
+
+        #[test]
+        fn test_s32_result(value: i32) {
+            let result = Value::S32(value);
+            let expected_type = AnalysedType::S32;
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
+        }
+
+        #[test]
+        fn test_s64_result(value: i64) {
+            let result = Value::S64(value);
+            let expected_type = AnalysedType::S64;
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
+        }
+
+        #[test]
+        fn test_f32_result(value: f32) {
+            let result = Value::F32(value);
+            let expected_type = AnalysedType::F32;
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Number(Number::from_f64(value as f64).unwrap())));
+        }
+
+        #[test]
+        fn test_f64_result(value: f64) {
+            let result = Value::F64(value);
+            let expected_type = AnalysedType::F64;
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Number(Number::from_f64(value).unwrap())));
+        }
+
+        #[test]
+        fn test_char_result(value: char) {
+            let result = Value::Char(value);
+            let expected_type = AnalysedType::Chr;
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value as u32))));
+        }
+
+        #[test]
+        fn test_string_result(value: String) {
+            let result = Value::String(value.clone());
+            let expected_type = AnalysedType::Str;
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::String(value)));
+        }
+
+        #[test]
+        fn test_list_i32_result(value: Vec<i32>) {
+            let result = Value::List(value.iter().map(|v| Value::S32(*v)).collect());
+            let expected_type = AnalysedType::List(Box::new(AnalysedType::S32));
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Array(value.into_iter().map(|v| JsonValue::Number(Number::from(v))).collect())));
+        }
+
+        #[test]
+        fn test_tuple_string_bool_result(value: (String, bool)) {
+            let result = Value::Tuple(vec![Value::String(value.0.clone()), Value::Bool(value.1)]);
+            let expected_type = AnalysedType::Tuple(vec![AnalysedType::Str, AnalysedType::Bool]);
+            let json = validate_function_result(result, &expected_type);
+            prop_assert_eq!(json, Ok(JsonValue::Array(vec![JsonValue::String(value.0), JsonValue::Bool(value.1)])));
+        }
+
+        #[test]
+        fn test_record_list_u8_fields(value in any::<Vec<(String, Vec<u8>)>>().prop_filter("Keys are distinct", |pairs|
+                pairs.iter().map(|(k, _)| k).collect::<std::collections::HashSet<_>>().len() == pairs.len())
+        ) {
+            let result = Value::Record(
+                value.iter().map(|(_, v)| Value::List(v.iter().map(|n| Value::U8(*n)).collect())).collect());
+            let expected_type = AnalysedType::Record(
+                value.iter().map(|(k, _)| (k.clone(), AnalysedType::List(Box::new(AnalysedType::U8))).into()).collect());
+            let json = validate_function_result(result, &expected_type);
+            let expected_json = JsonValue::Object(
+                value.iter().map(|(k, v)| (k.clone(), JsonValue::Array(v.iter().map(|n| JsonValue::Number(Number::from(*n))).collect())).into()).collect());
+            prop_assert_eq!(json, Ok(expected_json));
+        }
+
+        #[test]
+        fn test_flags_result(pairs in
+            any::<Vec<(String, bool)>>().prop_filter("Keys are distinct", |pairs|
+                pairs.iter().map(|(k, _)| k).collect::<std::collections::HashSet<_>>().len() == pairs.len())
+            ) {
+            let enabled: Vec<String> = pairs.iter().filter(|(_, v)| *v).map(|(k, _)| k.clone()).collect();
+            let value = Value::Flags(pairs.iter().map(|(_, v)| *v).collect());
+            let result = validate_function_result(value, &AnalysedType::Flags(
+                pairs.iter().map(|(k, _)| k.clone()).collect()));
+            prop_assert_eq!(result, Ok(
+                JsonValue::Array(enabled.iter().map(|v| JsonValue::String(v.clone())).collect())
+            ));
+        }
+
+        #[test]
+        fn test_enum_result((names, idx) in (any::<HashSet<String>>().prop_filter("Name list is non empty", |names| !names.is_empty()), any::<usize>())) {
+            let names: Vec<String> = names.into_iter().collect();
+            let idx = idx % names.len();
+            let value = Value::Enum(idx as u32);
+            let result = validate_function_result(value, &AnalysedType::Enum(names.clone()));
+            prop_assert_eq!(result, Ok(JsonValue::String(names[idx].clone())));
+        }
+
+        #[test]
+        fn test_option_string_result(opt: Option<String>) {
+            let value = Value::Option(opt.clone().map(|v| Box::new(Value::String(v))));
+            let result = validate_function_result(value, &AnalysedType::Option(Box::new(AnalysedType::Str)));
+            let json = match opt {
+                Some(str) => Ok(JsonValue::String(str)),
+                None => Ok(JsonValue::Null),
+            };
+            prop_assert_eq!(result, json);
+        }
+
+        #[test]
+        fn test_variant_u8tuple_string_result(first: (u32, u32), second: String, discriminator in 0i32..1i32) {
+            let value = Value::Variant {
+                case_idx: discriminator as u32,
+                case_value: match discriminator {
+                    0 => Box::new(Value::Tuple(vec![Value::U32(first.0), Value::U32(first.1)])),
+                    1 => Box::new(Value::String(second.clone())),
+                    _ => panic!("Invalid discriminator value"),
+                }
+            };
+            let result = validate_function_result(value, &AnalysedType::Variant(vec![
+                ("first".to_string(), Some(AnalysedType::Tuple(vec![AnalysedType::U32, AnalysedType::U32]))),
+                ("second".to_string(), Some(AnalysedType::Str)),
+            ]));
+            let json = match discriminator {
+                0 => JsonValue::Object(vec![
+                    ("first".to_string(), JsonValue::Array(vec![
+                        JsonValue::Number(Number::from(first.0)),
+                        JsonValue::Number(Number::from(first.1)),
+                    ])),
+                ].into_iter().collect()),
+                1 => JsonValue::Object(vec![
+                    ("second".to_string(), JsonValue::String(second)),
+                ].into_iter().collect()),
+                _ => panic!("Invalid discriminator value"),
+            };
+            prop_assert_eq!(result, Ok(json));
+        }
+    }
+
+    #[test]
+    fn json_null_works_as_none() {
+        let json = JsonValue::Null;
+        let result =
+            validate_function_parameter(&json, &AnalysedType::Option(Box::new(AnalysedType::Str)));
+        assert_eq!(result, Ok(Value::Option(None)));
+    }
+
+    #[test]
+    fn missing_field_works_as_none() {
+        let json = JsonValue::Object(
+            vec![("x".to_string(), JsonValue::String("a".to_string()))]
+                .into_iter()
+                .collect(),
+        );
+        let result = validate_function_parameter(
+            &json,
+            &AnalysedType::Record(vec![
+                ("x".to_string(), AnalysedType::Str),
+                (
+                    "y".to_string(),
+                    AnalysedType::Option(Box::new(AnalysedType::Str)),
+                ),
+            ]),
+        );
+        assert_eq!(
+            result,
+            Ok(Value::Record(vec![
+                Value::String("a".to_string()),
+                Value::Option(None)
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_get_record() {
+        // Test case where all keys are present
+        let input_json = json!({
+            "key1": "value1",
+            "key2": "value2",
+        });
+
+        let key1 = "key1".to_string();
+        let key2 = "key2".to_string();
+
+        let name_type_pairs: Vec<(String, AnalysedType)> = vec![
+            (key1.clone(), AnalysedType::Str),
+            (key2.clone(), AnalysedType::Str),
+        ];
+
+        let result = get_record(&input_json, &name_type_pairs);
+        let expected_result = Ok(vec![
+            Value::String("value1".to_string()),
+            Value::String("value2".to_string()),
+        ]);
+        assert_eq!(result, expected_result);
+
+        // Test case where a key is missing
+        let input_json = json!({
+            "key1": "value1",
+        });
+
+        let result = get_record(&input_json, &name_type_pairs);
+        assert!(result.is_err());
+    }
+}
