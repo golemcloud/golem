@@ -37,7 +37,7 @@ services:
       - GOLEM__ROUTING_TABLE__HOST="golem-shard-manager"
       - GOLEM__ROUTING_TABLE__PORT=${SHARD_MANAGER_GRPC_PORT:-9002}
       - GOLEM__GRPC_PORT=${GOLEM_SERVICE_GRPC_PORT:-9090}
-      - GOLEM__HTTP_PORT=${GOLEM_SERVICE_GRPC_PORT:-9881}
+      - GOLEM__HTTP_PORT=${GOLEM_SERVICE_HTTP_PORT:-9881}
     volumes:
       - template_store:/template_store
       - golem_db:/app/golem_db
