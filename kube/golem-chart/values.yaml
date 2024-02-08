@@ -2,17 +2,41 @@ workerExecutor:
   image: golemservices/golem-worker-executor:latest
   imagePullPolicy: Always
   replica: 1
+  ports:
+    http: 8080
+    grpc: 9000
 #  nodeSelector:
 
 shardManager:
   image: golemservices/golem-shard-manager:latest
   imagePullPolicy: Always
+  ports:
+    http: 8080
+    grpc: 9001
 #  nodeSelector:
 
 golemService:
   image: golemservices/golem-service:latest
   imagePullPolicy: Always
   replica: 1
+  ports:
+    http: 8080
+    grpc: 9090
 #  nodeSelector:
 
+logging:
+  json: false
+
+#serviceAccountName: golem-sa-default
 env: default
+
+redis:
+  port: 6379
+  host: redis
+
+postgres:
+  port: 5432
+  host: postgres
+  database: golem_db
+  username: golem_user
+  password: golem_password

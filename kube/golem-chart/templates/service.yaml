@@ -12,13 +12,13 @@ spec:
     app: worker-executor-app-{{.Values.env}}
   ports:
     - protocol: TCP
-      name: service-inst
-      port: 9000
-      targetPort: 9000
+      name: grpc
+      port: {{ .Values.workerExecutor.ports.grpc }}
+      targetPort: {{ .Values.workerExecutor.ports.grpc }}
     - protocol: TCP
       name: http
-      port: 8080
-      targetPort: 8080
+      port: {{ .Values.workerExecutor.ports.http }}
+      targetPort: {{ .Values.workerExecutor.ports.http }}
 ---
 
 apiVersion: v1
@@ -36,12 +36,12 @@ spec:
   ports:
     - protocol: TCP
       name: grpc
-      port: 9001
-      targetPort: 9001
+      port: {{ .Values.shardManager.ports.grpc }}
+      targetPort: {{ .Values.shardManager.ports.grpc }}
     - protocol: TCP
       name: http
-      port: 8080
-      targetPort: 8080
+      port: {{ .Values.shardManager.ports.http }}
+      targetPort: {{ .Values.shardManager.ports.http }}
 ---
 
 apiVersion: v1
@@ -59,9 +59,9 @@ spec:
   ports:
     - protocol: TCP
       name: http
-      port: 8080
-      targetPort: 8080
+      port: {{ .Values.golemService.ports.http }}
+      targetPort: {{ .Values.golemService.ports.http }}
     - protocol: TCP
       name: grpc
-      port: 9090
-      targetPort: 9090
+      port: {{ .Values.golemService.ports.grpc }}
+      targetPort: {{ .Values.golemService.ports.grpc }}
