@@ -38,7 +38,7 @@ bindgen!({
 });
 
 #[cfg(feature = "host")]
-pub use golem::rpc::types::{TypeIndex, WitNode, WitValue};
+pub use golem::rpc::types::{TypeIndex, WitNode, WitValue, HostWasmRpc};
 
 /// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
 #[derive(Debug, Clone, PartialEq)]
