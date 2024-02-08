@@ -5,7 +5,7 @@ use golem_worker_bridge::app_config::WorkerBridgeConfig;
 use poem::Route;
 use golem_worker_bridge::worker::WorkerServiceDefault;
 use golem_worker_bridge::worker_request_executor::{WorkerRequestExecutor, WorkerRequestExecutorDefault};
-use tracing::{error, info};
+use tracing::{error};
 use golem_worker_bridge::register::{RedisApiRegistry, RegisterApiDefinition};
 
 #[tokio::main]
