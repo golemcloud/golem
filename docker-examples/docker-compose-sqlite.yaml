@@ -5,7 +5,7 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - 6379:${REDIS_PORT-6379}
+      - ${REDIS_PORT:-6379}:6379
 
   golem-shard-manager:
     image: golemservices/golem-shard-manager:latest

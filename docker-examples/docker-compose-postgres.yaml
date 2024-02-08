@@ -6,7 +6,7 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - 6379:${REDIS_PORT-6379}
+      - ${REDIS_PORT:-6379}:6379
 
   postgres:
     image: postgres:latest
@@ -17,7 +17,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - 5432:${POSTGRES_PORT-5432}
+      - ${POSTGRES_PORT:-5432}:5432
 
   golem-shard-manager:
     image: golemservices/golem-shard-manager:latest
