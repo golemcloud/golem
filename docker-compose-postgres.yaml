@@ -5,8 +5,9 @@ services:
     image: redis:latest
     volumes:
       - redis_data:/data
+    command: --port ${REDIS_PORT}
     ports:
-      - "${REDIS_PORT}:6379"
+      - "${REDIS_PORT}:${REDIS_PORT}"
 
   postgres:
     image: postgres:latest
