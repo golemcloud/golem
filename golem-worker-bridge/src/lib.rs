@@ -14,6 +14,7 @@ mod value_typed;
 mod worker_bridge_reponse;
 mod api;
 mod register;
+mod request_data;
 
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;
