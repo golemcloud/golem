@@ -4,6 +4,7 @@ use poem::Route;
 use poem_openapi::OpenApiService;
 
 use crate::register::RegisterApiDefinition;
+use crate::request_data::api_definition::ApiDefinitionApi;
 use crate::worker_request_executor::WorkerRequestExecutor;
 
 #[derive(Clone)]
@@ -20,13 +21,8 @@ pub struct ManagementOpenApiService {
 pub fn management_open_api_service(services: ApiServices) -> ManagementOpenApiService {
     let api_service = OpenApiService::new(
         (
-            api_definition::ApiDefinitionApi::new(
-                services.project_service.clone(),
-                services.auth_service.clone(),
+            ApiDefinitionApi::new(
                 services.definition_service.clone(),
-                services.definition_validator,
-                services.deployment_service.clone(),
-                services.domain_route.clone(),
             )
         ),
         "Golem Api Gateway Management API",

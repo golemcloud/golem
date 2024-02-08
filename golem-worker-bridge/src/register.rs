@@ -17,7 +17,7 @@ pub trait RegisterApiDefinition {
 
     async fn get(
         &self,
-        api_definition_id: &ApiDefinition,
+        api_definition_id: &ApiDefinitionId,
     ) -> Result<Option<ApiDefinition>, Box<dyn Error>>;
 
     async fn delete(

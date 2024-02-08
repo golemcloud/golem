@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::result::Result;
 use std::sync::Arc;
 
-use golem_common::model::ProjectId;
 use golem_common::model::TemplateId;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
@@ -261,7 +260,7 @@ impl ApiDefinitionApi {
             .await
             .map_err(|e| {
                 error!(
-                    "API definition - account: {}, project: {}, id: {} - register error: {}",
+                    "API definition id: {} - register error: {}",
                     api_definition_id, e
                 );
                 ApiEndpointError::internal(e)
@@ -273,9 +272,7 @@ impl ApiDefinitionApi {
             .await
             .map_err(ApiEndpointError::internal)?;
 
-        let definition = data
-            .map(|d| d.definition)
-            .ok_or(ApiEndpointError::not_found("API Definition not found"))?;
+        let definition = data.ok_or(ApiEndpointError::not_found("API Definition not found"))?;
 
         let definition: ApiDefinition =
             definition.try_into().map_err(ApiEndpointError::internal)?;
@@ -286,7 +283,6 @@ impl ApiDefinitionApi {
     #[oai(path = "/", method = "get")]
     async fn get(
         &self,
-        #[oai(name = "project-id")] project_id_query: Query<ProjectId>,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
     ) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
         let api_definition_id_optional = api_definition_id_query.0;
@@ -306,7 +302,6 @@ impl ApiDefinitionApi {
             let values: Vec<ApiDefinition> = match data {
                 Some(d) => {
                     let definition: ApiDefinition = d
-                        .definition
                         .try_into()
                         .map_err(ApiEndpointError::internal)?;
                     vec![definition]
@@ -316,14 +311,11 @@ impl ApiDefinitionApi {
 
             Ok(Json(values))
         } else {
-            info!(
-                "Get API definitions - account: {}, project: {}",
-                account_id, project_id
-            );
+            info!("Get all API definitions");
 
             let data = self
                 .definition_service
-                .get_all(&account_id, &project_id)
+                .get_all()
                 .await
                 .map_err(ApiEndpointError::internal)?;
 
@@ -331,7 +323,6 @@ impl ApiDefinitionApi {
 
             for d in data {
                 let definition: ApiDefinition = d
-                    .definition
                     .try_into()
                     .map_err(ApiEndpointError::internal)?;
                 values.push(definition);
@@ -344,53 +335,24 @@ impl ApiDefinitionApi {
     #[oai(path = "/", method = "delete")]
     async fn delete(
         &self,
-        #[oai(name = "project-id")] project_id_query: Query<ProjectId>,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
-        token: GolemSecurityScheme,
     ) -> Result<Json<String>, ApiEndpointError> {
-        let token = token.secret();
-        let project_id = project_id_query.0;
-        self.is_authorized(Permission::Delete, &project_id, &token)
-            .await?;
-        let project_view = self.project_service.get(&project_id, &token).await?;
-        let account_id = project_view.owner_account_id;
         let api_definition_id = api_definition_id_query.0;
 
         info!(
-            "Delete API definition - account: {}, project: {}, id: {}",
-            account_id, project_id, api_definition_id
+            "Delete API definition - id: {}",
+            api_definition_id
         );
 
         let data = self
             .definition_service
-            .get(&account_id, &project_id, &api_definition_id)
+            .get(&api_definition_id)
             .await
             .map_err(ApiEndpointError::internal)?;
 
         if data.is_some() {
-            let deployments = self
-                .deployment_service
-                .get_by_id(&account_id, &project_id, &api_definition_id)
-                .await
-                .map_err(ApiEndpointError::internal)?;
-
-            for deployment in deployments {
-                self.domain_route
-                    .unregister(
-                        &deployment.deployment.site.host,
-                        &deployment.deployment.site.subdomain,
-                    )
-                    .await
-                    .map_err(ApiEndpointError::from)?;
-
-                self.deployment_service
-                    .delete(&deployment.deployment.site.to_string())
-                    .await
-                    .map_err(ApiEndpointError::internal)?;
-            }
-
             self.definition_service
-                .delete(&account_id, &project_id, &api_definition_id)
+                .delete(&api_definition_id)
                 .await
                 .map_err(ApiEndpointError::internal)?;
 
