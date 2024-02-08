@@ -10,6 +10,7 @@ use crate::api_definition::ApiDefinitionId;
 use crate::http_request::{ApiInputPath, InputHttpRequest};
 use crate::api_request_route_resolver::RouteResolver;
 use crate::register::RegisterApiDefinition;
+use crate::worker_bridge_reponse::GetWorkerBridgeResponse;
 use crate::worker_request::GolemWorkerRequest;
 use crate::worker_request_executor::{WorkerRequestExecutor, WorkerResponse};
 
@@ -71,11 +72,35 @@ impl CustomRequestEndpoint {
             req_body: json_request_body,
         };
 
-        let api_definition_id =
-            headers.get( "X-API-Definition-Id").ok_or("Missing X-API-Definition-Id header")?;
+        let api_definition_id_res =
+            headers.get( "X-API-Definition-Id").ok_or("Missing X-API-Definition-Id header");
 
-        let api_definition_id: ApiDefinitionId =
-            ApiDefinitionId(api_definition_id.to_str().map_err(|e| format!("Invalid X-API-Definition-Id header: {}", e))?.to_string());
+
+        let api_definition_id_header = match api_definition_id_res {
+            Ok(api_definition_id) => api_definition_id,
+            Err(err) => {
+                error!("Missing X-API-Definition-Id header");
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from_string(err.to_string()));
+            }
+        };
+
+        let api_definition_id_string =
+            api_definition_id_header.to_str().map_err(|e| format!("Invalid X-API-Definition-Id header: {}", e));
+
+
+        let api_definition_id = match api_definition_id_string {
+            Ok(api_definition_id) => {
+                ApiDefinitionId(api_definition_id.to_string())
+            }
+            Err(err) => {
+                error!("Invalid X-API-Definition-Id header: {}", err);
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from_string(err.to_string()))
+            }
+        };
 
         // Get ApiSpec corresponding to the API Definition Id
         let api_definition = match self
@@ -146,9 +171,27 @@ impl CustomRequestEndpoint {
                 };
 
                 match golem_worker_request.response_mapping {
-                    Some(response_mapping) => worker_response
-                        .to_gateway_response(&response_mapping, &resolved_route.resolved_variables)
-                        .to_http_response(),
+                    Some(response_mapping) => {
+                        let worker_bridge_response = worker_response
+                            .to_worker_bridge_response(&response_mapping, &resolved_route.resolved_variables);
+
+                        match worker_bridge_response {
+                            Ok(worker_bridge_response) => {
+                                worker_bridge_response.to_http_response()
+                            }
+                            Err(e) => {
+                                error!(
+                                    "API request id: {} - request error: {}",
+                                    &api_definition_id, e
+                                );
+                                Response::builder()
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .body(Body::from_string(
+                                        format!("Bad request {}", e).to_string(),
+                                    ))
+                            }
+                        }
+                    },
                     None => {
                         let body: Body = Body::from_json(worker_response.result).unwrap();
                         Response::builder().body(body)

@@ -33,11 +33,9 @@ impl GolemWorkerRequest {
         let mut function_params: Vec<Value> = vec![];
 
         for expr in &resolved_route.route_definition.binding.function_params {
-            let variant = expr
+            let json = expr
                 .evaluate(&resolved_route.resolved_variables)
                 .map_err(|err| err.to_string())?;
-
-            let json = variant.convert_to_json();
 
             function_params.push(json);
         }
@@ -51,14 +49,5 @@ impl GolemWorkerRequest {
             function_params: Value::Array(function_params),
             response_mapping: resolved_route.route_definition.binding.response.clone(),
         })
-    }
-
-    pub fn get_worker_name(&self) -> Result<WorkerName, String> {
-        let worker_name_string = self
-            .worker_id
-            .get_primitive_string()
-            .ok_or("Evaluated worker id is a complex string")?;
-
-        Ok(WorkerName(worker_name_string))
     }
 }

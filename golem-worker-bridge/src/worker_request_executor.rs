@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use tracing::info;
 
-use crate::worker::{WorkerService, WorkerServiceDefault};
+use crate::worker::{WorkerName, WorkerService, WorkerServiceDefault};
 use crate::worker_request::GolemWorkerRequest;
 
 #[async_trait]
@@ -26,7 +26,7 @@ impl WorkerRequestExecutor for WorkerRequestExecutorDefault {
         &self,
         worker_request_params: GolemWorkerRequest,
     ) -> Result<WorkerResponse, Box<dyn Error>> {
-        let worker_name = worker_request_params.get_worker_name()?;
+        let worker_name = WorkerName(worker_request_params.worker_id);
 
         let template_id = worker_request_params.template;
 
@@ -41,10 +41,7 @@ impl WorkerRequestExecutor for WorkerRequestExecutorDefault {
             .await
             .map_err(|e| e.to_string())?;
 
-        let invoke_parameters = worker_request_params
-            .function_params
-            .get_json()
-            .ok_or("The function parameters is not a json")?;
+        let invoke_parameters = worker_request_params.function_params;
 
         info!(
             "Executing request for template: {}, worker: {}, invocation key: {}, invocation params: {:?}",
@@ -78,7 +75,7 @@ impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
         &self,
         worker_request_params: GolemWorkerRequest,
     ) -> Result<WorkerResponse, Box<dyn Error>> {
-        let worker_name = worker_request_params.get_worker_name()?;
+        let worker_name = WorkerName(worker_request_params.worker_id);
         let template_id = worker_request_params.template;
 
         info!(

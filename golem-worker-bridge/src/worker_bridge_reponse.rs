@@ -28,7 +28,6 @@ pub struct WorkerBridgeResponse {
 
 impl WorkerBridgeResponse {
     pub fn to_http_response(&self) -> Response {
-        if let Some(status_code) = self.status.get_http_status_code() {
             let headers: Result<HeaderMap, String> =
                 self.headers.to_string_map().and_then(|headers| {
                     (&headers)
@@ -36,15 +35,18 @@ impl WorkerBridgeResponse {
                         .map_err(|e: hyper::http::Error| e.to_string())
                 });
 
+           let status = &self.status;
+        let body = &self.body;
+
             match headers {
                 Ok(response_headers) => {
                     let parts = ResponseParts {
-                        status: status_code,
+                        status: status.clone(),
                         version: Default::default(),
                         headers: response_headers,
                         extensions: Default::default(),
                     };
-                    let body: Body = Body::from_json(self.body.convert_to_json()).unwrap();
+                    let body: Body = Body::from_json(body.clone()).unwrap();
                     Response::from_parts(parts, body)
                 }
                 Err(err) => {
@@ -56,14 +58,6 @@ impl WorkerBridgeResponse {
                         )))
                 }
             }
-        } else {
-            Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::from_string(format!(
-                    "Unable to resolve a valid status code. It is resolved to {}",
-                    self.status
-                )))
-        }
     }
 }
 

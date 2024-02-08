@@ -128,7 +128,7 @@ impl Evaluator<Value> for Expr {
                     )))?.get(index).ok_or(EvaluationError::Message(format!(
                         "The array doesn't contain {} elements",
                         index
-                    )))
+                    ))).cloned()
                 }
 
                 Expr::SelectField(expr, field_name) => {
@@ -140,7 +140,7 @@ impl Evaluator<Value> for Expr {
                     )))?.get(&field_name).ok_or(EvaluationError::Message(format!(
                         "The result doesn't contain the field {}",
                         field_name
-                    )))
+                    ))).cloned()
                 }
 
                 Expr::EqualTo(left, right) => {
@@ -238,8 +238,8 @@ impl Evaluator<Value> for Expr {
 
                     for (key, expr) in tuples {
                         match go(&expr, resolved_variables) {
-                            Ok(variant) => {
-                                map.insert(key, variant.convert_to_json());
+                            Ok(value) => {
+                                map.insert(key, value);
                             }
 
                             Err(result) => return Err(result),
@@ -254,9 +254,9 @@ impl Evaluator<Value> for Expr {
 
                     for expr in exprs {
                         match go(&expr, resolved_variables) {
-                            Ok(variant) => {
-                                if let Some(primitve) = variant.get_primitive_string() {
-                                    result.push_str(primitve.as_str())
+                            Ok(value) => {
+                                if let Some(primitive) = value.as_str() {
+                                    result.push_str(primitive)
                                 } else {
                                     return Err(EvaluationError::Message(format!("Cannot append a complex expression {} to form strings. Please check the expression", variant)));
                                 }
@@ -275,7 +275,7 @@ impl Evaluator<Value> for Expr {
                     resolved_variables.get_key(path_var.as_str()).ok_or(EvaluationError::Message(format!(
                         "The result doesn't contain the field {}",
                         path_var
-                    )))
+                    ))).cloned()
                 }
             }
         }
