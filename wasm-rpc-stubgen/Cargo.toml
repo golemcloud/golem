@@ -1,0 +1,10 @@
+[package]
+name = "wasm-rpc-stubgen"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "wasm-rpc-stubgen"
+path = "src/main.rs"
+
+[dependencies]

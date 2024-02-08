@@ -1,47 +1,13 @@
-[package]
-name = "wit-value"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+resolver = "2"
 
-[lib]
-path = "src/lib.rs"
-# crate-type = ["cdylib"]
+members = [
+    "wasm-rpc",
+    "wasm-rpc-stubgen",
+]
 
-[[bin]]
-path = "src/main.rs"
-name = "wit-value-test"
+[profile.release]
+debug = false
+lto = true
+opt-level = 's'
 
-[dependencies]
-wit-bindgen = { version = "0.17.0", default-features = false, features = ["realloc"] }
-
-arbitrary = { version = "1.3.2", features = ["derive"], optional = true }
-bigdecimal = { version = "0.4.2", optional = true }
-golem-wasm-ast = { version = "0.1.4", features = ["analysis"], optional = true }
-serde = { version = "1.0.113", optional = true }
-serde_json = { version = "1.0.113", optional = true }
-prost = { version = "0.12.3", optional = true }
-wasmtime = { version = "=17.0.0", features = ["component-model"], optional = true }
-
-[dev-dependencies]
-proptest = "1.4.0"
-proptest-arbitrary-interop = "0.1.0"
-
-[build-dependencies]
-prost-build = "0.12.3"
-
-[features]
-default = ["host"]
-host = ["arbitrary", "json", "protobuf", "typeinfo", "wasmtime"]
-arbitrary = ["dep:arbitrary"]
-json = ["dep:serde", "dep:serde_json", "dep:bigdecimal", "typeinfo"]
-protobuf = ["dep:prost"]
-stub = []
-typeinfo = ["dep:golem-wasm-ast"]
-wasmtime = ["dep:wasmtime", "typeinfo"]
-
-
-[package.metadata.component]
-package = "golem:rpc"
-
-[package.metadata.component.target]
-path = "wit"
