@@ -15,12 +15,12 @@ use crate::worker_request_executor::{WorkerRequestExecutor, WorkerResponse};
 
 // Executes custom request with the help of worker_request_executor and definition_service
 #[derive(Clone)]
-pub struct CustomRequestExecutor {
+pub struct CustomRequestEndpoint {
     worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
 }
 
-impl CustomRequestExecutor {
+impl CustomRequestEndpoint {
     pub fn new(
         worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
         definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
@@ -172,7 +172,7 @@ impl CustomRequestExecutor {
 }
 
 #[async_trait]
-impl Endpoint for CustomRequestExecutor {
+impl Endpoint for CustomRequestEndpoint {
     type Output = Response;
 
     async fn call(&self, req: Request) -> poem::Result<Self::Output> {

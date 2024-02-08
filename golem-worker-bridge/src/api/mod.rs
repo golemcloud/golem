@@ -1,6 +1,6 @@
 pub mod api_definition_endpoints;
 pub mod common;
-pub mod custom_request_executor;
+pub mod custom_request_endpoint;
 
 use std::sync::Arc;
 
@@ -51,7 +51,7 @@ pub fn management_routes(services: ApiServices) -> Route {
 
 
 pub fn gateway_routes(services: ApiServices) -> Route {
-    let custom_request_executor = custom_request_executor::CustomRequestExecutor::new(
+    let custom_request_executor = custom_request_endpoint::CustomRequestEndpoint::new(
         services.worker_request_executor,
         services.definition_service,
     );
