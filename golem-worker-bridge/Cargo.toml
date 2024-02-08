@@ -6,7 +6,10 @@ license = "Apache-2.0"
 homepage = "https://golem.cloud"
 description = "Worker Bridge acts as a bridge between external API gateways and the worker's environment"
 
-[lib]
+
+[[bin]]
+name = "golem-worker-bridge"
+path = "src/main.rs"
 
 
 [dependencies]
@@ -36,3 +39,5 @@ http_02 = { package = "http", version = "0.2.11" }
 hyper = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
+prometheus = "0.13.3"
+futures = "0.3.30"

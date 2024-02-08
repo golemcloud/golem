@@ -45,12 +45,11 @@ pub fn management_open_api_service(services: ApiServices) -> ManagementOpenApiSe
     ManagementOpenApiService { route, yaml }
 }
 
-pub fn management_routes(services: ApiServices) -> Route {
+pub fn api_definition_routes(services: ApiServices) -> Route {
     management_open_api_service(services).route
 }
 
-
-pub fn gateway_routes(services: ApiServices) -> Route {
+pub fn custom_request_route(services: ApiServices) -> Route {
     let custom_request_executor = custom_request_endpoint::CustomRequestEndpoint::new(
         services.worker_request_executor,
         services.definition_service,
