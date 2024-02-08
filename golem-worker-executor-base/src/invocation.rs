@@ -240,7 +240,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 async fn invoke<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function: Func,
-    function_input: &Vec<golem::worker::Val>,
+    function_input: &[golem::worker::Val],
     calling_convention: InternalCallingConvention,
     context: &str,
 ) -> Result<InvokeResult, anyhow::Error> {

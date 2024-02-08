@@ -48,6 +48,6 @@ impl HostMonotonicClock for MonotonicClock {
     }
 }
 
-pub fn monotonic_clock() -> impl HostMonotonicClock + Send + Sync {
+pub fn monotonic_clock() -> impl HostMonotonicClock {
     MonotonicClock::new(ambient_authority())
 }
