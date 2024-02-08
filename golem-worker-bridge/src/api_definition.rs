@@ -14,6 +14,41 @@ use crate::expr::*;
 use crate::parser::path_pattern_parser::PathPatternParser;
 use crate::parser::{GolemParser, ParseError};
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiDefinition {
+    pub id: ApiDefinitionId,
+    pub version: String,
+    pub routes: Vec<Route>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[serde(rename_all = "camelCase")]
+pub struct GolemWorkerBinding {
+    pub template: TemplateId,
+    pub worker_id: Expr,
+    pub function_name: String,
+    pub function_params: Vec<Expr>,
+    pub response: Option<ResponseMapping>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+pub struct ResponseMapping {
+    pub body: Expr,   // ${function.return}
+    pub status: Expr, // "200" or if ${response.body.id == 1} "200" else "400"
+    pub headers: HashMap<String, Expr>,
+}
+
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
+pub struct ApiDefinitionId(pub String);
+
+impl Display for ApiDefinitionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(
 Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display, Encode, Decode, Enum,
 )]
@@ -264,39 +299,6 @@ pub struct Route {
     pub binding: GolemWorkerBinding,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
-pub struct ApiDefinitionId(pub String);
-
-impl Display for ApiDefinitionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiDefinition {
-    pub id: ApiDefinitionId,
-    pub version: String,
-    pub routes: Vec<Route>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-#[serde(rename_all = "camelCase")]
-pub struct GolemWorkerBinding {
-    pub template: TemplateId,
-    pub worker_id: Expr,
-    pub function_name: String,
-    pub function_params: Vec<Expr>,
-    pub response: Option<ResponseMapping>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-pub struct ResponseMapping {
-    pub body: Expr,   // ${function.return}
-    pub status: Expr, // "200" or if ${response.body.id == 1} "200" else "400"
-    pub headers: HashMap<String, Expr>,
-}
 
 #[cfg(test)]
 mod tests {

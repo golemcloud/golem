@@ -3,7 +3,7 @@ use golem_common::model::TemplateId;
 
 use crate::api_request_route_resolver::ResolvedRoute;
 use crate::evaluator::{Evaluator, Primitive};
-use crate::api_spec::ResponseMapping;
+use crate::api_definition::ResponseMapping;
 use crate::worker::WorkerName;
 
 #[derive(PartialEq, Debug, Clone)]

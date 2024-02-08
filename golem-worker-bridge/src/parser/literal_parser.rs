@@ -3,7 +3,7 @@ use nom::combinator::all_consuming;
 use nom::IResult;
 
 use super::*;
-use crate::api_spec::LiteralInfo;
+use crate::api_definition::LiteralInfo;
 
 pub struct LiteralParser;
 

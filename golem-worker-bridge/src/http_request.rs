@@ -4,9 +4,10 @@ use derive_more::{Display, FromStr, Into};
 use hyper::http::{HeaderMap, Method};
 
 use crate::api_request_route_resolver::RouteResolver;
-use crate::api_spec::ApiDefinition;
+use crate::api_definition::ApiDefinition;
 use crate::worker_request::GolemWorkerRequest;
 
+// An input request from external API gateways, that is then resolved to a worker request, using API definitions
 pub struct InputHttpRequest<'a> {
     pub input_path: ApiInputPath<'a>,
     pub headers: &'a HeaderMap,
@@ -89,8 +90,7 @@ mod tests {
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
 
     use super::*;
-    use crate::api_request::{ApiInputPath, InputHttpRequest};
-    use crate::value_typed::ValueTyped;
+    use crate::http_request::{ApiInputPath, InputHttpRequest};
 
     #[test]
     fn test_worker_request_resolution() {
@@ -110,12 +110,12 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart-1".to_string()),
+            worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -145,11 +145,11 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart-1".to_string()),
+            worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Object(expected_map),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -182,11 +182,11 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart-1".to_string()),
+            worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Object(expected_map),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -224,12 +224,12 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart-1".to_string()),
+            worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Number(serde_json::Number::from(1)),
                 serde_json::Value::Number(serde_json::Number::from(2)),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -268,13 +268,13 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart-1".to_string()),
+            worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Number(serde_json::Number::from(1)),
                 serde_json::Value::Number(serde_json::Number::from(2)),
                 serde_json::Value::String("age-10".to_string()),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -333,14 +333,14 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart-1".to_string()),
+            worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Object(user_id_map),
                 serde_json::Value::Number(serde_json::Number::from(2)),
                 serde_json::Value::String("age-10".to_string()),
                 serde_json::Value::Object(user_name_map),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -365,12 +365,12 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart-1".to_string()),
+            worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -402,11 +402,11 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart-1".to_string()),
+            worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::String("address".to_string()),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -435,11 +435,11 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart".to_string()),
+            worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Bool(true),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -468,11 +468,11 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart".to_string()),
+            worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Bool(true),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -501,11 +501,11 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart".to_string()),
+            worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Number(serde_json::Number::from(1)),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -537,11 +537,11 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart".to_string()),
+            worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Number(serde_json::Number::from(0)),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -570,12 +570,12 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart".to_string()),
+            worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Number(serde_json::Number::from(2)),
                 serde_json::Value::Number(serde_json::Number::from(1)),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -622,12 +622,12 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart-1".to_string()),
+            worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::String("foo_value".to_string()),
                 serde_json::Value::String("bar_value".to_string()),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -674,12 +674,12 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart-1".to_string()),
+            worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::String("foo_value".to_string()),
                 serde_json::Value::String("bar_value".to_string()),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -725,11 +725,11 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart-1".to_string()),
+            worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Object(request_body.clone()),
-            ])),
+            ]),
             response_mapping: None,
         };
 
@@ -782,13 +782,13 @@ mod tests {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
-            worker_id: Variant::String("shopping-cart-1".to_string()),
+            worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
-            function_params: Variant::ComplexJson(serde_json::Value::Array(vec![
+            function_params: serde_json::Value::Array(vec![
                 serde_json::Value::String("foo_value".to_string()),
                 serde_json::Value::String("bar_value".to_string()),
                 serde_json::Value::String("token_value".to_string()),
-            ])),
+            ]),
             response_mapping: None,
         };
 

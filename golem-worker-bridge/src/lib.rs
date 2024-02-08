@@ -1,8 +1,8 @@
 mod tokeniser;
 mod expr;
 mod parser;
-mod api_spec;
-mod api_request;
+mod api_definition;
+mod http_request;
 mod api_request_route_resolver;
 mod resolved_variables;
 mod worker_request_executor;
@@ -12,7 +12,8 @@ mod worker_request;
 mod evaluator;
 mod value_typed;
 mod worker_bridge_reponse;
-mod typed_comparison;
+mod api;
+mod register;
 
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;

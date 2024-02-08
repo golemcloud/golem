@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use hyper::http::Method;
 
-use crate::api_request::InputHttpRequest;
-use crate::api_spec::{ApiDefinition, MethodPattern, Route};
+use crate::http_request::InputHttpRequest;
+use crate::api_definition::{ApiDefinition, MethodPattern, Route};
 use crate::resolved_variables::ResolvedVariables;
 
 pub trait RouteResolver {

@@ -4,7 +4,7 @@ use hyper::{HeaderMap, StatusCode};
 use poem::{Body, get, Response, ResponseParts};
 use serde_json::Value;
 
-use crate::api_spec::ResponseMapping;
+use crate::api_definition::ResponseMapping;
 use crate::evaluator::{EvaluationError, Evaluator};
 use crate::expr::Expr;
 use crate::resolved_variables::ResolvedVariables;
