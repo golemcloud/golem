@@ -1,6 +1,6 @@
-// TODO: only use in stub mode, otherwise use host bindings
 #[allow(unused)]
 #[rustfmt::skip]
+#[cfg(feature = "stub")]
 mod bindings;
 
 /// A builder interface for WitValue instances
@@ -18,8 +18,27 @@ pub mod protobuf;
 pub mod wasmtime;
 
 use crate::builder::WitValueBuilder;
-pub use bindings::golem::rpc::types::{TypeIndex, WitNode, WitValue};
 pub use builder::{NodeBuilder, WitValueExtensions};
+
+#[cfg(feature = "stub")]
+pub use bindings::golem::rpc::types::{TypeIndex, WitNode, WitValue};
+
+#[cfg(feature = "host")]
+use ::wasmtime::component::bindgen;
+#[cfg(feature = "host")]
+bindgen!({
+    path: "wit",
+    interfaces: "
+      import golem:rpc/types@0.1.0;
+    ",
+    tracing: false,
+    async: true,
+    with: {
+    }
+});
+
+#[cfg(feature = "host")]
+pub use golem::rpc::types::{TypeIndex, WitNode, WitValue};
 
 /// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
 #[derive(Debug, Clone, PartialEq)]

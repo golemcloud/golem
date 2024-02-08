@@ -20,7 +20,7 @@ golem-wasm-ast = { version = "0.1.4", features = ["analysis"], optional = true }
 serde = { version = "1.0.113", optional = true }
 serde_json = { version = "1.0.113", optional = true }
 prost = { version = "0.12.3", optional = true }
-wasmtime = { version = "17.0.0", features = ["component-model"], optional = true }
+wasmtime = { version = "=17.0.0", features = ["component-model"], optional = true }
 
 [dev-dependencies]
 proptest = "1.4.0"
@@ -30,7 +30,8 @@ proptest-arbitrary-interop = "0.1.0"
 prost-build = "0.12.3"
 
 [features]
-default = ["arbitrary", "json", "protobuf", "typeinfo", "wasmtime", "stub"]
+default = ["host"]
+host = ["arbitrary", "json", "protobuf", "typeinfo", "wasmtime"]
 arbitrary = ["dep:arbitrary"]
 json = ["dep:serde", "dep:serde_json", "dep:bigdecimal", "typeinfo"]
 protobuf = ["dep:prost"]
