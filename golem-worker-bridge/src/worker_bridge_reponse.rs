@@ -17,7 +17,7 @@ pub trait GetWorkerBridgeResponse {
         &self,
         response_mapping: &ResponseMapping,
         resolved_variables: &ResolvedVariables,
-    ) -> WorkerBridgeResponse;
+    ) ->  Result<WorkerBridgeResponse, EvaluationError> ;
 }
 
 pub struct WorkerBridgeResponse {

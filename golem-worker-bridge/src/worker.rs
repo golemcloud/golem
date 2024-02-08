@@ -43,7 +43,7 @@ pub trait WorkerService {
         parameters: serde_json::Value,
         invocation_key: InvocationKey,
         use_stdio: bool,
-    ) -> Result<Vec<Val>, WorkerError>;
+    ) -> Result<Value, WorkerError>;
 
     async fn invoke(
         &self,
@@ -128,7 +128,7 @@ impl WorkerService for WorkerServiceDefault {
         name: &WorkerName,
         template_id: &TemplateId,
         function: String,
-        parameters: serde_json::Value,
+        parameters: Value,
         invocation_key: InvocationKey,
         use_stdio: bool,
     ) -> Result<Value, WorkerError> {

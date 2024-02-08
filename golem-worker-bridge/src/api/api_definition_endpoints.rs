@@ -25,12 +25,7 @@ impl ApiDefinitionEndpoints {
         definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
     ) -> Self {
         Self {
-            project_service,
-            auth_service,
             definition_service,
-            definition_validator,
-            deployment_service,
-            domain_route,
         }
     }
 
