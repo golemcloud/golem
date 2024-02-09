@@ -1,0 +1,13 @@
+package test:dep1@0.1.0;
+
+interface iface2 {
+    use test:dep2/types@0.1.0.{out};
+
+    enum a-or-b {
+        a,
+        b,
+    }
+
+
+    g: func(in: a-or-b) -> out;
+}

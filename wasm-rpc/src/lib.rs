@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: in all modules: Result and Variant optional types
-
 #[allow(unused)]
 #[rustfmt::skip]
 #[cfg(feature = "stub")]
@@ -37,7 +35,7 @@ use crate::builder::WitValueBuilder;
 pub use builder::{NodeBuilder, WitValueExtensions};
 
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc::types::{TypeIndex, WitNode, WitValue};
+pub use bindings::golem::rpc::types::{TypeIndex, Uri, WasmRpc, WitNode, WitValue};
 
 #[cfg(feature = "host")]
 use ::wasmtime::component::bindgen;

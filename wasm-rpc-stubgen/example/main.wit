@@ -1,0 +1,14 @@
+package test:main;
+
+interface iface1 {
+  add: func(x: s32, y: s32) -> s64;
+}
+
+world api {
+  export iface1;
+  export test:dep1/iface2@0.1.0;
+
+  export run: func(param: string);
+
+//  export type idx = u64;
+}

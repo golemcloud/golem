@@ -6,6 +6,10 @@ members = [
     "wasm-rpc-stubgen",
 ]
 
+exclude = [
+    "tmp"
+]
+
 [profile.release]
 debug = false
 lto = true
