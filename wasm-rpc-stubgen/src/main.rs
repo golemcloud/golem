@@ -305,6 +305,7 @@ struct InterfaceStub {
     pub name: String,
     pub functions: Vec<FunctionStub>,
     pub imports: Vec<InterfaceStubImport>,
+    pub global: bool,
 }
 
 #[derive(Hash, PartialEq, Eq)]
@@ -441,6 +442,7 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
                     name,
                     functions,
                     imports,
+                    global: false,
                 });
             }
             _ => {}
@@ -452,6 +454,7 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
             name: String::from(world.name.clone()),
             functions: collect_stub_functions(top_level_functions.into_iter())?,
             imports: collect_stub_imports(top_level_types.iter().map(|(k, v)| (k, *v)), resolve)?,
+            global: true,
         });
     }
 
@@ -651,7 +654,17 @@ fn generate_stub_source(
 
         let mut fn_impls = Vec::new();
         for function in &interface.functions {
-            fn_impls.push(generate_function_stub_source(&function, resolve)?);
+            fn_impls.push(generate_function_stub_source(
+                &function,
+                &root_ns,
+                &root_name,
+                if interface.global {
+                    None
+                } else {
+                    Some(&interface.name)
+                },
+                resolve,
+            )?);
         }
 
         interface_impls.push(quote! {
@@ -688,21 +701,28 @@ fn generate_stub_source(
 
 fn generate_function_stub_source(
     function: &FunctionStub,
+    root_ns: &Ident,
+    root_name: &Ident,
+    interface_name: Option<&String>,
     resolve: &Resolve,
 ) -> anyhow::Result<TokenStream> {
     let function_name = Ident::new(&function.name, Span::call_site());
     let mut params = Vec::new();
+    let mut input_values = Vec::new();
+
     for param in &function.params {
         let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
-        let param_typ = Ident::new("TODO", Span::call_site());
+        let param_typ = type_to_rust_ident(&param.typ, root_ns, root_name, resolve)?;
         params.push(quote! {
             #param_name: #param_typ
         });
+
+        input_values.push(wit_value_builder(&param.typ, &param_name, resolve)?);
     }
 
     let result_type = match &function.results {
         FunctionResultStub::Single(typ) => {
-            let typ = Ident::new("TODO", Span::call_site());
+            let typ = type_to_rust_ident(&typ, root_ns, root_name, resolve)?;
             quote! {
                 #typ
             }
@@ -711,7 +731,7 @@ fn generate_function_stub_source(
             let mut results = Vec::new();
             for param in params {
                 let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
-                let param_typ = Ident::new("TODO", Span::call_site());
+                let param_typ = type_to_rust_ident(&param.typ, root_ns, root_name, resolve)?;
                 results.push(quote! {
                     #param_name: #param_typ
                 });
@@ -728,9 +748,107 @@ fn generate_function_stub_source(
         }
     };
 
+    let remote_function_name = match interface_name {
+        Some(remote_interface) => format!(
+            "{}:{}/{}/{}",
+            root_ns, root_name, remote_interface, function.name
+        ),
+        None => format!("{}:{}/{}", root_ns, root_name, function.name),
+    };
+
     Ok(quote! {
         fn #function_name(&self, #(#params),*) -> #result_type {
-            todo!()
+            let result = self.rpc.invoke_and_await(
+                #remote_function_name,
+                &[
+                    #(#input_values),*
+                ],
+            ).expect(&format!("Failed to invoke remote {}", #remote_function_name));
+            todo!() // TODO
         }
     })
+}
+
+fn type_to_rust_ident(
+    typ: &Type,
+    root_ns: &Ident,
+    root_name: &Ident,
+    resolve: &Resolve,
+) -> anyhow::Result<TokenStream> {
+    match typ {
+        Type::Bool => Ok(quote! { bool }),
+        Type::U8 => Ok(quote! { u8 }),
+        Type::U16 => Ok(quote! { u16 }),
+        Type::U32 => Ok(quote! { u32 }),
+        Type::U64 => Ok(quote! { u64 }),
+        Type::S8 => Ok(quote! { i8 }),
+        Type::S16 => Ok(quote! { i16 }),
+        Type::S32 => Ok(quote! { i32 }),
+        Type::S64 => Ok(quote! { i64 }),
+        Type::Float32 => Ok(quote! { f32 }),
+        Type::Float64 => Ok(quote! { f64 }),
+        Type::Char => Ok(quote! { char }),
+        Type::String => Ok(quote! { String }),
+        Type::Id(type_id) => {
+            let typ = Ident::new(
+                &to_rust_ident(
+                    &resolve
+                        .types
+                        .get(*type_id)
+                        .ok_or(anyhow!("type not found"))?
+                        .name
+                        .clone()
+                        .ok_or(anyhow!("type has no name"))?,
+                )
+                .to_upper_camel_case(),
+                Span::call_site(),
+            );
+            Ok(quote! { crate::bindings::exports::#root_ns::#root_name::stub_api::#typ })
+        }
+    }
+}
+
+fn wit_value_builder(typ: &Type, name: &Ident, _resolve: &Resolve) -> anyhow::Result<TokenStream> {
+    match typ {
+        Type::Bool => Ok(quote! {
+            WitValue::builder().bool(#name)
+        }),
+        Type::U8 => Ok(quote! {
+            WitValue::builder().u8(#name)
+        }),
+        Type::U16 => Ok(quote! {
+            WitValue::builder().u16(#name)
+        }),
+        Type::U32 => Ok(quote! {
+            WitValue::builder().u32(#name)
+        }),
+        Type::U64 => Ok(quote! {
+            WitValue::builder().u64(#name)
+        }),
+        Type::S8 => Ok(quote! {
+            WitValue::builder().s8(#name)
+        }),
+        Type::S16 => Ok(quote! {
+            WitValue::builder().s16(#name)
+        }),
+        Type::S32 => Ok(quote! {
+            WitValue::builder().s32(#name)
+        }),
+        Type::S64 => Ok(quote! {
+            WitValue::builder().s64(#name)
+        }),
+        Type::Float32 => Ok(quote! {
+            WitValue::builder().f32(#name)
+        }),
+        Type::Float64 => Ok(quote! {
+            WitValue::builder().f64(#name)
+        }),
+        Type::Char => Ok(quote! {
+            WitValue::builder().char(#name)
+        }),
+        Type::String => Ok(quote! {
+            WitValue::builder().string(&#name)
+        }),
+        Type::Id(_) => Ok(quote!(todo!())), // TODO
+    }
 }
