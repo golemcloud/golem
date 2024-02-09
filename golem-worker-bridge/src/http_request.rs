@@ -71,7 +71,6 @@ mod tests {
     use golem_common::model::TemplateId;
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
 
-    use super::*;
     use crate::http_request::{ApiInputPath, InputHttpRequest};
 
     #[test]
