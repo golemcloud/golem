@@ -60,7 +60,7 @@ impl ResolvedVariables {
             );
         }
 
-        let request_headers = serde_json::Value::Object(headers.clone());
+        let request_headers = Value::Object(headers.clone());
         let mut request_query_values = ResolvedVariables::get_request_query_values(
             request_query_variables,
             spec_query_variables,
@@ -74,14 +74,11 @@ impl ResolvedVariables {
         let mut request_details = serde_json::Map::new();
         request_details.insert("body".to_string(), request_body.clone());
         request_details.insert("header".to_string(), request_headers);
-        request_details.insert(
-            "path".to_string(),
-            serde_json::Value::Object(request_query_values),
-        );
+        request_details.insert("path".to_string(), Value::Object(request_query_values));
 
         gateway_variables.insert(
             Path::from_string_unsafe(Token::Request.to_string().as_str()),
-            serde_json::Value::Object(request_details),
+            Value::Object(request_details),
         );
 
         Ok(gateway_variables)

@@ -342,7 +342,6 @@ mod tests {
         );
     }
 
-
     fn test_expr_str_err(expr: &str, expected: &str, resolved_variables: &ResolvedVariables) {
         test_expr_err(
             Expr::from_primitive_string(expr).expect("Failed to parse expr"),

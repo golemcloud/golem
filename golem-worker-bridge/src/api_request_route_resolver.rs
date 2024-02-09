@@ -54,6 +54,7 @@ impl<'a> RouteResolver for InputHttpRequest<'a> {
                 };
                 return Some(resolved_binding);
             } else {
+                dbg!("No match");
                 continue;
             }
         }
@@ -63,7 +64,7 @@ impl<'a> RouteResolver for InputHttpRequest<'a> {
 }
 
 fn match_method(input_request_method: &Method, spec_method_pattern: &MethodPattern) -> bool {
-    match input_request_method.clone() {
+    let x = match input_request_method.clone() {
         Method::CONNECT => spec_method_pattern.is_connect(),
         Method::GET => spec_method_pattern.is_get(),
         Method::POST => spec_method_pattern.is_post(),
@@ -74,13 +75,18 @@ fn match_method(input_request_method: &Method, spec_method_pattern: &MethodPatte
         Method::OPTIONS => spec_method_pattern.is_options(),
         Method::TRACE => spec_method_pattern.is_trace(),
         _ => false,
-    }
+    };
+
+    dbg!(x);
+    x
 }
 
 fn match_literals(
     request_path_values: &HashMap<usize, String>,
     spec_path_literals: &HashMap<usize, String>,
 ) -> bool {
+    dbg!("The request path is {}", request_path_values);
+    dbg!("The spec path is {}", spec_path_literals);
     let mut literals_match = true;
 
     for (index, spec_literal) in spec_path_literals.iter() {
@@ -93,6 +99,8 @@ fn match_literals(
             }
         }
     }
+
+    dbg!("The literals match is {}", literals_match);
 
     literals_match
 }

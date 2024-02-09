@@ -821,9 +821,10 @@ mod tests {
                 function_params,
             );
 
-            let result = GolemWorkerRequest::from_resolved_route(
-                &api_request.resolve(&api_specification).unwrap(),
-            );
+            let result = match &api_request.resolve(&api_specification) {
+                Some(resolved) => GolemWorkerRequest::from_resolved_route(resolved),
+                None => Err("err".to_string()),
+            };
 
             assert_eq!(result.is_ok(), ok);
         }
