@@ -86,7 +86,7 @@ impl RedisApiRegistry {
 #[async_trait]
 impl RegisterApiDefinition for RedisApiRegistry {
     async fn register(&self, definition: &ApiDefinition) -> Result<(), Box<dyn Error>> {
-        debug!("Register account: id: {}", definition.id);
+        debug!("Register definition: id: {}", definition.id);
 
         let definition_key = get_api_definition_redis_key(&definition.id);
 
@@ -102,7 +102,7 @@ impl RegisterApiDefinition for RedisApiRegistry {
     }
 
     async fn get(&self, api_id: &ApiDefinitionId) -> Result<Option<ApiDefinition>, Box<dyn Error>> {
-        info!("Get account: id: {}", api_id);
+        info!("Get definition: id: {}", api_id);
         let key = get_api_definition_redis_key(api_id);
         let value: Option<Bytes> = self
             .pool
@@ -128,7 +128,7 @@ impl RegisterApiDefinition for RedisApiRegistry {
     }
 
     async fn delete(&self, api_id: &ApiDefinitionId) -> Result<bool, Box<dyn Error>> {
-        debug!("Delete account: id: {}", api_id);
+        debug!("Delete definition: id: {}", api_id);
         let definition_key = get_api_definition_redis_key(api_id);
 
         let definition_delete: u32 = self
