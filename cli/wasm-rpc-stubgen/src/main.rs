@@ -3,14 +3,18 @@ use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,
     Profiles, StripSetting,
 };
+use heck::ToUpperCamelCase;
 use id_arena::Id;
 use indexmap::IndexSet;
+use proc_macro2::{Ident, Span, TokenStream};
+use quote::quote;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 use toml::Value;
+use wit_bindgen_rust::to_rust_ident;
 use wit_parser::*;
 
 // https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md
@@ -144,6 +148,16 @@ fn main() {
         &deps,
     )
     .unwrap();
+
+    let dest_src_root = dest_root.join(Path::new("src"));
+    fs::create_dir_all(&dest_src_root).unwrap();
+    generate_stub_source(
+        &dest_root.join("src/lib.rs"),
+        &resolve,
+        &world,
+        root_package,
+    )
+    .unwrap();
 }
 
 #[derive(Serialize)]
@@ -201,11 +215,19 @@ fn generate_cargo_toml(
             bail!("Package {} has multiple source directories", dep.name);
         }
 
-        wit_dependencies.insert("golem:rpc".to_string(), WitDependency { path: "wit/deps/wasm-rpc".to_string() });
+        wit_dependencies.insert(
+            "golem:rpc".to_string(),
+            WitDependency {
+                path: "wit/deps/wasm-rpc".to_string(),
+            },
+        );
         wit_dependencies.insert(
             format!("{}:{}", dep.name.namespace, dep.name.name),
             WitDependency {
-                path: format!("wit/{}", dirs.iter().next().unwrap().to_str().unwrap().to_string()),
+                path: format!(
+                    "wit/{}",
+                    dirs.iter().next().unwrap().to_str().unwrap().to_string()
+                ),
             },
         );
     }
@@ -502,7 +524,7 @@ fn generate_stub_wit(
 
     for interface in interfaces {
         writeln!(out, "  resource {} {{", &interface.name)?;
-        writeln!(out, "    constructor(location: uri);")?; // TODO: worker-uri
+        writeln!(out, "    constructor(location: uri);")?;
         for function in interface.functions {
             write!(out, "    {}: func(", function.name)?;
             for (idx, param) in function.params.iter().enumerate() {
@@ -595,4 +617,120 @@ fn dump(resolve: &Resolve) {
             }
         }
     }
+}
+
+fn generate_stub_source(
+    target: &Path,
+    resolve: &Resolve,
+    world_id: &WorldId,
+    root_package: PackageName,
+) -> anyhow::Result<()> {
+    let world = resolve.worlds.get(*world_id).unwrap();
+    let interfaces = collect_stub_interfaces(resolve, world)?;
+
+    let root_ns = Ident::new(&root_package.namespace, Span::call_site());
+    let root_name = Ident::new(&root_package.name, Span::call_site());
+
+    let mut struct_defs = Vec::new();
+    for interface in &interfaces {
+        let interface_ident = to_rust_ident(&interface.name).to_upper_camel_case();
+        let interface_name = Ident::new(&interface_ident, Span::call_site());
+        struct_defs.push(quote! {
+           pub struct #interface_name {
+                rpc: WasmRpc,
+            }
+        });
+    }
+
+    let mut interface_impls = Vec::new();
+    for interface in &interfaces {
+        let interface_ident = to_rust_ident(&interface.name).to_upper_camel_case();
+        let interface_name = Ident::new(&interface_ident, Span::call_site());
+        let guest_interface_name =
+            Ident::new(&format!("Guest{}", interface_ident), Span::call_site());
+
+        let mut fn_impls = Vec::new();
+        for function in &interface.functions {
+            fn_impls.push(generate_function_stub_source(&function, resolve)?);
+        }
+
+        interface_impls.push(quote! {
+            impl crate::bindings::exports::#root_ns::#root_name::stub_api::#guest_interface_name for #interface_name {
+                fn new(location: crate::bindings::golem::rpc::types::Uri) -> Self {
+                    let location = Uri { value: location.value };
+                    Self {
+                        rpc: WasmRpc::new(&location)
+                    }
+                }
+
+                #(#fn_impls)*
+            }
+        });
+    }
+
+    let lib = quote! {
+        use golem_wasm_rpc::*;
+
+        #[allow(dead_code)]
+        mod bindings;
+
+        #(#struct_defs)*
+
+        #(#interface_impls)*
+    };
+    println!("{}", lib);
+    let syntax_tree = syn::parse2(lib)?;
+    let src = prettyplease::unparse(&syntax_tree);
+
+    fs::write(target, src)?;
+    Ok(())
+}
+
+fn generate_function_stub_source(
+    function: &FunctionStub,
+    resolve: &Resolve,
+) -> anyhow::Result<TokenStream> {
+    let function_name = Ident::new(&function.name, Span::call_site());
+    let mut params = Vec::new();
+    for param in &function.params {
+        let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
+        let param_typ = Ident::new("TODO", Span::call_site());
+        params.push(quote! {
+            #param_name: #param_typ
+        });
+    }
+
+    let result_type = match &function.results {
+        FunctionResultStub::Single(typ) => {
+            let typ = Ident::new("TODO", Span::call_site());
+            quote! {
+                #typ
+            }
+        }
+        FunctionResultStub::Multi(params) => {
+            let mut results = Vec::new();
+            for param in params {
+                let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
+                let param_typ = Ident::new("TODO", Span::call_site());
+                results.push(quote! {
+                    #param_name: #param_typ
+                });
+            }
+            if results.is_empty() {
+                quote! {
+                    ()
+                }
+            } else {
+                quote! {
+                    (#(#results),*)
+                }
+            }
+        }
+    };
+
+    Ok(quote! {
+        fn #function_name(&self, #(#params),*) -> #result_type {
+            todo!()
+        }
+    })
 }
