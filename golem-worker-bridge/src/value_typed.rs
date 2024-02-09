@@ -155,6 +155,28 @@ impl ValueTyped {
         }
     }
 
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            ValueTyped::Boolean(bool) => Some(*bool),
+            ValueTyped::String(string) => string.parse().ok(),
+            _ => None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&Vec<Value>> {
+        match self {
+            ValueTyped::ComplexJson(Value::Array(array)) => Some(array),
+            _ => None,
+        }
+    }
+
+    pub fn as_object(&self) -> Option<&serde_json::Map<String, Value>> {
+        match self {
+            ValueTyped::ComplexJson(Value::Object(object)) => Some(object),
+            _ => None,
+        }
+    }
+
     pub fn convert_to_json(&self) -> Value {
         match self {
             ValueTyped::Boolean(bool) => Value::Bool(*bool),
@@ -267,7 +289,7 @@ impl ValueTyped {
         }
     }
 
-    pub fn from_json(input: &serde_json::Value) -> ValueTyped {
+    pub fn from_json(input: &Value) -> ValueTyped {
         match input {
             array @ Value::Array(_) => ValueTyped::ComplexJson(array.clone()),
             Value::Bool(bool) => ValueTyped::Boolean(*bool),

@@ -32,6 +32,7 @@ impl GolemWorkerRequest {
         let mut function_params: Vec<Value> = vec![];
 
         for expr in &resolved_route.route_definition.binding.function_params {
+            dbg!("The expr is {:?}", expr);
             let json = expr
                 .evaluate(&resolved_route.resolved_variables)
                 .map_err(|err| err.to_string())?;

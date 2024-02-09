@@ -93,16 +93,18 @@ impl Evaluator<Value> for Expr {
     fn evaluate(&self, resolved_variables: &ResolvedVariables) -> Result<Value, EvaluationError> {
         let expr: &Expr = self;
 
+        // An expression evaluation needs to be careful with string values
+        // and therefore returns ValueTyped
         fn go(
             expr: &Expr,
             resolved_variables: &ResolvedVariables,
-        ) -> Result<Value, EvaluationError> {
+        ) -> Result<ValueTyped, EvaluationError> {
             match expr.clone() {
                 Expr::Request() => {
                     match resolved_variables.get_path(&Path::from_string_unsafe(
                         Token::Request.to_string().as_str(),
                     )) {
-                        Some(v) => Ok(v),
+                        Some(v) => Ok(ValueTyped::from_json(&v)),
                         None => Err(EvaluationError::Message(
                             "Details of request is missing".to_string(),
                         )),
@@ -112,7 +114,7 @@ impl Evaluator<Value> for Expr {
                     match resolved_variables.get_path(&Path::from_string_unsafe(
                         Token::WorkerResponse.to_string().as_str(),
                     )) {
-                        Some(v) => Ok(v),
+                        Some(v) => Ok(ValueTyped::from_json(&v)),
                         None => Err(EvaluationError::Message(
                             "Details of worker response is missing".to_string(),
                         )),
@@ -129,11 +131,11 @@ impl Evaluator<Value> for Expr {
                             index
                         )))?
                         .get(index)
+                        .map(|v| ValueTyped::from_json(v))
                         .ok_or(EvaluationError::Message(format!(
                             "The array doesn't contain {} elements",
                             index
                         )))
-                        .cloned()
                 }
 
                 Expr::SelectField(expr, field_name) => {
@@ -146,60 +148,60 @@ impl Evaluator<Value> for Expr {
                             field_name
                         )))?
                         .get(&field_name)
+                        .map(|v| ValueTyped::from_json(v))
                         .ok_or(EvaluationError::Message(format!(
                             "The result doesn't contain the field {}",
                             field_name
                         )))
-                        .cloned()
                 }
 
                 Expr::EqualTo(left, right) => {
                     let left = go(&left, resolved_variables)?;
                     let right = go(&right, resolved_variables)?;
 
-                    let result = ValueTyped::from_json(&left)
-                        .equal_to(ValueTyped::from_json(&right))
+                    let result = left
+                        .equal_to(right)
                         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
-                    Ok(Value::Bool(result))
+                    Ok(ValueTyped::Boolean(result))
                 }
                 Expr::GreaterThan(left, right) => {
                     let left = go(&left, resolved_variables)?;
                     let right = go(&right, resolved_variables)?;
 
-                    let result = ValueTyped::from_json(&left)
-                        .greater_than(ValueTyped::from_json(&right))
+                    let result = left
+                        .greater_than(right)
                         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
-                    Ok(Value::Bool(result))
+                    Ok(ValueTyped::Boolean(result))
                 }
                 Expr::GreaterThanOrEqualTo(left, right) => {
                     let left = go(&left, resolved_variables)?;
                     let right = go(&right, resolved_variables)?;
 
-                    let result = ValueTyped::from_json(&left)
-                        .greater_than_or_equal_to(ValueTyped::from_json(&right))
+                    let result = left
+                        .greater_than_or_equal_to(right)
                         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
-                    Ok(Value::Bool(result))
+                    Ok(ValueTyped::Boolean(result))
                 }
                 Expr::LessThan(left, right) => {
                     let left = go(&left, resolved_variables)?;
                     let right = go(&right, resolved_variables)?;
-                    let result = ValueTyped::from_json(&left)
-                        .less_than(ValueTyped::from_json(&right))
+                    let result = left
+                        .less_than(right)
                         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
-                    Ok(Value::Bool(result))
+                    Ok(ValueTyped::Boolean(result))
                 }
                 Expr::LessThanOrEqualTo(left, right) => {
                     let left = go(&left, resolved_variables)?;
                     let right = go(&right, resolved_variables)?;
-                    let result = ValueTyped::from_json(&left)
-                        .less_than_or_equal_to(ValueTyped::from_json(&right))
+                    let result = left
+                        .less_than_or_equal_to(right)
                         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
-                    Ok(Value::Bool(result))
+                    Ok(ValueTyped::Boolean(result))
                 }
                 Expr::Not(expr) => {
                     let evaluated_expr = expr.evaluate(resolved_variables)?;
@@ -209,7 +211,7 @@ impl Evaluator<Value> for Expr {
                         evaluated_expr
                     )))?;
 
-                    Ok(Value::Bool(!bool))
+                    Ok(ValueTyped::Boolean(!bool))
                 }
 
                 Expr::Cond(pred0, left, right) => {
@@ -234,12 +236,12 @@ impl Evaluator<Value> for Expr {
 
                     for expr in exprs {
                         match go(&expr, resolved_variables) {
-                            Ok(value) => result.push(value),
+                            Ok(value) => result.push(value.to_json()),
                             Err(result) => return Err(result),
                         }
                     }
 
-                    Ok(Value::Array(result))
+                    Ok(ValueTyped::ComplexJson(Value::Array(result)))
                 }
 
                 Expr::Record(tuples) => {
@@ -249,14 +251,14 @@ impl Evaluator<Value> for Expr {
                     for (key, expr) in tuples {
                         match go(&expr, resolved_variables) {
                             Ok(value) => {
-                                map.insert(key, value);
+                                map.insert(key, value.to_json());
                             }
 
                             Err(result) => return Err(result),
                         }
                     }
 
-                    Ok(Value::Object(map))
+                    Ok(ValueTyped::ComplexJson(Value::Object(map)))
                 }
 
                 Expr::Concat(exprs) => {
@@ -265,8 +267,8 @@ impl Evaluator<Value> for Expr {
                     for expr in exprs {
                         match go(&expr, resolved_variables) {
                             Ok(value) => {
-                                if let Some(primitive) = value.as_str() {
-                                    result.push_str(primitive)
+                                if let Some(primitive) = value.get_primitive_string() {
+                                    result.push_str(primitive.as_str())
                                 } else {
                                     return Err(EvaluationError::Message(format!("Cannot append a complex expression {} to form strings. Please check the expression", value)));
                                 }
@@ -276,22 +278,23 @@ impl Evaluator<Value> for Expr {
                         }
                     }
 
-                    Ok(Value::String(result))
+                    Ok(ValueTyped::String(result))
                 }
 
-                Expr::Literal(literal) => Ok(Value::String(literal)),
+                Expr::Literal(literal) =>
+                    Ok(ValueTyped::from_string(literal.as_str())),
 
                 Expr::PathVar(path_var) => resolved_variables
                     .get_key(path_var.as_str())
+                    .map(|v| ValueTyped::from_json(&v))
                     .ok_or(EvaluationError::Message(format!(
                         "The result doesn't contain the field {}",
                         path_var
                     )))
-                    .cloned(),
             }
         }
 
-        go(expr, resolved_variables)
+        go(expr, resolved_variables).map(|v| v.to_json())
     }
 }
 

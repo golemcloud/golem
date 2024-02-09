@@ -56,7 +56,7 @@ impl ResolvedVariables {
 
             headers.insert(
                 header_name.to_string(),
-                serde_json::Value::String(header_value_str.to_string()),
+                Value::String(header_value_str.to_string()),
             );
         }
 
