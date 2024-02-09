@@ -860,7 +860,6 @@ mod tests {
             r#"
           id: users-api
           version: 0.0.1
-          projectId: '15d70aa5-2e23-4ee3-b65c-4e1d702836a3'
           routes:
           - method: Get
             path: {}

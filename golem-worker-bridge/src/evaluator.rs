@@ -431,7 +431,7 @@ mod tests {
         );
         test_expr_str_err(
             "${request.body.address.street.name}",
-            "Cannot obtain field name from a non json value",
+            "Result is not an object to get the field name",
             &resolved_variables,
         );
         test_expr_str_err(
