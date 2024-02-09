@@ -1,3 +1,17 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use anyhow::anyhow;
 use golem_api_grpc::proto::golem;
 use golem_common::model::{CallingConvention, VersionedWorkerId, WorkerStatus};
@@ -226,7 +240,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 async fn invoke<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function: Func,
-    function_input: &Vec<golem::worker::Val>,
+    function_input: &[golem::worker::Val],
     calling_convention: InternalCallingConvention,
     context: &str,
 ) -> Result<InvokeResult, anyhow::Error> {
