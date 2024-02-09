@@ -67,9 +67,9 @@ mod tests {
     use crate::api_definition::ApiDefinition;
     use crate::worker_request::GolemWorkerRequest;
 
+    use crate::api_request_route_resolver::RouteResolver;
     use golem_common::model::TemplateId;
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
-    use crate::api_request_route_resolver::RouteResolver;
 
     use super::*;
     use crate::http_request::{ApiInputPath, InputHttpRequest};
@@ -86,8 +86,9 @@ mod tests {
             function_params,
         );
 
-        let result =
-            GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -118,7 +119,9 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let mut expected_map = serde_json::Map::new();
 
@@ -152,7 +155,9 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let mut expected_map = serde_json::Map::new();
 
@@ -194,7 +199,9 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let mut expected_map = serde_json::Map::new();
 
@@ -245,7 +252,9 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -296,7 +305,9 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let mut user_id_map = serde_json::Map::new();
 
@@ -342,7 +353,9 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -379,7 +392,9 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -412,7 +427,9 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -443,7 +460,9 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -474,7 +493,9 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -510,7 +531,9 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -543,7 +566,9 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -595,7 +620,9 @@ mod tests {
             function_params.as_str(),
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -647,7 +674,9 @@ mod tests {
             function_params.as_str(),
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -698,7 +727,9 @@ mod tests {
             function_params.as_str(),
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -755,7 +786,9 @@ mod tests {
             function_params.as_str(),
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+        let result = GolemWorkerRequest::from_resolved_route(
+            &api_request.resolve(&api_specification).unwrap(),
+        );
 
         let expected = GolemWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -789,7 +822,9 @@ mod tests {
                 function_params,
             );
 
-            let result = GolemWorkerRequest::from_resolved_route(&api_request.resolve(&api_specification).unwrap());
+            let result = GolemWorkerRequest::from_resolved_route(
+                &api_request.resolve(&api_specification).unwrap(),
+            );
 
             assert_eq!(result.is_ok(), ok);
         }

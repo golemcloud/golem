@@ -245,8 +245,7 @@ impl Evaluator<Value> for Expr {
                 }
 
                 Expr::Record(tuples) => {
-                    let mut map: serde_json::Map<String, Value> =
-                        serde_json::Map::new();
+                    let mut map: serde_json::Map<String, Value> = serde_json::Map::new();
 
                     for (key, expr) in tuples {
                         match go(&expr, resolved_variables) {
@@ -281,8 +280,7 @@ impl Evaluator<Value> for Expr {
                     Ok(ValueTyped::String(result))
                 }
 
-                Expr::Literal(literal) =>
-                    Ok(ValueTyped::from_string(literal.as_str())),
+                Expr::Literal(literal) => Ok(ValueTyped::from_string(literal.as_str())),
 
                 Expr::PathVar(path_var) => resolved_variables
                     .get_key(path_var.as_str())
@@ -290,7 +288,7 @@ impl Evaluator<Value> for Expr {
                     .ok_or(EvaluationError::Message(format!(
                         "The result doesn't contain the field {}",
                         path_var
-                    )))
+                    ))),
             }
         }
 
@@ -300,11 +298,11 @@ impl Evaluator<Value> for Expr {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expr::Expr;
     use crate::resolved_variables::{Path, ResolvedVariables};
     use crate::tokeniser::tokeniser::Token;
+    use serde_json::Value;
 
     fn test_expr(
         expr: Expr,
