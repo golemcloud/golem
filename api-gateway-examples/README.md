@@ -213,4 +213,16 @@ It is the responsibility of whoever managing the API Gateway to make sure that t
 This can be achieved by using Tyk's middleware injection or transformations, and this is the case with almost all API Gateways.
 
 
+## What next?
+
+### Document Generation aspects
+
+* Users can use their Open API spec that can be imported to worker bridge, with an obvious interface to specify the worker name and function name.. Sometimes there may not be any transformations that everything else is mere defaults
+* If they want (not mandatory) They can make use of the same Open API spec to upload to API Gateway if they want to configure per-endpoint. Example: We allow 10000 requests per second for Get cart contents, but 1000 for posting. Otherwise (my draft PR) all requests to API Gateway is forwarded as is to worker bridge
+
+We can flip this thinking too
+
+* Users write the worker bridge API definition that is even more powerful with respect to a backend service, especially with transformations using Expr language
+* They can generate Open API spec (probably with some challenging part in details) from this, and if they want (not mandatory) can make use of it to upload to their preferred API gateways and achieve the same advantages mentioned above in the second point. Otherwise all requests to API Gateway is forwarded to worker bridge
+Given we already achieved what we discussed on Wednesday in my draft PR, may be its not a bad idea to discuss/validate some of these points (
 
