@@ -76,65 +76,44 @@ cd tyk-gateway-docker
 docker-compose up
 ```
 
-You can choose to edit existing apis here, or have a new one. Refer to Tyk's documentations for this
-
-An example configuration is:
+Register the API definition with Tyk. We are OAS API Definition of Tyk. You can read more about it in Tyk documentation
 
 ```json
-{
-    "name": "Tyk Test Keyless API",
-    "api_id": "keyless",
-    "org_id": "default",
-    "definition": {
-        "location": "header",
-        "key": "version"
-    },
-  "extended_paths": {
-    "ignored": [],
-    "white_list": [],
-    "black_list": [],
-    "cache": ["get"],
-    "transform": [],
-    "transform_headers": [
-      {
-        "delete_headers": ["authorization"],
-        "add_headers": {"x-widgets-secret": "the-secret-widget-key-is-secret"},
-        "path": "/",
-        "method": "GET"
-      }
-    ]
-  }
-,
-    "use_keyless": true,
-    "version_data": {
-        "not_versioned": true,
-        "versions": {
-            "Default": {
-                "name": "Default"
-            }
-        }
-    },
-    "custom_middleware": {
-        "pre": [
-          {
-            "name": "testJSVMData",
-            "path": "./middleware/injectHeader.js",
-            "require_session": false,
-            "raw_body_only": false
-          }
-        ]
+curl --location --request POST 'http://localhost:8080/tyk/apis/oas' \
+--header 'x-tyk-authorization: foo' \
+--header 'Content-Type: text/plain' \
+--data-raw \
+'{
+  "info": {
+    "title": "Petstore",
+    "version": "1.0.0"
   },
-    "driver": "otto",
-    "proxy": {
-        "listen_path": "/",
-        "target_url": "http://192.168.18.202:9006/",
-        "strip_listen_path": true
+  "openapi": "3.0.3",
+  "components": {},
+  "paths": {},
+  "x-tyk-api-gateway": {
+    "info": {
+      "name": "Petstore",
+      "state": {
+        "active": true
+      }
+    },
+    "upstream": {
+      "url": "http://192.168.18.202:9006/"
+    },
+    "server": {
+      "listenPath": {
+        "value": "/",
+        "strip": true
+      }
     }
-}
+  }
 
 ```
 
-You can see target_url here which is http://192.168.18.100:9006/. Note that Tyk's network and Golem's network are different and therefore it is important 
+```bash
+
+You can see upstream URL to be here which is http://192.168.18.100:9006/. Note that Tyk's network and Golem's network are different and therefore it is important 
 to know the actual IP address of your machine for 1 network to talk to the other. 9006 is the port where worker-bridge is running.
 
 Once you make changes, you will need to compose up again to see the changes. Or you can use the Tyk's dashboard to make changes.
