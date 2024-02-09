@@ -140,7 +140,7 @@ impl ApiDefinitionEndpoints {
 }
 
 // Mostly this data structures that represents the actual incoming request
-// exist due to the presence of complicated Expr data type in api_definition::ApiDefiniton.
+// exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.
 // Consider them to be otherwise same
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]

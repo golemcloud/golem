@@ -172,7 +172,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: golemservices/golem-worker-bridge
-      - name: Build and push cloud server image
+      - name: Build and push worker bridge image
         uses: docker/build-push-action@v5
         with:
           context: .

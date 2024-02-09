@@ -287,13 +287,13 @@ mod tests {
         assert!(api_definition1_result1.is_some());
         assert!(!api_definition_result2.is_empty());
         assert!(api_definition2_result1.is_some());
-        assert_eq!(api_definition1_result1.unwrap(), &api_definition1);
+        assert_eq!(api_definition1_result1.unwrap(), api_definition1);
         assert_eq!(api_definition_result2.len(), 2);
         assert!(delete1_result);
         assert!(delete2_result);
         assert!(api_definition1_result3.is_none());
         assert!(api_definition2_result3.is_none());
-        assert_eq!(api_definition_result3[0], &api_definition2);
+        assert_eq!(api_definition_result3[0], api_definition2);
         assert!(api_definition_result4.is_empty());
     }
 

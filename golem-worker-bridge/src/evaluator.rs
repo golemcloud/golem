@@ -243,7 +243,7 @@ impl Evaluator<Value> for Expr {
                 }
 
                 Expr::Record(tuples) => {
-                    let mut map: serde_json::Map<String, serde_json::Value> =
+                    let mut map: serde_json::Map<String, Value> =
                         serde_json::Map::new();
 
                     for (key, expr) in tuples {
@@ -297,26 +297,22 @@ impl Evaluator<Value> for Expr {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expr::Expr;
     use crate::resolved_variables::{Path, ResolvedVariables};
     use crate::tokeniser::tokeniser::Token;
-    use crate::value_typed::ValueTyped;
 
     fn test_expr(
         expr: Expr,
-        expected: Result<ValueTyped, EvaluationError>,
+        expected: Result<Value, EvaluationError>,
         resolved_variables: &ResolvedVariables,
     ) {
         let result = expr.evaluate(resolved_variables);
-        // dbg!("Expr: {:?}", expr);
-        // dbg!("Result: {:?}", &result);
-        // dbg!("Expected: {:?}", &expected);
-        // dbg!("GatewayVariables: {:?}", resolved_variables);
         assert_eq!(result, expected);
     }
 
-    fn test_expr_ok(expr: Expr, expected: ValueTyped, resolved_variables: &ResolvedVariables) {
+    fn test_expr_ok(expr: Expr, expected: Value, resolved_variables: &ResolvedVariables) {
         test_expr(expr, Ok(expected), resolved_variables);
     }
 
@@ -331,7 +327,7 @@ mod tests {
     fn test_expr_str_ok(expr: &str, expected: &str, resolved_variables: &ResolvedVariables) {
         test_expr_ok(
             Expr::from_primitive_string(expr).expect("Failed to parse expr"),
-            ValueTyped::from_string(expected),
+            Value::String(expected.to_string()),
             resolved_variables,
         );
     }

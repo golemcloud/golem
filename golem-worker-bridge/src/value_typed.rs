@@ -96,6 +96,18 @@ impl Display for ComparisonOp {
 }
 
 impl ValueTyped {
+    pub fn to_json(&self) -> Value {
+        match self {
+            ValueTyped::Boolean(bool) => Value::Bool(*bool),
+            ValueTyped::Float(float) => serde_json::Number::from_f64(*float)
+                .map(Value::Number)
+                .unwrap_or(Value::String(float.to_string())),
+            ValueTyped::String(string) => Value::String(string.clone()),
+            ValueTyped::U64(u64) => Value::Number(serde_json::Number::from(*u64)),
+            ValueTyped::I64(i64) => Value::Number(serde_json::Number::from(*i64)),
+            ValueTyped::ComplexJson(json) => json.clone(),
+        }
+    }
     pub fn get_primitive_variant(input: &str) -> ValueTyped {
         if let Ok(u64) = input.parse::<u64>() {
             ValueTyped::U64(u64)
