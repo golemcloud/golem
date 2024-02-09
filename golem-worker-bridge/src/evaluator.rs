@@ -354,6 +354,7 @@ mod tests {
         resolved_variables
     }
 
+    // I don't know why this refactored to be non debuggable tests
     #[test]
     fn test_evaluator() {
         let resolved_variables = get_request_variables(
