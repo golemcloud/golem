@@ -108,7 +108,7 @@ curl --location --request POST 'http://localhost:8080/tyk/apis/oas' \
       }
     }
   }
-
+}'
 ```
 
 Reload the gateway
@@ -118,7 +118,12 @@ curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 
 ```
 
-```bash
+Add middleware to inject the API-ID header: https://tyk.io/docs/api-management/manage-apis/tyk-oas-api-definition/tyk-oas-middleware/
+
+```json
+
+
+```
 
 You can see upstream URL to be here which is http://192.168.18.100:9006/. Note that Tyk's network and Golem's network are different and therefore it is important 
 to know the actual IP address of your machine for 1 network to talk to the other. 9006 is the port where worker-bridge is running.
@@ -132,7 +137,8 @@ However, inorder for this to work, we need to set a middleware that adds an extr
 value is the id of the endpoint definition that we registered with the worker bridge. In our example, it is "my-api".
 Tyk can make use of middleware injection or transformations to inject this header
 
-```js
+```json
+
 var testJSVMData = new TykJS.TykMiddleware.NewMiddleware({});
 
 testJSVMData.NewProcessRequest(function(request, session, config) {
