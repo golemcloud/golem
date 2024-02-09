@@ -111,6 +111,13 @@ curl --location --request POST 'http://localhost:8080/tyk/apis/oas' \
 
 ```
 
+Reload the gateway
+
+```bash
+curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
+
+```
+
 ```bash
 
 You can see upstream URL to be here which is http://192.168.18.100:9006/. Note that Tyk's network and Golem's network are different and therefore it is important 
@@ -148,8 +155,8 @@ With all this in place, you can now make requests to the API Gateway and see the
 ```bash
 
 
-curl -X GET http://localhost:8080/hmmm -H "X-Tyk-Authorization: foo" -H "X-API-Definition-Id: my-api"
-
+curl -X GET http://localhost:8080/v1/getcartcontents  -H "X-API-Definition-Id: my-api"
+ 
 [[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
 
 ```
