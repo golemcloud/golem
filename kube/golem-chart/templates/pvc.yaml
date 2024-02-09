@@ -3,9 +3,9 @@ kind: PersistentVolumeClaim
 metadata:
   name: golem-template-store-{{.Values.env}}
 spec:
-  storageClassName: local
+  storageClassName: hostpath
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 5Gi
+      storage: 2Gi

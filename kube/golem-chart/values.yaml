@@ -32,11 +32,12 @@ env: default
 
 redis:
   port: 6379
-  host: redis
+  host: golem-redis-master
+#  password: redis # TODO add password support
 
 postgres:
   port: 5432
-  host: postgres
+  host: golem-postgres-postgresql
   database: golem_db
   username: golem_user
-  password: golem_password
+  password: postgres
