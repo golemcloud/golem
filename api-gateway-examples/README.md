@@ -78,90 +78,68 @@ docker-compose up
 
 Register the API definition with Tyk. We are OAS API Definition of Tyk. You can read more about it in Tyk documentation
 
+
 ```json
-curl --location --request POST 'http://localhost:8080/tyk/apis/oas' \
+curl --location --request POST 'http://localhost:8080/tyk/apis' \
 --header 'x-tyk-authorization: foo' \
 --header 'Content-Type: text/plain' \
 --data-raw \
 '{
-  "info": {
-    "title": "Petstore",
-    "version": "1.0.0"
-  },
-  "openapi": "3.0.3",
-  "components": {},
-  "paths": {},
-  "x-tyk-api-gateway": {
-    "info": {
-      "name": "Petstore",
-      "state": {
-        "active": true
-      }
+    "name": "API to showcase integration with Golem",
+    "api_id": "shopping-cart-tyk",
+    "org_id": "default",
+    "definition": {
+        "location": "header",
+        "key": "version"
     },
-    "upstream": {
-      "url": "http://192.168.18.202:9006/"
+    "use_keyless": true,
+    "version_data": {
+        "not_versioned": true,
+        "versions": {
+            "Default": {
+                "name": "Default",
+                "global_headers": {
+                    "X-API-Definition-Id":"shopping-cart"
+                }
+            }
+        }
     },
-    "server": {
-      "listenPath": {
-        "value": "/",
-        "strip": true
-      }
+    "driver": "otto",
+    "proxy": {
+        "listen_path": "/v5",
+        "target_url": "http://192.168.18.202:9006/",
+        "strip_listen_path": true
     }
-  }
 }'
-```
 
-Reload the gateway
+```
+Reload the gateway, otherwise the API is not deployed with Tyk yet, so this is an important step.
 
 ```bash
 curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 
 ```
 
-Add middleware to inject the API-ID header: https://tyk.io/docs/api-management/manage-apis/tyk-oas-api-definition/tyk-oas-middleware/
 
-```json
-
-
-```
-
-You can see upstream URL to be here which is http://192.168.18.100:9006/. Note that Tyk's network and Golem's network are different and therefore it is important 
-to know the actual IP address of your machine for 1 network to talk to the other. 9006 is the port where worker-bridge is running.
-
-Once you make changes, you will need to compose up again to see the changes. Or you can use the Tyk's dashboard to make changes.
-
-The target URL is url of the worker bridge that is ready to serve your custom requests. Once this is registerd, 
-the worker bridge will then forward the request to the actual worker instance.
-
-However, inorder for this to work, we need to set a middleware that adds an extra header called "X-API-Definition-Id" whose
-value is the id of the endpoint definition that we registered with the worker bridge. In our example, it is "my-api".
-Tyk can make use of middleware injection or transformations to inject this header
-
-```json
-
-var testJSVMData = new TykJS.TykMiddleware.NewMiddleware({});
-
-testJSVMData.NewProcessRequest(function(request, session, config) {
-
-    log(JSON.stringify(request.Headers))
-
-    request.SetHeaders['X-API-Definition-Id'] = 'my-api';
-
-	return testJSVMData.ReturnData(request, {});
-});
-
+### Important aspects
+* Anything with listen_path /v5 will be forwarded to the worker bridge.
+* Tyk injects X-API-Definition-Id header to the request, which is the id of the endpoint definition that we registered with the worker bridge
+* With docker set up, we have 2 different docker networks running. Therefore the IP of the worker-bridge is the IP address of the machine (and not localhost) http://192.168.18.101:9006/.
+* The target URL is url of the worker bridge that is ready to serve your custom requests. 
+* Worker bridge is already registered with the API definition ID shopping-cart. If the worker bridge is not registered with the correct API definition, it will return something like the following
 
 ```
-
-This is how the worker bridge knows which endpoints it needs to serve for the requests forwarded from API Gateway.
+ API request definition id shfddfopping-cart not found%
+```
 
 With all this in place, you can now make requests to the API Gateway and see the worker bridge forwarding the requests to the actual worker instance.
 
 
+## Let's try out
 ```bash
 
 
-curl -X GET http://localhost:8080/v1/getcartcontents  -H "X-API-Definition-Id: my-api"
+curl -X GET http://localhost:8080/v1/getcartcontents
  
 [[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
 
