@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use serde_json::Value;
 
-use super::tokeniser::tokeniser::{Token, Tokenizer};
+use super::tokeniser::tokenizer::{Token, Tokenizer};
 use crate::expr::Expr;
 use crate::resolved_variables::{Path, ResolvedVariables};
 use crate::value_typed::ValueTyped;
@@ -41,7 +41,7 @@ impl<'t> Primitive<'t> {
 impl<'t> Evaluator<String> for Primitive<'t> {
     fn evaluate(&self, place_holder_values: &ResolvedVariables) -> Result<String, EvaluationError> {
         let mut combined_string = String::new();
-        let result: crate::tokeniser::tokeniser::TokeniserResult = Tokenizer::new(self.input).run();
+        let result: crate::tokeniser::tokenizer::TokeniserResult = Tokenizer::new(self.input).run();
 
         let mut cursor = result.to_cursor();
 
@@ -131,7 +131,7 @@ impl Evaluator<Value> for Expr {
                             index
                         )))?
                         .get(index)
-                        .map(|v| ValueTyped::from_json(v))
+                        .map(ValueTyped::from_json)
                         .ok_or(EvaluationError::Message(format!(
                             "The array doesn't contain {} elements",
                             index
@@ -148,7 +148,7 @@ impl Evaluator<Value> for Expr {
                             field_name
                         )))?
                         .get(&field_name)
-                        .map(|v| ValueTyped::from_json(v))
+                        .map(ValueTyped::from_json)
                         .ok_or(EvaluationError::Message(format!(
                             "The result doesn't contain the field {}",
                             field_name
@@ -284,7 +284,7 @@ impl Evaluator<Value> for Expr {
 
                 Expr::PathVar(path_var) => resolved_variables
                     .get_key(path_var.as_str())
-                    .map(|v| ValueTyped::from_json(&v))
+                    .map(ValueTyped::from_json)
                     .ok_or(EvaluationError::Message(format!(
                         "The result doesn't contain the field {}",
                         path_var
@@ -301,7 +301,7 @@ mod tests {
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expr::Expr;
     use crate::resolved_variables::{Path, ResolvedVariables};
-    use crate::tokeniser::tokeniser::Token;
+    use crate::tokeniser::tokenizer::Token;
     use serde_json::Value;
 
     fn test_expr(

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::tokeniser::cursor::TokenCursor;
-use crate::tokeniser::tokeniser::{Token, Tokenizer};
+use crate::tokeniser::tokenizer::{Token, Tokenizer};
 use crate::worker_request_executor::WorkerResponse;
 
 // Data that represent the resolved variables

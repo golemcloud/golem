@@ -40,7 +40,7 @@ impl WorkerBridgeResponse {
         match headers {
             Ok(response_headers) => {
                 let parts = ResponseParts {
-                    status: status.clone(),
+                    status: *status,
                     version: Default::default(),
                     headers: response_headers,
                     extensions: Default::default(),
@@ -88,7 +88,8 @@ impl ResolvedHeaders {
             let value = value_expr.evaluate(gateway_variables)?;
 
             let value_str = value.as_str().ok_or(EvaluationError::Message(format!(
-                "Header value is not a string"
+                "Header value is not a string. {}",
+                value
             )))?;
 
             resolved_headers.insert(header_name.clone(), value_str.to_string());

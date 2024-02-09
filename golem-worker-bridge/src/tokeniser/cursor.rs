@@ -1,4 +1,4 @@
-use super::tokeniser::Token;
+use super::tokenizer::Token;
 
 // A better management for traversing through token
 // without worrying about white spaces

@@ -81,8 +81,8 @@ services:
       - GOLEM__MANAGEMENT_PORT=9005
       - GOLEM__PORT=9006
     ports:
-      - "9005:9005"
-      - "9006:9006"
+      - "${WORKER_BRIDGE_MANAGEMENT_PORT}:${WORKER_BRIDGE_MANAGEMENT_PORT}"
+      - "${WORKER_BRIDGE_CUSTOM_REQUEST_PORT}:${WORKER_BRIDGE_CUSTOM_REQUEST_PORT}"
     depends_on:
       - redis
 
