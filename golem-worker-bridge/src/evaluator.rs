@@ -334,6 +334,15 @@ mod tests {
         );
     }
 
+    fn test_expr_number_ok(expr: &str, expected: &str, resolved_variables: &ResolvedVariables) {
+        test_expr_ok(
+            Expr::from_primitive_string(expr).expect("Failed to parse expr"),
+            Value::Number(expected.parse().unwrap()),
+            resolved_variables,
+        );
+    }
+
+
     fn test_expr_str_err(expr: &str, expected: &str, resolved_variables: &ResolvedVariables) {
         test_expr_err(
             Expr::from_primitive_string(expr).expect("Failed to parse expr"),
@@ -390,7 +399,7 @@ mod tests {
             "bStreet bCity",
             &resolved_variables,
         );
-        test_expr_str_ok(
+        test_expr_number_ok(
             "${if (request.headers.authorisation == \"admin\") then 200 else 401}",
             "401",
             &resolved_variables,
