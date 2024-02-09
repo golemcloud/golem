@@ -13,10 +13,14 @@
 // limitations under the License.
 
 use crate::service::Services;
+use poem::endpoint::PrometheusExporter;
 use poem::Route;
 use poem::{get, EndpointExt};
 use poem_openapi::OpenApiService;
 use poem_openapi::Tags;
+use prometheus::Registry;
+use std::ops::Deref;
+use std::sync::Arc;
 
 mod template;
 mod worker;
@@ -29,11 +33,12 @@ enum ApiTags {
     Worker,
 }
 
-pub fn combined_routes(services: &Services) -> Route {
+pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {
     let api_service = make_open_api_service(services);
 
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint_yaml();
+    let metrics = PrometheusExporter::new(prometheus_registry.deref().clone());
 
     let connect_services = worker_connect::ConnectService::new(services.worker_service.clone());
 
@@ -41,6 +46,7 @@ pub fn combined_routes(services: &Services) -> Route {
         .nest("/", api_service)
         .nest("/docs", ui)
         .nest("/specs", spec)
+        .nest("/metrics", metrics)
         .at(
             "/v2/templates/:template_id/workers/:worker_name/connect",
             get(worker_connect::ws.data(connect_services)),

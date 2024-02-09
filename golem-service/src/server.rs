@@ -13,17 +13,23 @@
 // limitations under the License.
 
 use golem_service::config::{CloudServiceConfig, DbConfig};
-use golem_service::db;
 use golem_service::service::Services;
-use golem_service::{api, grpcapi};
+use golem_service::{api, db, grpcapi, metrics};
+use opentelemetry::global;
+use opentelemetry_sdk::metrics::MeterProvider;
 use poem::listener::TcpListener;
+use poem::middleware::{OpenTelemetryMetrics, Tracing};
+use poem::EndpointExt;
+use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::Arc;
 use tokio::select;
 use tracing::{error, info};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<(), std::io::Error> {
+    let prometheus = metrics::register_all();
     let config = CloudServiceConfig::new();
 
     if config.enable_tracing_console {
@@ -43,14 +49,24 @@ fn main() -> Result<(), std::io::Error> {
             .init();
     }
 
+    let exporter = opentelemetry_prometheus::exporter()
+        .with_registry(prometheus.clone())
+        .build()
+        .unwrap();
+
+    global::set_meter_provider(MeterProvider::builder().with_reader(exporter).build());
+
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap()
-        .block_on(async_main(&config))
+        .block_on(async_main(&config, prometheus))
 }
 
-async fn async_main(config: &CloudServiceConfig) -> Result<(), std::io::Error> {
+async fn async_main(
+    config: &CloudServiceConfig,
+    prometheus_registry: Registry,
+) -> Result<(), std::io::Error> {
     let grpc_port = config.grpc_port;
     let http_port = config.http_port;
 
@@ -83,7 +99,10 @@ async fn async_main(config: &CloudServiceConfig) -> Result<(), std::io::Error> {
     let grpc_services = services.clone();
 
     let http_server = tokio::spawn(async move {
-        let app = api::combined_routes(&http_services);
+        let prometheus_registry = Arc::new(prometheus_registry);
+        let app = api::combined_routes(prometheus_registry, &http_services)
+            .with(OpenTelemetryMetrics::new())
+            .with(Tracing);
 
         poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", http_port)))
             .run(app)

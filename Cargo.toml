@@ -66,6 +66,9 @@ hyper = { version = "1.0.1", features = ["full"] } # keep in sync with wasmtime
 iso8601-timestamp = "0.2.16"
 lazy_static = "1.4.0"
 poem = "2.0.0"
+opentelemetry = "0.21.0"
+opentelemetry-prometheus = "0.14.1"
+opentelemetry_sdk = "0.21.2"
 poem-openapi = { version = "4.0.0", features = ["swagger-ui", "chrono", "time", "humantime", "uuid", "url", "websocket"] }
 prometheus = { version = "0.13.3", features = ["process"] }
 proptest = "1.4.0"
