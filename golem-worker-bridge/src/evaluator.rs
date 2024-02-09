@@ -317,6 +317,7 @@ mod tests {
         test_expr(expr, Ok(expected), resolved_variables);
     }
 
+    // TODO remove all these overly refactoring
     fn test_expr_err(
         expr: Expr,
         expected: EvaluationError,
