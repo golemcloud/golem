@@ -213,7 +213,7 @@ fn get_from_map(
     }
 }
 
-fn get_from_sequence(sequence: &Vec<Value>, path_component: &PathComponent) -> Option<Value> {
+fn get_from_sequence(sequence: &[Value], path_component: &PathComponent) -> Option<Value> {
     match path_component {
         PathComponent::Index(index) => {
             if index.0 < sequence.len() {
