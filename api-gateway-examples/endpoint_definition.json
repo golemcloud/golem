@@ -4,7 +4,7 @@
   "routes": [
     {
       "method": "Get",
-      "path": "/getcartcontents",
+      "path": "/get-cart-contents",
       "binding": {
         "type": "wit-worker",
         "template": "c467b83d-cb27-4296-b48a-ee85114cdb71",

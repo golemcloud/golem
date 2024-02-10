@@ -1,4 +1,4 @@
-use nom::character::complete::alpha1;
+use nom::character::complete::not_line_ending;
 use nom::combinator::all_consuming;
 use nom::IResult;
 
@@ -17,5 +17,6 @@ impl GolemParser<LiteralInfo> for LiteralParser {
 }
 
 pub fn parse_literal_pattern(input: &str) -> IResult<&str, LiteralInfo> {
-    all_consuming(alpha1)(input).map(|(rest, captured)| (rest, LiteralInfo(captured.to_string())))
+    all_consuming(not_line_ending)(input)
+        .map(|(rest, captured)| (rest, LiteralInfo(captured.to_string())))
 }
