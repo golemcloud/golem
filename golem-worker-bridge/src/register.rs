@@ -20,12 +20,16 @@ pub trait RegisterApiDefinition {
         api_definition_id: &ApiDefinitionId,
     ) -> Result<Option<ApiDefinition>, ApiRegistrationError>;
 
-    async fn delete(&self, api_definition_id: &ApiDefinitionId) -> Result<bool, ApiRegistrationError>;
+    async fn delete(
+        &self,
+        api_definition_id: &ApiDefinitionId,
+    ) -> Result<bool, ApiRegistrationError>;
 
     async fn get_all(&self) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
 }
 
 // TODO; AlreadyExists, Unknown etc
+#[derive(Debug)]
 pub enum ApiRegistrationError {
     RegistrationError(String),
     InternalError(String),
@@ -61,7 +65,10 @@ impl RegisterApiDefinition for InMemoryRegistry {
         Ok(())
     }
 
-    async fn get(&self, api_id: &ApiDefinitionId) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
+    async fn get(
+        &self,
+        api_id: &ApiDefinitionId,
+    ) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
         let registry = self.registry.lock().unwrap();
         Ok(registry.get(api_id).cloned())
     }
@@ -73,7 +80,11 @@ impl RegisterApiDefinition for InMemoryRegistry {
     }
 
     async fn get_all(&self) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
-        unimplemented!("get_all")
+        let registry = self.registry.lock().unwrap();
+
+        let result: Vec<ApiDefinition> = registry.values().cloned().collect();
+
+        Ok(result)
     }
 }
 
@@ -83,7 +94,8 @@ pub struct RedisApiRegistry {
 
 impl RedisApiRegistry {
     pub async fn new(config: &RedisConfig) -> Result<RedisApiRegistry, ApiRegistrationError> {
-        let pool_result = golem_common::redis::RedisPool::configured(config).await
+        let pool_result = golem_common::redis::RedisPool::configured(config)
+            .await
             .map_err(|err| ApiRegistrationError::InternalError(err.to_string()))?;
 
         Ok(RedisApiRegistry { pool: pool_result })
@@ -95,7 +107,10 @@ impl RegisterApiDefinition for RedisApiRegistry {
     async fn register(&self, definition: &ApiDefinition) -> Result<(), ApiRegistrationError> {
         debug!("Register definition: id: {}", definition.id);
         let definition_key = get_api_definition_redis_key(&definition.id);
-        let definition_value = self.pool.serialize(definition).map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+        let definition_value = self
+            .pool
+            .serialize(definition)
+            .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
         self.pool
             .with("persistence", "register_definition")
             .set(definition_key, definition_value, None, None, false)
@@ -104,7 +119,10 @@ impl RegisterApiDefinition for RedisApiRegistry {
         Ok(())
     }
 
-    async fn get(&self, api_id: &ApiDefinitionId) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
+    async fn get(
+        &self,
+        api_id: &ApiDefinitionId,
+    ) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
         info!("Get definition: id: {}", api_id);
         let key = get_api_definition_redis_key(api_id);
         let value: Option<Bytes> = self
@@ -234,5 +252,77 @@ mod tests {
         assert!(api_definition2_result3.is_none());
         assert_eq!(api_definition_result3[0], api_definition2);
         assert!(api_definition_result4.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    pub async fn test_redis_register() {
+        let config = RedisConfig {
+            key_prefix: "registry_test:".to_string(),
+            database: 1,
+            ..Default::default()
+        };
+
+        let registry = RedisApiRegistry::new(&config).await.unwrap();
+
+        let api_id1 = ApiDefinitionId("api1".to_string());
+
+        let api_definition1 = get_simple_api_definition_example(
+            &api_id1,
+            "getcartcontent/{cart-id}",
+            "cart-${path.cart-id}",
+        );
+
+        let api_id2 = ApiDefinitionId("api2".to_string());
+
+        let api_definition2 = get_simple_api_definition_example(
+            &api_id2,
+            "getcartcontent/{cart-id}",
+            "cart-${path.cart-id}",
+        );
+
+        registry.register(&api_definition1).await.unwrap();
+
+        registry.register(&api_definition2).await.unwrap();
+
+        let api_definition1_result1 = registry.get(&api_id1).await.unwrap_or(None);
+
+        let api_definition2_result1 = registry.get(&api_id2).await.unwrap_or(None);
+
+        let api_definition_result2 = registry.get_all().await.unwrap_or(vec![]);
+
+        let delete1_result = registry.delete(&api_id1).await.unwrap_or(false);
+
+        let api_definition1_result3 = registry.get(&api_id1).await.unwrap_or(None);
+
+        let api_definition_result3 = registry.get_all().await.unwrap_or(vec![]);
+
+        let delete2_result = registry.delete(&api_id2).await.unwrap_or(false);
+
+        let api_definition2_result3 = registry.get(&api_id2).await.unwrap_or(None);
+
+        let api_definition_result4 = registry.get_all().await.unwrap_or(vec![]);
+
+        assert!(api_definition1_result1.is_some());
+        assert!(!api_definition_result2.is_empty());
+        assert!(api_definition2_result1.is_some());
+        assert_eq!(api_definition1_result1.unwrap(), api_definition1);
+        assert_eq!(api_definition_result2.len(), 2);
+        assert!(delete1_result);
+        assert!(delete2_result);
+        assert!(api_definition1_result3.is_none());
+        assert!(api_definition2_result3.is_none());
+        assert_eq!(api_definition_result3[0], api_definition2);
+        assert!(api_definition_result4.is_empty());
+    }
+
+    #[test]
+    pub fn test_get_api_definition_redis_key() {
+        let api_id = ApiDefinitionId("api1".to_string());
+
+        assert_eq!(
+            get_api_definition_redis_key(&api_id),
+            "apidefinition:definition:api1"
+        );
     }
 }
