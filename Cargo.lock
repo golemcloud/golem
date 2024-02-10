@@ -1990,9 +1990,14 @@ dependencies = [
  "golem-service-base",
  "golem-wasm-ast",
  "humantime-serde",
+ "lazy_static",
  "mappable-rc",
+ "opentelemetry",
+ "opentelemetry-prometheus",
+ "opentelemetry_sdk",
  "poem",
  "poem-openapi",
+ "prometheus",
  "serde",
  "serde_json",
  "sqlx",
@@ -3219,6 +3224,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f16aec8a98a457a52664d69e0091bac3a0abd18ead9b641cb00202ba4e0efe4"
 dependencies = [
  "async-trait",
+ "crossbeam-channel",
  "futures-channel",
  "futures-executor",
  "futures-util",
@@ -3226,6 +3232,8 @@ dependencies = [
  "once_cell",
  "opentelemetry",
  "ordered-float",
+ "percent-encoding",
+ "rand",
  "thiserror",
 ]
 

@@ -26,6 +26,8 @@ pub struct RedisConfig {
     pub pool_size: usize,
     pub retries: RetryConfig,
     pub key_prefix: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
 }
 
 impl RedisConfig {
@@ -48,6 +50,8 @@ impl Default for RedisConfig {
             pool_size: 8,
             retries: RetryConfig::default(),
             key_prefix: "".to_string(),
+            username: None,
+            password: None,
         }
     }
 }
