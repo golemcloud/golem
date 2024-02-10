@@ -20,8 +20,10 @@ golemService:
   imagePullPolicy: Always
   replica: 1
   ports:
-    http: 8080
+    http: 9881
     grpc: 9090
+  service:
+    type: LoadBalancer
 #  nodeSelector:
 
 logging:

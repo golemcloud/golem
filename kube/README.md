@@ -19,10 +19,9 @@ helm delete -n golem golem-postgres
 ```
 
 get password
-
+```shell
 export GOLEM_POSTGRES_PASSWORD=$(kubectl get secret --namespace golem golem-postgres-postgresql -o jsonpath="{.data.password}" | base64 -d)
-
-
+```shell
 
 ## redis
 
@@ -38,18 +37,24 @@ delete
 helm delete -n golem golem-redis
 ```
 
-
+```shell
 kubectl -n golem get service
 
 service/golem-postgres-postgresql
 service/golem-redis-master
+```
 
+## golem services
 
+install
+```shell
+helm upgrade --install golem-default golem-chart -n golem --set postgres.password=$GOLEM_POSTGRES_PASSWORD
+```
+
+show kube files
 ```shell
 
-helm template golem-chart --set postgres.password=$GOLEM_POSTGRES_PASSWORD --set env=golem
-
-helm upgrade --install golem-default golem-chart -n golem --set postgres.password=$GOLEM_POSTGRES_PASSWORD --set env=golem
+helm template golem-chart --set postgres.password=$GOLEM_POSTGRES_PASSWORD
 ```
 
 delete

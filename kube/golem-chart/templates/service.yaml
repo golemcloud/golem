@@ -2,7 +2,6 @@ apiVersion: v1
 kind: Service
 metadata:
   name: service-worker-executor-{{.Values.env}}
-  namespace: "{{.Values.env}}"
   labels:
     app: worker-executor-app-{{.Values.env}}
     env: {{.Values.env}}
@@ -25,7 +24,6 @@ apiVersion: v1
 kind: Service
 metadata:
   name: service-shard-manager-{{.Values.env}}
-  namespace: "{{.Values.env}}"
   labels:
     app: shard-manager-app-{{.Values.env}}
     env: {{.Values.env}}
@@ -48,12 +46,11 @@ apiVersion: v1
 kind: Service
 metadata:
   name: service-golem-service-{{.Values.env}}
-  namespace: "{{.Values.env}}"
   labels:
     app: golem-service-app-{{.Values.env}}
     env: {{.Values.env}}
 spec:
-  type: NodePort
+  type: {{ .Values.golemService.service.type }}
   selector:
     app: golem-service-app-{{.Values.env}}
   ports:

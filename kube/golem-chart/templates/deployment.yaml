@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: deployment-worker-executor-{{.Values.env}}
-  namespace: {{.Values.env}}
   labels:
     env: {{.Values.env}}
 spec:
@@ -101,7 +100,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: deployment-shard-manager-{{.Values.env}}
-  namespace: {{.Values.env}}
   labels:
     env: {{.Values.env}}
 spec:
@@ -167,7 +165,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: deployment-golem-service-{{.Values.env}}
-  namespace: {{.Values.env}}
   labels:
     env: {{.Values.env}}
 spec:
@@ -233,20 +230,20 @@ spec:
               containerPort: {{ .Values.golemService.ports.http }}
             - name: grpc
               containerPort: {{ .Values.golemService.ports.grpc }}
-          livenessProbe:
-            httpGet:
-              path: "/healthcheck"
-              port: {{ .Values.golemService.ports.http }}
-            periodSeconds: 10
-            failureThreshold: 5
-            initialDelaySeconds: 20
-          readinessProbe:
-            httpGet:
-              path: "/healthcheck"
-              port: {{ .Values.golemService.ports.http }}
-            periodSeconds: 10
-            failureThreshold: 5
-            initialDelaySeconds: 20
+{{/*          livenessProbe:*/}}
+{{/*            httpGet:*/}}
+{{/*              path: "/healthcheck"*/}}
+{{/*              port: {{ .Values.golemService.ports.http }}*/}}
+{{/*            periodSeconds: 10*/}}
+{{/*            failureThreshold: 5*/}}
+{{/*            initialDelaySeconds: 20*/}}
+{{/*          readinessProbe:*/}}
+{{/*            httpGet:*/}}
+{{/*              path: "/healthcheck"*/}}
+{{/*              port: {{ .Values.golemService.ports.http }}*/}}
+{{/*            periodSeconds: 10*/}}
+{{/*            failureThreshold: 5*/}}
+{{/*            initialDelaySeconds: 20*/}}
           volumeMounts:
             - name: golem-template-store-{{.Values.env}}
               mountPath: /golem/template
