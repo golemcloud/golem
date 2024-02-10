@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use hyper::http::Method;
-use poem_openapi::types::Type;
 
 use crate::api_definition::{ApiDefinition, MethodPattern, Route};
 use crate::http_request::InputHttpRequest;
