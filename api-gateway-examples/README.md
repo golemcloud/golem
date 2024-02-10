@@ -39,6 +39,8 @@ golem-cli worker invoke-and-await  --template-name mytemplate --worker-name mywo
 
 ### Step 3: Register the endpoint definition
 
+Please make sure to use the correct template-id based on the output from `template add` command.
+
 ```bash
 {
   "id": "shopping-cart",

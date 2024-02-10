@@ -505,7 +505,7 @@ impl Display for WorkerError {
                     }
                     None => write!(f, "Unknown golem error"),
                 },
-                Some(Error::NotFound(error)) => write!(f, "Project not found: {}", error.error),
+                Some(Error::NotFound(error)) => write!(f, "Not found: {}", error.error),
                 Some(Error::Unauthorized(error)) => write!(f, "Unauthorized: {}", error.error),
                 Some(Error::LimitExceeded(error)) => {
                     write!(f, "Worker limit reached: {}", error.error)
