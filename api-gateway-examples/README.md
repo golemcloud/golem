@@ -91,7 +91,13 @@ curl --location --request POST 'http://localhost:8080/tyk/apis' \
         "location": "header",
         "key": "version"
     },
-    "use_keyless": true,
+    "use_keyless": true, 
+     "cache_options": {
+       "enable_cache": true,
+       "cache_timeout": 40,
+       "cache_all_safe_requests": true,
+       "cache_response_codes": [200]
+    },    
     "version_data": {
         "not_versioned": true,
         "versions": {
@@ -105,7 +111,7 @@ curl --location --request POST 'http://localhost:8080/tyk/apis' \
     },
     "driver": "otto",
     "proxy": {
-        "listen_path": "/v5",
+        "listen_path": "/v8",
         "target_url": "http://192.168.18.202:9006/",
         "strip_listen_path": true
     }
@@ -126,6 +132,7 @@ curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 * With docker set up, we have 2 different docker networks running. Therefore the IP of the worker-bridge is the IP address of the machine (and not localhost) http://192.168.18.101:9006/.
 * The target URL is url of the worker bridge that is ready to serve your custom requests. 
 * Worker bridge is already registered with the API definition ID shopping-cart. If the worker bridge is not registered with the correct API definition, it will return something like the following
+* Caching is enabled in Tyk API Gateway, just to show case, we get these features for free. 
 
 ```
  API request definition id shfddfopping-cart not found%
