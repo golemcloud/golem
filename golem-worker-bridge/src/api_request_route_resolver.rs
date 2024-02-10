@@ -84,7 +84,7 @@ fn match_literals(
     spec_path_literals: &HashMap<usize, String>,
 ) -> bool {
     if spec_path_literals.len() != request_path_values.len() {
-         false
+        false
     } else {
         let mut literals_match = true;
 
@@ -104,6 +104,7 @@ fn match_literals(
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
@@ -118,7 +119,10 @@ mod tests {
         spec_path_literals.insert(0, "users".to_string());
         spec_path_literals.insert(1, "1".to_string());
 
-        assert_eq!(match_literals(&request_path_values, &spec_path_literals), true);
+        assert_eq!(
+            match_literals(&request_path_values, &spec_path_literals),
+            true
+        );
     }
 
     #[test]
@@ -128,7 +132,10 @@ mod tests {
         let mut spec_path_literals = HashMap::new();
         spec_path_literals.insert(0, "get-cart-contents".to_string());
 
-        assert_eq!(match_literals(&request_path_values, &spec_path_literals), false);
+        assert_eq!(
+            match_literals(&request_path_values, &spec_path_literals),
+            false
+        );
     }
 
     #[test]
@@ -138,7 +145,9 @@ mod tests {
 
         let spec_path_literals = HashMap::new();
 
-        assert_eq!(match_literals(&request_path_values, &spec_path_literals), false);
+        assert_eq!(
+            match_literals(&request_path_values, &spec_path_literals),
+            false
+        );
     }
-
 }
