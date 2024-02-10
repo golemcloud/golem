@@ -30,16 +30,26 @@ logging:
   json: false
 
 #serviceAccountName: golem-sa-default
+
 env: default
 
 redis:
   port: 6379
   host: golem-redis-master
-#  password: redis # TODO add password support
+  username: golem_user
+  password:
+    plain: ""
+    fromSecret:
+      name: "" #golem-redis
+      key: password
 
 postgres:
   port: 5432
   host: golem-postgres-postgresql
   database: golem_db
   username: golem_user
-  password: postgres
+  password:
+    plain: ""
+    fromSecret:
+      name: golem-postgres-postgresql
+      key: password

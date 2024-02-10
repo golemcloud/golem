@@ -13,15 +13,16 @@ install
 ```shell
 helm install -n golem golem-postgres oci://registry-1.docker.io/bitnamicharts/postgresql --set auth.database=golem_db --set auth.username=golem_user
 ```
+
 delete
 ```shell
 helm delete -n golem golem-postgres
 ```
 
-get password
+get password (if you need it)
 ```shell
 export GOLEM_POSTGRES_PASSWORD=$(kubectl get secret --namespace golem golem-postgres-postgresql -o jsonpath="{.data.password}" | base64 -d)
-```shell
+```
 
 ## redis
 
@@ -48,13 +49,13 @@ service/golem-redis-master
 
 install
 ```shell
-helm upgrade --install golem-default golem-chart -n golem --set postgres.password=$GOLEM_POSTGRES_PASSWORD
+helm upgrade --install golem-default golem-chart -n golem
 ```
 
 show kube files
 ```shell
 
-helm template golem-chart --set postgres.password=$GOLEM_POSTGRES_PASSWORD
+helm template golem-chart
 ```
 
 delete

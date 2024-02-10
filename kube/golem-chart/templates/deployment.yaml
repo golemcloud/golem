@@ -56,6 +56,19 @@ spec:
               value: {{ .Values.redis.host }}
             - name: GOLEM__REDIS__PORT
               value: "{{ .Values.redis.port }}"
+            - name: GOLEM__REDIS__USERNAME
+              value: "{{ .Values.redis.username }}"
+{{- if .Values.redis.password.plain }}
+            - name: GOLEM__REDIS__PASSWORD
+              value: {{ .Values.redis.password.plain }}
+{{- end }}
+{{- if .Values.redis.password.fromSecret.name }}
+            - name: GOLEM__REDIS__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.password.fromSecret.name }}
+                  key: {{ .Values.redis.password.fromSecret.key }}
+{{- end }}
             - name: WASMTIME_BACKTRACE_DETAILS
               value: "1"
             - name: RUST_BACKTRACE
@@ -136,6 +149,19 @@ spec:
               value: {{ .Values.redis.host }}
             - name: GOLEM__REDIS__PORT
               value: "{{ .Values.redis.port }}"
+            - name: GOLEM__REDIS__USERNAME
+              value: "{{ .Values.redis.username }}"
+{{- if .Values.redis.password.plain }}
+            - name: GOLEM__REDIS__PASSWORD
+              value: {{ .Values.redis.password.plain }}
+{{- end }}
+{{- if .Values.redis.password.fromSecret.name }}
+            - name: GOLEM__REDIS__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.password.fromSecret.name }}
+                  key: {{ .Values.redis.password.fromSecret.key }}
+{{- end }}
             - name: RUST_BACKTRACE
               value: "1"
             - name: RUST_LOG
@@ -213,8 +239,17 @@ spec:
               value: "{{ .Values.postgres.port }}"
             - name: GOLEM__DB__CONFIG__USERNAME
               value: {{ .Values.postgres.username }}
+{{- if .Values.postgres.password.plain }}
             - name: GOLEM__DB__CONFIG__PASSWORD
-              value: {{ .Values.postgres.password }}
+              value: {{ .Values.postgres.password.plain }}
+{{- end }}
+{{- if .Values.postgres.password.fromSecret.name }}
+            - name: GOLEM__DB__CONFIG__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.password.fromSecret.name }}
+                  key: {{ .Values.postgres.password.fromSecret.key }}
+{{- end }}
             - name: GOLEM__HTTP_PORT
               value: "{{ .Values.golemService.ports.http }}"
             - name: GOLEM__GRPC_PORT
