@@ -94,7 +94,7 @@ curl --location --request POST 'http://localhost:8080/tyk/apis' \
     "use_keyless": true, 
      "cache_options": {
        "enable_cache": true,
-       "cache_timeout": 40,
+       "cache_timeout": 1,
        "cache_all_safe_requests": true,
        "cache_response_codes": [200]
     },    
@@ -111,7 +111,7 @@ curl --location --request POST 'http://localhost:8080/tyk/apis' \
     },
     "driver": "otto",
     "proxy": {
-        "listen_path": "/v8",
+        "listen_path": "/v10",
         "target_url": "http://192.168.18.202:9006/",
         "strip_listen_path": true
     }

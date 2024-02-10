@@ -38,6 +38,7 @@ impl<'a> RouteResolver for InputHttpRequest<'a> {
             if match_method(request_method, spec_method)
                 && match_literals(&request_path_components, &spec_path_literals)
             {
+                dbg!("Herer???");
                 let request_details: ResolvedVariables = ResolvedVariables::from_http_request(
                     request_body,
                     request_header,
@@ -64,7 +65,7 @@ impl<'a> RouteResolver for InputHttpRequest<'a> {
 }
 
 fn match_method(input_request_method: &Method, spec_method_pattern: &MethodPattern) -> bool {
-    let x = match input_request_method.clone() {
+    match input_request_method.clone() {
         Method::CONNECT => spec_method_pattern.is_connect(),
         Method::GET => spec_method_pattern.is_get(),
         Method::POST => spec_method_pattern.is_post(),
@@ -75,32 +76,69 @@ fn match_method(input_request_method: &Method, spec_method_pattern: &MethodPatte
         Method::OPTIONS => spec_method_pattern.is_options(),
         Method::TRACE => spec_method_pattern.is_trace(),
         _ => false,
-    };
-
-    dbg!(x);
-    x
+    }
 }
 
 fn match_literals(
     request_path_values: &HashMap<usize, String>,
     spec_path_literals: &HashMap<usize, String>,
 ) -> bool {
-    dbg!("The request path is {}", request_path_values);
-    dbg!("The spec path is {}", spec_path_literals);
-    let mut literals_match = true;
+    if spec_path_literals.len() != request_path_values.len() {
+         false
+    } else {
+        let mut literals_match = true;
 
-    for (index, spec_literal) in spec_path_literals.iter() {
-        if let Some(request_literal) = request_path_values.get(index) {
-            if request_literal.trim() != spec_literal.trim() {
+        for (index, spec_literal) in spec_path_literals.iter() {
+            if let Some(request_literal) = request_path_values.get(index) {
+                if request_literal.trim() != spec_literal.trim() {
+                    literals_match = false;
+                    break;
+                }
+            } else {
                 literals_match = false;
                 break;
-            } else {
-                continue;
             }
         }
+
+        literals_match
+    }
+}
+
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_match_literals() {
+        let mut request_path_values = HashMap::new();
+        request_path_values.insert(0, "users".to_string());
+        request_path_values.insert(1, "1".to_string());
+
+        let mut spec_path_literals = HashMap::new();
+        spec_path_literals.insert(0, "users".to_string());
+        spec_path_literals.insert(1, "1".to_string());
+
+        assert_eq!(match_literals(&request_path_values, &spec_path_literals), true);
     }
 
-    dbg!("The literals match is {}", literals_match);
+    #[test]
+    fn test_match_literals_empty_request_path() {
+        let request_path_values = HashMap::new();
 
-    literals_match
+        let mut spec_path_literals = HashMap::new();
+        spec_path_literals.insert(0, "get-cart-contents".to_string());
+
+        assert_eq!(match_literals(&request_path_values, &spec_path_literals), false);
+    }
+
+    #[test]
+    fn test_match_literals_empty_spec_path() {
+        let mut request_path_values = HashMap::new();
+        request_path_values.insert(0, "get-cart-contents".to_string());
+
+        let spec_path_literals = HashMap::new();
+
+        assert_eq!(match_literals(&request_path_values, &spec_path_literals), false);
+    }
+
 }
