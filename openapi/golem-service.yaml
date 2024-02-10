@@ -4,6 +4,7 @@ info:
   version: '2.0'
 servers: []
 tags:
+- name: HealthCheck
 - name: Template
 - name: Worker
 paths:
@@ -921,6 +922,28 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /healthcheck:
+    get:
+      tags:
+      - HealthCheck
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HealthcheckResponse'
+  /version:
+    get:
+      tags:
+      - HealthCheck
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/VersionInfo'
 components:
   schemas:
     CallingConvention:
@@ -1466,6 +1489,8 @@ components:
             type: string
             example: WorkerNotFound
       - $ref: '#/components/schemas/GolemErrorWorkerNotFound'
+    HealthcheckResponse:
+      type: object
     InterruptResponse:
       type: object
     InvocationKey:
@@ -1951,6 +1976,13 @@ components:
       properties:
         versionedTemplateId:
           $ref: '#/components/schemas/VersionedTemplateId'
+    VersionInfo:
+      type: object
+      required:
+      - version
+      properties:
+        version:
+          type: string
     VersionedName:
       type: object
       required:
