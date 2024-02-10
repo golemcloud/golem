@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use hyper::http::Method;
+use poem_openapi::types::Type;
 
 use crate::api_definition::{ApiDefinition, MethodPattern, Route};
 use crate::http_request::InputHttpRequest;
@@ -38,7 +39,6 @@ impl<'a> RouteResolver for InputHttpRequest<'a> {
             if match_method(request_method, spec_method)
                 && match_literals(&request_path_components, &spec_path_literals)
             {
-                dbg!("Herer???");
                 let request_details: ResolvedVariables = ResolvedVariables::from_http_request(
                     request_body,
                     request_header,
@@ -55,7 +55,6 @@ impl<'a> RouteResolver for InputHttpRequest<'a> {
                 };
                 return Some(resolved_binding);
             } else {
-                dbg!("No match");
                 continue;
             }
         }
@@ -83,7 +82,7 @@ fn match_literals(
     request_path_values: &HashMap<usize, String>,
     spec_path_literals: &HashMap<usize, String>,
 ) -> bool {
-    if spec_path_literals.len() != request_path_values.len() {
+    if spec_path_literals.is_empty() && !request_path_values.is_empty() {
         false
     } else {
         let mut literals_match = true;
