@@ -41,23 +41,22 @@ golem-cli worker invoke-and-await  --template-name mytemplate --worker-name mywo
 
 ```bash
 {
-  "id": "my-api",
+  "id": "shopping-cart",
   "version": "0.0.1",
   "routes": [
     {
       "method": "Get",
-      "path": "/",
+      "path": "/getcartcontents",
       "binding": {
         "type": "wit-worker",
-        "template": "c467b83d-cb27-4296-b48a-ee85114cdb71", // Note down the template id
-        "workerId": "myworker",
+        "template": "c467b83d-cb27-4296-b48a-ee85114cdb71",
+        "workerId": "myworker2",
         "functionName": "golem:it/api/get-cart-contents",
         "functionParams": []
       }
     }
   ]
 }
-
 
 ```
 
