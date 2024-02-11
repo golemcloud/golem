@@ -36,7 +36,7 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
                     .ok_or("No x-worker-bridge extension found")?;
                 Ok(worker_bridgge_info)
             }
-            openapiv3::ReferenceOr::Reference { reference } => {
+            openapiv3::ReferenceOr::Reference { reference: _ } => {
                 Err("Reference not supported".to_string())
             }
         };

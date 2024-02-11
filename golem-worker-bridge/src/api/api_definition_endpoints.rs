@@ -12,8 +12,8 @@ use tracing::{error, info};
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::api_definition;
 use crate::api_definition::{ApiDefinitionId, MethodPattern, Version};
-use crate::oas_worker_bridge::*;
 use crate::expr::Expr;
+use crate::oas_worker_bridge::*;
 use crate::register::RegisterApiDefinition;
 
 pub struct ApiDefinitionEndpoints {
@@ -29,18 +29,12 @@ impl ApiDefinitionEndpoints {
     #[oai(path = "/oas", method = "put")]
     async fn create_or_update_open_api(
         &self,
-        payload: serde_yaml::Value,
+        payload: String,
     ) -> Result<Json<ApiDefinition>, ApiEndpointError> {
-
-        let definition = get_api_definition(payload.as_str().unwrap()).map_err(
-            |e| {
-                error!(
-                    "Invalid Spec {}",
-                    e
-                );
-                ApiEndpointError::bad_request(e)
-            }
-        )?;
+        let definition = get_api_definition(payload.as_str()).map_err(|e| {
+            error!("Invalid Spec {}", e);
+            ApiEndpointError::bad_request(e)
+        })?;
 
         let api_definition_id = &definition.id;
 
