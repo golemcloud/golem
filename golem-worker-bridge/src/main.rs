@@ -9,11 +9,16 @@ use golem_worker_bridge::worker_request_executor::{
 use poem::Route;
 use std::sync::Arc;
 use tracing::error;
+use golem_worker_bridge::oas_worker_bridge::{get_api_definition, sample};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+
+    let result = get_api_definition(sample().as_str());
+    dbg!(result);
     let config = WorkerBridgeConfig::default();
     app(&config).await
+
 }
 
 pub async fn app(config: &WorkerBridgeConfig) -> std::io::Result<()> {
