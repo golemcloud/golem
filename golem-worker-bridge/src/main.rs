@@ -8,13 +8,45 @@ use golem_worker_bridge::worker_request_executor::{
 };
 use poem::Route;
 use std::sync::Arc;
+use openapiv3::OpenAPI;
 use tracing::error;
+use golem_worker_bridge::api_definition::PathPattern;
+use golem_worker_bridge::oas_worker_bridge::sample;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let config = WorkerBridgeConfig::default();
+   // let config = WorkerBridgeConfig::default();
+    let openapi: OpenAPI = serde_yaml::from_str(sample().as_str()).expect("Could not deserialize input");
+    // println!("{:?}", openapi);
+    // println!("{:?}", openapi);
+    openapi.extensions.iter().for_each(|(key, value)| {
+        println!("Key: {}", key);
+        println!("Value: {:?}", value);
+    });
 
-    app(&config).await
+    openapi.paths.iter().for_each(|(path, path_item)| {
+        println!("Path: {}", path);
+
+        match path_item {
+            openapiv3::ReferenceOr::Item(item) => {
+                println!("extensions: {:?}", item.extensions);
+            }
+            openapiv3::ReferenceOr::Reference {
+                reference,
+            } => {
+                println!("Reference: {:?}", reference);
+            }
+        }
+        println!("path item is {:?}", path_item);
+
+        let hmm = PathPattern::from(path).unwrap();
+
+        println!("Path Pattern: {:?}", hmm);
+
+        //println!("Path Item: {:?}", path_item);
+    });
+    Ok(())
+   // app(&config).await
 }
 
 pub async fn app(config: &WorkerBridgeConfig) -> std::io::Result<()> {
