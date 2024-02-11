@@ -104,7 +104,7 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
         routes.push(route);
     });
 
-    Err("damn".to_string())
+    Err("not yet implemented".to_string())
 
 
 }
