@@ -1,9 +1,8 @@
-
+create namespace
 
 ```shell
 kubectl create namespace golem
 ```
-
 
 ## postgres
 

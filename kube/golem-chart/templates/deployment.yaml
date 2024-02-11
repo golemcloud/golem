@@ -69,7 +69,7 @@ spec:
           livenessProbe:
             httpGet:
               path: "/healthcheck"
-              port: {{ .Values.shardManager.ports.http }}
+              port: http
             periodSeconds: 10
             failureThreshold: 5
             initialDelaySeconds: 20
@@ -173,7 +173,7 @@ spec:
           livenessProbe:
             httpGet:
               path: "/healthcheck"
-              port: {{ .Values.workerExecutor.ports.http }}
+              port: http
             periodSeconds: 10
             failureThreshold: 5
             initialDelaySeconds: 45
@@ -265,11 +265,18 @@ spec:
 {{/*          livenessProbe:*/}}
 {{/*            httpGet:*/}}
 {{/*              path: "/healthcheck"*/}}
-{{/*              port: {{ .Values.workerBridge.ports.mgmtHttp }}*/}}
+{{/*              port: mgmtHttp*/}}
 {{/*            periodSeconds: 10*/}}
 {{/*            failureThreshold: 5*/}}
 {{/*            initialDelaySeconds: 45*/}}
 {{/*            timeoutSeconds: 2*/}}
+{{/*          readinessProbe:*/}}
+{{/*            httpGet:*/}}
+{{/*              path: "/healthcheck"*/}}
+{{/*              port: mgmtHttp*/}}
+{{/*            periodSeconds: 10*/}}
+{{/*            failureThreshold: 5*/}}
+{{/*            initialDelaySeconds: 20*/}}
 ---
 
 apiVersion: apps/v1
@@ -353,14 +360,14 @@ spec:
 {{/*          livenessProbe:*/}}
 {{/*            httpGet:*/}}
 {{/*              path: "/healthcheck"*/}}
-{{/*              port: {{ .Values.golemService.ports.http }}*/}}
+{{/*              port: http*/}}
 {{/*            periodSeconds: 10*/}}
 {{/*            failureThreshold: 5*/}}
 {{/*            initialDelaySeconds: 20*/}}
 {{/*          readinessProbe:*/}}
 {{/*            httpGet:*/}}
 {{/*              path: "/healthcheck"*/}}
-{{/*              port: {{ .Values.golemService.ports.http }}*/}}
+{{/*              port: http */}}
 {{/*            periodSeconds: 10*/}}
 {{/*            failureThreshold: 5*/}}
 {{/*            initialDelaySeconds: 20*/}}
