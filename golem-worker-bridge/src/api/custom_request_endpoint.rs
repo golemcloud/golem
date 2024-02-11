@@ -73,7 +73,9 @@ impl CustomRequestEndpoint {
         };
 
         let api_definition_id_res = headers
-            .get("X-API-Definition-Id")
+            .iter()
+            .find(|(key, _)| key.as_str().to_lowercase() == "x-api-definition-id")
+            .map(|(_, value)| value)
             .ok_or("Missing X-API-Definition-Id header");
 
         let api_definition_id_header = match api_definition_id_res {

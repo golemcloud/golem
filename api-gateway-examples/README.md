@@ -87,6 +87,46 @@ docker-compose up
 
 Register the API definition with Tyk. We are OAS API Definition of Tyk. You can read more about it in Tyk documentation
 
+```
+curl --location --request POST 'http://localhost:8080/tyk/apis/oas/import' \
+--header 'x-tyk-authorization: foo' \
+--header 'Content-Type: text/plain' \
+--data-raw '{
+  "openapi": "3.0.0",
+  "x-API-Definition-Id": "my-api",
+  "info": {
+    "title": "Sample API",
+    "version": "1.0.0"
+  },
+    "servers": [
+        {
+        "url": "http://192.168.18.202:9006"
+        }
+    ],
+  "paths": {
+    "/get-cart-contents": {
+      "x-worker-bridge": {
+        "worker-id": "myworker",
+        "function-name": "golem:it/api/get-cart-contents",
+        "function-params": [],
+        "template-id": "25762a6c-65b5-499c-afa5-d7875dceeba5"
+      },
+      "get": {
+        "summary": "Get Cart Contents",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "404": {
+            "description": "Contents not found"
+          }
+        }
+      }
+    }
+  }
+}'
+
+```
 
 ```json
 curl --location --request POST 'http://localhost:8080/tyk/apis' \

@@ -4,24 +4,16 @@ info:
   title: Sample API
   version: 1.0.0
 paths:
-  /users/{id}:
+  /get-cart-contents:
     x-worker-bridge:
       worker-id: "myworker"
       function-name: "golem:it/api/get-cart-contents"
       function-params: []
-      template-id: "4d1b159d-51d3-4440-aa29-8edb235f62a3"
+      template-id: "25762a6c-65b5-499c-afa5-d7875dceeba5"
     get:
-      summary: Get user by ID
-      description: getUserById
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+      summary: Get Cart Contents
       responses:
         '200':
           description: OK
         '404':
-          description: User not found
+          description: Contents not found

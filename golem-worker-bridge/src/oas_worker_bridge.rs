@@ -8,42 +8,6 @@ use serde_json;
 use serde_json::Value;
 use uuid::Uuid;
 
-pub fn sample() -> String {
-    print!("Golem TimeLine");
-
-    let json_data = r#"
-openapi: 3.0.0
-x-API-Definition-Id : "my-api"
-info:
-  title: Sample API
-  version: 1.0.0
-paths:
-  /users/{id}:
-    x-worker-bridge:
-      worker-id: "myworker"
-      function-name: "golem:it/api/get-cart-contents"
-      function-params: []
-      template-id: "4d1b159d-51d3-4440-aa29-8edb235f62a3"
-    get:
-      summary: Get user by ID
-      description: getUserById
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
-      responses:
-        '200':
-          description: OK
-        '404':
-          description: User not found
-    "#;
-
-    json_data.to_string()
-}
-
 pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
     dbg!(open_api);
     let openapi: OpenAPI = serde_yaml::from_str(open_api).map_err(|e| e.to_string())?;
@@ -51,7 +15,9 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
     let id = ApiDefinitionId(
         openapi
             .extensions
-            .get("x-API-Definition-Id")
+            .iter()
+            .find(|(key, _)| key.to_lowercase() == "x-api-definition-id")
+            .map(|(_, value)| value)
             .ok_or("No X-API-Definition-Id found")?
             .as_str()
             .ok_or("X-API-Definition-Id is not a string")?
