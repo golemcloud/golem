@@ -8,41 +8,6 @@ use serde_json;
 use serde_json::Value;
 use uuid::Uuid;
 
-pub fn sample() -> String {
-    print!("Golem TimeLine");
-
-    let json_data = r#"
-openapi: 3.0.0
-info:
-  title: Sample API
-  version: 1.0.0
-paths:
-  /users/{id}:
-    x-worker-bridge:
-      worker-id: "myworker"
-      function-name: "golem:it/api/get-cart-contents"
-      function-params: []
-      template-id: "4d1b159d-51d3-4440-aa29-8edb235f62a3"
-    get:
-      summary: Get user by ID
-      description: getUserById
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
-      responses:
-        '200':
-          description: OK
-        '404':
-          description: User not found
-    "#;
-
-    json_data.to_string()
-}
-
 pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
     let openapi: OpenAPI = serde_yaml::from_str(open_api).map_err(|e| e.to_string())?;
     let version = Version(openapi.info.version);
@@ -58,9 +23,7 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
 
     let mut routes: Vec<Route> = vec![];
 
-    openapi.paths.iter().for_each(|(path, path_item)| {
-        println!("Path: {}", path);
-
+    for (path, path_item) in openapi.paths.iter() {
         let worker_bridge_info_result: Result<&Value, String> = match path_item {
             openapiv3::ReferenceOr::Item(item) => {
                 println!("extensions: {:?}", item.extensions);
@@ -105,7 +68,7 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
         };
 
         routes.push(route);
-    });
+    }
 
     Ok(ApiDefinition {
         id,

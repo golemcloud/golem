@@ -12,6 +12,7 @@ use tracing::{error, info};
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::api_definition;
 use crate::api_definition::{ApiDefinitionId, MethodPattern, Version};
+use crate::oas_worker_bridge::*;
 use crate::expr::Expr;
 use crate::register::RegisterApiDefinition;
 
@@ -23,6 +24,49 @@ pub struct ApiDefinitionEndpoints {
 impl ApiDefinitionEndpoints {
     pub fn new(definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>) -> Self {
         Self { definition_service }
+    }
+
+    #[oai(path = "/oas", method = "put")]
+    async fn create_or_update_open_api(
+        &self,
+        payload: String,
+    ) -> Result<Json<ApiDefinition>, ApiEndpointError> {
+
+        let definition = get_api_definition(payload.as_str()).map_err(
+            |e| {
+                error!(
+                    "Invalid Spec {}",
+                    e
+                );
+                ApiEndpointError::bad_request(e)
+            }
+        )?;
+
+        let api_definition_id = &definition.id;
+
+        self.definition_service
+            .register(&definition)
+            .await
+            .map_err(|e| {
+                error!(
+                    "API definition id: {} - register error: {}",
+                    api_definition_id, e
+                );
+                ApiEndpointError::internal(e)
+            })?;
+
+        let data = self
+            .definition_service
+            .get(api_definition_id)
+            .await
+            .map_err(ApiEndpointError::internal)?;
+
+        let definition = data.ok_or(ApiEndpointError::not_found("API Definition not found"))?;
+
+        let definition: ApiDefinition =
+            definition.try_into().map_err(ApiEndpointError::internal)?;
+
+        Ok(Json(definition))
     }
 
     #[oai(path = "/", method = "put")]
