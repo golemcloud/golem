@@ -1,4 +1,5 @@
 openapi: 3.0.0
+x-API-Definition-Id : "my-api"
 info:
   title: Sample API
   version: 1.0.0

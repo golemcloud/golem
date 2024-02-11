@@ -69,6 +69,14 @@ curl -X PUT http://localhost:9005/v1/api/definitions -H "Content-Type: applicati
 
 ```
 
+You can also choose to open-api spec, with some additional information of worker-bridge!
+
+```scala
+curl -X PUT http://localhost:9005/v1/api/definitions/oas \
+-H "Content-Type: application/yaml" \
+--data-binary "@endpoit_definition_oas.yaml"
+```
+
 Step 4: Install Tyk API gateway
 
 ```bash

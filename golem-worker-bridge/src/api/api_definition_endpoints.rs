@@ -29,10 +29,10 @@ impl ApiDefinitionEndpoints {
     #[oai(path = "/oas", method = "put")]
     async fn create_or_update_open_api(
         &self,
-        payload: String,
+        payload: serde_yaml::Value,
     ) -> Result<Json<ApiDefinition>, ApiEndpointError> {
 
-        let definition = get_api_definition(payload.as_str()).map_err(
+        let definition = get_api_definition(payload.as_str().unwrap()).map_err(
             |e| {
                 error!(
                     "Invalid Spec {}",
