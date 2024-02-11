@@ -1,0 +1,17 @@
+{
+  "id": "shopping-cart",
+  "version": "0.0.1",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "/get-cart-contents",
+      "binding": {
+        "type": "wit-worker",
+        "template": "4d1b159d-51d3-4440-aa29-8edb235f62a3",
+        "workerId": "myworker",
+        "functionName": "golem:it/api/get-cart-contents",
+        "functionParams": []
+      }
+    }
+  ]
+}
