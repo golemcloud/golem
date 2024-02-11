@@ -1,0 +1,288 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-worker-executor-{{.Values.env}}
+  labels:
+    env: {{.Values.env}}
+spec:
+  replicas: {{ .Values.workerExecutor.replica }}
+  selector:
+    matchLabels:
+      app: worker-executor-app-{{.Values.env}}
+  template:
+    metadata:
+      labels:
+        app: worker-executor-app-{{.Values.env}}
+        env: {{.Values.env}}
+    spec:
+{{- if .Values.serviceAccountName }}
+      serviceAccountName: {{ .Values.serviceAccountName }}
+{{- end }}
+{{- if .Values.workerExecutor.nodeSelector }}
+      nodeSelector: {{- .Values.workerExecutor.nodeSelector | toYaml | nindent 8 }}
+{{- end }}
+      containers:
+        - name: worker-executor-app-{{.Values.env}}
+          image: "{{ .Values.workerExecutor.image }}"
+          imagePullPolicy: {{.Values.workerExecutor.imagePullPolicy}}
+          env:
+            - name: ENVIRONMENT
+              value: {{.Values.env}}
+            - name: REDIS_HOST
+              value: {{ .Values.redis.host }}
+            - name: GOLEM__TEMPLATE_SERVICE__CONFIG__HOST
+              value: service-golem-service-{{.Values.env}}
+            - name: GOLEM__TEMPLATE_SERVICE__CONFIG__PORT
+              value: "{{ .Values.golemService.ports.grpc }}"
+            - name: GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN
+              value: "2A354594-7A63-4091-A46B-CC58D379F677"
+            - name: GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST
+              value: service-shard-manager-{{.Values.env}}
+            - name: GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT
+              value: "{{ .Values.shardManager.ports.grpc }}"
+            - name: GOLEM__SHARD_MANAGER_SERVICE__TYPE
+              value: "Grpc"
+            - name: GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS
+              value: "5"
+            - name: GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY
+              value: "100ms"
+            - name: GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY
+              value: "2s"
+            - name: GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER
+              value: "2"
+            - name: GOLEM__REDIS__KEY_PREFIX
+              value: {{.Values.env}}
+            - name: GOLEM__REDIS__HOST
+              value: {{ .Values.redis.host }}
+            - name: GOLEM__REDIS__PORT
+              value: "{{ .Values.redis.port }}"
+            - name: GOLEM__REDIS__USERNAME
+              value: "{{ .Values.redis.username }}"
+{{- if .Values.redis.password.plain }}
+            - name: GOLEM__REDIS__PASSWORD
+              value: {{ .Values.redis.password.plain }}
+{{- end }}
+{{- if .Values.redis.password.fromSecret.name }}
+            - name: GOLEM__REDIS__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.password.fromSecret.name }}
+                  key: {{ .Values.redis.password.fromSecret.key }}
+{{- end }}
+            - name: WASMTIME_BACKTRACE_DETAILS
+              value: "1"
+            - name: RUST_BACKTRACE
+              value: "1"
+            - name: RUST_LOG
+              value: "info"
+            - name: GOLEM__ENABLE_JSON_LOG
+              value: "{{ .Values.logging.json }}"
+            - name: GOLEM__HTTP_PORT
+              value: "{{ .Values.workerExecutor.ports.http }}"
+            - name: GOLEM__PORT
+              value: "{{ .Values.workerExecutor.ports.grpc }}"
+            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
+              value: "Local"
+            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION
+              value: "us-east-1"
+            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT
+              value: "/golem/template"
+          ports:
+            - name: http
+              containerPort: {{ .Values.workerExecutor.ports.http }}
+            - name: grpc
+              containerPort: {{ .Values.workerExecutor.ports.grpc }}
+          livenessProbe:
+            httpGet:
+              path: "/healthcheck"
+              port: {{ .Values.workerExecutor.ports.http }}
+            periodSeconds: 10
+            failureThreshold: 5
+            initialDelaySeconds: 45
+            timeoutSeconds: 2
+          volumeMounts:
+            - name: golem-template-store-{{.Values.env}}
+              mountPath: /golem/template
+      volumes:
+        - name: golem-template-store-{{.Values.env}}
+          persistentVolumeClaim:
+            claimName: golem-template-store-{{.Values.env}}
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-shard-manager-{{.Values.env}}
+  labels:
+    env: {{.Values.env}}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: shard-manager-app-{{.Values.env}}
+  template:
+    metadata:
+      labels:
+        app: shard-manager-app-{{.Values.env}}
+        env: {{.Values.env}}
+    spec:
+{{- if .Values.serviceAccountName }}
+      serviceAccountName: {{ .Values.serviceAccountName }}
+{{- end }}
+{{- if .Values.workerExecutor.nodeSelector }}
+      nodeSelector: {{- .Values.workerExecutor.nodeSelector | toYaml | nindent 8 }}
+{{- end }}
+      containers:
+        - name: shard-manager-app-{{.Values.env}}
+          image: "{{ .Values.shardManager.image }}"
+          imagePullPolicy: {{.Values.shardManager.imagePullPolicy}}
+          env:
+            - name: ENVIRONMENT
+              value: {{.Values.env}}
+            - name: REDIS_HOST
+              value: {{ .Values.redis.host }}
+            - name: GOLEM__REDIS__KEY_PREFIX
+              value: {{.Values.env}}
+            - name: GOLEM__REDIS__HOST
+              value: {{ .Values.redis.host }}
+            - name: GOLEM__REDIS__PORT
+              value: "{{ .Values.redis.port }}"
+            - name: GOLEM__REDIS__USERNAME
+              value: "{{ .Values.redis.username }}"
+{{- if .Values.redis.password.plain }}
+            - name: GOLEM__REDIS__PASSWORD
+              value: {{ .Values.redis.password.plain }}
+{{- end }}
+{{- if .Values.redis.password.fromSecret.name }}
+            - name: GOLEM__REDIS__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.password.fromSecret.name }}
+                  key: {{ .Values.redis.password.fromSecret.key }}
+{{- end }}
+            - name: RUST_BACKTRACE
+              value: "1"
+            - name: RUST_LOG
+              value: "info,h2=warn,hyper=warn,tower=warn"
+            - name: GOLEM__ENABLE_JSON_LOG
+              value: "{{ .Values.logging.json }}"
+            - name: GOLEM__HTTP_PORT
+              value: "{{ .Values.shardManager.ports.http }}"
+            - name: GOLEM_SHARD_MANAGER_PORT
+              value: "{{ .Values.shardManager.ports.grpc }}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.shardManager.ports.http }}
+            - name: grpc
+              containerPort: {{ .Values.shardManager.ports.grpc }}
+          livenessProbe:
+            httpGet:
+              path: "/healthcheck"
+              port: {{ .Values.shardManager.ports.http }}
+            periodSeconds: 10
+            failureThreshold: 5
+            initialDelaySeconds: 20
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-golem-service-{{.Values.env}}
+  labels:
+    env: {{.Values.env}}
+spec:
+  replicas: {{ .Values.golemService.replica }}
+  selector:
+    matchLabels:
+      app: golem-service-app-{{.Values.env}}
+  template:
+    metadata:
+      labels:
+        app: golem-service-app-{{.Values.env}}
+        env: {{.Values.env}}
+    spec:
+{{- if .Values.serviceAccountName }}
+      serviceAccountName: {{ .Values.serviceAccountName }}
+{{- end }}
+{{- if .Values.golemService.nodeSelector }}
+      nodeSelector: {{- .Values.golemService.nodeSelector | toYaml | nindent 8 }}
+{{- end }}
+      containers:
+        - name: golem-service-app-{{.Values.env}}
+          image: "{{ .Values.golemService.image }}"
+          imagePullPolicy: {{.Values.golemService.imagePullPolicy}}
+          env:
+            - name: ENVIRONMENT
+              value: {{.Values.env}}
+            - name: GOLEM__ROUTING_TABLE__HOST
+              value: service-shard-manager-{{.Values.env}}
+            - name: GOLEM__ROUTING_TABLE__PORT
+              value: "{{ .Values.shardManager.ports.grpc }}"
+            - name: RUST_BACKTRACE
+              value: "1"
+            - name: RUST_LOG
+              value: "info,h2=warn,hyper=warn,tower=warn"
+            - name: GOLEM__ENABLE_JSON_LOG
+              value: "{{ .Values.logging.json }}"
+            - name: GOLEM__DB__TYPE
+              value: "Postgres"
+            - name: GOLEM__DB__CONFIG__MAX_CONNECTIONS
+              value: "10"
+            - name: GOLEM__DB__CONFIG__DATABASE
+              value: {{ .Values.postgres.database }}
+            - name: GOLEM__DB__CONFIG__HOST
+              value: {{ .Values.postgres.host }}
+            - name: GOLEM__DB__CONFIG__PORT
+              value: "{{ .Values.postgres.port }}"
+            - name: GOLEM__DB__CONFIG__USERNAME
+              value: {{ .Values.postgres.username }}
+{{- if .Values.postgres.password.plain }}
+            - name: GOLEM__DB__CONFIG__PASSWORD
+              value: {{ .Values.postgres.password.plain }}
+{{- end }}
+{{- if .Values.postgres.password.fromSecret.name }}
+            - name: GOLEM__DB__CONFIG__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.password.fromSecret.name }}
+                  key: {{ .Values.postgres.password.fromSecret.key }}
+{{- end }}
+            - name: GOLEM__HTTP_PORT
+              value: "{{ .Values.golemService.ports.http }}"
+            - name: GOLEM__GRPC_PORT
+              value: "{{ .Values.golemService.ports.grpc }}"
+            - name: GOLEM__TEMPLATES__STORE__TYPE
+              value: "Local"
+            - name: GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX
+              value: ""
+            - name: GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH
+              value: "/golem/template"
+          ports:
+            - name: http
+              containerPort: {{ .Values.golemService.ports.http }}
+            - name: grpc
+              containerPort: {{ .Values.golemService.ports.grpc }}
+{{/*          livenessProbe:*/}}
+{{/*            httpGet:*/}}
+{{/*              path: "/healthcheck"*/}}
+{{/*              port: {{ .Values.golemService.ports.http }}*/}}
+{{/*            periodSeconds: 10*/}}
+{{/*            failureThreshold: 5*/}}
+{{/*            initialDelaySeconds: 20*/}}
+{{/*          readinessProbe:*/}}
+{{/*            httpGet:*/}}
+{{/*              path: "/healthcheck"*/}}
+{{/*              port: {{ .Values.golemService.ports.http }}*/}}
+{{/*            periodSeconds: 10*/}}
+{{/*            failureThreshold: 5*/}}
+{{/*            initialDelaySeconds: 20*/}}
+          volumeMounts:
+            - name: golem-template-store-{{.Values.env}}
+              mountPath: /golem/template
+      volumes:
+        - name: golem-template-store-{{.Values.env}}
+          persistentVolumeClaim:
+            claimName: golem-template-store-{{.Values.env}}

@@ -22,15 +22,16 @@ use prometheus::Registry;
 use std::ops::Deref;
 use std::sync::Arc;
 
+mod healthcheck;
 mod template;
 mod worker;
-
 mod worker_connect;
 
 #[derive(Tags)]
 enum ApiTags {
     Template,
     Worker,
+    HealthCheck,
 }
 
 pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {
@@ -53,7 +54,11 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
         )
 }
 
-type ApiServices = (template::TemplateApi, worker::WorkerApi);
+type ApiServices = (
+    template::TemplateApi,
+    worker::WorkerApi,
+    healthcheck::HealthcheckApi,
+);
 
 pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices, ()> {
     OpenApiService::new(
@@ -65,6 +70,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
                 template_service: services.template_service.clone(),
                 worker_service: services.worker_service.clone(),
             },
+            healthcheck::HealthcheckApi,
         ),
         "Golem API",
         "2.0",
