@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
     dbg!(open_api);
-    let openapi: OpenAPI = serde_yaml::from_str(open_api).map_err(|e| e.to_string())?;
+    let openapi: OpenAPI = serde_json::from_str(open_api).map_err(|e| e.to_string())?;
     let version = Version(openapi.info.version);
     let id = ApiDefinitionId(
         openapi

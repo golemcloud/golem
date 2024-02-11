@@ -69,14 +69,6 @@ curl -X PUT http://localhost:9005/v1/api/definitions -H "Content-Type: applicati
 
 ```
 
-You can also choose to open-api spec, with some additional information of worker-bridge!
-
-```scala
-curl -X PUT http://localhost:9005/v1/api/definitions/oas \
--H "Content-Type: application/yaml" \
---data-binary "@endpoit_definition_oas.yaml"
-```
-
 Step 4: Install Tyk API gateway
 
 ```bash
@@ -86,47 +78,6 @@ docker-compose up
 ```
 
 Register the API definition with Tyk. We are OAS API Definition of Tyk. You can read more about it in Tyk documentation
-
-```
-curl --location --request POST 'http://localhost:8080/tyk/apis/oas/import' \
---header 'x-tyk-authorization: foo' \
---header 'Content-Type: text/plain' \
---data-raw '{
-  "openapi": "3.0.0",
-  "x-API-Definition-Id": "my-api",
-  "info": {
-    "title": "Sample API",
-    "version": "1.0.0"
-  },
-    "servers": [
-        {
-        "url": "http://192.168.18.202:9006"
-        }
-    ],
-  "paths": {
-    "/get-cart-contents": {
-      "x-worker-bridge": {
-        "worker-id": "myworker",
-        "function-name": "golem:it/api/get-cart-contents",
-        "function-params": [],
-        "template-id": "25762a6c-65b5-499c-afa5-d7875dceeba5"
-      },
-      "get": {
-        "summary": "Get Cart Contents",
-        "responses": {
-          "200": {
-            "description": "OK"
-          },
-          "404": {
-            "description": "Contents not found"
-          }
-        }
-      }
-    }
-  }
-}'
-
-```
 
 ```json
 curl --location --request POST 'http://localhost:8080/tyk/apis' \
@@ -200,6 +151,45 @@ curl -X GET http://localhost:8080/v1/getcartcontents
 [[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
 
 ```
+
+
+## Alternate and easier workflow using OpenAPI Spec
+
+If we have an OpenAPI spec of the backend services, with a few additional information relating to worker-bridge and Tyk, 
+we can use the same to register with worker-bridge and API Gateway.
+
+### Step 1: Registration with worker-bridge
+
+```bash
+
+# Refer to open_api.json. servers section is for Tyk and worker-bridge section is for worker-bridge
+curl -X PUT http://localhost:9005/v1/api/definitions/oas -H "Content-Type: application/json" --data-binary "@open_api.json"
+
+```
+
+### Step 2: Registration with Tyk
+
+```bash
+
+curl -X POST http://localhost:8080/tyk/apis/oas/import --header 'x-tyk-authorization: foo' --header 'Content-Type: text/plain' -d @open_api.json
+
+# then reload
+curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
+
+
+```
+
+### Step 3: Try out
+
+```bash
+
+curl -X GET http://localhost:8080/getcartcontents
+ 
+[[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
+
+```
+
+
 ## Generation of Open API spec
 
 Currently the requests to the gateway is forwarded as it is to worker bridge. 
