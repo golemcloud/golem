@@ -1,3 +1,13 @@
+shardManager:
+  image: golemservices/golem-shard-manager:latest
+  imagePullPolicy: Always
+  ports:
+    http: 8080
+    grpc: 9001
+  service:
+    type: ClusterIP
+#  nodeSelector:
+
 workerExecutor:
   image: golemservices/golem-worker-executor:latest
   imagePullPolicy: Always
@@ -5,14 +15,19 @@ workerExecutor:
   ports:
     http: 8080
     grpc: 9000
+  service:
+    type: ClusterIP
 #  nodeSelector:
 
-shardManager:
-  image: golemservices/golem-shard-manager:latest
+workerBridge:
+  image: golemservices/golem-worker-bridge:latest
   imagePullPolicy: Always
+  replica: 1
   ports:
-    http: 8080
-    grpc: 9001
+    mgmtHttp: 8080
+    requestHttp: 9000
+  service:
+    type: LoadBalancer
 #  nodeSelector:
 
 golemService:
