@@ -1,13 +1,14 @@
-use serde_json;
+use crate::api_definition::{
+    ApiDefinition, ApiDefinitionId, GolemWorkerBinding, MethodPattern, PathPattern, Route, Version,
+};
+use crate::expr::Expr;
+use golem_common::model::TemplateId;
 use openapiv3::OpenAPI;
+use serde_json;
 use serde_json::Value;
 use uuid::Uuid;
-use golem_api_grpc::proto::golem::template::TemplateId;
-use golem_common::model::TemplateId;
-use crate::api_definition::{ApiDefinition, GolemWorkerBinding, MethodPattern, PathPattern, Route};
-use crate::expr::Expr;
 
-pub fn sample()  -> String {
+pub fn sample() -> String {
     print!("Golem TimeLine");
 
     let json_data = r#"
@@ -40,27 +41,36 @@ paths:
     "#;
 
     json_data.to_string()
-
 }
 
 pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
     let openapi: OpenAPI = serde_yaml::from_str(open_api).map_err(|e| e.to_string())?;
+    let version = Version(openapi.info.version);
+    let id = ApiDefinitionId(
+        openapi
+            .extensions
+            .get("X-API-Definition-Id")
+            .ok_or("No X-API-Definition-Id found")?
+            .as_str()
+            .ok_or("X-API-Definition-Id is not a string")?
+            .to_string(),
+    );
 
     let mut routes: Vec<Route> = vec![];
 
     openapi.paths.iter().for_each(|(path, path_item)| {
         println!("Path: {}", path);
 
-
         let worker_bridge_info_result: Result<&Value, String> = match path_item {
             openapiv3::ReferenceOr::Item(item) => {
                 println!("extensions: {:?}", item.extensions);
-                let worker_bridgge_info = item.extensions.get("x-worker-bridge").ok_or("No x-worker-bridge extension found")?;
+                let worker_bridgge_info = item
+                    .extensions
+                    .get("x-worker-bridge")
+                    .ok_or("No x-worker-bridge extension found")?;
                 Ok(worker_bridgge_info)
             }
-            openapiv3::ReferenceOr::Reference {
-                reference,
-            } => {
+            openapiv3::ReferenceOr::Reference { reference } => {
                 Err("Reference not supported".to_string())
             }
         };
@@ -71,25 +81,17 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
             function_name: get_function_name(worker_bridge_info)?,
             function_params: get_function_params(worker_bridge_info)?,
             template: get_template_id(worker_bridge_info)?,
-            response: None
+            response: None,
         };
 
         let path_pattern = get_path_pattern(path)?;
         let method_res = match path_item {
-            openapiv3::ReferenceOr::Item(item) => {
-                match &item.get {
-                    Some(_) => {
-                        Ok(MethodPattern::Get)
-                    }
-                    None => {
-                        Err("Other methods not supported".to_string())
-                    }
-                }
-            }
+            openapiv3::ReferenceOr::Item(item) => match &item.get {
+                Some(_) => Ok(MethodPattern::Get),
+                None => Err("Other methods not supported".to_string()),
+            },
 
-            openapiv3::ReferenceOr::Reference {
-                reference,
-            } => {
+            openapiv3::ReferenceOr::Reference { reference: _ } => {
                 Err("Reference not supported".to_string())
             }
         };
@@ -98,24 +100,36 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
         let route = Route {
             path: path_pattern,
             method: method,
-            binding: golem_binding
+            binding: golem_binding,
         };
 
         routes.push(route);
     });
 
-    Err("not yet implemented".to_string())
-
-
+    Ok(ApiDefinition {
+        id,
+        version,
+        routes,
+    })
 }
 
 fn get_template_id(worker_bridge_info: &Value) -> Result<TemplateId, String> {
-    let template_id = worker_bridge_info.get("template-id").ok_or("No template-id found")?.as_str().ok_or("template-id is not a string")?;
-    Ok(TemplateId(Uuid::parse_str(template_id).map_err(|err| err.to_string())?))
+    let template_id = worker_bridge_info
+        .get("template-id")
+        .ok_or("No template-id found")?
+        .as_str()
+        .ok_or("template-id is not a string")?;
+    Ok(TemplateId(
+        Uuid::parse_str(template_id).map_err(|err| err.to_string())?,
+    ))
 }
 
 fn get_function_params(worker_bridge_info: &Value) -> Result<Vec<Expr>, String> {
-    let function_params = worker_bridge_info.get("function-params").ok_or("No function-params found")?.as_array().ok_or("function-params is not an array")?;
+    let function_params = worker_bridge_info
+        .get("function-params")
+        .ok_or("No function-params found")?
+        .as_array()
+        .ok_or("function-params is not an array")?;
     let mut exprs = vec![];
     for param in function_params {
         exprs.push(Expr::from_json_value(param).map_err(|err| err.to_string())?);
@@ -124,12 +138,18 @@ fn get_function_params(worker_bridge_info: &Value) -> Result<Vec<Expr>, String> 
 }
 
 fn get_function_name(worker_bridge_info: &Value) -> Result<String, String> {
-    let function_name = worker_bridge_info.get("function-name").ok_or("No function-name found")?.as_str().ok_or("function-name is not a string")?;
+    let function_name = worker_bridge_info
+        .get("function-name")
+        .ok_or("No function-name found")?
+        .as_str()
+        .ok_or("function-name is not a string")?;
     Ok(function_name.to_string())
 }
 
 fn get_worker_id(worker_bridge_info: &Value) -> Result<Expr, String> {
-    let worker_id = worker_bridge_info.get("worker-id").ok_or("No worker-id found")?;
+    let worker_id = worker_bridge_info
+        .get("worker-id")
+        .ok_or("No worker-id found")?;
     Expr::from_json_value(worker_id).map_err(|err| err.to_string())
 }
 
