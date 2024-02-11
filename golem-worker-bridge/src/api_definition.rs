@@ -17,7 +17,7 @@ use Iterator;
 #[serde(rename_all = "camelCase")]
 pub struct ApiDefinition {
     pub id: ApiDefinitionId,
-    pub version: String,
+    pub version: Version,
     pub routes: Vec<Route>,
 }
 
@@ -40,6 +40,9 @@ pub struct ResponseMapping {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct ApiDefinitionId(pub String);
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
+pub struct Version(pub String);
 
 impl Display for ApiDefinitionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

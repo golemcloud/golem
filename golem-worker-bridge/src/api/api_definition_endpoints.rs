@@ -11,7 +11,7 @@ use tracing::{error, info};
 
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::api_definition;
-use crate::api_definition::{ApiDefinitionId, MethodPattern};
+use crate::api_definition::{ApiDefinitionId, MethodPattern, Version};
 use crate::expr::Expr;
 use crate::register::RegisterApiDefinition;
 
@@ -147,7 +147,7 @@ impl ApiDefinitionEndpoints {
 #[oai(rename_all = "camelCase")]
 struct ApiDefinition {
     pub id: ApiDefinitionId,
-    pub version: String,
+    pub version: Version,
     pub routes: Vec<Route>,
 }
 
