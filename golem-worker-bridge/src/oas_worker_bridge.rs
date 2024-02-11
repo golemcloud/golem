@@ -76,7 +76,7 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
         };
 
         let worker_bridge_info = worker_bridge_info_result?;
-        let golem_binding = GolemWorkerBinding {
+        let binding = GolemWorkerBinding {
             worker_id: get_worker_id(worker_bridge_info)?,
             function_name: get_function_name(worker_bridge_info)?,
             function_params: get_function_params(worker_bridge_info)?,
@@ -84,7 +84,7 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
             response: None,
         };
 
-        let path_pattern = get_path_pattern(path)?;
+        let path = get_path_pattern(path)?;
         let method_res = match path_item {
             openapiv3::ReferenceOr::Item(item) => match &item.get {
                 Some(_) => Ok(MethodPattern::Get),
@@ -97,10 +97,11 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
         };
 
         let method = method_res?;
+
         let route = Route {
-            path: path_pattern,
-            method: method,
-            binding: golem_binding,
+            path,
+            method,
+            binding,
         };
 
         routes.push(route);
