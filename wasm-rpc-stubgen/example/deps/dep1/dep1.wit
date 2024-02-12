@@ -8,6 +8,18 @@ interface iface2 {
         b,
     }
 
+    variant storage {
+        in-memory,
+        s3(string),
+        filesystem(filesystem-config)
+    }
+
+    record filesystem-config {
+        path: string,
+        max-size: u64,
+    }
 
     g: func(in: a-or-b) -> out;
+
+    h: func(s: storage);
 }

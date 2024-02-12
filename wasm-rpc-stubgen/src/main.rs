@@ -6,7 +6,6 @@ use cargo_toml::{
 use heck::{ToShoutySnakeCase, ToUpperCamelCase};
 use id_arena::Id;
 use indexmap::IndexSet;
-use proc_macro2::TokenTree::Literal;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use serde::Serialize;
@@ -394,8 +393,40 @@ impl TypeExtensions for Type {
                     .types
                     .get(*type_id)
                     .ok_or(anyhow!("type not found"))?;
-                let name = typ.name.clone().ok_or(anyhow!("type has no name"))?;
-                Ok(name)
+
+                match &typ.kind {
+                    TypeDefKind::Option(inner) => {
+                        Ok(format!("option<{}>", inner.wit_type_string(resolve)?))
+                    }
+                    TypeDefKind::List(inner) => {
+                        Ok(format!("list<{}>", inner.wit_type_string(resolve)?))
+                    }
+                    TypeDefKind::Result(result) => match (&result.ok, &result.err) {
+                        (Some(ok), Some(err)) => {
+                            let ok = ok.wit_type_string(resolve)?;
+                            let err = err.wit_type_string(resolve)?;
+                            Ok(format!("result<{}, {}>", ok, err))
+                        }
+                        (Some(ok), None) => {
+                            let ok = ok.wit_type_string(resolve)?;
+                            Ok(format!("result<{}>", ok))
+                        }
+                        (None, Some(err)) => {
+                            let err = err.wit_type_string(resolve)?;
+                            Ok(format!("result<_, {}>", err))
+                        }
+                        (None, None) => {
+                            bail!("result type has no ok or err types")
+                        }
+                    },
+                    _ => {
+                        let name = typ
+                            .name
+                            .clone()
+                            .ok_or(anyhow!("wit_type_string: type has no name"))?;
+                        Ok(name)
+                    }
+                }
             }
         }
     }
@@ -825,62 +856,91 @@ fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStre
                 .types
                 .get(*type_id)
                 .ok_or(anyhow!("type not found"))?;
-            let typ = Ident::new(
-                &to_rust_ident(&typedef.name.as_ref().ok_or(anyhow!("type has no name"))?)
-                    .to_upper_camel_case(),
-                Span::call_site(),
-            );
-            let mut path = Vec::new();
-            path.push(quote! { crate });
-            path.push(quote! { bindings });
-            match &typedef.owner {
-                TypeOwner::World(world_id) => {
-                    let world = resolve
-                        .worlds
-                        .get(*world_id)
-                        .ok_or(anyhow!("type's owner world not found"))?;
-                    let package_id = world.package.ok_or(anyhow!("world has no package"))?;
-                    let package = resolve
-                        .packages
-                        .get(package_id)
-                        .ok_or(anyhow!("package not found"))?;
-                    let ns_ident =
-                        Ident::new(&to_rust_ident(&package.name.namespace), Span::call_site());
-                    let name_ident =
-                        Ident::new(&to_rust_ident(&package.name.name), Span::call_site());
-                    path.push(quote! { #ns_ident });
-                    path.push(quote! { #name_ident });
-                }
-                TypeOwner::Interface(interface_id) => {
-                    let interface = resolve
-                        .interfaces
-                        .get(*interface_id)
-                        .ok_or(anyhow!("type's owner interface not found"))?;
 
-                    let package_id = interface
-                        .package
-                        .ok_or(anyhow!("interface has no package"))?;
-                    let package = resolve
-                        .packages
-                        .get(package_id)
-                        .ok_or(anyhow!("package not found"))?;
-                    let interface_name = interface
-                        .name
-                        .as_ref()
-                        .ok_or(anyhow!("interface has no name"))?;
-                    let ns_ident =
-                        Ident::new(&to_rust_ident(&package.name.namespace), Span::call_site());
-                    let name_ident =
-                        Ident::new(&to_rust_ident(&package.name.name), Span::call_site());
-                    let interface_ident =
-                        Ident::new(&to_rust_ident(interface_name), Span::call_site());
-                    path.push(quote! { #ns_ident });
-                    path.push(quote! { #name_ident });
-                    path.push(quote! { #interface_ident });
+            match &typedef.kind {
+                TypeDefKind::Option(inner) => {
+                    let inner = type_to_rust_ident(inner, resolve)?;
+                    Ok(quote! { Option<#inner> })
                 }
-                TypeOwner::None => {}
+                TypeDefKind::List(inner) => {
+                    let inner = type_to_rust_ident(inner, resolve)?;
+                    Ok(quote! { Vec<#inner> })
+                }
+                TypeDefKind::Result(result) => {
+                    let ok = match &result.ok {
+                        Some(ok) => type_to_rust_ident(ok, resolve)?,
+                        None => quote! { () },
+                    };
+                    let err = match &result.err {
+                        Some(err) => type_to_rust_ident(err, resolve)?,
+                        None => quote! { () },
+                    };
+                    Ok(quote! { Result<#ok, #err> })
+                }
+                _ => {
+                    let typ = Ident::new(
+                        &to_rust_ident(&typedef.name.as_ref().ok_or(anyhow!("type has no name"))?)
+                            .to_upper_camel_case(),
+                        Span::call_site(),
+                    );
+                    let mut path = Vec::new();
+                    path.push(quote! { crate });
+                    path.push(quote! { bindings });
+                    match &typedef.owner {
+                        TypeOwner::World(world_id) => {
+                            let world = resolve
+                                .worlds
+                                .get(*world_id)
+                                .ok_or(anyhow!("type's owner world not found"))?;
+                            let package_id =
+                                world.package.ok_or(anyhow!("world has no package"))?;
+                            let package = resolve
+                                .packages
+                                .get(package_id)
+                                .ok_or(anyhow!("package not found"))?;
+                            let ns_ident = Ident::new(
+                                &to_rust_ident(&package.name.namespace),
+                                Span::call_site(),
+                            );
+                            let name_ident =
+                                Ident::new(&to_rust_ident(&package.name.name), Span::call_site());
+                            path.push(quote! { #ns_ident });
+                            path.push(quote! { #name_ident });
+                        }
+                        TypeOwner::Interface(interface_id) => {
+                            let interface = resolve
+                                .interfaces
+                                .get(*interface_id)
+                                .ok_or(anyhow!("type's owner interface not found"))?;
+
+                            let package_id = interface
+                                .package
+                                .ok_or(anyhow!("interface has no package"))?;
+                            let package = resolve
+                                .packages
+                                .get(package_id)
+                                .ok_or(anyhow!("package not found"))?;
+                            let interface_name = interface
+                                .name
+                                .as_ref()
+                                .ok_or(anyhow!("interface has no name"))?;
+                            let ns_ident = Ident::new(
+                                &to_rust_ident(&package.name.namespace),
+                                Span::call_site(),
+                            );
+                            let name_ident =
+                                Ident::new(&to_rust_ident(&package.name.name), Span::call_site());
+                            let interface_ident =
+                                Ident::new(&to_rust_ident(interface_name), Span::call_site());
+                            path.push(quote! { #ns_ident });
+                            path.push(quote! { #name_ident });
+                            path.push(quote! { #interface_ident });
+                        }
+                        TypeOwner::None => {}
+                    }
+                    Ok(quote! { #(#path)::*::#typ })
+                }
             }
-            Ok(quote! { #(#path)::*::#typ })
         }
     }
 }
@@ -948,32 +1008,32 @@ fn wit_value_builder(
                 TypeDefKind::Tuple(tuple) => {
                     wit_tuple_value_builder(tuple, name, resolve, builder_expr)
                 }
-                TypeDefKind::Variant(_) => {
-                    Ok(quote!(todo!())) // TODO
+                TypeDefKind::Variant(variant) => {
+                    wit_variant_value_builder(variant, typ, name, resolve, builder_expr)
                 }
-                TypeDefKind::Enum(_) => {
-                    Ok(quote!(todo!())) // TODO
+                TypeDefKind::Enum(enum_def) => {
+                    wit_enum_value_builder(enum_def, typ, name, resolve, builder_expr)
                 }
-                TypeDefKind::Option(_) => {
-                    Ok(quote!(todo!())) // TODO
+                TypeDefKind::Option(inner) => {
+                    wit_option_value_builder(inner, name, resolve, builder_expr)
                 }
-                TypeDefKind::Result(_) => {
-                    Ok(quote!(todo!())) // TODO
+                TypeDefKind::Result(result) => {
+                    wit_result_value_builder(result, name, resolve, builder_expr)
                 }
-                TypeDefKind::List(_) => {
-                    Ok(quote!(todo!())) // TODO
+                TypeDefKind::List(elem) => {
+                    wit_list_value_builder(elem, name, resolve, builder_expr)
                 }
                 TypeDefKind::Future(_) => {
-                    Ok(quote!(todo!())) // TODO
+                    Ok(quote!(todo!("future"))) // TODO
                 }
                 TypeDefKind::Stream(_) => {
-                    Ok(quote!(todo!())) // TODO
+                    Ok(quote!(todo!("stream"))) // TODO
                 }
                 TypeDefKind::Type(_) => {
-                    Ok(quote!(todo!())) // TODO
+                    Ok(quote!(todo!("type"))) // TODO
                 }
                 TypeDefKind::Unknown => {
-                    Ok(quote!(todo!())) // TODO
+                    Ok(quote!(todo!("unknown"))) // TODO
                 }
             }
         }
@@ -1038,4 +1098,175 @@ fn wit_tuple_value_builder(
     }
 
     Ok(quote! { #builder_expr.finish() })
+}
+
+fn wit_variant_value_builder(
+    variant: &Variant,
+    typ: &Type,
+    name: &TokenStream,
+    resolve: &Resolve,
+    builder_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let variant_type = type_to_rust_ident(typ, resolve)?;
+
+    let mut case_idx_patterns = Vec::new();
+    let mut is_unit_patterns = Vec::new();
+    let mut builder_patterns = Vec::new();
+    for (n, case) in variant.cases.iter().enumerate() {
+        let case_name = Ident::new(
+            &to_rust_ident(&case.name).to_upper_camel_case(),
+            Span::call_site(),
+        );
+
+        let case_idx: u32 = n as u32;
+
+        match &case.ty {
+            None => {
+                case_idx_patterns.push(quote! {
+                    #variant_type::#case_name => #case_idx
+                });
+                is_unit_patterns.push(quote! {
+                    #variant_type::#case_name => true
+                });
+                builder_patterns.push(quote! {
+                    #variant_type::#case_name => {
+                        unreachable!()
+                    }
+                });
+            }
+            Some(inner_ty) => {
+                let inner_builder_expr = wit_value_builder(
+                    inner_ty,
+                    &quote! { inner },
+                    resolve,
+                    quote! { case_builder },
+                )?;
+
+                case_idx_patterns.push(quote! {
+                    #variant_type::#case_name(_) => #case_idx
+                });
+                is_unit_patterns.push(quote! {
+                    #variant_type::#case_name(_) => false
+                });
+                builder_patterns.push(quote! {
+                    #variant_type::#case_name(inner) => {
+                        #inner_builder_expr
+                    }
+                });
+            }
+        }
+    }
+
+    Ok(quote! {
+        #builder_expr.variant_fn(
+            match &#name {
+                #(#case_idx_patterns),*,
+            },
+            match &#name {
+                #(#is_unit_patterns),*,
+            },
+            |case_builder| match &#name {
+                #(#builder_patterns),*,
+            }
+        )
+    })
+}
+
+fn wit_enum_value_builder(
+    enum_def: &Enum,
+    typ: &Type,
+    name: &TokenStream,
+    resolve: &Resolve,
+    builder_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let enum_type = type_to_rust_ident(typ, resolve)?;
+
+    let mut cases = Vec::new();
+    for (n, case) in enum_def.cases.iter().enumerate() {
+        let case_name = Ident::new(&case.name.to_shouty_snake_case(), Span::call_site());
+        let case_idx = n as u32;
+        cases.push(quote! {
+            #enum_type::#case_name => #case_idx
+        });
+    }
+
+    Ok(quote! {
+        #builder_expr.enum_value(match #name {
+            #(#cases),*
+        })
+    })
+}
+
+fn wit_option_value_builder(
+    inner: &Type,
+    name: &TokenStream,
+    resolve: &Resolve,
+    builder_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let inner_builder_expr = wit_value_builder(
+        inner,
+        &quote! { #name.as_ref().unwrap() },
+        resolve,
+        quote! { some_builder },
+    )?;
+
+    Ok(quote! {
+        #builder_expr.option_fn(#name.is_some(), |some_builder| {
+            #inner_builder_expr
+        })
+    })
+}
+
+fn wit_result_value_builder(
+    result: &Result_,
+    name: &TokenStream,
+    resolve: &Resolve,
+    builder_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let ok_expr = match &result.ok {
+        Some(ok) => {
+            wit_value_builder(ok, &quote! { ok_value }, resolve, quote! { result_builder })?
+        }
+        None => quote! { unreachable!() },
+    };
+    let err_expr = match &result.err {
+        Some(err) => wit_value_builder(
+            err,
+            &quote! { err_value },
+            resolve,
+            quote! { result_builder },
+        )?,
+        None => quote! { unreachable!() },
+    };
+
+    let has_ok = result.ok.is_some();
+    let has_err = result.err.is_some();
+    Ok(quote! {
+        #builder_expr.result_fn(#name.is_ok(), #has_ok, #has_err, |result_builder| {
+            match &#name {
+                Ok(ok_value) => {
+                    #ok_expr
+                }
+                Err(err_value) => {
+                    #err_expr
+                }
+            }
+        })
+    })
+}
+
+fn wit_list_value_builder(
+    inner: &Type,
+    name: &TokenStream,
+    resolve: &Resolve,
+    builder_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let inner_builder_expr =
+        wit_value_builder(inner, &quote! { item }, resolve, quote! { item_builder })?;
+
+    Ok(quote! {
+        #builder_expr.list_fn(&#name, |item, item_builder| {
+            #inner_builder_expr
+        })
+    })
 }

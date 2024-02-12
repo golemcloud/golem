@@ -51,16 +51,79 @@ pub trait NodeBuilder: Sized {
     fn record(self) -> WitValueChildItemsBuilder<Self>;
     fn variant(self, case_idx: u32) -> WitValueChildBuilder<Self>;
     fn variant_unit(self, case_idx: u32) -> Self::Result;
+
+    /// An alternative to `variant` and `variant_unit`, easier to use in generated code
+    fn variant_fn(
+        self,
+        case_idx: u32,
+        is_unit: bool,
+        f: impl FnOnce(WitValueChildBuilder<Self>) -> Self,
+    ) -> Self::Result {
+        if is_unit {
+            self.variant_unit(case_idx)
+        } else {
+            f(self.variant(case_idx)).finish()
+        }
+    }
+
     fn tuple(self) -> WitValueChildItemsBuilder<Self>;
     fn list(self) -> WitValueChildItemsBuilder<Self>;
 
+    fn list_fn<T>(
+        self,
+        items: &[T],
+        f: impl Fn(&T, WitValueItemBuilder<Self>) -> WitValueChildItemsBuilder<Self>,
+    ) -> Self::Result {
+        let mut builder = self.list();
+        for item in items {
+            builder = f(item, builder.item());
+        }
+        builder.finish()
+    }
+
     fn option_some(self) -> WitValueChildBuilder<Self>;
     fn option_none(self) -> Self::Result;
+
+    /// An alternative to `option_some` and `option_none`, easier to use in generated code
+    fn option_fn(
+        self,
+        is_some: bool,
+        f: impl FnOnce(WitValueChildBuilder<Self>) -> Self,
+    ) -> Self::Result {
+        if is_some {
+            f(self.option_some()).finish()
+        } else {
+            self.option_none()
+        }
+    }
 
     fn result_ok(self) -> WitValueChildBuilder<Self>;
     fn result_ok_unit(self) -> Self::Result;
     fn result_err(self) -> WitValueChildBuilder<Self>;
     fn result_err_unit(self) -> Self::Result;
+
+    /// An alternative to `result_ok`, `result_ok_unit`, `result_err` and `result_err_unit`, easier to use in generated code
+    fn result_fn(
+        self,
+        is_ok: bool,
+        has_ok: bool,
+        has_err: bool,
+        f: impl FnOnce(WitValueChildBuilder<Self>) -> Self,
+    ) -> Self::Result {
+        if is_ok {
+            if has_ok {
+                f(self.result_ok()).finish()
+            } else {
+                self.result_ok_unit()
+            }
+        } else {
+            if has_err {
+                f(self.result_err()).finish()
+            } else {
+                self.result_err_unit()
+            }
+        }
+    }
 
     fn finish(self) -> Self::Result;
 }
@@ -873,8 +936,8 @@ mod tests {
         assert_eq!(
             value,
             Value::Record(vec![Value::List(vec![
-                Value::Record(vec![Value::S32(10), Value::S32(-11),]),
-                Value::Record(vec![Value::S32(100), Value::S32(200),]),
+                Value::Record(vec![Value::S32(10), Value::S32(-11)]),
+                Value::Record(vec![Value::S32(100), Value::S32(200)]),
             ]),])
         );
     }
