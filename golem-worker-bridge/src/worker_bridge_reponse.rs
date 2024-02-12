@@ -119,6 +119,8 @@ impl GetWorkerBridgeResponse for WorkerResponse {
 
         let response_body = response_mapping.body.evaluate(&variables)?;
 
+        dbg!("The response body is {:?}", response_body.clone());
+
         Ok(WorkerBridgeResponse {
             body: response_body,
             status: status_code,

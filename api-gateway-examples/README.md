@@ -48,7 +48,7 @@ Please make sure to use the correct template-id based on the output from `templa
   "routes": [
     {
       "method": "Get",
-      "path": "/{user-id}/getcartcontents",
+      "path": "/{user-id}/get-cart-contents",
       "binding": {
         "type": "wit-worker",
         "template": "c467b83d-cb27-4296-b48a-ee85114cdb71",
@@ -148,7 +148,7 @@ With all this in place, you can now make requests to the API Gateway and see the
 ```bash
 
 
-curl -X GET http://localhost:8080/v10/adam/getcartcontents
+curl -X GET http://localhost:8080/v10/adam/get-cart-contents
  
 [[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
 
@@ -190,7 +190,7 @@ curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 
 ```bash
 
-curl -X GET http://localhost:8080/adam/getcartcontents
+curl -X GET http://localhost:8080/adam/get-cart-contents
  
 [[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
 
