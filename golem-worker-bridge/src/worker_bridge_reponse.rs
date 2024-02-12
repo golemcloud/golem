@@ -132,22 +132,30 @@ fn get_status_code(
     resolved_variables: &ResolvedVariables,
 ) -> Result<StatusCode, EvaluationError> {
     let status_value = status_expr.evaluate(resolved_variables)?;
-    let status_str = status_value
-        .as_str()
-        .ok_or(EvaluationError::Message(format!(
-            "Status Code Expression is evaluated to a complex value. It is resolved to {:?}",
-            status_value
-        )))?;
+    let status_res: Result<u16, EvaluationError> =
+        match status_value {
+            Value::String(status_str) => status_str.parse().map_err(|e| {
+                EvaluationError::Message(format!(
+                    "Invalid Status Code Expression. It is resolved to a string but not a number {}. Error: {}",
+                    status_str, e
+                ))
+            }),
+            Value::Number(number) => number.to_string().parse().map_err(|e| {
+                EvaluationError::Message(format!(
+                    "Invalid Status Code Expression. It is resolved to a number but not a u16 {}. Error: {}",
+                    number, e
+                ))
+            }),
+            _ => Err(EvaluationError::Message(format!(
+                "Status Code Expression is evaluated to a complex value. It is resolved to {:?}",
+                status_value
+            )))
+        };
 
-    let status_u16 = status_str.parse::<u16>().map_err(|e| {
-        EvaluationError::Message(format!(
-            "Invalid Status Code Expression. It is resolved to {}. Error: {}",
-            status_str, e
-        ))
-    })?;
+    let status_u16 = status_res?;
 
     StatusCode::from_u16(status_u16).map_err(|e| EvaluationError::Message(format!(
         "Invalid Status Code. A valid status code cannot be formed from the evaluated status code expression {}. Error: {}",
-        status_str, e
+        status_u16, e
     )))
 }

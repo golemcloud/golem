@@ -10,7 +10,12 @@
         "template": "1846bd43-cb35-4b51-9ae1-dd86fba38cbb",
         "workerId": "worker-${request.path.user-id}",
         "functionName": "golem:it/api/get-cart-contents",
-        "functionParams": []
+        "functionParams": [],
+        "response" : {
+          "status": "200",
+          "body": "${worker.response[0]}",
+          "headers": {}
+        }
       }
     }
   ]
