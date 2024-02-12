@@ -79,6 +79,7 @@ docker-compose up
 
 Register the API definition with Tyk. We are OAS API Definition of Tyk. You can read more about it in Tyk documentation
 
+# Tyk supports Classic API definition and OAS Api definition (limitations)
 ```json
 curl --location --request POST 'http://localhost:8080/tyk/apis' \
 --header 'x-tyk-authorization: foo' \
@@ -98,14 +99,15 @@ curl --location --request POST 'http://localhost:8080/tyk/apis' \
        "cache_timeout": 1,
        "cache_all_safe_requests": true,
        "cache_response_codes": [200]
-    },    
+    },   
+            
     "version_data": {
         "not_versioned": true,
         "versions": {
             "Default": {
                 "name": "Default",
                 "global_headers": {
-                    "X-API-Definition-Id":"shopping-cart"
+                    "x-API-Definition-Id":"shopping-cart-v1"
                 }
             }
         }
@@ -128,7 +130,7 @@ curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 
 
 ### Important aspects
-* Anything with listen_path /v5 will be forwarded to the worker bridge.
+* Anything with listen_path /v10 will be forwarded to the worker bridge.
 * Tyk injects X-API-Definition-Id header to the request, which is the id of the endpoint definition that we registered with the worker bridge
 * With docker set up, we have 2 different docker networks running. Therefore the IP of the worker-bridge is the IP address of the machine (and not localhost) http://192.168.18.101:9006/.
 * The target URL is url of the worker bridge that is ready to serve your custom requests. 
@@ -146,7 +148,7 @@ With all this in place, you can now make requests to the API Gateway and see the
 ```bash
 
 
-curl -X GET http://localhost:8080/v1/getcartcontents
+curl -X GET http://localhost:8080/v10/adam/getcartcontents
  
 [[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
 
@@ -154,6 +156,7 @@ curl -X GET http://localhost:8080/v1/getcartcontents
 
 
 ## Alternate and easier workflow using OpenAPI Spec
+
 
 If we have an OpenAPI spec of the backend services, with a few additional information relating to worker-bridge and Tyk, 
 we can use the same to register with worker-bridge and API Gateway.
