@@ -160,7 +160,11 @@ we can use the same to register with worker-bridge and API Gateway.
 
 ### Step 1: Registration with worker-bridge
 
+After creating a template and a worker with golem-services,
+
 ```bash
+
+cd api-gateway-examples
 
 # Refer to open_api.json. servers section is for Tyk and worker-bridge section is for worker-bridge
 curl -X PUT http://localhost:9005/v1/api/definitions/oas -H "Content-Type: application/json" --data-binary "@open_api.json"

@@ -16,7 +16,7 @@
         "worker-id": "myworker",
         "function-name": "golem:it/api/get-cart-contents",
         "function-params": [],
-        "template-id": "25762a6c-65b5-499c-afa5-d7875dceeba5"
+        "template-id": "93c76575-ae32-49e1-a5c8-5eaddbdf0e28"
       },
       "get": {
         "summary": "Get Cart Contents",
