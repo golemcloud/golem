@@ -1,7 +1,31 @@
 package test:main;
 
 interface iface1 {
+
+  flags permissions {
+    read,
+    write,
+    exec,
+    close
+  }
+
+  record metadata {
+    name: string,
+    origin: string,
+    perms: permissions
+  }
+
+  record point {
+    x: s32,
+    y: s32,
+    metadata: metadata
+  }
+
+  type point-tuple = tuple<s32, s32>;
+
   add: func(x: s32, y: s32) -> s64;
+  point-to-string: func(p: point) -> string;
+  tuple-to-point: func(t: point-tuple, metadata: metadata) -> point;
 }
 
 world api {
@@ -10,5 +34,4 @@ world api {
 
   export run: func(param: string);
 
-//  export type idx = u64;
 }

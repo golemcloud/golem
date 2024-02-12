@@ -3,9 +3,10 @@ use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,
     Profiles, StripSetting,
 };
-use heck::ToUpperCamelCase;
+use heck::{ToShoutySnakeCase, ToUpperCamelCase};
 use id_arena::Id;
 use indexmap::IndexSet;
+use proc_macro2::TokenTree::Literal;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use serde::Serialize;
@@ -117,13 +118,30 @@ fn main() {
     let mut all = deps.clone();
     all.push(root);
     for unresolved in all {
-        println!("copying {:?}", unresolved.name);
-        for source in unresolved.source_files() {
-            let relative = source.strip_prefix(root_path).unwrap();
-            let dest = dest_wit_root.join(relative);
-            println!("Copying {source:?} to {dest:?}");
-            fs::create_dir_all(dest.parent().unwrap()).unwrap();
-            fs::copy(&source, &dest).unwrap();
+        if unresolved.name == root_package {
+            println!("copying root {:?}", unresolved.name);
+            let dep_dir = dest_wit_root
+                .join(Path::new("deps"))
+                .join(Path::new(&format!(
+                    "{}_{}",
+                    root_package.namespace, root_package.name
+                )));
+            fs::create_dir_all(&dep_dir).unwrap();
+            for source in unresolved.source_files() {
+                let dest = dep_dir.join(source.file_name().unwrap());
+                println!("Copying {source:?} to {dest:?}");
+                fs::create_dir_all(dest.parent().unwrap()).unwrap();
+                fs::copy(&source, &dest).unwrap();
+            }
+        } else {
+            println!("copying {:?}", unresolved.name);
+            for source in unresolved.source_files() {
+                let relative = source.strip_prefix(root_path).unwrap();
+                let dest = dest_wit_root.join(relative);
+                println!("Copying {source:?} to {dest:?}");
+                fs::create_dir_all(dest.parent().unwrap()).unwrap();
+                fs::copy(&source, &dest).unwrap();
+            }
         }
     }
     let wasm_rpc_wit = include_str!("../../wasm-rpc/wit/wasm-rpc.wit");
@@ -133,8 +151,13 @@ fn main() {
 
     println!("----");
 
+    let (final_root, final_deps) = get_unresolved_packages(&dest_wit_root).unwrap();
+
     let mut final_resolve = Resolve::new();
-    final_resolve.push_dir(&dest_wit_root).unwrap();
+    for unresolved in final_deps.iter().cloned() {
+        final_resolve.push(unresolved).unwrap();
+    }
+    final_resolve.push(final_root.clone()).unwrap();
     dump(&final_resolve);
 
     println!("generating cargo.toml");
@@ -143,7 +166,7 @@ fn main() {
         &dest_root.join("Cargo.toml"),
         selected_world,
         stub_crate_version,
-        format!("{}:{}", root_package.namespace, root_package.name),
+        &root_package,
         stub_world_name,
         &deps,
     )
@@ -194,13 +217,26 @@ fn generate_cargo_toml(
     target: &Path,
     name: String,
     version: String,
-    package: String,
+    root_package: &PackageName,
     stub_world_name: String,
     deps: &[UnresolvedPackage],
 ) -> anyhow::Result<()> {
     let mut manifest = Manifest::default();
 
     let mut wit_dependencies = HashMap::new();
+
+    wit_dependencies.insert(
+        root_package.to_string(),
+        WitDependency {
+            path: format!("wit/deps/{}_{}", root_package.namespace, root_package.name),
+        },
+    );
+    wit_dependencies.insert(
+        "golem:rpc".to_string(),
+        WitDependency {
+            path: "wit/deps/wasm-rpc".to_string(),
+        },
+    );
     for dep in deps {
         let mut dirs = HashSet::new();
         for source in dep.source_files() {
@@ -216,12 +252,6 @@ fn generate_cargo_toml(
         }
 
         wit_dependencies.insert(
-            "golem:rpc".to_string(),
-            WitDependency {
-                path: "wit/deps/wasm-rpc".to_string(),
-            },
-        );
-        wit_dependencies.insert(
             format!("{}:{}", dep.name.namespace, dep.name.name),
             WitDependency {
                 path: format!(
@@ -234,7 +264,7 @@ fn generate_cargo_toml(
 
     let metadata = MetadataRoot {
         component: Some(ComponentMetadata {
-            package: package.clone(),
+            package: format!("{}:{}", root_package.namespace, root_package.name),
             target: ComponentTarget {
                 world: stub_world_name.clone(),
                 path: "wit".to_string(),
@@ -509,7 +539,7 @@ fn generate_stub_wit(
 
     let mut out = String::new();
 
-    writeln!(out, "package {};", package_name)?;
+    writeln!(out, "package {}-stub;", package_name)?;
     writeln!(out, "")?;
     writeln!(out, "interface stub-{} {{", world.name)?;
 
@@ -632,7 +662,7 @@ fn generate_stub_source(
     let interfaces = collect_stub_interfaces(resolve, world)?;
 
     let root_ns = Ident::new(&root_package.namespace, Span::call_site());
-    let root_name = Ident::new(&root_package.name, Span::call_site());
+    let root_name = Ident::new(&format!("{}_stub", root_package.name), Span::call_site());
 
     let mut struct_defs = Vec::new();
     for interface in &interfaces {
@@ -706,23 +736,29 @@ fn generate_function_stub_source(
     interface_name: Option<&String>,
     resolve: &Resolve,
 ) -> anyhow::Result<TokenStream> {
-    let function_name = Ident::new(&function.name, Span::call_site());
+    let function_name = Ident::new(&to_rust_ident(&function.name), Span::call_site());
     let mut params = Vec::new();
     let mut input_values = Vec::new();
 
     for param in &function.params {
         let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
-        let param_typ = type_to_rust_ident(&param.typ, root_ns, root_name, resolve)?;
+        let param_typ = type_to_rust_ident(&param.typ, resolve)?;
         params.push(quote! {
             #param_name: #param_typ
         });
+        let param_name_access = quote! { #param_name };
 
-        input_values.push(wit_value_builder(&param.typ, &param_name, resolve)?);
+        input_values.push(wit_value_builder(
+            &param.typ,
+            &param_name_access,
+            resolve,
+            quote! { WitValue::builder() },
+        )?);
     }
 
     let result_type = match &function.results {
         FunctionResultStub::Single(typ) => {
-            let typ = type_to_rust_ident(&typ, root_ns, root_name, resolve)?;
+            let typ = type_to_rust_ident(&typ, resolve)?;
             quote! {
                 #typ
             }
@@ -731,7 +767,7 @@ fn generate_function_stub_source(
             let mut results = Vec::new();
             for param in params {
                 let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
-                let param_typ = type_to_rust_ident(&param.typ, root_ns, root_name, resolve)?;
+                let param_typ = type_to_rust_ident(&param.typ, resolve)?;
                 results.push(quote! {
                     #param_name: #param_typ
                 });
@@ -769,12 +805,7 @@ fn generate_function_stub_source(
     })
 }
 
-fn type_to_rust_ident(
-    typ: &Type,
-    root_ns: &Ident,
-    root_name: &Ident,
-    resolve: &Resolve,
-) -> anyhow::Result<TokenStream> {
+fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStream> {
     match typ {
         Type::Bool => Ok(quote! { bool }),
         Type::U8 => Ok(quote! { u8 }),
@@ -790,65 +821,221 @@ fn type_to_rust_ident(
         Type::Char => Ok(quote! { char }),
         Type::String => Ok(quote! { String }),
         Type::Id(type_id) => {
+            let typedef = resolve
+                .types
+                .get(*type_id)
+                .ok_or(anyhow!("type not found"))?;
             let typ = Ident::new(
-                &to_rust_ident(
-                    &resolve
-                        .types
-                        .get(*type_id)
-                        .ok_or(anyhow!("type not found"))?
-                        .name
-                        .clone()
-                        .ok_or(anyhow!("type has no name"))?,
-                )
-                .to_upper_camel_case(),
+                &to_rust_ident(&typedef.name.as_ref().ok_or(anyhow!("type has no name"))?)
+                    .to_upper_camel_case(),
                 Span::call_site(),
             );
-            Ok(quote! { crate::bindings::exports::#root_ns::#root_name::stub_api::#typ })
+            let mut path = Vec::new();
+            path.push(quote! { crate });
+            path.push(quote! { bindings });
+            match &typedef.owner {
+                TypeOwner::World(world_id) => {
+                    let world = resolve
+                        .worlds
+                        .get(*world_id)
+                        .ok_or(anyhow!("type's owner world not found"))?;
+                    let package_id = world.package.ok_or(anyhow!("world has no package"))?;
+                    let package = resolve
+                        .packages
+                        .get(package_id)
+                        .ok_or(anyhow!("package not found"))?;
+                    let ns_ident =
+                        Ident::new(&to_rust_ident(&package.name.namespace), Span::call_site());
+                    let name_ident =
+                        Ident::new(&to_rust_ident(&package.name.name), Span::call_site());
+                    path.push(quote! { #ns_ident });
+                    path.push(quote! { #name_ident });
+                }
+                TypeOwner::Interface(interface_id) => {
+                    let interface = resolve
+                        .interfaces
+                        .get(*interface_id)
+                        .ok_or(anyhow!("type's owner interface not found"))?;
+
+                    let package_id = interface
+                        .package
+                        .ok_or(anyhow!("interface has no package"))?;
+                    let package = resolve
+                        .packages
+                        .get(package_id)
+                        .ok_or(anyhow!("package not found"))?;
+                    let interface_name = interface
+                        .name
+                        .as_ref()
+                        .ok_or(anyhow!("interface has no name"))?;
+                    let ns_ident =
+                        Ident::new(&to_rust_ident(&package.name.namespace), Span::call_site());
+                    let name_ident =
+                        Ident::new(&to_rust_ident(&package.name.name), Span::call_site());
+                    let interface_ident =
+                        Ident::new(&to_rust_ident(interface_name), Span::call_site());
+                    path.push(quote! { #ns_ident });
+                    path.push(quote! { #name_ident });
+                    path.push(quote! { #interface_ident });
+                }
+                TypeOwner::None => {}
+            }
+            Ok(quote! { #(#path)::*::#typ })
         }
     }
 }
 
-fn wit_value_builder(typ: &Type, name: &Ident, _resolve: &Resolve) -> anyhow::Result<TokenStream> {
+fn wit_value_builder(
+    typ: &Type,
+    name: &TokenStream,
+    resolve: &Resolve,
+    builder_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
     match typ {
         Type::Bool => Ok(quote! {
-            WitValue::builder().bool(#name)
+            #builder_expr.bool(#name)
         }),
         Type::U8 => Ok(quote! {
-            WitValue::builder().u8(#name)
+            #builder_expr.u8(#name)
         }),
         Type::U16 => Ok(quote! {
-            WitValue::builder().u16(#name)
+            #builder_expr.u16(#name)
         }),
         Type::U32 => Ok(quote! {
-            WitValue::builder().u32(#name)
+            #builder_expr.u32(#name)
         }),
         Type::U64 => Ok(quote! {
-            WitValue::builder().u64(#name)
+            #builder_expr.u64(#name)
         }),
         Type::S8 => Ok(quote! {
-            WitValue::builder().s8(#name)
+            #builder_expr.s8(#name)
         }),
         Type::S16 => Ok(quote! {
-            WitValue::builder().s16(#name)
+            #builder_expr.s16(#name)
         }),
         Type::S32 => Ok(quote! {
-            WitValue::builder().s32(#name)
+            #builder_expr.s32(#name)
         }),
         Type::S64 => Ok(quote! {
-            WitValue::builder().s64(#name)
+            #builder_expr.s64(#name)
         }),
         Type::Float32 => Ok(quote! {
-            WitValue::builder().f32(#name)
+            #builder_expr.f32(#name)
         }),
         Type::Float64 => Ok(quote! {
-            WitValue::builder().f64(#name)
+            #builder_expr.f64(#name)
         }),
         Type::Char => Ok(quote! {
-            WitValue::builder().char(#name)
+            #builder_expr.char(#name)
         }),
         Type::String => Ok(quote! {
-            WitValue::builder().string(&#name)
+            #builder_expr.string(&#name)
         }),
-        Type::Id(_) => Ok(quote!(todo!())), // TODO
+        Type::Id(type_id) => {
+            let typedef = resolve
+                .types
+                .get(*type_id)
+                .ok_or(anyhow!("type not found"))?;
+            match &typedef.kind {
+                TypeDefKind::Record(record) => {
+                    wit_record_value_builder(record, name, resolve, builder_expr)
+                }
+                TypeDefKind::Resource => Ok(quote!(todo!("resource support"))),
+                TypeDefKind::Handle(_) => Ok(quote!(todo!("resource support"))),
+                TypeDefKind::Flags(flags) => {
+                    wit_flags_value_builder(flags, typ, name, resolve, builder_expr)
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    wit_tuple_value_builder(tuple, name, resolve, builder_expr)
+                }
+                TypeDefKind::Variant(_) => {
+                    Ok(quote!(todo!())) // TODO
+                }
+                TypeDefKind::Enum(_) => {
+                    Ok(quote!(todo!())) // TODO
+                }
+                TypeDefKind::Option(_) => {
+                    Ok(quote!(todo!())) // TODO
+                }
+                TypeDefKind::Result(_) => {
+                    Ok(quote!(todo!())) // TODO
+                }
+                TypeDefKind::List(_) => {
+                    Ok(quote!(todo!())) // TODO
+                }
+                TypeDefKind::Future(_) => {
+                    Ok(quote!(todo!())) // TODO
+                }
+                TypeDefKind::Stream(_) => {
+                    Ok(quote!(todo!())) // TODO
+                }
+                TypeDefKind::Type(_) => {
+                    Ok(quote!(todo!())) // TODO
+                }
+                TypeDefKind::Unknown => {
+                    Ok(quote!(todo!())) // TODO
+                }
+            }
+        }
     }
+}
+
+fn wit_record_value_builder(
+    record: &Record,
+    name: &TokenStream,
+    resolve: &Resolve,
+    mut builder_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    builder_expr = quote! { #builder_expr.record() };
+
+    for field in &record.fields {
+        let field_name = Ident::new(&to_rust_ident(&field.name), Span::call_site());
+        let field_access = quote! { #name.#field_name };
+        builder_expr = wit_value_builder(
+            &field.ty,
+            &field_access,
+            resolve,
+            quote! { #builder_expr.item() },
+        )?;
+    }
+
+    Ok(quote! { #builder_expr.finish() })
+}
+
+fn wit_flags_value_builder(
+    flags: &Flags,
+    typ: &Type,
+    name: &TokenStream,
+    resolve: &Resolve,
+    builder_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let flags_type = type_to_rust_ident(typ, resolve)?;
+
+    let mut flags_vec_values = Vec::new();
+    for flag in &flags.flags {
+        let flag_id = Ident::new(&flag.name.to_shouty_snake_case(), Span::call_site());
+        flags_vec_values.push(quote! {
+            (#name & #flags_type::#flag_id) == #flags_type::#flag_id
+        })
+    }
+
+    Ok(quote! { #builder_expr.flags(vec![#(#flags_vec_values),*]) })
+}
+
+fn wit_tuple_value_builder(
+    tuple: &Tuple,
+    name: &TokenStream,
+    resolve: &Resolve,
+    mut builder_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    builder_expr = quote! { #builder_expr.tuple() };
+
+    for (n, typ) in tuple.types.iter().enumerate() {
+        let field_name = syn::Index::from(n);
+        let field_access = quote! { #name.#field_name };
+        builder_expr =
+            wit_value_builder(typ, &field_access, resolve, quote! { #builder_expr.item() })?;
+    }
+
+    Ok(quote! { #builder_expr.finish() })
 }
