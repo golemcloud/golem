@@ -25,7 +25,10 @@ interface iface1 {
 
   add: func(x: s32, y: s32) -> s64;
   point-to-string: func(p: point) -> string;
-  tuple-to-point: func(t: point-tuple, metadata: metadata) -> point;
+  points-to-strings: func(ps: list<point>) -> list<string>;
+  tuple-to-point: func(t: point-tuple, metadata: option<metadata>) -> result<point, string>;
+
+  process-result: func(r: result<point, string>);
 }
 
 world api {
