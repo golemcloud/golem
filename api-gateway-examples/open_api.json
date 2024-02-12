@@ -1,6 +1,6 @@
 {
   "openapi": "3.0.0",
-  "x-API-Definition-Id": "my-api",
+  "x-API-Definition-Id": "shopping-cart-v2",
   "info": {
     "title": "Sample API",
     "version": "1.0.0"
@@ -11,15 +11,26 @@
         }
     ],
   "paths": {
-    "/get-cart-contents": {
+    "/{user-id}/get-cart-contents": {
       "x-worker-bridge": {
-        "worker-id": "myworker",
+        "worker-id": "worker-${request.path.user-id}",
         "function-name": "golem:it/api/get-cart-contents",
         "function-params": [],
         "template-id": "93c76575-ae32-49e1-a5c8-5eaddbdf0e28"
       },
       "get": {
         "summary": "Get Cart Contents",
+        "description": "Get the contents of a user's cart",
+        "parameters": [
+          {
+            "name": "user-id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK"

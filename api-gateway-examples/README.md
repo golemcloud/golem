@@ -34,7 +34,7 @@ docker-compose up
 golem-cli template add --template-name mytemplate test-templates/shopping-cart.wasm
 
 # Note down the worker-name, here it is myworker
-golem-cli worker invoke-and-await  --template-name mytemplate --worker-name myworker --function golem:it/api/add-item --parameters '[{"product-id" : "hmm", "name" : "hmm" , "price" : 10, "quantity" : 2}]'
+golem-cli worker invoke-and-await  --template-name mytemplate --worker-name worker-adam --function golem:it/api/add-item --parameters '[{"product-id" : "hmm", "name" : "hmm" , "price" : 10, "quantity" : 2}]'
 ```
 
 ### Step 3: Register the endpoint definition
@@ -48,11 +48,11 @@ Please make sure to use the correct template-id based on the output from `templa
   "routes": [
     {
       "method": "Get",
-      "path": "/getcartcontents",
+      "path": "/{user-id}/getcartcontents",
       "binding": {
         "type": "wit-worker",
         "template": "c467b83d-cb27-4296-b48a-ee85114cdb71",
-        "workerId": "myworker2",
+        "workerId": "worker-${request.path.user-id}",
         "functionName": "golem:it/api/get-cart-contents",
         "functionParams": []
       }
@@ -187,7 +187,7 @@ curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 
 ```bash
 
-curl -X GET http://localhost:8080/getcartcontents
+curl -X GET http://localhost:8080/adam/getcartcontents
  
 [[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
 
