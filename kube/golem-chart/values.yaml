@@ -68,3 +68,13 @@ postgres:
     fromSecret:
       name: golem-postgres-postgresql
       key: password
+
+
+templateStore:
+  pvc:
+    enable: true
+  s3:
+    enable: false
+    objectPrefix: ""
+    bucket: ""
+    region: "us-east-1"

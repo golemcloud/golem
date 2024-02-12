@@ -159,12 +159,32 @@ spec:
               value: "{{ .Values.workerExecutor.ports.http }}"
             - name: GOLEM__PORT
               value: "{{ .Values.workerExecutor.ports.grpc }}"
+{{- if .Values.templateStore.pvc.enable }}
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
               value: "Local"
-            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION
-              value: "us-east-1"
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT
               value: "/golem/template"
+            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__TYPE
+              value: "Local"
+            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__ROOT
+              value: "/golem/template"
+{{- end }}
+{{- if .Values.templateStore.s3.enable }}
+            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
+              value: "S3"
+            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION
+              value: {{ .Values.templateStore.s3.region }}
+            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX
+              value: {{ .Values.templateStore.s3.objectPrefix }}
+            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__BUCKET
+              value: {{ .Values.templateStore.s3.bucket }}
+            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__TYPE
+              value: "S3"
+            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION
+              value: {{ .Values.templateStore.s3.region }}
+            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__BUCKET_PREFIX
+              value: ""
+{{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.workerExecutor.ports.http }}
@@ -178,14 +198,17 @@ spec:
             failureThreshold: 5
             initialDelaySeconds: 45
             timeoutSeconds: 2
+{{- if .Values.templateStore.pvc.enable }}
           volumeMounts:
             - name: golem-template-store-{{.Values.env}}
               mountPath: /golem/template
+{{- end }}
+{{- if .Values.templateStore.pvc.enable }}
       volumes:
         - name: golem-template-store-{{.Values.env}}
           persistentVolumeClaim:
             claimName: golem-template-store-{{.Values.env}}
-
+{{- end }}
 ---
 
 apiVersion: apps/v1
@@ -346,12 +369,22 @@ spec:
               value: "{{ .Values.golemService.ports.http }}"
             - name: GOLEM__GRPC_PORT
               value: "{{ .Values.golemService.ports.grpc }}"
+{{- if .Values.templateStore.pvc.enable }}
             - name: GOLEM__TEMPLATES__STORE__TYPE
               value: "Local"
-            - name: GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX
-              value: ""
             - name: GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH
               value: "/golem/template"
+{{- end }}
+{{- if .Values.templateStore.s3.enable }}
+            - name: GOLEM__TEMPLATES__STORE__TYPE
+              value: "S3"
+            - name: GOLEM__TEMPLATES__STORE__REGION
+              value: {{ .Values.templateStore.s3.region }}
+            - name: GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX
+              value: {{ .Values.templateStore.s3.objectPrefix }}
+            - name: GOLEM__TEMPLATES__STORE__CONFIG__BUCKET_NAME
+              value: {{ .Values.templateStore.s3.bucket }}
+{{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.golemService.ports.http }}
@@ -371,10 +404,14 @@ spec:
 {{/*            periodSeconds: 10*/}}
 {{/*            failureThreshold: 5*/}}
 {{/*            initialDelaySeconds: 20*/}}
+{{- if .Values.templateStore.pvc.enable }}
           volumeMounts:
             - name: golem-template-store-{{.Values.env}}
               mountPath: /golem/template
+{{- end }}
+{{- if .Values.templateStore.pvc.enable }}
       volumes:
         - name: golem-template-store-{{.Values.env}}
           persistentVolumeClaim:
             claimName: golem-template-store-{{.Values.env}}
+{{- end }}
