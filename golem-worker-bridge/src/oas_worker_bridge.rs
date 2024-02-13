@@ -23,7 +23,10 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
             .iter()
             .find(|(key, _)| key.to_lowercase() == GOLEM_API_DEFINITION_ID)
             .map(|(_, value)| value)
-            .ok_or(format!("{} not found in the open API spec", GOLEM_API_DEFINITION_ID))?
+            .ok_or(format!(
+                "{} not found in the open API spec",
+                GOLEM_API_DEFINITION_ID
+            ))?
             .as_str()
             .ok_or(format!("Invalid value for {}", GOLEM_API_DEFINITION_ID))?
             .to_string(),
