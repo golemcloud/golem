@@ -273,7 +273,7 @@ impl<'a> arbitrary::Arbitrary<'a> for WitValue {
 }
 
 #[cfg(feature = "host")]
-pub static WASM_RPC_WIT: &'static str = include_str!("../wit/wasm-rpc.wit");
+pub const WASM_RPC_WIT: &str = include_str!("../wit/wasm-rpc.wit");
 
 pub const WASM_RPC_VERSION: &str = env!("CARGO_PKG_VERSION");
 
