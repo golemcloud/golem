@@ -146,9 +146,7 @@ impl CustomRequestEndpoint {
                     .execute(golem_worker_request.clone())
                     .await
                 {
-                    Ok(response) => {
-                        response
-                    },
+                    Ok(response) => response,
                     Err(e) => {
                         error!("API request host: {} - error: {}", host, e);
                         return Response::builder()

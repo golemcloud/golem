@@ -1,10 +1,13 @@
-use std::collections::HashMap;
-use crate::api_definition::{ApiDefinition, ApiDefinitionId, GolemWorkerBinding, MethodPattern, PathPattern, ResponseMapping, Route, Version};
+use crate::api_definition::{
+    ApiDefinition, ApiDefinitionId, GolemWorkerBinding, MethodPattern, PathPattern,
+    ResponseMapping, Route, Version,
+};
 use crate::expr::Expr;
 use golem_common::model::TemplateId;
 use openapiv3::{OpenAPI, PathItem, ReferenceOr};
 use serde_json;
 use serde_json::Value;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
@@ -34,9 +37,9 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
                     routes.push(route);
                 }
             }
-            ReferenceOr::Reference { reference: _ } => {
-                Err("Reference not supported when extracting worker bridge extension info".to_string())
-            }
+            ReferenceOr::Reference { reference: _ } => Err(
+                "Reference not supported when extracting worker bridge extension info".to_string(),
+            ),
         };
     }
 
@@ -47,7 +50,11 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
     })
 }
 
-fn get_route_from_path_item(method: &str, path_item: &PathItem, path_pattern: &PathPattern) -> Result<Route, String> {
+fn get_route_from_path_item(
+    method: &str,
+    path_item: &PathItem,
+    path_pattern: &PathPattern,
+) -> Result<Route, String> {
     let method_res = match method {
         "get" => Ok(MethodPattern::Get),
         "post" => Ok(MethodPattern::Post),
@@ -96,38 +103,32 @@ fn get_template_id(worker_bridge_info: &Value) -> Result<TemplateId, String> {
 fn get_response_mapping(worker_bridge_info: &Value) -> Result<Option<ResponseMapping>, String> {
     let response = worker_bridge_info.get("response");
     match response {
-        Some(response) => {
-            Ok(Some(ResponseMapping {
-                status: Expr::from_json_value(
-                    response
-                        .get("status")
-                        .ok_or("No status found")?
-                )
-                    .map_err(|err| err.to_string())?,
-                headers: {
-                    let mut header_map = HashMap::new();
+        Some(response) => Ok(Some(ResponseMapping {
+            status: Expr::from_json_value(response.get("status").ok_or("No status found")?)
+                .map_err(|err| err.to_string())?,
+            headers: {
+                let mut header_map = HashMap::new();
 
-                    let header_iter = response.get("headers")
-                        .ok_or("No headers found")?
-                        .as_object()
-                        .ok_or("headers is not an object")?
-                        .iter();
+                let header_iter = response
+                    .get("headers")
+                    .ok_or("No headers found")?
+                    .as_object()
+                    .ok_or("headers is not an object")?
+                    .iter();
 
-                   for (header_name, value) in header_iter {
-                       let value_str = value.as_str().ok_or("Header value is not a string")?;
-                       header_map.insert(header_name.clone(), Expr::from_primitive_string(value_str).map_err(|err| err.to_string())?);
-                   };
+                for (header_name, value) in header_iter {
+                    let value_str = value.as_str().ok_or("Header value is not a string")?;
+                    header_map.insert(
+                        header_name.clone(),
+                        Expr::from_primitive_string(value_str).map_err(|err| err.to_string())?,
+                    );
+                }
 
-                   header_map
-                },
-                body: Expr::from_json_value(
-                    response
-                        .get("body")
-                        .ok_or("No body found")?
-                )
-                    .map_err(|err| err.to_string())?,
-            }))
-        }
+                header_map
+            },
+            body: Expr::from_json_value(response.get("body").ok_or("No body found")?)
+                .map_err(|err| err.to_string())?,
+        })),
         None => Ok(None),
     }
 }
