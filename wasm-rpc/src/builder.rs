@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{TypeIndex, WitNode, WitValue};
+use crate::{NodeIndex, WitNode, WitValue};
 
-pub trait WitValueExtensions {
+pub trait WitValueBuilderExtensions {
     fn builder() -> WitValueBuilder;
 }
 
-impl WitValueExtensions for WitValue {
+impl WitValueBuilderExtensions for WitValue {
     fn builder() -> WitValueBuilder {
         WitValueBuilder::new()
     }
@@ -137,116 +137,116 @@ impl WitValueBuilder {
         WitValueBuilder { nodes: Vec::new() }
     }
 
-    fn add(&mut self, node: WitNode) -> TypeIndex {
+    fn add(&mut self, node: WitNode) -> NodeIndex {
         self.nodes.push(node);
-        self.nodes.len() as TypeIndex - 1
+        self.nodes.len() as NodeIndex - 1
     }
 
-    pub(crate) fn add_u8(&mut self, value: u8) -> TypeIndex {
+    pub(crate) fn add_u8(&mut self, value: u8) -> NodeIndex {
         self.add(WitNode::PrimU8(value))
     }
 
-    pub(crate) fn add_u16(&mut self, value: u16) -> TypeIndex {
+    pub(crate) fn add_u16(&mut self, value: u16) -> NodeIndex {
         self.add(WitNode::PrimU16(value))
     }
 
-    pub(crate) fn add_u32(&mut self, value: u32) -> TypeIndex {
+    pub(crate) fn add_u32(&mut self, value: u32) -> NodeIndex {
         self.add(WitNode::PrimU32(value))
     }
 
-    pub(crate) fn add_u64(&mut self, value: u64) -> TypeIndex {
+    pub(crate) fn add_u64(&mut self, value: u64) -> NodeIndex {
         self.add(WitNode::PrimU64(value))
     }
 
-    pub(crate) fn add_s8(&mut self, value: i8) -> TypeIndex {
+    pub(crate) fn add_s8(&mut self, value: i8) -> NodeIndex {
         self.add(WitNode::PrimS8(value))
     }
 
-    pub(crate) fn add_s16(&mut self, value: i16) -> TypeIndex {
+    pub(crate) fn add_s16(&mut self, value: i16) -> NodeIndex {
         self.add(WitNode::PrimS16(value))
     }
 
-    pub(crate) fn add_s32(&mut self, value: i32) -> TypeIndex {
+    pub(crate) fn add_s32(&mut self, value: i32) -> NodeIndex {
         self.add(WitNode::PrimS32(value))
     }
 
-    pub(crate) fn add_s64(&mut self, value: i64) -> TypeIndex {
+    pub(crate) fn add_s64(&mut self, value: i64) -> NodeIndex {
         self.add(WitNode::PrimS64(value))
     }
 
-    pub(crate) fn add_f32(&mut self, value: f32) -> TypeIndex {
+    pub(crate) fn add_f32(&mut self, value: f32) -> NodeIndex {
         self.add(WitNode::PrimFloat32(value))
     }
 
-    pub(crate) fn add_f64(&mut self, value: f64) -> TypeIndex {
+    pub(crate) fn add_f64(&mut self, value: f64) -> NodeIndex {
         self.add(WitNode::PrimFloat64(value))
     }
 
-    pub(crate) fn add_char(&mut self, value: char) -> TypeIndex {
+    pub(crate) fn add_char(&mut self, value: char) -> NodeIndex {
         self.add(WitNode::PrimChar(value))
     }
 
-    pub(crate) fn add_bool(&mut self, value: bool) -> TypeIndex {
+    pub(crate) fn add_bool(&mut self, value: bool) -> NodeIndex {
         self.add(WitNode::PrimBool(value))
     }
 
-    pub(crate) fn add_string(&mut self, value: &str) -> TypeIndex {
+    pub(crate) fn add_string(&mut self, value: &str) -> NodeIndex {
         self.add(WitNode::PrimString(value.to_string()))
     }
 
-    pub(crate) fn add_record(&mut self) -> TypeIndex {
+    pub(crate) fn add_record(&mut self) -> NodeIndex {
         self.add(WitNode::RecordValue(Vec::new()))
     }
 
-    pub(crate) fn add_variant(&mut self, idx: u32, target_idx: TypeIndex) -> TypeIndex {
+    pub(crate) fn add_variant(&mut self, idx: u32, target_idx: NodeIndex) -> NodeIndex {
         self.add(WitNode::VariantValue((idx, Some(target_idx))))
     }
 
-    pub(crate) fn add_variant_unit(&mut self, idx: u32) -> TypeIndex {
+    pub(crate) fn add_variant_unit(&mut self, idx: u32) -> NodeIndex {
         self.add(WitNode::VariantValue((idx, None)))
     }
 
-    pub(crate) fn add_enum_value(&mut self, value: u32) -> TypeIndex {
+    pub(crate) fn add_enum_value(&mut self, value: u32) -> NodeIndex {
         self.add(WitNode::EnumValue(value))
     }
 
-    pub(crate) fn add_flags(&mut self, values: Vec<bool>) -> TypeIndex {
+    pub(crate) fn add_flags(&mut self, values: Vec<bool>) -> NodeIndex {
         self.add(WitNode::FlagsValue(values))
     }
 
-    pub(crate) fn add_tuple(&mut self) -> TypeIndex {
+    pub(crate) fn add_tuple(&mut self) -> NodeIndex {
         self.add(WitNode::TupleValue(Vec::new()))
     }
 
-    pub(crate) fn add_list(&mut self) -> TypeIndex {
+    pub(crate) fn add_list(&mut self) -> NodeIndex {
         self.add(WitNode::ListValue(Vec::new()))
     }
 
-    pub(crate) fn add_option_none(&mut self) -> TypeIndex {
+    pub(crate) fn add_option_none(&mut self) -> NodeIndex {
         self.add(WitNode::OptionValue(None))
     }
 
-    pub(crate) fn add_option_some(&mut self) -> TypeIndex {
+    pub(crate) fn add_option_some(&mut self) -> NodeIndex {
         self.add(WitNode::OptionValue(Some(-1)))
     }
 
-    pub(crate) fn add_result_ok(&mut self) -> TypeIndex {
+    pub(crate) fn add_result_ok(&mut self) -> NodeIndex {
         self.add(WitNode::ResultValue(Ok(Some(-1))))
     }
 
-    pub(crate) fn add_result_ok_unit(&mut self) -> TypeIndex {
+    pub(crate) fn add_result_ok_unit(&mut self) -> NodeIndex {
         self.add(WitNode::ResultValue(Ok(None)))
     }
 
-    pub(crate) fn add_result_err(&mut self) -> TypeIndex {
+    pub(crate) fn add_result_err(&mut self) -> NodeIndex {
         self.add(WitNode::ResultValue(Err(Some(-1))))
     }
 
-    pub(crate) fn add_result_err_unit(&mut self) -> TypeIndex {
+    pub(crate) fn add_result_err_unit(&mut self) -> NodeIndex {
         self.add(WitNode::ResultValue(Err(None)))
     }
 
-    pub(crate) fn finish_child(&mut self, child: TypeIndex, target_idx: TypeIndex) {
+    pub(crate) fn finish_child(&mut self, child: NodeIndex, target_idx: NodeIndex) {
         match &mut self.nodes[target_idx as usize] {
             WitNode::OptionValue(ref mut result_item) => match result_item {
                 Some(idx) => *idx = child,
@@ -270,7 +270,7 @@ impl WitValueBuilder {
         }
     }
 
-    pub(crate) fn finish_seq(&mut self, items: Vec<TypeIndex>, target_idx: TypeIndex) {
+    pub(crate) fn finish_seq(&mut self, items: Vec<NodeIndex>, target_idx: NodeIndex) {
         match &mut self.nodes[target_idx as usize] {
             WitNode::RecordValue(ref mut result_items) => {
                 *result_items = items;
@@ -448,12 +448,12 @@ impl NodeBuilder for WitValueBuilder {
 
 pub struct WitValueChildItemsBuilder<ParentBuilder: NodeBuilder> {
     builder: ParentBuilder,
-    target_idx: TypeIndex,
-    items: Vec<TypeIndex>,
+    target_idx: NodeIndex,
+    items: Vec<NodeIndex>,
 }
 
 impl<ParentBuilder: NodeBuilder> WitValueChildItemsBuilder<ParentBuilder> {
-    fn new(builder: ParentBuilder, target_idx: TypeIndex) -> Self {
+    fn new(builder: ParentBuilder, target_idx: NodeIndex) -> Self {
         Self {
             builder,
             target_idx,
@@ -668,7 +668,7 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueItemBuilder<ParentBuild
 
 pub struct WitValueChildBuilder<ParentBuilder: NodeBuilder> {
     builder: ParentBuilder,
-    target_idx: TypeIndex,
+    target_idx: NodeIndex,
 }
 
 impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueChildBuilder<ParentBuilder> {
@@ -879,7 +879,7 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueChildBuilder<ParentBuil
 
 #[cfg(test)]
 mod tests {
-    use crate::{NodeBuilder, Value, WitValue, WitValueExtensions};
+    use crate::{NodeBuilder, Value, WitValue, WitValueBuilderExtensions};
 
     #[test]
     fn primitive() {

@@ -20,6 +20,9 @@ mod bindings;
 /// A builder interface for WitValue instances
 mod builder;
 
+/// Extension methods for extracting values from WitValue instances
+mod extractor;
+
 /// Conversion to and from JSON, in the presence of golem-wasm-ast generated type information
 #[cfg(feature = "json")]
 pub mod json;
@@ -32,10 +35,11 @@ pub mod protobuf;
 pub mod wasmtime;
 
 use crate::builder::WitValueBuilder;
-pub use builder::{NodeBuilder, WitValueExtensions};
+pub use builder::{NodeBuilder, WitValueBuilderExtensions};
+pub use extractor::{WitNodePointer, WitValueExtractor};
 
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc::types::{TypeIndex, Uri, WasmRpc, WitNode, WitValue};
+pub use bindings::golem::rpc::types::{NodeIndex, Uri, WasmRpc, WitNode, WitValue};
 
 #[cfg(feature = "host")]
 use ::wasmtime::component::bindgen;
@@ -52,7 +56,7 @@ bindgen!({
 });
 
 #[cfg(feature = "host")]
-pub use golem::rpc::types::{HostWasmRpc, TypeIndex, WitNode, WitValue};
+pub use golem::rpc::types::{HostWasmRpc, NodeIndex, WitNode, WitValue};
 
 /// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
 #[derive(Debug, Clone, PartialEq)]
@@ -92,7 +96,7 @@ impl From<Value> for WitValue {
     }
 }
 
-fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> TypeIndex {
+fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
     match value {
         Value::Bool(value) => builder.add_bool(value),
         Value::U8(value) => builder.add_u8(value),
