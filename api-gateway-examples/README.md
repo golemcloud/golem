@@ -22,9 +22,10 @@ Below given are the step by step instructions to follow to try all of this in Lo
 ### Step 1: Spin up Golem
 
 ```bash
-// Choose any docker-comppose file in api-gateway-examples folder
-docker-compose up
-#golem-serviec, workerbride, worker-executor, shard-manager, redis, sqlite
+# Clone golem-services and spin up all services which includes worker-bridge
+
+cargo build --release --target x86_64-unknown-linux-gnu
+docker-compose -f docker-compose-sqlite.yaml up --build
 ```
 
 ### Step 2: Deploy shopping cart example
@@ -40,6 +41,7 @@ golem-cli worker invoke-and-await  --template-name mytemplate --worker-name work
 ### Step 3: Register the endpoint definition
 
 Please make sure to use the correct template-id based on the output from `template add` command.
+A typical worker bridge endpoint definition looks like this. Please refer to [endpoint_definition.json](endpoint_definition.json) for a complete example.
 
 ```bash
 {
@@ -117,7 +119,7 @@ curl --location --request POST 'http://localhost:8080/tyk/apis' \
             "Default": {
                 "name": "Default",
                 "global_headers": {
-                    "x-API-Definition-Id":"shopping-cart-v1"
+                    "x-golem-api-definition-id":"shopping-cart-v1"
                 }
             }
         }
@@ -141,15 +143,16 @@ curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 
 ### Important aspects
 * Anything with listen_path /v10 will be forwarded to the worker bridge.
-* Tyk injects X-API-Definition-Id header to the request, which is the id of the endpoint definition that we registered with the worker bridge
-* With docker set up, we have 2 different docker networks running. Therefore the IP of the worker-bridge is the IP address of the machine (and not localhost) http://192.168.18.101:9006/.
+* Tyk injects x-golem-definition-id header to the request, which is the id of the endpoint definition that we registered with the worker bridge
+* With docker set up, we have 2 different docker networks running. Therefore, the IP of the worker-bridge is the IP address of the machine (and not localhost) http://192.168.18.101:9006/.
 * The target URL is url of the worker bridge that is ready to serve your custom requests. 
 * Worker bridge is already registered with the API definition ID shopping-cart. If the worker bridge is not registered with the correct API definition, it will return something like the following
-* Caching is enabled in Tyk API Gateway, just to show case, we get these features for free. 
 
 ```
  API request definition id shfddfopping-cart not found%
 ```
+
+* Caching is enabled in Tyk API Gateway, just to show-case, we get these features of external API gateways for free.
 
 With all this in place, you can now make requests to the API Gateway and see the worker bridge forwarding the requests to the actual worker instance.
 
@@ -163,7 +166,6 @@ curl -X GET http://localhost:8080/v10/adam/get-cart-contents
 {"name":"hmm","price":10.0,"quantity":2}
 
 ```
-
 
 ## Alternate and easier workflow using OpenAPI Spec
 
@@ -200,8 +202,9 @@ curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 
 ```bash
 
-# TODO; Note, the OAS spec in Tyk - harder to add header to the request, therefore explicitly passing it here for demo purpose 
-curl -X GET http://localhost:8080/adam/get-cart-contents -H "x-api-definition-id: shopping-cart-v2"
+# TODO; Note, with using OAS API Definition in Tyk - harder to add header to the request without a management console, therefore explicitly passing it here for demo purpose 
+# In real world, the header is injected by Tyk
+curl -X GET http://localhost:8080/adam/get-cart-contents -H "x-golem-api-definition-id: shopping-cart-v2"
  
 [[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
 
@@ -239,13 +242,11 @@ backed by API Gateway. We are also working on emitting OpenAPI spec from worker-
 
 ## How does worker bridge know which API definition to pick for a given endpoint?
 
-*X-API-Definition-Id*
+*x-golem-api-definition-id*
 
-This is by making using of API-ID header in the request. Given that the worker bridge is aware of various API definitions, it can pick the right
-API definition for a given request, if the request consist of the knowledge of API-ID as a header. 
-It is the responsibility of whoever managing the API Gateway to make sure that the API-ID is configured to be present in the request.
-This can be achieved by using Tyk's middleware injection or transformations, and this is the case with almost all API Gateways.
-
+By injecting x-golem-api-definition-id to every request, worker bridge can lookup the corresponding API definition and serve the request.
+It is the responsibility of whoever managing the API Gateway (Tyk in this case) to make sure that every request is configured to inject
+this header.
 
 ## What next?
 

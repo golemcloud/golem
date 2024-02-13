@@ -146,3 +146,5 @@ cargo build --target x86_64-unknown-linux-gnu
 ```
 
 ## Integration with existing API Gateways
+
+Please refer to [api-gateway-examples](api-gateway-examples) for more information.
