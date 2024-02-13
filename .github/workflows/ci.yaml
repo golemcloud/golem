@@ -82,4 +82,5 @@ jobs:
           export VERSION="${{ steps.get_version.outputs.version-without-v }}"
           sed -i "s/0.0.0/$VERSION/g" wasm-rpc/Cargo.toml
           sed -i "s/0.0.0/$VERSION/g" wasm-rpc-stubgen/Cargo.toml
-          cargo publish --all-features --allow-dirty
+          cargo publish -p golem-wasm-rpc --all-features --allow-dirty
+          cargo publish -p golem-wasm-rpc-stubgen --all-features --allow-dirty
