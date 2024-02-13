@@ -55,11 +55,11 @@ spec:
     app: worker-bridge-app-{{.Values.env}}
   ports:
     - protocol: TCP
-      name: mgmtHttp
+      name: mhttp
       port: {{ .Values.workerBridge.ports.mgmtHttp }}
       targetPort: {{ .Values.workerBridge.ports.mgmtHttp }}
     - protocol: TCP
-      name: requestHttp
+      name: rhttp
       port: {{ .Values.workerBridge.ports.requestHttp }}
       targetPort: {{ .Values.workerBridge.ports.requestHttp }}
 ---

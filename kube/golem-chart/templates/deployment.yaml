@@ -180,6 +180,8 @@ spec:
               value: "Local"
             - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__ROOT
               value: "/golem/worker/blob"
+            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION
+              value: ""
 {{- end }}
 {{- if .Values.workerBlobStore.s3.enable }}
             - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__TYPE
@@ -300,14 +302,14 @@ spec:
             - name: GOLEM__MANAGEMENT_PORT
               value: "{{ .Values.workerBridge.ports.mgmtHttp }}"
           ports:
-            - name: mgmtHttp
+            - name: mhttp
               containerPort: {{ .Values.workerBridge.ports.mgmtHttp }}
-            - name: requestHttp
+            - name: rhttp
               containerPort: {{ .Values.workerBridge.ports.requestHttp }}
 {{/*          livenessProbe:*/}}
 {{/*            httpGet:*/}}
 {{/*              path: "/healthcheck"*/}}
-{{/*              port: mgmtHttp*/}}
+{{/*              port: mhttp*/}}
 {{/*            periodSeconds: 10*/}}
 {{/*            failureThreshold: 5*/}}
 {{/*            initialDelaySeconds: 45*/}}
@@ -315,7 +317,7 @@ spec:
 {{/*          readinessProbe:*/}}
 {{/*            httpGet:*/}}
 {{/*              path: "/healthcheck"*/}}
-{{/*              port: mgmtHttp*/}}
+{{/*              port: mhttp*/}}
 {{/*            periodSeconds: 10*/}}
 {{/*            failureThreshold: 5*/}}
 {{/*            initialDelaySeconds: 20*/}}
@@ -393,6 +395,8 @@ spec:
               value: "Local"
             - name: GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH
               value: "/golem/template"
+            - name: GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX
+              value: ""
 {{- end }}
 {{- if .Values.templateStore.s3.enable }}
             - name: GOLEM__TEMPLATES__STORE__TYPE
