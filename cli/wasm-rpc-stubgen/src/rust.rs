@@ -91,6 +91,10 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let syntax_tree = syn::parse2(lib)?;
     let src = prettyplease::unparse(&syntax_tree);
 
+    println!(
+        "Generating stub source to {}",
+        def.target_rust_path().to_string_lossy()
+    );
     fs::create_dir_all(def.target_rust_path().parent().unwrap())?;
     fs::write(def.target_rust_path(), src)?;
     Ok(())

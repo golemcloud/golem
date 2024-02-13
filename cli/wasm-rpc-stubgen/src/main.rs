@@ -21,28 +21,67 @@ use crate::cargo::generate_cargo_toml;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
 use crate::wit::{copy_wit_files, generate_stub_wit};
-use std::fs;
-use std::path::Path;
+
+use anyhow::Context;
+use clap::Parser;
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = "wasm-rpc-stubgen")]
+#[command(bin_name = "wasm-rpc-stubgen")]
+enum Command {
+    Generate(GenerateArgs),
+}
+
+#[derive(clap::Args)]
+#[command(version, about, long_about = None)]
+struct GenerateArgs {
+    #[clap(short, long)]
+    source_wit_root: PathBuf,
+    #[clap(short, long)]
+    dest_crate_root: PathBuf,
+    #[clap(short, long)]
+    world: Option<String>,
+    #[clap(long, default_value = "0.0.1")]
+    stub_crate_version: String,
+    #[clap(long)]
+    wasm_rpc_path_override: Option<String>,
+}
 
 fn main() {
-    // TODO: inputs from clap
-    let root_path = Path::new("wasm-rpc-stubgen/example");
-    let dest_root = Path::new("tmp/stubgen_out");
-    let selected_world = Some("api");
-    let stub_crate_version = "0.0.1";
-    // ^^^
+    match Command::parse() {
+        Command::Generate(generate_args) => {
+            let _ = render_error(generate(generate_args));
+        }
+    }
+}
 
-    let stub_def =
-        StubDefinition::new(root_path, dest_root, selected_world, stub_crate_version).unwrap();
+fn render_error<T>(result: anyhow::Result<T>) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(err) => {
+            eprintln!("Error: {}", err);
+            None
+        }
+    }
+}
 
-    generate_stub_wit(&stub_def).unwrap();
-    copy_wit_files(&stub_def).unwrap();
+fn generate(args: GenerateArgs) -> anyhow::Result<()> {
+    let stub_def = StubDefinition::new(
+        &args.source_wit_root,
+        &args.dest_crate_root,
+        &args.world,
+        &args.stub_crate_version,
+        &args.wasm_rpc_path_override,
+    )
+    .context("Failed to gather information for the stub generator")?;
 
-    stub_def.verify_target_wits().unwrap();
-
-    generate_cargo_toml(&stub_def).unwrap();
-
-    let dest_src_root = dest_root.join(Path::new("src"));
-    fs::create_dir_all(dest_src_root).unwrap();
-    generate_stub_source(&stub_def).unwrap();
+    generate_stub_wit(&stub_def).context("Failed to generate the stub wit file")?;
+    copy_wit_files(&stub_def).context("Failed to copy the dependent wit files")?;
+    stub_def
+        .verify_target_wits()
+        .context("Failed to resolve the result WIT root")?;
+    generate_cargo_toml(&stub_def).context("Failed to generate the Cargo.toml file")?;
+    generate_stub_source(&stub_def).context("Failed to generate the stub Rust source")?;
+    Ok(())
 }
