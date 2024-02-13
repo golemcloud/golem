@@ -14,6 +14,7 @@
 
 #[allow(unused)]
 #[rustfmt::skip]
+#[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 mod bindings;
 
@@ -38,6 +39,7 @@ use crate::builder::WitValueBuilder;
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 pub use extractor::{WitNodePointer, WitValueExtractor};
 
+#[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 pub use bindings::golem::rpc::types::{NodeIndex, Uri, WasmRpc, WitNode, WitValue};
 

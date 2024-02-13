@@ -612,7 +612,7 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "arbitrary",
  "bigdecimal",
@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "cargo_toml",
