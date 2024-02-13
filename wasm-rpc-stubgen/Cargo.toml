@@ -10,7 +10,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.79"
 cargo_toml = "0.19.1"
-clap = "4.4.18"
+clap = { version = "4.5.0", features = ["derive"] }
+golem-wasm-rpc = { path = "../wasm-rpc" }
 heck = "0.4.1"
 id-arena = "2.2.1"
 indexmap = "2.0.0"
@@ -21,4 +22,4 @@ serde = { version = "1.0.196", features = ["derive"] }
 syn = "2.0.48"
 toml = "0.8.10"
 wit-bindgen-rust = "0.17.0"
-wit-parser = "0.13.2"
+wit-parser = "0.14.0"

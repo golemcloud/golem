@@ -18,6 +18,7 @@ use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,
     Profiles, StripSetting,
 };
+use golem_wasm_rpc::WASM_RPC_VERSION;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -141,10 +142,13 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         ..Default::default()
     }));
 
-    // TODO: configurable
     let dep_golem_wasm_rpc = Dependency::Detailed(Box::new(DependencyDetail {
-        // version: Some("0.17.0".to_string()),
-        path: Some("../../wasm-rpc".to_string()),
+        version: if def.wasm_rpc_path_override.is_none() {
+            Some(WASM_RPC_VERSION.to_string())
+        } else {
+            None
+        },
+        path: def.wasm_rpc_path_override.clone(),
         default_features: false,
         features: vec!["stub".to_string()],
         ..Default::default()
@@ -156,6 +160,11 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     manifest.dependencies = deps;
 
     let cargo_toml = toml::to_string(&manifest)?;
+
+    println!(
+        "Generating Cargo.toml to {}",
+        def.target_cargo_path().to_string_lossy()
+    );
     fs::write(def.target_cargo_path(), cargo_toml)?;
     Ok(())
 }

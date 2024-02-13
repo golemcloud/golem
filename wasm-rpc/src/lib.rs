@@ -270,6 +270,8 @@ impl<'a> arbitrary::Arbitrary<'a> for WitValue {
     }
 }
 
+pub const WASM_RPC_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[cfg(test)]
 mod tests {
     use crate::{Value, WitValue};

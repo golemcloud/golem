@@ -94,6 +94,10 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     writeln!(out, "  export stub-{};", world.name)?;
     writeln!(out, "}}")?;
 
+    println!(
+        "Generating stub WIT to {}",
+        def.target_wit_path().to_string_lossy()
+    );
     fs::create_dir_all(def.target_wit_root())?;
     fs::write(def.target_wit_path(), out)?;
     Ok(())
@@ -108,7 +112,8 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
 
     for unresolved in all {
         if unresolved.name == def.root_package_name {
-            println!("copying root {:?}", unresolved.name); // TODO: log
+            println!("Copying root package {}", unresolved.name);
+
             let dep_dir = dest_wit_root
                 .clone()
                 .join(Path::new("deps"))
@@ -116,19 +121,30 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
                     "{}_{}",
                     def.root_package_name.namespace, def.root_package_name.name
                 )));
+
             fs::create_dir_all(&dep_dir)?;
             for source in unresolved.source_files() {
                 let dest = dep_dir.join(source.file_name().unwrap());
-                println!("copying {source:?} to {dest:?}"); // TODO: log
+                println!(
+                    "  .. {} to {}",
+                    source.to_string_lossy(),
+                    dest.to_string_lossy()
+                );
+
                 fs::create_dir_all(dest.parent().unwrap())?;
                 fs::copy(source, &dest)?;
             }
         } else {
-            println!("copying {:?}", unresolved.name); // TODO: log
+            println!("Copying package {}", unresolved.name);
+
             for source in unresolved.source_files() {
                 let relative = source.strip_prefix(&def.source_wit_root)?;
                 let dest = dest_wit_root.clone().join(relative);
-                println!("copying {source:?} to {dest:?}"); // TODO: log
+                println!(
+                    "  .. {} to {}",
+                    source.to_string_lossy(),
+                    dest.to_string_lossy()
+                );
                 fs::create_dir_all(dest.parent().unwrap())?;
                 fs::copy(source, &dest)?;
             }
@@ -137,6 +153,11 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
     let wasm_rpc_wit = include_str!("../../wasm-rpc/wit/wasm-rpc.wit");
     let wasm_rpc_root = dest_wit_root.join(Path::new("deps/wasm-rpc"));
     fs::create_dir_all(&wasm_rpc_root).unwrap();
+
+    println!(
+        "Writing wasm-rpc.wit to {}",
+        wasm_rpc_root.to_string_lossy()
+    );
     fs::write(wasm_rpc_root.join(Path::new("wasm-rpc.wit")), wasm_rpc_wit)?;
     Ok(())
 }
