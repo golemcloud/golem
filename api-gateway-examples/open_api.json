@@ -16,7 +16,7 @@
         "worker-id": "worker-${request.path.user-id}",
         "function-name": "golem:it/api/get-cart-contents",
         "function-params": [],
-        "template-id": "93c76575-ae32-49e1-a5c8-5eaddbdf0e28",
+        "template-id": "c0e881af-cd94-4993-a2c2-15e489527b2a",
         "response" : {
           "status": "200",
           "body": {
@@ -41,16 +41,16 @@
           }
         ],
         "responses": {
-          "content":{
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CartItem"
-              }
-            }
-
-          },
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content":{
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartItem"
+                }
+              }
+
+            }
           },
           "404": {
             "description": "Contents not found"
