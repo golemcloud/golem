@@ -24,7 +24,8 @@ Below given are the step by step instructions to follow to try all of this in Lo
 ```bash
 # Clone golem-services and spin up all services which includes worker-bridge
 
-docker-compose -f docker-compose-sqlite.yaml up
+cargo build --release --target x86_64-unknown-linux-gnu
+docker-compose -f docker-compose-sqlite.yaml up --build
 ```
 
 ### Step 2: Deploy shopping cart example
