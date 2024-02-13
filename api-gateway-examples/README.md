@@ -243,11 +243,9 @@ backed by API Gateway. We are also working on emitting OpenAPI spec from worker-
 
 *x-golem-api-definition-id*
 
-This is by making using of API-ID header in the request. Given that the worker bridge is aware of various API definitions, it can pick the right
-API definition for a given request, if the request consist of the knowledge of API-ID as a header. 
-It is the responsibility of whoever managing the API Gateway to make sure that the API-ID is configured to be present in the request.
-This can be achieved by using Tyk's middleware injection or transformations, and this is the case with almost all API Gateways.
-
+By injecting x-golem-api-definition-id to every request, worker bridge can lookup the corresponding API definition and serve the request.
+It is the responsibility of whoever managing the API Gateway (Tyk in this case) to make sure that every request is configured to inject
+this header.
 
 ## What next?
 
