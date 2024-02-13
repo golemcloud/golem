@@ -1,6 +1,6 @@
 {
   "openapi": "3.0.0",
-  "x-API-Definition-Id": "shopping-cart-v2",
+  "x-golem-api-definition-id": "shopping-cart-v2",
   "info": {
     "title": "Sample API",
     "version": "1.0.0"
@@ -12,7 +12,7 @@
     ],
   "paths": {
     "/{user-id}/get-cart-contents": {
-      "x-worker-bridge": {
+      "x-golem-worker-bridge": {
         "worker-id": "worker-${request.path.user-id}",
         "function-name": "golem:it/api/get-cart-contents",
         "function-params": [],
