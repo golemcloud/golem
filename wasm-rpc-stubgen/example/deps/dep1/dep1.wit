@@ -8,6 +8,8 @@ interface iface2 {
         b,
     }
 
+    type alias = a-or-b;
+
     variant storage {
         in-memory,
         s3(string),
@@ -20,6 +22,9 @@ interface iface2 {
     }
 
     g: func(in: a-or-b) -> out;
+    gg: func(in: a-or-b) -> tuple<out, string>;
 
     h: func(s: storage);
+    hh: func(s: storage) -> a-or-b;
+    hhh: func(in: alias) -> storage;
 }

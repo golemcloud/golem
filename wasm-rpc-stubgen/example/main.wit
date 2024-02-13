@@ -29,6 +29,9 @@ interface iface1 {
   tuple-to-point: func(t: point-tuple, metadata: option<metadata>) -> result<point, string>;
 
   process-result: func(r: result<point, string>);
+  new-point: func(x: s32, y: s32, metadata: metadata) -> point;
+
+  get-metadata: func() -> option<metadata>;
 }
 
 world api {
