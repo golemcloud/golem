@@ -10,7 +10,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-const GOLEM_API_DEFINITION_ID: &str = "x-golem-api-definition-id";
+const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
+const GOLEM_WORKER_BRIDGE_EXTENSION: &str = "x-golem-worker-bridge";
 
 pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
     let openapi: OpenAPI = serde_json::from_str(open_api).map_err(|e| e.to_string())?;
@@ -21,14 +22,17 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
         openapi
             .extensions
             .iter()
-            .find(|(key, _)| key.to_lowercase() == GOLEM_API_DEFINITION_ID)
+            .find(|(key, _)| key.to_lowercase() == GOLEM_API_DEFINITION_ID_EXTENSION)
             .map(|(_, value)| value)
             .ok_or(format!(
                 "{} not found in the open API spec",
-                GOLEM_API_DEFINITION_ID
+                GOLEM_API_DEFINITION_ID_EXTENSION
             ))?
             .as_str()
-            .ok_or(format!("Invalid value for {}", GOLEM_API_DEFINITION_ID))?
+            .ok_or(format!(
+                "Invalid value for {}",
+                GOLEM_API_DEFINITION_ID_EXTENSION
+            ))?
             .to_string(),
     );
 
@@ -87,8 +91,11 @@ fn get_route_from_path_item(
 
     let worker_bridge_info = path_item
         .extensions
-        .get("x-golem-worker-bridge")
-        .ok_or("No x-worker-bridge extension found")?;
+        .get(GOLEM_WORKER_BRIDGE_EXTENSION)
+        .ok_or(format!(
+            "No {} extension found",
+            GOLEM_WORKER_BRIDGE_EXTENSION
+        ))?;
 
     let binding = GolemWorkerBinding {
         worker_id: get_worker_id_expr(worker_bridge_info)?,
