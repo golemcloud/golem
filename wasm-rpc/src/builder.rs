@@ -116,12 +116,10 @@ pub trait NodeBuilder: Sized {
             } else {
                 self.result_ok_unit()
             }
+        } else if has_err {
+            f(self.result_err()).finish()
         } else {
-            if has_err {
-                f(self.result_err()).finish()
-            } else {
-                self.result_err_unit()
-            }
+            self.result_err_unit()
         }
     }
 
