@@ -159,31 +159,35 @@ spec:
               value: "{{ .Values.workerExecutor.ports.http }}"
             - name: GOLEM__PORT
               value: "{{ .Values.workerExecutor.ports.grpc }}"
-{{- if .Values.templateStore.pvc.enable }}
+{{- if .Values.templateCompiledStore.pvc.enable }}
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
               value: "Local"
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT
-              value: "/golem/template"
-            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__TYPE
-              value: "Local"
-            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__ROOT
-              value: "/golem/template"
+              value: "/golem/template/compiled"
 {{- end }}
-{{- if .Values.templateStore.s3.enable }}
+{{- if .Values.templateCompiledStore.s3.enable }}
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
               value: "S3"
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION
-              value: {{ .Values.templateStore.s3.region }}
+              value: {{ .Values.templateCompiledStore.s3.region }}
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX
-              value: {{ .Values.templateStore.s3.objectPrefix }}
+              value: {{ .Values.templateCompiledStore.s3.objectPrefix }}
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__BUCKET
-              value: {{ .Values.templateStore.s3.bucket }}
+              value: {{ .Values.templateCompiledStore.s3.bucket }}
+{{- end }}
+{{- if .Values.workerBlobStore.pvc.enable }}
+            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__TYPE
+              value: "Local"
+            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__ROOT
+              value: "/golem/worker/blob"
+{{- end }}
+{{- if .Values.workerBlobStore.s3.enable }}
             - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__TYPE
               value: "S3"
             - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION
-              value: {{ .Values.templateStore.s3.region }}
+              value: {{ .Values.workerBlobStore.s3.region }}
             - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__BUCKET_PREFIX
-              value: ""
+              value: {{ .Values.workerBlobStore.s3.bucketPrefix }}
 {{- end }}
           ports:
             - name: http
@@ -198,17 +202,32 @@ spec:
             failureThreshold: 5
             initialDelaySeconds: 45
             timeoutSeconds: 2
-{{- if .Values.templateStore.pvc.enable }}
+{{- if or .Values.templateCompiledStore.pvc.enable .Values.workerBlobStore.pvc.enable }}
           volumeMounts:
-            - name: golem-template-store-{{.Values.env}}
-              mountPath: /golem/template
 {{- end }}
-{{- if .Values.templateStore.pvc.enable }}
+{{- if .Values.templateCompiledStore.pvc.enable }}
+            - name: golem-template-compiled-store-{{.Values.env}}
+              mountPath: /golem/template/compiled
+{{- end }}
+{{- if .Values.workerBlobStore.pvc.enable }}
+            - name: golem-worker-blob-store-{{.Values.env}}
+              mountPath: /golem/worker/blob
+{{- end }}
+{{- if or .Values.templateCompiledStore.pvc.enable .Values.workerBlobStore.pvc.enable }}
       volumes:
-        - name: golem-template-store-{{.Values.env}}
-          persistentVolumeClaim:
-            claimName: golem-template-store-{{.Values.env}}
 {{- end }}
+{{- if .Values.templateCompiledStore.pvc.enable }}
+        - name: golem-template-compiled-store-{{.Values.env}}
+          persistentVolumeClaim:
+            claimName: golem-template-compiled-store-{{.Values.env}}
+{{- end }}
+{{- if .Values.workerBlobStore.pvc.enable }}
+        - name: golem-worker-blob-store-{{.Values.env}}
+          persistentVolumeClaim:
+            claimName: golem-worker-blob-store-{{.Values.env}}
+{{- end }}
+
+
 ---
 
 apiVersion: apps/v1
