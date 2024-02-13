@@ -43,7 +43,7 @@ Please make sure to use the correct template-id based on the output from `templa
 
 ```bash
 {
-  "id": "shopping-cart",
+  "id": "shopping-cart-v1",
   "version": "0.0.1",
   "routes": [
     {
@@ -51,14 +51,24 @@ Please make sure to use the correct template-id based on the output from `templa
       "path": "/{user-id}/get-cart-contents",
       "binding": {
         "type": "wit-worker",
-        "template": "c467b83d-cb27-4296-b48a-ee85114cdb71",
+        "template": "08930752-d868-412f-a608-b834bda159be",
         "workerId": "worker-${request.path.user-id}",
         "functionName": "golem:it/api/get-cart-contents",
-        "functionParams": []
+        "functionParams": [],
+        "response" : {
+          "status": "200",
+          "body": {
+            "name" : "${worker.response[0][0].name}",
+            "price" : "${worker.response[0][0].price}",
+            "quantity" : "${worker.response[0][0].quantity}"
+          },
+          "headers": {}
+        }
       }
     }
   ]
 }
+
 
 ```
 
@@ -150,7 +160,7 @@ With all this in place, you can now make requests to the API Gateway and see the
 
 curl -X GET http://localhost:8080/v10/adam/get-cart-contents
  
-[[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
+{"name":"hmm","price":10.0,"quantity":2}
 
 ```
 

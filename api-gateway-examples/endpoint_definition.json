@@ -7,13 +7,17 @@
       "path": "/{user-id}/get-cart-contents",
       "binding": {
         "type": "wit-worker",
-        "template": "1846bd43-cb35-4b51-9ae1-dd86fba38cbb",
+        "template": "08930752-d868-412f-a608-b834bda159be",
         "workerId": "worker-${request.path.user-id}",
         "functionName": "golem:it/api/get-cart-contents",
         "functionParams": [],
         "response" : {
           "status": "200",
-          "body": "${worker.response[0]}",
+          "body": {
+            "name" : "${worker.response[0][0].name}",
+            "price" : "${worker.response[0][0].price}",
+            "quantity" : "${worker.response[0][0].quantity}"
+          },
           "headers": {}
         }
       }

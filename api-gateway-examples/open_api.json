@@ -16,7 +16,16 @@
         "worker-id": "worker-${request.path.user-id}",
         "function-name": "golem:it/api/get-cart-contents",
         "function-params": [],
-        "template-id": "93c76575-ae32-49e1-a5c8-5eaddbdf0e28"
+        "template-id": "93c76575-ae32-49e1-a5c8-5eaddbdf0e28",
+        "response" : {
+          "status": "200",
+          "body": {
+            "name" : "${worker.response[0][0].name}",
+            "price" : "${worker.response[0][0].price}",
+            "quantity" : "${worker.response[0][0].quantity}"
+          },
+          "headers": {}
+        }
       },
       "get": {
         "summary": "Get Cart Contents",
@@ -32,11 +41,37 @@
           }
         ],
         "responses": {
+          "content":{
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CartItem"
+              }
+            }
+
+          },
           "200": {
             "description": "OK"
           },
           "404": {
             "description": "Contents not found"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CartItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number"
           }
         }
       }
