@@ -65,7 +65,7 @@ fn get_unresolved_packages(
     let mut order = IndexSet::new();
     let mut visiting = HashSet::new();
     for pkg in deps.values().chain([&root]) {
-        visit(&pkg, &deps, &mut order, &mut visiting)?;
+        visit(pkg, &deps, &mut order, &mut visiting)?;
     }
 
     let mut ordered_deps = Vec::new();
@@ -130,7 +130,7 @@ fn main() {
                 let dest = dep_dir.join(source.file_name().unwrap());
                 println!("Copying {source:?} to {dest:?}");
                 fs::create_dir_all(dest.parent().unwrap()).unwrap();
-                fs::copy(&source, &dest).unwrap();
+                fs::copy(source, &dest).unwrap();
             }
         } else {
             println!("copying {:?}", unresolved.name);
@@ -139,7 +139,7 @@ fn main() {
                 let dest = dest_wit_root.join(relative);
                 println!("Copying {source:?} to {dest:?}");
                 fs::create_dir_all(dest.parent().unwrap()).unwrap();
-                fs::copy(&source, &dest).unwrap();
+                fs::copy(source, &dest).unwrap();
             }
         }
     }
@@ -161,7 +161,7 @@ fn main() {
 
     println!("generating cargo.toml");
     generate_cargo_toml(
-        &root_path,
+        root_path,
         &dest_root.join("Cargo.toml"),
         selected_world,
         stub_crate_version,
@@ -172,7 +172,7 @@ fn main() {
     .unwrap();
 
     let dest_src_root = dest_root.join(Path::new("src"));
-    fs::create_dir_all(&dest_src_root).unwrap();
+    fs::create_dir_all(dest_src_root).unwrap();
     generate_stub_source(
         &dest_root.join("src/lib.rs"),
         &resolve,
@@ -183,15 +183,12 @@ fn main() {
 }
 
 #[derive(Serialize)]
+#[derive(Default)]
 struct MetadataRoot {
     component: Option<ComponentMetadata>,
 }
 
-impl Default for MetadataRoot {
-    fn default() -> Self {
-        MetadataRoot { component: None }
-    }
-}
+
 
 #[derive(Serialize)]
 struct ComponentMetadata {
@@ -255,7 +252,7 @@ fn generate_cargo_toml(
             WitDependency {
                 path: format!(
                     "wit/{}",
-                    dirs.iter().next().unwrap().to_str().unwrap().to_string()
+                    dirs.iter().next().unwrap().to_str().unwrap()
                 ),
             },
         );
@@ -512,7 +509,7 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
 
     if !top_level_functions.is_empty() {
         interfaces.push(InterfaceStub {
-            name: String::from(world.name.clone()),
+            name: world.name.clone(),
             functions: collect_stub_functions(top_level_functions.into_iter())?,
             imports: collect_stub_imports(top_level_types.iter().map(|(k, v)| (k, *v)), resolve)?,
             global: true,
@@ -532,7 +529,7 @@ fn collect_stub_functions<'a>(
             for (name, typ) in &f.params {
                 params.push(FunctionParamStub {
                     name: name.clone(),
-                    typ: typ.clone(),
+                    typ: *typ,
                 });
             }
 
@@ -542,12 +539,12 @@ fn collect_stub_functions<'a>(
                     for (name, typ) in params {
                         param_stubs.push(FunctionParamStub {
                             name: name.clone(),
-                            typ: typ.clone(),
+                            typ: *typ,
                         });
                     }
                     FunctionResultStub::Multi(param_stubs)
                 }
-                Results::Anon(single) => FunctionResultStub::Single(single.clone()),
+                Results::Anon(single) => FunctionResultStub::Single(*single),
             };
 
             FunctionStub {
@@ -571,7 +568,7 @@ fn generate_stub_wit(
     let mut out = String::new();
 
     writeln!(out, "package {}-stub;", package_name)?;
-    writeln!(out, "")?;
+    writeln!(out)?;
     writeln!(out, "interface stub-{} {{", world.name)?;
 
     let interfaces = collect_stub_interfaces(resolve, world)?;
@@ -584,7 +581,7 @@ fn generate_stub_wit(
     for import in all_imports {
         writeln!(out, "  use {}.{{{}}};", import.path, import.name)?;
     }
-    writeln!(out, "")?;
+    writeln!(out)?;
 
     for interface in interfaces {
         writeln!(out, "  resource {} {{", &interface.name)?;
@@ -629,11 +626,11 @@ fn generate_stub_wit(
             writeln!(out, ";")?;
         }
         writeln!(out, "  }}")?;
-        writeln!(out, "")?;
+        writeln!(out)?;
     }
 
     writeln!(out, "}}")?;
-    writeln!(out, "")?;
+    writeln!(out)?;
 
     writeln!(out, "world {} {{", target_world_name)?;
     writeln!(out, "  export stub-{};", world.name)?;
@@ -716,7 +713,7 @@ fn generate_stub_source(
         let mut fn_impls = Vec::new();
         for function in &interface.functions {
             fn_impls.push(generate_function_stub_source(
-                &function,
+                function,
                 &root_ns,
                 &root_name,
                 if interface.global {
@@ -789,7 +786,7 @@ fn generate_function_stub_source(
 
     let result_type = match &function.results {
         FunctionResultStub::Single(typ) => {
-            let typ = type_to_rust_ident(&typ, resolve)?;
+            let typ = type_to_rust_ident(typ, resolve)?;
             quote! {
                 #typ
             }
@@ -879,7 +876,7 @@ fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStre
                 }
                 _ => {
                     let typ = Ident::new(
-                        &to_rust_ident(&typedef.name.as_ref().ok_or(anyhow!("type has no name"))?)
+                        &to_rust_ident(typedef.name.as_ref().ok_or(anyhow!("type has no name"))?)
                             .to_upper_camel_case(),
                         Span::call_site(),
                     );
