@@ -392,6 +392,14 @@ impl TypeExtensions for Type {
                     TypeDefKind::List(inner) => {
                         Ok(format!("list<{}>", inner.wit_type_string(resolve)?))
                     }
+                    TypeDefKind::Tuple(tuple) => {
+                        let types = tuple
+                            .types
+                            .iter()
+                            .map(|t| t.wit_type_string(resolve))
+                            .collect::<anyhow::Result<Vec<_>>>()?;
+                        Ok(format!("tuple<{}>", types.join(", ")))
+                    }
                     TypeDefKind::Result(result) => match (&result.ok, &result.err) {
                         (Some(ok), Some(err)) => {
                             let ok = ok.wit_type_string(resolve)?;
@@ -816,7 +824,7 @@ fn generate_function_stub_source(
                 output_values.push(extract_from_wit_value(
                     &param.typ,
                     resolve,
-                    quote! { result.tuple_element(#n).expect("result must be a tuple") },
+                    quote! { result.tuple_element(#n).expect("tuple not found") },
                 )?);
             }
         }
@@ -872,6 +880,14 @@ fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStre
                 TypeDefKind::List(inner) => {
                     let inner = type_to_rust_ident(inner, resolve)?;
                     Ok(quote! { Vec<#inner> })
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    let types = tuple
+                        .types
+                        .iter()
+                        .map(|t| type_to_rust_ident(t, resolve))
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+                    Ok(quote! { (#(#types),*) })
                 }
                 TypeDefKind::Result(result) => {
                     let ok = match &result.ok {
@@ -1036,9 +1052,7 @@ fn wit_value_builder(
                 TypeDefKind::Stream(_) => {
                     Ok(quote!(todo!("stream"))) // TODO
                 }
-                TypeDefKind::Type(_) => {
-                    Ok(quote!(todo!("type"))) // TODO
-                }
+                TypeDefKind::Type(typ) => wit_value_builder(typ, name, resolve, builder_expr),
                 TypeDefKind::Unknown => {
                     Ok(quote!(todo!("unknown"))) // TODO
                 }
@@ -1285,43 +1299,43 @@ fn extract_from_wit_value(
 ) -> anyhow::Result<TokenStream> {
     match typ {
         Type::Bool => Ok(quote! {
-            #base_expr.bool().expect("result must be a bool")
+            #base_expr.bool().expect("bool not found")
         }),
         Type::U8 => Ok(quote! {
-            #base_expr.u8().expect("result must be a u8")
+            #base_expr.u8().expect("u8 not found")
         }),
         Type::U16 => Ok(quote! {
-            #base_expr.u16().expect("result must be a u16")
+            #base_expr.u16().expect("u16 not found")
         }),
         Type::U32 => Ok(quote! {
-            #base_expr.u32().expect("result must be a u32")
+            #base_expr.u32().expect("u32 not found")
         }),
         Type::U64 => Ok(quote! {
-            #base_expr.u64().expect("result must be a u64")
+            #base_expr.u64().expect("u64 not found")
         }),
         Type::S8 => Ok(quote! {
-            #base_expr.s8().expect("result must be a i8")
+            #base_expr.s8().expect("i8 not found")
         }),
         Type::S16 => Ok(quote! {
-            #base_expr.s16().expect("result must be a i16")
+            #base_expr.s16().expect("i16 not found")
         }),
         Type::S32 => Ok(quote! {
-            #base_expr.s32().expect("result must be a i32")
+            #base_expr.s32().expect("i32 not found")
         }),
         Type::S64 => Ok(quote! {
-            #base_expr.s64().expect("result must be a i64")
+            #base_expr.s64().expect("i64 not found")
         }),
         Type::Float32 => Ok(quote! {
-            #base_expr.f32().expect("result must be a f32")
+            #base_expr.f32().expect("f32 not found")
         }),
         Type::Float64 => Ok(quote! {
-            #base_expr.f64().expect("result must be a f64")
+            #base_expr.f64().expect("f64 not found")
         }),
         Type::Char => Ok(quote! {
-            #base_expr.char().expect("result must be a char")
+            #base_expr.char().expect("char not found")
         }),
         Type::String => Ok(quote! {
-            #base_expr.string().expect("result must be a string").to_string()
+            #base_expr.string().expect("string not found").to_string()
         }),
         Type::Id(type_id) => {
             let typedef = resolve
@@ -1329,29 +1343,249 @@ fn extract_from_wit_value(
                 .get(*type_id)
                 .ok_or(anyhow!("type not found"))?;
             match &typedef.kind {
-                TypeDefKind::Record(record) => Ok(quote!(todo!("record support"))),
+                TypeDefKind::Record(record) => {
+                    extract_from_record_value(record, typ, resolve, base_expr)
+                }
                 TypeDefKind::Resource => Ok(quote!(todo!("resource support"))),
                 TypeDefKind::Handle(_) => Ok(quote!(todo!("resource support"))),
-                TypeDefKind::Flags(flags) => Ok(quote!(todo!("flags support"))),
-                TypeDefKind::Tuple(tuple) => Ok(quote!(todo!("tuple support"))),
-                TypeDefKind::Variant(variant) => Ok(quote!(todo!("variant support"))),
-                TypeDefKind::Enum(enum_def) => Ok(quote!(todo!("enum support"))),
-                TypeDefKind::Option(inner) => Ok(quote!(todo!("option support"))),
-                TypeDefKind::Result(result) => Ok(quote!(todo!("result support"))),
-                TypeDefKind::List(elem) => Ok(quote!(todo!("list support"))),
+                TypeDefKind::Flags(flags) => {
+                    extract_from_flags_value(flags, typ, resolve, base_expr)
+                }
+                TypeDefKind::Tuple(tuple) => extract_from_tuple_value(tuple, resolve, base_expr),
+                TypeDefKind::Variant(variant) => {
+                    extract_from_variant_value(variant, typ, resolve, base_expr)
+                }
+                TypeDefKind::Enum(enum_def) => {
+                    extract_from_enum_value(enum_def, typ, resolve, base_expr)
+                }
+                TypeDefKind::Option(inner) => extract_from_option_value(inner, resolve, base_expr),
+                TypeDefKind::Result(result) => {
+                    extract_from_result_value(result, resolve, base_expr)
+                }
+                TypeDefKind::List(elem) => extract_from_list_value(elem, resolve, base_expr),
                 TypeDefKind::Future(_) => {
                     Ok(quote!(todo!("future"))) // TODO
                 }
                 TypeDefKind::Stream(_) => {
                     Ok(quote!(todo!("stream"))) // TODO
                 }
-                TypeDefKind::Type(_) => {
-                    Ok(quote!(todo!("type"))) // TODO
-                }
+                TypeDefKind::Type(typ) => extract_from_wit_value(typ, resolve, base_expr),
                 TypeDefKind::Unknown => {
                     Ok(quote!(todo!("unknown"))) // TODO
                 }
             }
         }
     }
+}
+
+fn extract_from_record_value(
+    record: &Record,
+    record_type: &Type,
+    resolve: &Resolve,
+    base_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let mut field_extractors = Vec::new();
+    for (field_idx, field) in record.fields.iter().enumerate() {
+        let field_name = Ident::new(&to_rust_ident(&field.name), Span::call_site());
+        let field_expr = extract_from_wit_value(
+            &field.ty,
+            resolve,
+            quote! { record.field(#field_idx).expect("record field not found") },
+        )?;
+        field_extractors.push(quote! {
+            #field_name: #field_expr
+        });
+    }
+
+    let record_type = type_to_rust_ident(&record_type, resolve)?;
+
+    Ok(quote! {
+        {
+            let record = #base_expr;
+            #record_type {
+                #(#field_extractors),*
+            }
+        }
+    })
+}
+
+fn extract_from_flags_value(
+    flags: &Flags,
+    flags_type: &Type,
+    resolve: &Resolve,
+    base_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let flags_type = type_to_rust_ident(&flags_type, resolve)?;
+    let mut flag_exprs = Vec::new();
+    for (flag_idx, flag) in flags.flags.iter().enumerate() {
+        let flag_name = Ident::new(&flag.name.to_shouty_snake_case(), Span::call_site());
+        flag_exprs.push(quote! {
+            if flag_vec[#flag_idx] {
+                flags |= #flags_type::#flag_name;
+            }
+        });
+    }
+
+    Ok(quote! {
+        {
+            let flag_vec = #base_expr.flags().expect("flags not found");
+            let mut flags = #flags_type::empty();
+            #(#flag_exprs);*
+            flags
+        }
+    })
+}
+
+fn extract_from_tuple_value(
+    tuple: &Tuple,
+    resolve: &Resolve,
+    base_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let mut elem_extractors = Vec::new();
+    for (field_idx, typ) in tuple.types.iter().enumerate() {
+        let elem_expr = extract_from_wit_value(
+            typ,
+            resolve,
+            quote! { tuple.tuple_element(#field_idx).expect("tuple element not found") },
+        )?;
+        elem_extractors.push(elem_expr);
+    }
+
+    Ok(quote! {
+        {
+            let tuple = #base_expr;
+            (#(#elem_extractors),*)
+        }
+    })
+}
+
+fn extract_from_variant_value(
+    variant: &Variant,
+    variant_type: &Type,
+    resolve: &Resolve,
+    base_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let variant_type = type_to_rust_ident(&variant_type, resolve)?;
+
+    let mut case_extractors = Vec::new();
+    for (n, case) in variant.cases.iter().enumerate() {
+        let case_name = Ident::new(
+            &to_rust_ident(&case.name).to_upper_camel_case(),
+            Span::call_site(),
+        );
+        let case_idx = n as u32;
+
+        match &case.ty {
+            Some(ty) => {
+                let case_expr = extract_from_wit_value(
+                    ty,
+                    resolve,
+                    quote! { inner.expect("variant case not found") },
+                )?;
+                case_extractors.push(quote! {
+                    #case_idx => #variant_type::#case_name(#case_expr)
+                });
+            }
+            None => {
+                case_extractors.push(quote! {
+                    #case_idx => #variant_type::#case_name
+                });
+            }
+        }
+    }
+
+    Ok(quote! {
+        {
+            let (case_idx, inner) = #base_expr.variant().expect("variant not found");
+            match case_idx {
+                #(#case_extractors),*,
+                _ => unreachable!("invalid variant case index")
+            }
+        }
+    })
+}
+
+fn extract_from_enum_value(
+    enum_def: &Enum,
+    enum_type: &Type,
+    resolve: &Resolve,
+    base_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let enum_type = type_to_rust_ident(&enum_type, resolve)?;
+
+    let mut case_extractors = Vec::new();
+    for (n, case) in enum_def.cases.iter().enumerate() {
+        let case_name = Ident::new(&case.name.to_shouty_snake_case(), Span::call_site());
+        let case_idx = n as u32;
+        case_extractors.push(quote! {
+            #case_idx => #enum_type::#case_name
+        });
+    }
+
+    Ok(quote! {
+        {
+            let case_idx = #base_expr.enum_value().expect("enum not found");
+            match case_idx {
+                #(#case_extractors),*,
+                _ => unreachable!("invalid enum case index")
+            }
+        }
+    })
+}
+
+fn extract_from_option_value(
+    inner: &Type,
+    resolve: &Resolve,
+    base_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let inner_expr = extract_from_wit_value(inner, resolve, quote! { inner })?;
+
+    Ok(quote! {
+        #base_expr.option().expect("option not found").map(|inner| #inner_expr)
+    })
+}
+
+fn extract_from_result_value(
+    result: &Result_,
+    resolve: &Resolve,
+    base_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let ok_expr = match &result.ok {
+        Some(ok) => extract_from_wit_value(
+            ok,
+            resolve,
+            quote! { ok_value.expect("result ok value not found") },
+        )?,
+        None => quote! { () },
+    };
+    let err_expr = match &result.err {
+        Some(err) => extract_from_wit_value(
+            err,
+            resolve,
+            quote! { err_value.expect("result err value not found") },
+        )?,
+        None => quote! { () },
+    };
+
+    Ok(quote! {
+        {
+            let result = #base_expr.result().expect("result not found");
+            match result {
+                Ok(ok_value) => Ok(#ok_expr),
+                Err(err_value) => Err(#err_expr)
+            }
+        }
+    })
+}
+
+fn extract_from_list_value(
+    inner: &Type,
+    resolve: &Resolve,
+    base_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    let inner_expr = extract_from_wit_value(inner, resolve, quote! { item })?;
+
+    Ok(quote! {
+        #base_expr.list_elements(|item| #inner_expr).expect("list not found")
+    })
 }
