@@ -36,7 +36,7 @@ jobs:
           override: true
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo binstall cargo-component
+        run: cargo binstall --no-confirm cargo-component@0.7.0
       - name: Check formatting
         run: cargo fmt -- --check
       - name: Clippy
