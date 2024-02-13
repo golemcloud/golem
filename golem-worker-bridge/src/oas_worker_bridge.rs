@@ -19,9 +19,9 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
             .iter()
             .find(|(key, _)| key.to_lowercase() == "x-api-definition-id")
             .map(|(_, value)| value)
-            .ok_or("No X-API-Definition-Id found")?
+            .ok_or("No x-api-definition-Id found")?
             .as_str()
-            .ok_or("X-API-Definition-Id is not a string")?
+            .ok_or("x-api-definition-id is not a string")?
             .to_string(),
     );
 
@@ -32,14 +32,17 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
             ReferenceOr::Item(item) => {
                 let path_pattern = get_path_pattern(path)?;
 
-                for (str, op) in item.iter() {
+                for (str, _) in item.iter() {
                     let route = get_route_from_path_item(str, item, &path_pattern)?;
                     routes.push(route);
                 }
             }
-            ReferenceOr::Reference { reference: _ } => Err(
-                "Reference not supported when extracting worker bridge extension info".to_string(),
-            ),
+            ReferenceOr::Reference { reference: _ } => {
+                return Err(
+                    "Reference not supported yet when extracting worker bridge extension info"
+                        .to_string(),
+                )
+            }
         };
     }
 

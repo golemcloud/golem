@@ -200,7 +200,8 @@ curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 
 ```bash
 
-curl -X GET http://localhost:8080/adam/get-cart-contents
+# TODO; Note, the OAS spec in Tyk - harder to add header to the request, therefore explicitly passing it here for demo purpose 
+curl -X GET http://localhost:8080/adam/get-cart-contents -H "x-api-definition-id: shopping-cart-v2"
  
 [[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
 
