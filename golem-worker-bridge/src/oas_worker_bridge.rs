@@ -2,13 +2,12 @@ use std::collections::HashMap;
 use crate::api_definition::{ApiDefinition, ApiDefinitionId, GolemWorkerBinding, MethodPattern, PathPattern, ResponseMapping, Route, Version};
 use crate::expr::Expr;
 use golem_common::model::TemplateId;
-use openapiv3::OpenAPI;
+use openapiv3::{OpenAPI, PathItem, ReferenceOr};
 use serde_json;
 use serde_json::Value;
 use uuid::Uuid;
 
 pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
-    dbg!(open_api);
     let openapi: OpenAPI = serde_json::from_str(open_api).map_err(|e| e.to_string())?;
     let version = Version(openapi.info.version);
     let id = ApiDefinitionId(
@@ -26,56 +25,60 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
     let mut routes: Vec<Route> = vec![];
 
     for (path, path_item) in openapi.paths.iter() {
-        let worker_bridge_info_result: Result<&Value, String> = match path_item {
-            openapiv3::ReferenceOr::Item(item) => {
-                let worker_bridge_info = item
-                    .extensions
-                    .get("x-worker-bridge")
-                    .ok_or("No x-worker-bridge extension found")?;
-                Ok(worker_bridge_info)
+        match path_item {
+            ReferenceOr::Item(item) => {
+                let path_pattern = get_path_pattern(path)?;
+
+                for (str, op) in item.iter() {
+                    let route = get_route_from_path_item(str, item, &path_pattern)?;
+                    routes.push(route);
+                }
             }
-            openapiv3::ReferenceOr::Reference { reference: _ } => {
-                continue;
-            }
-        };
-
-        let worker_bridge_info = worker_bridge_info_result?;
-        let binding = GolemWorkerBinding {
-            worker_id: get_worker_id_expr(worker_bridge_info)?,
-            function_name: get_function_name(worker_bridge_info)?,
-            function_params: get_function_params_expr(worker_bridge_info)?,
-            template: get_template_id(worker_bridge_info)?,
-            response: get_response_mapping(worker_bridge_info)?,
-        };
-
-        let path = get_path_pattern(path)?;
-        let method_res = match path_item {
-            openapiv3::ReferenceOr::Item(item) =>
-                match &item.get {
-                    Some(_) => Ok(MethodPattern::Get),
-                    None => Err("Other methods not supported".to_string()),
-                },
-
-            openapiv3::ReferenceOr::Reference { reference: _ } => {
-                Err("Reference not supported".to_string())
+            ReferenceOr::Reference { reference: _ } => {
+                Err("Reference not supported when extracting worker bridge extension info".to_string())
             }
         };
-
-        let method = method_res?;
-
-        let route = Route {
-            path,
-            method,
-            binding,
-        };
-
-        routes.push(route);
     }
 
     Ok(ApiDefinition {
         id,
         version,
         routes,
+    })
+}
+
+fn get_route_from_path_item(method: &str, path_item: &PathItem, path_pattern: &PathPattern) -> Result<Route, String> {
+    let method_res = match method {
+        "get" => Ok(MethodPattern::Get),
+        "post" => Ok(MethodPattern::Post),
+        "put" => Ok(MethodPattern::Put),
+        "delete" => Ok(MethodPattern::Delete),
+        "options" => Ok(MethodPattern::Options),
+        "head" => Ok(MethodPattern::Head),
+        "patch" => Ok(MethodPattern::Patch),
+        "trace" => Ok(MethodPattern::Trace),
+        _ => Err("Other methods not supported".to_string()),
+    };
+
+    let method = method_res?;
+
+    let worker_bridge_info = path_item
+        .extensions
+        .get("x-worker-bridge")
+        .ok_or("No x-worker-bridge extension found")?;
+
+    let binding = GolemWorkerBinding {
+        worker_id: get_worker_id_expr(worker_bridge_info)?,
+        function_name: get_function_name(worker_bridge_info)?,
+        function_params: get_function_params_expr(worker_bridge_info)?,
+        template: get_template_id(worker_bridge_info)?,
+        response: get_response_mapping(worker_bridge_info)?,
+    };
+
+    Ok(Route {
+        path: path_pattern.clone(),
+        method,
+        binding,
     })
 }
 
