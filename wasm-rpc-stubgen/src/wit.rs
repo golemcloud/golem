@@ -150,7 +150,6 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
             }
         }
     }
-    let wasm_rpc_wit = include_str!("../../wasm-rpc/wit/wasm-rpc.wit");
     let wasm_rpc_root = dest_wit_root.join(Path::new("deps/wasm-rpc"));
     fs::create_dir_all(&wasm_rpc_root).unwrap();
 
@@ -158,7 +157,10 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
         "Writing wasm-rpc.wit to {}",
         wasm_rpc_root.to_string_lossy()
     );
-    fs::write(wasm_rpc_root.join(Path::new("wasm-rpc.wit")), wasm_rpc_wit)?;
+    fs::write(
+        wasm_rpc_root.join(Path::new("wasm-rpc.wit")),
+        golem_wasm_rpc::WASM_RPC_WIT,
+    )?;
     Ok(())
 }
 
