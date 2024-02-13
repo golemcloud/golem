@@ -125,7 +125,7 @@ impl<'a> WitNodePointer<'a> {
         &self.value.nodes[self.idx]
     }
 
-    pub fn u8(self) -> Option<u8> {
+    pub fn u8(&self) -> Option<u8> {
         if let WitNode::PrimU8(value) = self.node() {
             Some(*value)
         } else {
@@ -133,7 +133,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn u16(self) -> Option<u16> {
+    pub fn u16(&self) -> Option<u16> {
         if let WitNode::PrimU16(value) = self.node() {
             Some(*value)
         } else {
@@ -141,7 +141,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn u32(self) -> Option<u32> {
+    pub fn u32(&self) -> Option<u32> {
         if let WitNode::PrimU32(value) = self.node() {
             Some(*value)
         } else {
@@ -149,7 +149,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn u64(self) -> Option<u64> {
+    pub fn u64(&self) -> Option<u64> {
         if let WitNode::PrimU64(value) = self.node() {
             Some(*value)
         } else {
@@ -157,7 +157,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn s8(self) -> Option<i8> {
+    pub fn s8(&self) -> Option<i8> {
         if let WitNode::PrimS8(value) = self.node() {
             Some(*value)
         } else {
@@ -165,7 +165,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn s16(self) -> Option<i16> {
+    pub fn s16(&self) -> Option<i16> {
         if let WitNode::PrimS16(value) = self.node() {
             Some(*value)
         } else {
@@ -173,7 +173,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn s32(self) -> Option<i32> {
+    pub fn s32(&self) -> Option<i32> {
         if let WitNode::PrimS32(value) = self.node() {
             Some(*value)
         } else {
@@ -181,7 +181,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn s64(self) -> Option<i64> {
+    pub fn s64(&self) -> Option<i64> {
         if let WitNode::PrimS64(value) = self.node() {
             Some(*value)
         } else {
@@ -189,7 +189,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn f32(self) -> Option<f32> {
+    pub fn f32(&self) -> Option<f32> {
         if let WitNode::PrimFloat32(value) = self.node() {
             Some(*value)
         } else {
@@ -197,7 +197,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn f64(self) -> Option<f64> {
+    pub fn f64(&self) -> Option<f64> {
         if let WitNode::PrimFloat64(value) = self.node() {
             Some(*value)
         } else {
@@ -205,7 +205,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn char(self) -> Option<char> {
+    pub fn char(&self) -> Option<char> {
         if let WitNode::PrimChar(value) = self.node() {
             Some(*value)
         } else {
@@ -213,7 +213,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn bool(self) -> Option<bool> {
+    pub fn bool(&self) -> Option<bool> {
         if let WitNode::PrimBool(value) = self.node() {
             Some(*value)
         } else {
@@ -221,7 +221,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn string(self) -> Option<&'a str> {
+    pub fn string(&self) -> Option<&'a str> {
         if let WitNode::PrimString(value) = self.node() {
             Some(value)
         } else {
@@ -229,7 +229,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn field(self, field_idx: usize) -> Option<WitNodePointer<'a>> {
+    pub fn field(&self, field_idx: usize) -> Option<WitNodePointer<'a>> {
         if let WitNode::RecordValue(fields) = self.node() {
             fields
                 .get(field_idx)
@@ -239,7 +239,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn variant(self) -> Option<(u32, Option<WitNodePointer<'a>>)> {
+    pub fn variant(&self) -> Option<(u32, Option<WitNodePointer<'a>>)> {
         if let WitNode::VariantValue((case, value)) = self.node() {
             let value = value.map(|idx| WitNodePointer::new(self.value, idx as usize));
             Some((*case, value))
@@ -248,7 +248,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn enum_value(self) -> Option<u32> {
+    pub fn enum_value(&self) -> Option<u32> {
         if let WitNode::EnumValue(value) = self.node() {
             Some(*value)
         } else {
@@ -256,7 +256,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn flags(self) -> Option<&'a [bool]> {
+    pub fn flags(&self) -> Option<&'a [bool]> {
         if let WitNode::FlagsValue(value) = self.node() {
             Some(value)
         } else {
@@ -264,7 +264,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn tuple_element(self, element_idx: usize) -> Option<WitNodePointer<'a>> {
+    pub fn tuple_element(&self, element_idx: usize) -> Option<WitNodePointer<'a>> {
         if let WitNode::TupleValue(elements) = self.node() {
             elements
                 .get(element_idx)
@@ -274,7 +274,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    fn list_elements<R>(self, f: impl Fn(WitNodePointer<'a>) -> R) -> Option<Vec<R>> {
+    fn list_elements<R>(&self, f: impl Fn(WitNodePointer<'a>) -> R) -> Option<Vec<R>> {
         if let WitNode::ListValue(elements) = self.node() {
             Some(
                 elements
@@ -287,7 +287,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn option(self) -> Option<Option<WitNodePointer<'a>>> {
+    pub fn option(&self) -> Option<Option<WitNodePointer<'a>>> {
         if let WitNode::OptionValue(value) = self.node() {
             Some(value.map(|idx| WitNodePointer::new(self.value, idx as usize)))
         } else {
@@ -295,7 +295,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    pub fn result(self) -> Option<Result<Option<WitNodePointer<'a>>, Option<WitNodePointer<'a>>>> {
+    pub fn result(&self) -> Option<Result<Option<WitNodePointer<'a>>, Option<WitNodePointer<'a>>>> {
         if let WitNode::ResultValue(value) = self.node() {
             Some(match value {
                 Ok(idx) => Ok(idx.map(|idx| WitNodePointer::new(self.value, idx as usize))),
@@ -330,6 +330,11 @@ mod tests {
             .flags(vec![true, false, true])
             .finish();
         assert_eq!(value.field(0).unwrap().u8(), Some(1));
+        assert_eq!(value.field(1).unwrap().enum_value(), Some(2));
+        assert_eq!(
+            value.field(2).unwrap().flags().unwrap(),
+            &[true, false, true]
+        );
     }
 
     #[test]
@@ -344,11 +349,11 @@ mod tests {
             .string("hello")
             .finish()
             .finish();
-        assert_eq!(value.field(0).unwrap().field(0).unwrap().s32(), Some(10));
-        assert_eq!(
-            value.field(0).unwrap().field(1).unwrap().string(),
-            Some("hello")
-        );
+
+        let inner = value.field(0).unwrap();
+
+        assert_eq!(inner.field(0).unwrap().s32(), Some(10));
+        assert_eq!(inner.field(1).unwrap().string(), Some("hello"));
     }
 
     #[test]
