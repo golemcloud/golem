@@ -489,23 +489,20 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
 
     let mut interfaces = Vec::new();
     for (name, item) in &world.exports {
-        match item {
-            WorldItem::Interface(id) => {
-                let interface = resolve
-                    .interfaces
-                    .get(*id)
-                    .ok_or(anyhow!("exported interface not found"))?;
-                let name = interface.name.clone().unwrap_or(String::from(name.clone()));
-                let functions = collect_stub_functions(interface.functions.values())?;
-                let imports = collect_stub_imports(interface.types.iter(), resolve)?;
-                interfaces.push(InterfaceStub {
-                    name,
-                    functions,
-                    imports,
-                    global: false,
-                });
-            }
-            _ => {}
+        if let WorldItem::Interface(id) = item {
+            let interface = resolve
+                .interfaces
+                .get(*id)
+                .ok_or(anyhow!("exported interface not found"))?;
+            let name = interface.name.clone().unwrap_or(String::from(name.clone()));
+            let functions = collect_stub_functions(interface.functions.values())?;
+            let imports = collect_stub_imports(interface.types.iter(), resolve)?;
+            interfaces.push(InterfaceStub {
+                name,
+                functions,
+                imports,
+                global: false,
+            });
         }
     }
 
@@ -1397,7 +1394,7 @@ fn extract_from_record_value(
         });
     }
 
-    let record_type = type_to_rust_ident(&record_type, resolve)?;
+    let record_type = type_to_rust_ident(record_type, resolve)?;
 
     Ok(quote! {
         {
@@ -1415,7 +1412,7 @@ fn extract_from_flags_value(
     resolve: &Resolve,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let flags_type = type_to_rust_ident(&flags_type, resolve)?;
+    let flags_type = type_to_rust_ident(flags_type, resolve)?;
     let mut flag_exprs = Vec::new();
     for (flag_idx, flag) in flags.flags.iter().enumerate() {
         let flag_name = Ident::new(&flag.name.to_shouty_snake_case(), Span::call_site());
@@ -1465,7 +1462,7 @@ fn extract_from_variant_value(
     resolve: &Resolve,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let variant_type = type_to_rust_ident(&variant_type, resolve)?;
+    let variant_type = type_to_rust_ident(variant_type, resolve)?;
 
     let mut case_extractors = Vec::new();
     for (n, case) in variant.cases.iter().enumerate() {
@@ -1511,7 +1508,7 @@ fn extract_from_enum_value(
     resolve: &Resolve,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let enum_type = type_to_rust_ident(&enum_type, resolve)?;
+    let enum_type = type_to_rust_ident(enum_type, resolve)?;
 
     let mut case_extractors = Vec::new();
     for (n, case) in enum_def.cases.iter().enumerate() {
