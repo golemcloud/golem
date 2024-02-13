@@ -182,13 +182,10 @@ fn main() {
     .unwrap();
 }
 
-#[derive(Serialize)]
-#[derive(Default)]
+#[derive(Serialize, Default)]
 struct MetadataRoot {
     component: Option<ComponentMetadata>,
 }
-
-
 
 #[derive(Serialize)]
 struct ComponentMetadata {
@@ -250,10 +247,7 @@ fn generate_cargo_toml(
         wit_dependencies.insert(
             format!("{}:{}", dep.name.namespace, dep.name.name),
             WitDependency {
-                path: format!(
-                    "wit/{}",
-                    dirs.iter().next().unwrap().to_str().unwrap()
-                ),
+                path: format!("wit/{}", dirs.iter().next().unwrap().to_str().unwrap()),
             },
         );
     }
@@ -767,6 +761,7 @@ fn generate_function_stub_source(
     let function_name = Ident::new(&to_rust_ident(&function.name), Span::call_site());
     let mut params = Vec::new();
     let mut input_values = Vec::new();
+    let mut output_values = Vec::new();
 
     for param in &function.params {
         let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
@@ -812,6 +807,21 @@ fn generate_function_stub_source(
         }
     };
 
+    match &function.results {
+        FunctionResultStub::Single(typ) => {
+            output_values.push(extract_from_wit_value(typ, resolve, quote! { result })?);
+        }
+        FunctionResultStub::Multi(params) => {
+            for (n, param) in params.iter().enumerate() {
+                output_values.push(extract_from_wit_value(
+                    &param.typ,
+                    resolve,
+                    quote! { result.tuple_element(#n).expect("result must be a tuple") },
+                )?);
+            }
+        }
+    }
+
     let remote_function_name = match interface_name {
         Some(remote_interface) => format!(
             "{}:{}/{}/{}",
@@ -828,7 +838,7 @@ fn generate_function_stub_source(
                     #(#input_values),*
                 ],
             ).expect(&format!("Failed to invoke remote {}", #remote_function_name));
-            todo!() // TODO
+            (#(#output_values),*)
         }
     })
 }
@@ -1266,4 +1276,82 @@ fn wit_list_value_builder(
             #inner_builder_expr
         })
     })
+}
+
+fn extract_from_wit_value(
+    typ: &Type,
+    resolve: &Resolve,
+    base_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    match typ {
+        Type::Bool => Ok(quote! {
+            #base_expr.bool().expect("result must be a bool")
+        }),
+        Type::U8 => Ok(quote! {
+            #base_expr.u8().expect("result must be a u8")
+        }),
+        Type::U16 => Ok(quote! {
+            #base_expr.u16().expect("result must be a u16")
+        }),
+        Type::U32 => Ok(quote! {
+            #base_expr.u32().expect("result must be a u32")
+        }),
+        Type::U64 => Ok(quote! {
+            #base_expr.u64().expect("result must be a u64")
+        }),
+        Type::S8 => Ok(quote! {
+            #base_expr.s8().expect("result must be a i8")
+        }),
+        Type::S16 => Ok(quote! {
+            #base_expr.s16().expect("result must be a i16")
+        }),
+        Type::S32 => Ok(quote! {
+            #base_expr.s32().expect("result must be a i32")
+        }),
+        Type::S64 => Ok(quote! {
+            #base_expr.s64().expect("result must be a i64")
+        }),
+        Type::Float32 => Ok(quote! {
+            #base_expr.f32().expect("result must be a f32")
+        }),
+        Type::Float64 => Ok(quote! {
+            #base_expr.f64().expect("result must be a f64")
+        }),
+        Type::Char => Ok(quote! {
+            #base_expr.char().expect("result must be a char")
+        }),
+        Type::String => Ok(quote! {
+            #base_expr.string().expect("result must be a string").to_string()
+        }),
+        Type::Id(type_id) => {
+            let typedef = resolve
+                .types
+                .get(*type_id)
+                .ok_or(anyhow!("type not found"))?;
+            match &typedef.kind {
+                TypeDefKind::Record(record) => Ok(quote!(todo!("record support"))),
+                TypeDefKind::Resource => Ok(quote!(todo!("resource support"))),
+                TypeDefKind::Handle(_) => Ok(quote!(todo!("resource support"))),
+                TypeDefKind::Flags(flags) => Ok(quote!(todo!("flags support"))),
+                TypeDefKind::Tuple(tuple) => Ok(quote!(todo!("tuple support"))),
+                TypeDefKind::Variant(variant) => Ok(quote!(todo!("variant support"))),
+                TypeDefKind::Enum(enum_def) => Ok(quote!(todo!("enum support"))),
+                TypeDefKind::Option(inner) => Ok(quote!(todo!("option support"))),
+                TypeDefKind::Result(result) => Ok(quote!(todo!("result support"))),
+                TypeDefKind::List(elem) => Ok(quote!(todo!("list support"))),
+                TypeDefKind::Future(_) => {
+                    Ok(quote!(todo!("future"))) // TODO
+                }
+                TypeDefKind::Stream(_) => {
+                    Ok(quote!(todo!("stream"))) // TODO
+                }
+                TypeDefKind::Type(_) => {
+                    Ok(quote!(todo!("type"))) // TODO
+                }
+                TypeDefKind::Unknown => {
+                    Ok(quote!(todo!("unknown"))) // TODO
+                }
+            }
+        }
+    }
 }
