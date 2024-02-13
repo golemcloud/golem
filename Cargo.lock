@@ -2097,6 +2097,7 @@ dependencies = [
  "http 1.0.0",
  "hyper 1.1.0",
  "nom",
+ "openapiv3",
  "poem",
  "poem-openapi",
  "prometheus",
@@ -3160,6 +3161,17 @@ name = "opaque-debug"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
+
+[[package]]
+name = "openapiv3"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc02deea53ffe807708244e5914f6b099ad7015a207ee24317c22112e17d9c5c"
+dependencies = [
+ "indexmap 2.2.2",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "openssl-probe"

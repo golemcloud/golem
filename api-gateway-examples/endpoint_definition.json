@@ -1,16 +1,25 @@
 {
-  "id": "shopping-cart",
+  "id": "shopping-cart-v1",
   "version": "0.0.1",
   "routes": [
     {
       "method": "Get",
-      "path": "/get-cart-contents",
+      "path": "/{user-id}/get-cart-contents",
       "binding": {
         "type": "wit-worker",
-        "template": "4d1b159d-51d3-4440-aa29-8edb235f62a3",
-        "workerId": "myworker",
+        "template": "08930752-d868-412f-a608-b834bda159be",
+        "workerId": "worker-${request.path.user-id}",
         "functionName": "golem:it/api/get-cart-contents",
-        "functionParams": []
+        "functionParams": [],
+        "response" : {
+          "status": "200",
+          "body": {
+            "name" : "${worker.response[0][0].name}",
+            "price" : "${worker.response[0][0].price}",
+            "quantity" : "${worker.response[0][0].quantity}"
+          },
+          "headers": {}
+        }
       }
     }
   ]

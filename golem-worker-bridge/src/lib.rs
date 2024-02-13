@@ -5,6 +5,7 @@ pub mod app_config;
 pub mod evaluator;
 pub mod expr;
 mod http_request;
+pub mod oas_worker_bridge;
 pub mod parser;
 pub mod register;
 pub mod resolved_variables;

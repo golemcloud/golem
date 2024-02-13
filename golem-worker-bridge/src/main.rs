@@ -13,7 +13,6 @@ use tracing::error;
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let config = WorkerBridgeConfig::default();
-
     app(&config).await
 }
 
