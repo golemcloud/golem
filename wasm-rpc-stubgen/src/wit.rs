@@ -1,0 +1,200 @@
+use crate::stub::{FunctionResultStub, StubDefinition};
+use anyhow::{anyhow, bail};
+use indexmap::IndexSet;
+use std::fmt::Write;
+use std::fs;
+use std::path::Path;
+use wit_parser::{Resolve, Type, TypeDefKind};
+
+pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
+    let world = def.resolve.worlds.get(def.world_id).unwrap();
+
+    let mut out = String::new();
+
+    writeln!(out, "package {}-stub;", def.root_package_name)?;
+    writeln!(out)?;
+    writeln!(out, "interface stub-{} {{", world.name)?;
+
+    let all_imports = def
+        .interfaces
+        .iter()
+        .flat_map(|i| i.imports.iter())
+        .collect::<IndexSet<_>>();
+
+    writeln!(out, "  use golem:rpc/types@0.1.0.{{uri}};")?;
+    for import in all_imports {
+        writeln!(out, "  use {}.{{{}}};", import.path, import.name)?;
+    }
+    writeln!(out)?;
+
+    for interface in &def.interfaces {
+        writeln!(out, "  resource {} {{", &interface.name)?;
+        writeln!(out, "    constructor(location: uri);")?;
+        for function in &interface.functions {
+            write!(out, "    {}: func(", function.name)?;
+            for (idx, param) in function.params.iter().enumerate() {
+                write!(
+                    out,
+                    "{}: {}",
+                    param.name,
+                    param.typ.wit_type_string(&def.resolve)?
+                )?;
+                if idx < function.params.len() - 1 {
+                    write!(out, ", ")?;
+                }
+            }
+            write!(out, ")")?;
+            if !function.results.is_empty() {
+                write!(out, " -> ")?;
+                match &function.results {
+                    FunctionResultStub::Single(typ) => {
+                        write!(out, "{}", typ.wit_type_string(&def.resolve)?)?;
+                    }
+                    FunctionResultStub::Multi(params) => {
+                        write!(out, "(")?;
+                        for (idx, param) in params.iter().enumerate() {
+                            write!(
+                                out,
+                                "{}: {}",
+                                param.name,
+                                param.typ.wit_type_string(&def.resolve)?
+                            )?;
+                            if idx < params.len() - 1 {
+                                write!(out, ", ")?;
+                            }
+                        }
+                        write!(out, ")")?;
+                    }
+                }
+            }
+            writeln!(out, ";")?;
+        }
+        writeln!(out, "  }}")?;
+        writeln!(out)?;
+    }
+
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    writeln!(out, "world {} {{", def.target_world_name()?)?;
+    writeln!(out, "  export stub-{};", world.name)?;
+    writeln!(out, "}}")?;
+
+    fs::create_dir_all(def.target_wit_root())?;
+    fs::write(def.target_wit_path(), out)?;
+    Ok(())
+}
+
+pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
+    let mut all = def.unresolved_deps.clone();
+    all.push(def.unresolved_root.clone());
+
+    let dest_wit_root = def.target_wit_root();
+    fs::create_dir_all(&dest_wit_root)?;
+
+    for unresolved in all {
+        if unresolved.name == def.root_package_name {
+            println!("copying root {:?}", unresolved.name); // TODO: log
+            let dep_dir = dest_wit_root
+                .clone()
+                .join(Path::new("deps"))
+                .join(Path::new(&format!(
+                    "{}_{}",
+                    def.root_package_name.namespace, def.root_package_name.name
+                )));
+            fs::create_dir_all(&dep_dir)?;
+            for source in unresolved.source_files() {
+                let dest = dep_dir.join(source.file_name().unwrap());
+                println!("copying {source:?} to {dest:?}"); // TODO: log
+                fs::create_dir_all(dest.parent().unwrap())?;
+                fs::copy(source, &dest)?;
+            }
+        } else {
+            println!("copying {:?}", unresolved.name); // TODO: log
+            for source in unresolved.source_files() {
+                let relative = source.strip_prefix(&def.source_wit_root)?;
+                let dest = dest_wit_root.clone().join(relative);
+                println!("copying {source:?} to {dest:?}"); // TODO: log
+                fs::create_dir_all(dest.parent().unwrap())?;
+                fs::copy(source, &dest)?;
+            }
+        }
+    }
+    let wasm_rpc_wit = include_str!("../../wasm-rpc/wit/wasm-rpc.wit");
+    let wasm_rpc_root = dest_wit_root.join(Path::new("deps/wasm-rpc"));
+    fs::create_dir_all(&wasm_rpc_root).unwrap();
+    fs::write(wasm_rpc_root.join(Path::new("wasm-rpc.wit")), wasm_rpc_wit)?;
+    Ok(())
+}
+
+trait TypeExtensions {
+    fn wit_type_string(&self, resolve: &Resolve) -> anyhow::Result<String>;
+}
+
+impl TypeExtensions for Type {
+    fn wit_type_string(&self, resolve: &Resolve) -> anyhow::Result<String> {
+        match self {
+            Type::Bool => Ok("bool".to_string()),
+            Type::U8 => Ok("u8".to_string()),
+            Type::U16 => Ok("u16".to_string()),
+            Type::U32 => Ok("u32".to_string()),
+            Type::U64 => Ok("u64".to_string()),
+            Type::S8 => Ok("s8".to_string()),
+            Type::S16 => Ok("s16".to_string()),
+            Type::S32 => Ok("s32".to_string()),
+            Type::S64 => Ok("s64".to_string()),
+            Type::Float32 => Ok("f32".to_string()),
+            Type::Float64 => Ok("f64".to_string()),
+            Type::Char => Ok("char".to_string()),
+            Type::String => Ok("string".to_string()),
+            Type::Id(type_id) => {
+                let typ = resolve
+                    .types
+                    .get(*type_id)
+                    .ok_or(anyhow!("type not found"))?;
+
+                match &typ.kind {
+                    TypeDefKind::Option(inner) => {
+                        Ok(format!("option<{}>", inner.wit_type_string(resolve)?))
+                    }
+                    TypeDefKind::List(inner) => {
+                        Ok(format!("list<{}>", inner.wit_type_string(resolve)?))
+                    }
+                    TypeDefKind::Tuple(tuple) => {
+                        let types = tuple
+                            .types
+                            .iter()
+                            .map(|t| t.wit_type_string(resolve))
+                            .collect::<anyhow::Result<Vec<_>>>()?;
+                        Ok(format!("tuple<{}>", types.join(", ")))
+                    }
+                    TypeDefKind::Result(result) => match (&result.ok, &result.err) {
+                        (Some(ok), Some(err)) => {
+                            let ok = ok.wit_type_string(resolve)?;
+                            let err = err.wit_type_string(resolve)?;
+                            Ok(format!("result<{}, {}>", ok, err))
+                        }
+                        (Some(ok), None) => {
+                            let ok = ok.wit_type_string(resolve)?;
+                            Ok(format!("result<{}>", ok))
+                        }
+                        (None, Some(err)) => {
+                            let err = err.wit_type_string(resolve)?;
+                            Ok(format!("result<_, {}>", err))
+                        }
+                        (None, None) => {
+                            bail!("result type has no ok or err types")
+                        }
+                    },
+                    _ => {
+                        let name = typ
+                            .name
+                            .clone()
+                            .ok_or(anyhow!("wit_type_string: type has no name"))?;
+                        Ok(name)
+                    }
+                }
+            }
+        }
+    }
+}
