@@ -61,3 +61,8 @@ delete
 ```shell
 helm delete -n golem golem-default
 ```
+
+shell to the running pod/container
+```shell
+kubectl exec --stdin --tty -n golem  <pod> -- /bin/bash
+```
