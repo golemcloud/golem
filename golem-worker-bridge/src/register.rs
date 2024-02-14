@@ -29,9 +29,9 @@ pub trait RegisterApiDefinition {
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
-struct ApiDefinitionKey {
-    id: ApiDefinitionId,
-    version: Version,
+pub struct ApiDefinitionKey {
+    pub id: ApiDefinitionId,
+    pub version: Version,
 }
 
 impl Display for ApiDefinitionKey {
@@ -88,11 +88,11 @@ impl RegisterApiDefinition for InMemoryRegistry {
         let mut registry = self.registry.lock().unwrap();
         let key: ApiDefinitionKey = ApiDefinitionKey::from(definition);
 
-        if registry.contains_key(&key) {
-            Err(ApiRegistrationError::AlreadyExists(key))
-        } else {
-            registry.insert(key, definition.clone());
+        if let std::collections::hash_map::Entry::Vacant(e) = registry.entry(key.clone()) {
+            e.insert(definition.clone());
             Ok(())
+        } else {
+            Err(ApiRegistrationError::AlreadyExists(key.clone()))
         }
     }
 
@@ -144,7 +144,7 @@ impl RegisterApiDefinition for RedisApiRegistry {
         let value: Option<Bytes> = self
             .pool
             .with("persistence", "get_definition")
-            .get(key.clone())
+            .get(redis_key.clone())
             .await
             .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 

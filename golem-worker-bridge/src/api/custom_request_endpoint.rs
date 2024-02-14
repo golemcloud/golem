@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use crate::api_definition::ApiDefinitionId;
+use crate::api_definition::{ApiDefinitionId, Version};
 use async_trait::async_trait;
+use http::HeaderMap;
 use hyper::header::HOST;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
@@ -9,7 +10,8 @@ use tracing::{error, info};
 
 use crate::api_request_route_resolver::RouteResolver;
 use crate::http_request::{ApiInputPath, InputHttpRequest};
-use crate::register::RegisterApiDefinition;
+use crate::oas_worker_bridge::{GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION};
+use crate::register::{ApiDefinitionKey, RegisterApiDefinition};
 use crate::worker_bridge_reponse::GetWorkerBridgeResponse;
 use crate::worker_request::GolemWorkerRequest;
 use crate::worker_request_executor::{WorkerRequestExecutor, WorkerResponse};
@@ -72,46 +74,55 @@ impl CustomRequestEndpoint {
             req_body: json_request_body,
         };
 
-        let api_definition_id_res = headers
-            .iter()
-            .find(|(key, _)| key.as_str().to_lowercase() == "x-api-definition-id")
-            .map(|(_, value)| value)
-            .ok_or("Missing X-API-Definition-Id header");
-
-        let api_definition_id_header = match api_definition_id_res {
-            Ok(api_definition_id) => api_definition_id,
+        let api_definition_id = match get_header_value(&headers, GOLEM_API_DEFINITION_ID_EXTENSION)
+        {
+            Ok(api_definition_id) => ApiDefinitionId(api_definition_id.to_string()),
             Err(err) => {
+                error!(
+                    "{}",
+                    format!(
+                        "Invalid {} header: {}",
+                        GOLEM_API_DEFINITION_ID_EXTENSION, err
+                    )
+                );
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .body(Body::from_string(err.to_string()));
             }
         };
 
-        let api_definition_id_string = api_definition_id_header
-            .to_str()
-            .map_err(|e| format!("Invalid X-API-Definition-Id header: {}", e));
-
-        let api_definition_id = match api_definition_id_string {
-            Ok(api_definition_id) => ApiDefinitionId(api_definition_id.to_string()),
+        let version = match get_header_value(&headers, GOLEM_API_DEFINITION_VERSION) {
+            Ok(version) => Version(version),
             Err(err) => {
-                error!("Invalid X-API-Definition-Id header: {}", err);
+                error!(
+                    "{}",
+                    format!("Invalid {} header: {}", GOLEM_API_DEFINITION_VERSION, err)
+                );
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .body(Body::from_string(err.to_string()));
             }
+        };
+
+        let api_key = ApiDefinitionKey {
+            id: api_definition_id.clone(),
+            version,
         };
 
         // Get ApiSpec corresponding to the API Definition Id
-        let api_definition = match self.definition_service.get(&api_definition_id).await {
+        let api_definition = match self.definition_service.get(&api_key).await {
             Ok(Some(api_definition)) => api_definition,
             Ok(None) => {
-                error!("API request definition id {} not found", &api_definition_id);
+                error!(
+                    "API request definition id {} with version {} not found",
+                    &api_key.id, &api_key.version
+                );
 
                 return Response::builder()
                     .status(StatusCode::NOT_FOUND)
                     .body(Body::from_string(format!(
-                        "API request definition id {} not found",
-                        &api_definition_id
+                        "API request definition id {} with version {} not found",
+                        &api_key.id, &api_key.version
                     )));
             }
             Err(err) => {
@@ -196,6 +207,19 @@ impl CustomRequestEndpoint {
             }
         }
     }
+}
+
+fn get_header_value(headers: &HeaderMap, header_name: &str) -> Result<String, String> {
+    let header_value = headers
+        .iter()
+        .find(|(key, _)| key.as_str().to_lowercase() == header_name)
+        .map(|(_, value)| value)
+        .ok_or(format!("Missing {} header", header_name))?;
+
+    header_value
+        .to_str()
+        .map(|x| x.to_string())
+        .map_err(|e| format!("Invalid value for the header {} error: {}", header_name, e))
 }
 
 #[async_trait]
