@@ -119,7 +119,8 @@ curl --location --request POST 'http://localhost:8080/tyk/apis' \
             "Default": {
                 "name": "Default",
                 "global_headers": {
-                    "x-golem-api-definition-id":"shopping-cart-v1"
+                    "x-golem-api-definition-id":"shopping-cart-v1",
+                    "x-golem-api-definition-version": "0.0.1"
                 }
             }
         }
@@ -143,7 +144,7 @@ curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 
 ### Important aspects
 * Anything with listen_path /v10 will be forwarded to the worker bridge.
-* Tyk injects x-golem-definition-id header to the request, which is the id of the endpoint definition that we registered with the worker bridge
+* Tyk injects x-golem-api-definition-id and x-golem-api-definition-version headers to the request, which is the id and version of the endpoint definition that we registered with the worker bridge
 * With docker set up, we have 2 different docker networks running. Therefore, the IP of the worker-bridge is the IP address of the machine (and not localhost) http://192.168.18.101:9006/.
 * The target URL is url of the worker bridge that is ready to serve your custom requests. 
 * Worker bridge is already registered with the API definition ID shopping-cart. If the worker bridge is not registered with the correct API definition, it will return something like the following
@@ -202,51 +203,29 @@ curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 
 ```bash
 
-# TODO; Note, with using OAS API Definition in Tyk - harder to add header to the request without a management console, therefore explicitly passing it here for demo purpose 
+# TODO; Note, with using OAS API Definition in Tyk - harder to add headers to the request without a management console, therefore explicitly passing it here for demo purpose 
 # In real world, the header is injected by Tyk
-curl -X GET http://localhost:8080/adam/get-cart-contents -H "x-golem-api-definition-id: shopping-cart-v2"
- 
-[[{"name":"hmm","price":10.0,"product-id":"hmm","quantity":2}]]%```
+curl -X GET http://localhost:8080/adam/get-cart-contents -H "x-golem-api-definition-id: shopping-cart-v2" -H "x-golem-api-definition-version: 0.0.1"
 
 ```
 
-
-## Generation of Open API spec
-
-Currently the requests to the gateway is forwarded as it is to worker bridge. 
-This can work in various places. However, in some cases, it is important to generate Open API spec for the endpoints that are registered with the worker bridge,
-and upload it to the gateway so that these endpoints can be further configured for authentication , authorisation, rate limits,
-caching etc using Gateway console individually. This is not a mandatory step, but can be super useful in some cases.
-
-
-## API Definition in external API Gateway vs API definition in worker-bridge
-
-Consider worker-bridge, to a significant extent, as a backend service for free, that can interact with Golem's worker instances and 
-the functions. It is therefore easier to integrate worker-bridge to any popular API gateways
-similar to integrating any backend service to any API Gateways (Tyk, AWS Gateway etc). 
-
-As we know, usually backend service _may_ have their own API definition (most often, it is an OpenAPI Spec). 
-Similarly, we _need_ an API definition (that has its own expressive language supports) 
-for worker-bridge to work. This is the only way a user/developer can let worker-bridge know which worker instance and function to call for a given request.
-
-## Why is separate definition document required in worker-bridge as well as Tyk ?
-As mentioned above, if we consider worker-bridge as a backend service, this question can be answered easily.
+## Why do we need to upload definition to both worker-bridge and API Gateway?
 Here is an excerpt from Tyk's documentation on a similar aspect:
 
 > Crucially, the user’s API service remains unaware of the Tyk Gateway’s processing layer, responding to incoming requests as in direct client-to-service communication. It implements the API endpoints, resources and methods providing the service’s functionality. It can also have its own OpenAPI document to describe and document itself (which is essentially also another name for API definition)
 
 A backend service can have its own API definition or documentation. And at the same time, the reverse proxy configurations
 may have its own documentation. Therefore it is not by surprise, we also have a 2 layer documentation for services
-backed by API Gateway. We are also working on emitting OpenAPI spec from worker-bridge API Definition, which can be used to configure API Gateways.
+backed by API Gateway.
 
 
 ## How does worker bridge know which API definition to pick for a given endpoint?
 
-*x-golem-api-definition-id*
+*x-golem-api-definition-id* and *x-golem-api-definition-version* are the headers that are injected by Tyk to the request.
 
-By injecting x-golem-api-definition-id to every request, worker bridge can lookup the corresponding API definition and serve the request.
+By injecting these headers to every request, worker bridge can lookup the corresponding API definition and serve the request.
 It is the responsibility of whoever managing the API Gateway (Tyk in this case) to make sure that every request is configured to inject
-this header.
+these headers.
 
 ## What next?
 
