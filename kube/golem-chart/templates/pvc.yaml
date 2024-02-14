@@ -1,11 +1,45 @@
+{{- if eq .Values.templateStore.type "pvc" }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: golem-template-store-{{.Values.env}}
 spec:
-  storageClassName: hostpath
+  storageClassName: {{ .Values.templateStore.pvc.storageClassName }}
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 5Gi
+      storage: {{ .Values.templateStore.pvc.storageSize }}
+---
+{{- end }}
+
+
+{{- if eq .Values.templateCompiledStore.type "pvc" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: golem-template-compiled-store-{{.Values.env}}
+spec:
+  storageClassName: {{ .Values.templateCompiledStore.pvc.storageClassName }}
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.templateCompiledStore.pvc.storageSize }}
+---
+{{- end }}
+
+
+{{- if eq .Values.workerBlobStore.type "pvc" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: golem-worker-blob-store-{{.Values.env}}
+spec:
+  storageClassName: {{ .Values.workerBlobStore.pvc.storageClassName }}
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.workerBlobStore.pvc.storageSize }}
+{{- end }}
