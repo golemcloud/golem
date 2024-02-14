@@ -71,33 +71,30 @@ postgres:
 
 
 templateStore:
+  type: pvc
   pvc:
-    enable: true
     storageClassName: hostpath
     storageSize: 5Gi
   s3:
-    enable: false
     objectPrefix: ""
     bucket: ""
     region: "us-east-1"
 
 templateCompiledStore:
+  type: pvc
   pvc:
-    enable: true
     storageClassName: hostpath
     storageSize: 5Gi
   s3:
-    enable: false
     objectPrefix: ""
     bucket: ""
     region: "us-east-1"
 
 workerBlobStore:
+  type: pvc
   pvc:
-    enable: true
     storageClassName: hostpath
     storageSize: 5Gi
   s3:
-    enable: false
     bucketPrefix: ""
     region: "us-east-1"

@@ -1,4 +1,4 @@
-{{- if .Values.templateStore.pvc.enable }}
+{{- if eq .Values.templateStore.type "pvc" }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -14,7 +14,7 @@ spec:
 {{- end }}
 
 
-{{- if .Values.templateCompiledStore.pvc.enable }}
+{{- if eq .Values.templateCompiledStore.type "pvc" }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -30,7 +30,7 @@ spec:
 {{- end }}
 
 
-{{- if .Values.workerBlobStore.pvc.enable }}
+{{- if eq .Values.workerBlobStore.type "pvc" }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

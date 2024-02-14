@@ -159,13 +159,13 @@ spec:
               value: "{{ .Values.workerExecutor.ports.http }}"
             - name: GOLEM__PORT
               value: "{{ .Values.workerExecutor.ports.grpc }}"
-{{- if .Values.templateCompiledStore.pvc.enable }}
+{{- if eq .Values.templateCompiledStore.type "pvc" }}
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
               value: "Local"
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT
               value: "/golem/template/compiled"
 {{- end }}
-{{- if .Values.templateCompiledStore.s3.enable }}
+{{- if eq .Values.templateCompiledStore.type "s3" }}
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
               value: "S3"
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION
@@ -175,7 +175,7 @@ spec:
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__BUCKET
               value: {{ .Values.templateCompiledStore.s3.bucket }}
 {{- end }}
-{{- if .Values.workerBlobStore.pvc.enable }}
+{{- if eq .Values.workerBlobStore.type "pvc" }}
             - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__TYPE
               value: "Local"
             - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__ROOT
@@ -183,7 +183,7 @@ spec:
             - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION
               value: ""
 {{- end }}
-{{- if .Values.workerBlobStore.s3.enable }}
+{{- if eq .Values.workerBlobStore.type "s3" }}
             - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__TYPE
               value: "S3"
             - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION
@@ -204,26 +204,26 @@ spec:
             failureThreshold: 5
             initialDelaySeconds: 45
             timeoutSeconds: 2
-{{- if or .Values.templateCompiledStore.pvc.enable .Values.workerBlobStore.pvc.enable }}
+{{- if or (eq .Values.templateCompiledStore.type "pvc") (eq .Values.workerBlobStore.type "pvc") }}
           volumeMounts:
 {{- end }}
-{{- if .Values.templateCompiledStore.pvc.enable }}
+{{- if eq .Values.templateCompiledStore.type "pvc" }}
             - name: golem-template-compiled-store-{{.Values.env}}
               mountPath: /golem/template/compiled
 {{- end }}
-{{- if .Values.workerBlobStore.pvc.enable }}
+{{- if eq .Values.workerBlobStore.type "pvc" }}
             - name: golem-worker-blob-store-{{.Values.env}}
               mountPath: /golem/worker/blob
 {{- end }}
-{{- if or .Values.templateCompiledStore.pvc.enable .Values.workerBlobStore.pvc.enable }}
+{{- if or (eq .Values.templateCompiledStore.type "pvc") (eq .Values.workerBlobStore.type "pvc") }}
       volumes:
 {{- end }}
-{{- if .Values.templateCompiledStore.pvc.enable }}
+{{- if eq .Values.templateCompiledStore.type "pvc" }}
         - name: golem-template-compiled-store-{{.Values.env}}
           persistentVolumeClaim:
             claimName: golem-template-compiled-store-{{.Values.env}}
 {{- end }}
-{{- if .Values.workerBlobStore.pvc.enable }}
+{{- if eq .Values.workerBlobStore.type "pvc" }}
         - name: golem-worker-blob-store-{{.Values.env}}
           persistentVolumeClaim:
             claimName: golem-worker-blob-store-{{.Values.env}}
@@ -390,7 +390,7 @@ spec:
               value: "{{ .Values.golemService.ports.http }}"
             - name: GOLEM__GRPC_PORT
               value: "{{ .Values.golemService.ports.grpc }}"
-{{- if .Values.templateStore.pvc.enable }}
+{{- if eq .Values.templateStore.type "pvc" }}
             - name: GOLEM__TEMPLATES__STORE__TYPE
               value: "Local"
             - name: GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH
@@ -398,7 +398,7 @@ spec:
             - name: GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX
               value: ""
 {{- end }}
-{{- if .Values.templateStore.s3.enable }}
+{{- if eq .Values.templateStore.type "s3" }}
             - name: GOLEM__TEMPLATES__STORE__TYPE
               value: "S3"
             - name: GOLEM__TEMPLATES__STORE__REGION
@@ -427,12 +427,12 @@ spec:
 {{/*            periodSeconds: 10*/}}
 {{/*            failureThreshold: 5*/}}
 {{/*            initialDelaySeconds: 20*/}}
-{{- if .Values.templateStore.pvc.enable }}
+{{- if eq .Values.templateStore.type "pvc" }}
           volumeMounts:
             - name: golem-template-store-{{.Values.env}}
               mountPath: /golem/template
 {{- end }}
-{{- if .Values.templateStore.pvc.enable }}
+{{- if eq .Values.templateStore.type "pvc" }}
       volumes:
         - name: golem-template-store-{{.Values.env}}
           persistentVolumeClaim:
