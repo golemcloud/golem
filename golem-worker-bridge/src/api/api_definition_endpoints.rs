@@ -161,6 +161,23 @@ impl ApiDefinitionEndpoints {
 
         Err(ApiEndpointError::not_found("API definition not found"))
     }
+
+    #[oai(path = "/all", method = "get")]
+    async fn get_all(&self) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
+        let data = self
+            .definition_service
+            .get_all()
+            .await
+            .map_err(ApiEndpointError::internal)?;
+
+        let values = data
+            .into_iter()
+            .map(|d| d.try_into())
+            .collect::<Result<Vec<ApiDefinition>, _>>()
+            .map_err(ApiEndpointError::internal)?;
+
+        Ok(Json(values))
+    }
 }
 
 async fn register_api(
