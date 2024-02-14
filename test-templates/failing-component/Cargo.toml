@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 [profile.release]
 lto = true
 opt-level = 's'
-strip = true
+strip = false # we want debug symbols for testing that error response contains usable call stack
 
 [dependencies]
 wit-bindgen = { version = "0.16.0", default-features = false, features = ["realloc"] }
