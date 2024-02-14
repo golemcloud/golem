@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package wasm.rpc;
+
+message WitValue {
+  repeated WitNode nodes = 1;
+}
+
+message WitNode {
+  oneof value {
+    WitRecordNode record = 1;
+    WitVariantNode variant = 2;
+    WitEnumNode enum = 3;
+    WitFlagsNode flags = 4;
+    WitTupleNode tuple = 5;
+    WitListNode list = 6;
+    WitOptionNode option = 7;
+    WitResultNode result = 8;
+    WitPrimU8Node u8 = 9;
+    WitPrimU16Node u16 = 10;
+    WitPrimU32Node u32 = 11;
+    WitPrimU64Node u64 = 12;
+    WitPrimI8Node i8 = 13;
+    WitPrimI16Node i16 = 14;
+    WitPrimI32Node i32 = 15;
+    WitPrimI64Node i64 = 16;
+    WitPrimF32Node f32 = 17;
+    WitPrimF64Node f64 = 18;
+    WitPrimCharNode char = 19;
+    WitPrimBoolNode bool = 20;
+    WitPrimStringNode string = 21;
+  }
+}
+
+message WitRecordNode {
+  repeated int32 fields = 1;
+}
+
+message WitVariantNode {
+  uint32 case_index = 1;
+  optional int32 case_value = 2;
+}
+
+message WitEnumNode {
+  uint32 value = 1;
+}
+
+message WitFlagsNode {
+  repeated bool flags = 1;
+}
+
+message WitTupleNode {
+  repeated int32 values = 1;
+}
+
+message WitListNode {
+  repeated int32 values = 1;
+}
+
+message WitOptionNode {
+  optional int32 value = 1;
+}
+
+message WitResultNode {
+  int32 discriminant = 1;
+  optional int32 value = 2;
+}
+
+message WitPrimU8Node {
+  uint32 value = 1;
+}
+
+message WitPrimU16Node {
+  uint32 value = 1;
+}
+
+message WitPrimU32Node {
+  uint32 value = 1;
+}
+
+message WitPrimU64Node {
+  uint64 value = 1;
+}
+
+message WitPrimI8Node {
+  sint32 value = 1;
+}
+
+message WitPrimI16Node {
+  sint32 value = 1;
+}
+
+message WitPrimI32Node {
+  sint32 value = 1;
+}
+
+message WitPrimI64Node {
+  sint64 value = 1;
+}
+
+message WitPrimF32Node {
+  float value = 1;
+}
+
+message WitPrimF64Node {
+  double value = 1;
+}
+
+message WitPrimCharNode {
+  uint32 value = 1;
+}
+
+message WitPrimBoolNode {
+  bool value = 1;
+}
+
+message WitPrimStringNode {
+  string value = 1;
+}
+
