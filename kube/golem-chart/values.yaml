@@ -98,3 +98,9 @@ workerBlobStore:
   s3:
     bucketPrefix: ""
     region: "us-east-1"
+
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: nginx
+  ingressClassName: nginx

@@ -44,6 +44,27 @@ service/golem-postgres-postgresql
 service/golem-redis-master
 ```
 
+## ngnix ingress
+
+install
+```shell
+helm upgrade --install ingress-nginx ingress-nginx --repo https://kubernetes.github.io/ingress-nginx --namespace ingress-nginx --create-namespace
+```
+
+you can watch the status by running
+
+```shell
+kubectl get service --namespace ingress-nginx ingress-nginx-controller --output wide --watch
+```
+
+NOTE: by default ingress is exposed under localhost:80, if you are want to test golem-services in kubernetes locally (docker with kubernetes), 
+and try to run commands with `golem-cli`, default url may be changed by: 
+
+```shell
+export GOLEM_BASE_URL=http://localhost:80
+```
+
+
 ## golem services
 
 install
@@ -53,7 +74,6 @@ helm upgrade --install golem-default golem-chart -n golem
 
 show kube files
 ```shell
-
 helm template golem-chart
 ```
 
