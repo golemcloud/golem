@@ -42,3 +42,6 @@ tokio = { workspace = true }
 prometheus = "0.13.3"
 futures = "0.3.30"
 openapiv3 = "2.0.0"
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-prometheus = { workspace = true }
