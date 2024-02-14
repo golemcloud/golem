@@ -35,6 +35,7 @@ exclude = [
     "test-templates/read-stdin",
     "test-templates/runtime-service",
     "test-templates/shopping-cart",
+    "test-templates/shopping-cart-resource",
     "test-templates/stdio-cc",
     "test-templates/variant-service",
     "test-templates/write-stderr",
@@ -43,6 +44,7 @@ exclude = [
     "golem-client",
     "golem-cli",
     "libtest-mimic",
+    "wasm-rpc"
 ]
 
 [workspace.dependencies]

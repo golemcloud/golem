@@ -4,6 +4,9 @@ use ctor::ctor;
 use golem_wasm_ast::analysis::AnalysisContext;
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
+use golem_wasm_rpc::protobuf::{
+    val, Val, ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple,
+};
 use prometheus::Registry;
 use std::collections::HashMap;
 use std::path::Path;
@@ -14,8 +17,8 @@ use std::{env, panic};
 
 use crate::REDIS;
 use golem_api_grpc::proto::golem::worker::{
-    log_event, val, worker_execution_error, CallingConvention, LogEvent, StdErrLog, StdOutLog, Val,
-    ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple, WorkerExecutionError,
+    log_event, worker_execution_error, CallingConvention, LogEvent, StdErrLog, StdOutLog,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{

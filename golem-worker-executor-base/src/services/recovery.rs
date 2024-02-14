@@ -506,11 +506,11 @@ mod tests {
     use anyhow::Error;
     use async_trait::async_trait;
     use bytes::Bytes;
-    use golem_api_grpc::proto::golem::worker::Val;
     use golem_common::model::{
         AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerId,
         WorkerMetadata, WorkerStatus,
     };
+    use golem_wasm_rpc::protobuf::Val;
     use tokio::runtime::Handle;
     use tokio::time::{timeout, Instant};
     use wasmtime::component::Instance;

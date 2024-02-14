@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use anyhow::anyhow;
-use golem_api_grpc::proto::golem;
 use golem_common::model::{CallingConvention, VersionedWorkerId, WorkerStatus};
+use golem_wasm_rpc::wasmtime::{decode_param, encode_output};
+use golem_wasm_rpc::Value;
 use tracing::{debug, error, warn};
 use wasmtime::component::{Func, Val};
 use wasmtime::AsContextMut;
@@ -22,7 +23,6 @@ use wasmtime::AsContextMut;
 use crate::error::{is_interrupt, is_suspend, GolemError};
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::parse_function_name;
-use crate::wasm_types;
 use crate::workerctx::{FuelManagement, WorkerCtx};
 
 /// Invokes a function on a worker.
@@ -39,7 +39,7 @@ use crate::workerctx::{FuelManagement, WorkerCtx};
 /// - `was_live_before`: whether the worker was live before the invocation, or this invocation is part of a recovery
 pub async fn invoke_worker<Ctx: WorkerCtx>(
     full_function_name: String,
-    function_input: Vec<golem::worker::Val>,
+    function_input: Vec<golem_wasm_rpc::protobuf::Val>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     calling_convention: &CallingConvention,
@@ -134,12 +134,12 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
 async fn invoke_or_fail<Ctx: WorkerCtx>(
     worker_id: &VersionedWorkerId,
     full_function_name: String,
-    function_input: Vec<golem::worker::Val>,
+    function_input: Vec<golem_wasm_rpc::protobuf::Val>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     calling_convention: &CallingConvention,
     was_live_before: bool,
-) -> anyhow::Result<Option<Vec<golem::worker::Val>>> {
+) -> anyhow::Result<Option<Vec<golem_wasm_rpc::protobuf::Val>>> {
     let mut store = store.as_context_mut();
 
     let (interface_name, function_name) = parse_function_name(&full_function_name);
@@ -240,7 +240,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 async fn invoke<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function: Func,
-    function_input: &[golem::worker::Val],
+    function_input: &[golem_wasm_rpc::protobuf::Val],
     calling_convention: InternalCallingConvention,
     context: &str,
 ) -> Result<InvokeResult, anyhow::Error> {
@@ -255,17 +255,24 @@ async fn invoke<Ctx: WorkerCtx>(
             let params = function_input
                 .iter()
                 .zip(param_types.iter())
-                .map(|(param, param_type)| wasm_types::decode_param(param, param_type))
+                .map(|(param, param_type)| {
+                    let param_value: Value = param
+                        .clone()
+                        .try_into()
+                        .map_err(|err| GolemError::ValueMismatch { details: err })?;
+                    decode_param(&param_value, param_type).map_err(|err| GolemError::from(err))
+                })
                 .collect::<Result<Vec<Val>, GolemError>>()?;
 
             let (results, consumed_fuel) =
                 call_exported_function(&mut store, function, params, context).await?;
             let results = results?;
 
-            let mut output: Vec<golem::worker::Val> = Vec::new();
+            let mut output: Vec<golem_wasm_rpc::protobuf::Val> = Vec::new();
             for result in results.iter() {
-                let result = wasm_types::encode_output(result)?;
-                output.push(result);
+                let result_value = encode_output(result).map_err(|err| GolemError::from(err))?;
+                let proto_value = result_value.into();
+                output.push(proto_value);
             }
 
             if let Some(invocation_key) = store.data().get_current_invocation_key().await {
@@ -293,7 +300,7 @@ async fn invoke<Ctx: WorkerCtx>(
                 panic!("unexpected parameter count for stdio calling convention for {context}")
             }
             let stdin = match function_input.first().unwrap().val.as_ref().unwrap() {
-                golem::worker::val::Val::String(value) => value.clone(),
+                golem_wasm_rpc::protobuf::val::Val::String(value) => value.clone(),
                 _ => panic!("unexpected function input for stdio calling convention for {context}"),
             };
 
@@ -315,8 +322,8 @@ async fn invoke<Ctx: WorkerCtx>(
 
             let stdout = store.data_mut().finish_capturing_stdout().await.ok();
 
-            let output: Vec<golem::worker::Val> = vec![golem::worker::Val {
-                val: Some(golem::worker::val::Val::String(
+            let output: Vec<golem_wasm_rpc::protobuf::Val> = vec![golem_wasm_rpc::protobuf::Val {
+                val: Some(golem_wasm_rpc::protobuf::val::Val::String(
                     stdout.unwrap_or("".to_string()),
                 )),
             }];
@@ -386,7 +393,7 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
 struct InvokeResult {
     pub exited: bool,
     pub consumed_fuel: i64,
-    pub output: Vec<golem::worker::Val>,
+    pub output: Vec<golem_wasm_rpc::protobuf::Val>,
 }
 
 #[derive(Clone, Debug)]

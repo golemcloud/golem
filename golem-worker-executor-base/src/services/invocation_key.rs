@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem;
 use golem_common::model::{InvocationKey, WorkerId};
 use tokio::sync::broadcast::{Receiver, Sender};
 use tracing::debug;
@@ -36,7 +35,7 @@ pub trait InvocationKeyService {
         &self,
         worker_id: &WorkerId,
         key: &InvocationKey,
-        vals: Result<Vec<golem::worker::Val>, GolemError>,
+        vals: Result<Vec<golem_wasm_rpc::protobuf::Val>, GolemError>,
     );
     fn interrupt_key(&self, worker_id: &WorkerId, key: &InvocationKey);
     fn resume_key(&self, worker_id: &WorkerId, key: &InvocationKey);
@@ -61,7 +60,7 @@ struct State {
     pending_keys: std::collections::HashMap<(WorkerId, InvocationKey), PendingStatus>,
     confirmed_keys: std::collections::HashMap<
         (WorkerId, InvocationKey),
-        Result<Vec<golem::worker::Val>, GolemError>,
+        Result<Vec<golem_wasm_rpc::protobuf::Val>, GolemError>,
     >,
 }
 
@@ -85,7 +84,7 @@ pub enum LookupResult {
     Invalid,
     Pending,
     Interrupted,
-    Complete(Result<Vec<golem::worker::Val>, GolemError>),
+    Complete(Result<Vec<golem_wasm_rpc::protobuf::Val>, GolemError>),
 }
 
 impl Default for InvocationKeyServiceDefault {
@@ -162,7 +161,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
         &self,
         worker_id: &WorkerId,
         key: &InvocationKey,
-        vals: Result<Vec<golem::worker::Val>, GolemError>,
+        vals: Result<Vec<golem_wasm_rpc::protobuf::Val>, GolemError>,
     ) {
         self.cleanup();
         let key = (worker_id.clone(), key.clone());
@@ -238,9 +237,8 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
 
 #[cfg(test)]
 mod tests {
-    use golem::worker::{val, Val};
-    use golem_api_grpc::proto::golem;
     use golem_common::model::{TemplateId, WorkerId};
+    use golem_wasm_rpc::protobuf::{val, Val};
 
     use crate::services::invocation_key::{
         InvocationKeyService, InvocationKeyServiceDefault, LookupResult,

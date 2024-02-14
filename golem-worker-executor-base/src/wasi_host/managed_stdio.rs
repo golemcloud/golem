@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use bytes::{Buf, BufMut, Bytes};
-use golem_api_grpc::proto::golem;
 use golem_common::model::{InvocationKey, WorkerId};
 use tokio::sync::{mpsc, Mutex};
 
@@ -353,10 +352,12 @@ impl ManagedStandardIo {
                                 } else {
                                     let result = String::from_utf8(captured)
                                         .map(|captured_string| {
-                                            vec![golem::worker::Val {
-                                                val: Some(golem::worker::val::Val::String(
-                                                    captured_string,
-                                                )),
+                                            vec![golem_wasm_rpc::protobuf::Val {
+                                                val: Some(
+                                                    golem_wasm_rpc::protobuf::val::Val::String(
+                                                        captured_string,
+                                                    ),
+                                                ),
                                             }]
                                         })
                                         .map_err(|_| GolemError::Runtime {

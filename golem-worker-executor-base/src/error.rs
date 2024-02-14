@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use bincode::{Decode, Encode};
+use golem_wasm_rpc::wasmtime::EncodingError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
@@ -712,6 +713,16 @@ impl TryFrom<golem::worker::WorkerExecutionError> for GolemError {
                     details: unknown_error.details,
                 })
             }
+        }
+    }
+}
+
+impl From<EncodingError> for GolemError {
+    fn from(value: EncodingError) -> Self {
+        match value {
+            EncodingError::ParamTypeMismatch => GolemError::ParamTypeMismatch,
+            EncodingError::ValueMismatch { details } => GolemError::ValueMismatch { details },
+            EncodingError::Unknown { details } => GolemError::Unknown { details },
         }
     }
 }

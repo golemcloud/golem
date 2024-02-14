@@ -19,8 +19,7 @@ use golem_common::model::{ShardId, TemplateId, WorkerStatus};
 use http::Uri;
 use poem_openapi::{NewType, Object, Union};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashMap; // TODO?? Is this here
-                               // TODO; Should ww split errors - that golem error has InvalidAccountId
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 pub struct WorkerCreationRequest {
@@ -273,6 +272,7 @@ impl<'de> Deserialize<'de> for TypeVariant {
         Ok(Self { cases })
     }
 }
+
 impl Serialize for TypeVariant {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -842,13 +842,13 @@ pub enum Type {
     Bool(TypeBool),
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::template::Type> for Type {
+impl TryFrom<golem_wasm_rpc::protobuf::Type> for Type {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::template::Type) -> Result<Self, Self::Error> {
+    fn try_from(value: golem_wasm_rpc::protobuf::Type) -> Result<Self, Self::Error> {
         match value.r#type {
             None => Err("Missing type".to_string()),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Variant(variant)) => {
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Variant(variant)) => {
                 Ok(Self::Variant(TypeVariant {
                     cases: variant
                         .cases
@@ -866,7 +866,7 @@ impl TryFrom<golem_api_grpc::proto::golem::template::Type> for Type {
                         .collect::<Result<_, _>>()?,
                 }))
             }
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Result(result)) => {
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Result(result)) => {
                 let ok = match result.ok {
                     None => None,
                     Some(ok) => Some(Box::new((*ok).try_into()?)),
@@ -878,20 +878,20 @@ impl TryFrom<golem_api_grpc::proto::golem::template::Type> for Type {
 
                 Ok(Self::Result(TypeResult { ok, err }))
             }
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Option(option)) => {
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Option(option)) => {
                 Ok(Self::Option(TypeOption {
                     inner: Box::new((*option.elem.ok_or("Missing elem")?).try_into()?),
                 }))
             }
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Enum(r#enum)) => {
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Enum(r#enum)) => {
                 Ok(Self::Enum(TypeEnum {
                     cases: r#enum.names,
                 }))
             }
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Flags(flags)) => {
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Flags(flags)) => {
                 Ok(Self::Flags(TypeFlags { cases: flags.names }))
             }
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Record(record)) => {
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Record(record)) => {
                 Ok(Self::Record(TypeRecord {
                     cases: record
                         .fields
@@ -905,7 +905,7 @@ impl TryFrom<golem_api_grpc::proto::golem::template::Type> for Type {
                         .collect::<Result<_, _>>()?,
                 }))
             }
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Tuple(tuple)) => {
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Tuple(tuple)) => {
                 Ok(Self::Tuple(TypeTuple {
                     items: tuple
                         .elems
@@ -914,231 +914,191 @@ impl TryFrom<golem_api_grpc::proto::golem::template::Type> for Type {
                         .collect::<Result<_, _>>()?,
                 }))
             }
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::List(list)) => {
-                Ok(Self::List(TypeList {
-                    inner: Box::new((*list.elem.ok_or("Missing elem")?).try_into()?),
-                }))
-            }
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 12 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::List(list)) => Ok(Self::List(TypeList {
+                inner: Box::new((*list.elem.ok_or("Missing elem")?).try_into()?),
+            })),
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 12 },
             )) => Ok(Self::Str(TypeStr)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 11 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 11 },
             )) => Ok(Self::Chr(TypeChr)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 10 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 10 },
             )) => Ok(Self::F64(TypeF64)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 9 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 9 },
             )) => Ok(Self::F32(TypeF32)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 8 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 8 },
             )) => Ok(Self::U64(TypeU64)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 7 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 7 },
             )) => Ok(Self::S64(TypeS64)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 6 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 6 },
             )) => Ok(Self::U32(TypeU32)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 5 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 5 },
             )) => Ok(Self::S32(TypeS32)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 4 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 4 },
             )) => Ok(Self::U16(TypeU16)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 3 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 3 },
             )) => Ok(Self::S16(TypeS16)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 2 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 2 },
             )) => Ok(Self::U8(TypeU8)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 1 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 1 },
             )) => Ok(Self::S8(TypeS8)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 0 },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive: 0 },
             )) => Ok(Self::Bool(TypeBool)),
-            Some(golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                golem_api_grpc::proto::golem::template::TypePrimitive { primitive },
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                golem_wasm_rpc::protobuf::TypePrimitive { primitive },
             )) => Err(format!("Invalid primitive: {}", primitive)),
         }
     }
 }
 
-impl From<Type> for golem_api_grpc::proto::golem::template::Type {
+impl From<Type> for golem_wasm_rpc::protobuf::Type {
     fn from(value: Type) -> Self {
         match value {
             Type::Variant(variant) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Variant(
-                        golem_api_grpc::proto::golem::template::TypeVariant {
-                            cases: variant
-                                .cases
-                                .into_iter()
-                                .map(|case| {
-                                    golem_api_grpc::proto::golem::template::NameOptionTypePair {
-                                        name: case.name,
-                                        typ: case.typ.map(|typ| (*typ).into()),
-                                    }
-                                })
-                                .collect(),
-                        },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Variant(
+                    golem_wasm_rpc::protobuf::TypeVariant {
+                        cases: variant
+                            .cases
+                            .into_iter()
+                            .map(|case| golem_wasm_rpc::protobuf::NameOptionTypePair {
+                                name: case.name,
+                                typ: case.typ.map(|typ| (*typ).into()),
+                            })
+                            .collect(),
+                    },
+                )),
             },
             Type::Result(result) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Result(Box::new(
-                        golem_api_grpc::proto::golem::template::TypeResult {
-                            ok: result.ok.map(|ok| Box::new((*ok).into())),
-                            err: result.err.map(|err| Box::new((*err).into())),
-                        },
-                    )),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Result(Box::new(
+                    golem_wasm_rpc::protobuf::TypeResult {
+                        ok: result.ok.map(|ok| Box::new((*ok).into())),
+                        err: result.err.map(|err| Box::new((*err).into())),
+                    },
+                ))),
             },
             Type::Option(option) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Option(Box::new(
-                        golem_api_grpc::proto::golem::template::TypeOption {
-                            elem: Some(Box::new((*option.inner).into())),
-                        },
-                    )),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Option(Box::new(
+                    golem_wasm_rpc::protobuf::TypeOption {
+                        elem: Some(Box::new((*option.inner).into())),
+                    },
+                ))),
             },
             Type::Enum(r#enum) => Self {
-                r#type: Some(golem_api_grpc::proto::golem::template::r#type::Type::Enum(
-                    golem_api_grpc::proto::golem::template::TypeEnum {
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Enum(
+                    golem_wasm_rpc::protobuf::TypeEnum {
                         names: r#enum.cases,
                     },
                 )),
             },
             Type::Flags(flags) => Self {
-                r#type: Some(golem_api_grpc::proto::golem::template::r#type::Type::Flags(
-                    golem_api_grpc::proto::golem::template::TypeFlags { names: flags.cases },
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Flags(
+                    golem_wasm_rpc::protobuf::TypeFlags { names: flags.cases },
                 )),
             },
             Type::Record(record) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Record(
-                        golem_api_grpc::proto::golem::template::TypeRecord {
-                            fields: record
-                                .cases
-                                .into_iter()
-                                .map(
-                                    |case| golem_api_grpc::proto::golem::template::NameTypePair {
-                                        name: case.name,
-                                        typ: Some((*case.typ).into()),
-                                    },
-                                )
-                                .collect(),
-                        },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Record(
+                    golem_wasm_rpc::protobuf::TypeRecord {
+                        fields: record
+                            .cases
+                            .into_iter()
+                            .map(|case| golem_wasm_rpc::protobuf::NameTypePair {
+                                name: case.name,
+                                typ: Some((*case.typ).into()),
+                            })
+                            .collect(),
+                    },
+                )),
             },
             Type::Tuple(tuple) => Self {
-                r#type: Some(golem_api_grpc::proto::golem::template::r#type::Type::Tuple(
-                    golem_api_grpc::proto::golem::template::TypeTuple {
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Tuple(
+                    golem_wasm_rpc::protobuf::TypeTuple {
                         elems: tuple.items.into_iter().map(|item| item.into()).collect(),
                     },
                 )),
             },
             Type::List(list) => Self {
-                r#type: Some(golem_api_grpc::proto::golem::template::r#type::Type::List(
-                    Box::new(golem_api_grpc::proto::golem::template::TypeList {
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::List(Box::new(
+                    golem_wasm_rpc::protobuf::TypeList {
                         elem: Some(Box::new((*list.inner).into())),
-                    }),
-                )),
+                    },
+                ))),
             },
             Type::Str(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 12 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 12 },
+                )),
             },
             Type::Chr(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 11 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 11 },
+                )),
             },
             Type::F64(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 10 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 10 },
+                )),
             },
             Type::F32(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 9 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 9 },
+                )),
             },
             Type::U64(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 8 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 8 },
+                )),
             },
             Type::S64(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 7 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 7 },
+                )),
             },
             Type::U32(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 6 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 6 },
+                )),
             },
             Type::S32(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 5 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 5 },
+                )),
             },
             Type::U16(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 4 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 4 },
+                )),
             },
             Type::S16(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 3 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 3 },
+                )),
             },
             Type::U8(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 2 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 2 },
+                )),
             },
             Type::S8(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 1 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 1 },
+                )),
             },
             Type::Bool(_) => Self {
-                r#type: Some(
-                    golem_api_grpc::proto::golem::template::r#type::Type::Primitive(
-                        golem_api_grpc::proto::golem::template::TypePrimitive { primitive: 0 },
-                    ),
-                ),
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
+                    golem_wasm_rpc::protobuf::TypePrimitive { primitive: 0 },
+                )),
             },
         }
     }
@@ -1404,6 +1364,271 @@ impl From<Producers> for golem_api_grpc::proto::golem::template::Producers {
     fn from(value: Producers) -> Self {
         Self {
             fields: value.fields.into_iter().map(|field| field.into()).collect(),
+        }
+    }
+}
+
+impl From<golem_wasm_ast::metadata::Producers> for Producers {
+    fn from(value: golem_wasm_ast::metadata::Producers) -> Self {
+        Self {
+            fields: value
+                .fields
+                .into_iter()
+                .map(|p| p.into())
+                .collect::<Vec<_>>(),
+        }
+    }
+}
+
+impl From<Producers> for golem_wasm_ast::metadata::Producers {
+    fn from(value: Producers) -> Self {
+        Self {
+            fields: value
+                .fields
+                .into_iter()
+                .map(|p| p.into())
+                .collect::<Vec<_>>(),
+        }
+    }
+}
+
+impl From<golem_wasm_ast::metadata::ProducersField> for ProducerField {
+    fn from(value: golem_wasm_ast::metadata::ProducersField) -> Self {
+        Self {
+            name: value.name,
+            values: value
+                .values
+                .into_iter()
+                .map(|value| VersionedName {
+                    name: value.name,
+                    version: value.version,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<ProducerField> for golem_wasm_ast::metadata::ProducersField {
+    fn from(value: ProducerField) -> Self {
+        Self {
+            name: value.name,
+            values: value
+                .values
+                .into_iter()
+                .map(|value| golem_wasm_ast::metadata::VersionedName {
+                    name: value.name,
+                    version: value.version,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<golem_wasm_ast::analysis::AnalysedExport> for Export {
+    fn from(value: golem_wasm_ast::analysis::AnalysedExport) -> Self {
+        match value {
+            golem_wasm_ast::analysis::AnalysedExport::Function(analysed_function) => {
+                Export::Function(analysed_function.into())
+            }
+            golem_wasm_ast::analysis::AnalysedExport::Instance(analysed_instance) => {
+                Export::Instance(analysed_instance.into())
+            }
+        }
+    }
+}
+
+impl From<Export> for golem_wasm_ast::analysis::AnalysedExport {
+    fn from(value: Export) -> Self {
+        match value {
+            Export::Function(export_function) => {
+                golem_wasm_ast::analysis::AnalysedExport::Function(export_function.into())
+            }
+            Export::Instance(export_instance) => {
+                golem_wasm_ast::analysis::AnalysedExport::Instance(export_instance.into())
+            }
+        }
+    }
+}
+
+impl From<golem_wasm_ast::analysis::AnalysedFunction> for ExportFunction {
+    fn from(value: golem_wasm_ast::analysis::AnalysedFunction) -> Self {
+        Self {
+            name: value.name,
+            parameters: value.params.into_iter().map(|p| p.into()).collect(),
+            results: value.results.into_iter().map(|r| r.into()).collect(),
+        }
+    }
+}
+
+impl From<ExportFunction> for golem_wasm_ast::analysis::AnalysedFunction {
+    fn from(value: ExportFunction) -> Self {
+        Self {
+            name: value.name,
+            params: value.parameters.into_iter().map(|p| p.into()).collect(),
+            results: value.results.into_iter().map(|r| r.into()).collect(),
+        }
+    }
+}
+
+impl From<golem_wasm_ast::analysis::AnalysedInstance> for ExportInstance {
+    fn from(value: golem_wasm_ast::analysis::AnalysedInstance) -> Self {
+        Self {
+            name: value.name,
+            functions: value.funcs.into_iter().map(|f| f.into()).collect(),
+        }
+    }
+}
+
+impl From<ExportInstance> for golem_wasm_ast::analysis::AnalysedInstance {
+    fn from(value: ExportInstance) -> Self {
+        Self {
+            name: value.name,
+            funcs: value.functions.into_iter().map(|f| f.into()).collect(),
+        }
+    }
+}
+
+impl From<golem_wasm_ast::analysis::AnalysedFunctionParameter> for FunctionParameter {
+    fn from(value: golem_wasm_ast::analysis::AnalysedFunctionParameter) -> Self {
+        Self {
+            name: value.name,
+            typ: value.typ.into(),
+        }
+    }
+}
+
+impl From<FunctionParameter> for golem_wasm_ast::analysis::AnalysedFunctionParameter {
+    fn from(value: FunctionParameter) -> Self {
+        Self {
+            name: value.name,
+            typ: value.typ.into(),
+        }
+    }
+}
+
+impl From<golem_wasm_ast::analysis::AnalysedFunctionResult> for FunctionResult {
+    fn from(value: golem_wasm_ast::analysis::AnalysedFunctionResult) -> Self {
+        Self {
+            name: value.name,
+            typ: value.typ.into(),
+        }
+    }
+}
+
+impl From<FunctionResult> for golem_wasm_ast::analysis::AnalysedFunctionResult {
+    fn from(value: FunctionResult) -> Self {
+        Self {
+            name: value.name,
+            typ: value.typ.into(),
+        }
+    }
+}
+
+impl From<golem_wasm_ast::analysis::AnalysedType> for Type {
+    fn from(value: golem_wasm_ast::analysis::AnalysedType) -> Self {
+        match value {
+            golem_wasm_ast::analysis::AnalysedType::Bool => Type::Bool(TypeBool),
+            golem_wasm_ast::analysis::AnalysedType::S8 => Type::S8(TypeS8),
+            golem_wasm_ast::analysis::AnalysedType::U8 => Type::U8(TypeU8),
+            golem_wasm_ast::analysis::AnalysedType::S16 => Type::S16(TypeS16),
+            golem_wasm_ast::analysis::AnalysedType::U16 => Type::U16(TypeU16),
+            golem_wasm_ast::analysis::AnalysedType::S32 => Type::S32(TypeS32),
+            golem_wasm_ast::analysis::AnalysedType::U32 => Type::U32(TypeU32),
+            golem_wasm_ast::analysis::AnalysedType::S64 => Type::S64(TypeS64),
+            golem_wasm_ast::analysis::AnalysedType::U64 => Type::U64(TypeU64),
+            golem_wasm_ast::analysis::AnalysedType::F32 => Type::F32(TypeF32),
+            golem_wasm_ast::analysis::AnalysedType::F64 => Type::F64(TypeF64),
+            golem_wasm_ast::analysis::AnalysedType::Chr => Type::Chr(TypeChr),
+            golem_wasm_ast::analysis::AnalysedType::Str => Type::Str(TypeStr),
+            golem_wasm_ast::analysis::AnalysedType::List(inner) => Type::List(TypeList {
+                inner: Box::new((*inner).into()),
+            }),
+            golem_wasm_ast::analysis::AnalysedType::Tuple(items) => Type::Tuple(TypeTuple {
+                items: items.into_iter().map(|t| t.into()).collect(),
+            }),
+            golem_wasm_ast::analysis::AnalysedType::Record(cases) => Type::Record(TypeRecord {
+                cases: cases
+                    .into_iter()
+                    .map(|(name, typ)| NameTypePair {
+                        name,
+                        typ: Box::new(typ.into()),
+                    })
+                    .collect(),
+            }),
+            golem_wasm_ast::analysis::AnalysedType::Flags(cases) => {
+                Type::Flags(TypeFlags { cases })
+            }
+            golem_wasm_ast::analysis::AnalysedType::Enum(cases) => Type::Enum(TypeEnum { cases }),
+            golem_wasm_ast::analysis::AnalysedType::Option(inner) => Type::Option(TypeOption {
+                inner: Box::new((*inner).into()),
+            }),
+            golem_wasm_ast::analysis::AnalysedType::Result { ok, error } => {
+                Type::Result(TypeResult {
+                    ok: ok.map(|t| Box::new((*t).into())),
+                    err: error.map(|t| Box::new((*t).into())),
+                })
+            }
+            golem_wasm_ast::analysis::AnalysedType::Variant(variants) => {
+                Type::Variant(TypeVariant {
+                    cases: variants
+                        .into_iter()
+                        .map(|(name, typ)| NameOptionTypePair {
+                            name,
+                            typ: typ.map(|t| Box::new(t.into())),
+                        })
+                        .collect(),
+                })
+            }
+        }
+    }
+}
+
+impl From<Type> for golem_wasm_ast::analysis::AnalysedType {
+    fn from(value: Type) -> Self {
+        match value {
+            Type::Bool(_) => golem_wasm_ast::analysis::AnalysedType::Bool,
+            Type::S8(_) => golem_wasm_ast::analysis::AnalysedType::S8,
+            Type::U8(_) => golem_wasm_ast::analysis::AnalysedType::U8,
+            Type::S16(_) => golem_wasm_ast::analysis::AnalysedType::S16,
+            Type::U16(_) => golem_wasm_ast::analysis::AnalysedType::U16,
+            Type::S32(_) => golem_wasm_ast::analysis::AnalysedType::S32,
+            Type::U32(_) => golem_wasm_ast::analysis::AnalysedType::U32,
+            Type::S64(_) => golem_wasm_ast::analysis::AnalysedType::S64,
+            Type::U64(_) => golem_wasm_ast::analysis::AnalysedType::U64,
+            Type::F32(_) => golem_wasm_ast::analysis::AnalysedType::F32,
+            Type::F64(_) => golem_wasm_ast::analysis::AnalysedType::F64,
+            Type::Chr(_) => golem_wasm_ast::analysis::AnalysedType::Chr,
+            Type::Str(_) => golem_wasm_ast::analysis::AnalysedType::Str,
+            Type::List(inner) => {
+                let elem_type: golem_wasm_ast::analysis::AnalysedType = (*inner.inner).into();
+                golem_wasm_ast::analysis::AnalysedType::List(Box::new(elem_type))
+            }
+            Type::Tuple(inner) => golem_wasm_ast::analysis::AnalysedType::Tuple(
+                inner.items.into_iter().map(|t| t.into()).collect(),
+            ),
+            Type::Record(inner) => golem_wasm_ast::analysis::AnalysedType::Record(
+                inner
+                    .cases
+                    .into_iter()
+                    .map(|case| (case.name, (*case.typ).into()))
+                    .collect(),
+            ),
+            Type::Flags(inner) => golem_wasm_ast::analysis::AnalysedType::Flags(inner.cases),
+            Type::Enum(inner) => golem_wasm_ast::analysis::AnalysedType::Enum(inner.cases),
+            Type::Option(inner) => {
+                golem_wasm_ast::analysis::AnalysedType::Option(Box::new((*inner.inner).into()))
+            }
+            Type::Result(inner) => golem_wasm_ast::analysis::AnalysedType::Result {
+                ok: inner.ok.map(|t| Box::new((*t).into())),
+                error: inner.err.map(|t| Box::new((*t).into())),
+            },
+            Type::Variant(variants) => golem_wasm_ast::analysis::AnalysedType::Variant(
+                variants
+                    .cases
+                    .into_iter()
+                    .map(|case| (case.name, case.typ.map(|t| (*t).into())))
+                    .collect(),
+            ),
         }
     }
 }
@@ -1704,6 +1929,7 @@ impl From<golem_api_grpc::proto::golem::worker::InvalidRequest> for GolemErrorIn
         }
     }
 }
+
 impl From<GolemErrorInvalidRequest> for golem_api_grpc::proto::golem::worker::InvalidRequest {
     fn from(value: GolemErrorInvalidRequest) -> Self {
         Self {
@@ -2230,6 +2456,7 @@ impl From<golem_api_grpc::proto::golem::worker::PreviousInvocationFailed>
         Self {}
     }
 }
+
 impl From<GolemErrorPreviousInvocationFailed>
     for golem_api_grpc::proto::golem::worker::PreviousInvocationFailed
 {
@@ -2490,107 +2717,107 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::WorkerExecutionE
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::InvalidRequest(err.into())),
                 }
-            },
+            }
             GolemError::WorkerAlreadyExists(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::WorkerAlreadyExists(err.into())),
                 }
-            },
+            }
             GolemError::WorkerNotFound(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::WorkerNotFound(err.into())),
                 }
-            },
+            }
             GolemError::WorkerCreationFailed(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::WorkerCreationFailed(err.into())),
                 }
-            },
+            }
             GolemError::FailedToResumeWorker(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::FailedToResumeWorker(err.into())),
                 }
-            },
+            }
             GolemError::TemplateDownloadFailed(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::TemplateDownloadFailed(err.into())),
                 }
-            },
+            }
             GolemError::TemplateParseFailed(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::TemplateParseFailed(err.into())),
                 }
-            },
+            }
             GolemError::GetLatestVersionOfTemplateFailed(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(err.into())),
                 }
-            },
+            }
             GolemError::PromiseNotFound(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PromiseNotFound(err.into())),
                 }
-            },
+            }
             GolemError::PromiseDropped(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PromiseDropped(err.into())),
                 }
-            },
+            }
             GolemError::PromiseAlreadyCompleted(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PromiseAlreadyCompleted(err.into())),
                 }
-            },
+            }
             GolemError::Interrupted(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::Interrupted(err.into())),
                 }
-            },
+            }
             GolemError::ParamTypeMismatch(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::ParamTypeMismatch(err.into())),
                 }
-            },
+            }
             GolemError::NoValueInMessage(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::NoValueInMessage(err.into())),
                 }
-            },
+            }
             GolemError::ValueMismatch(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::ValueMismatch(err.into())),
                 }
-            },
+            }
             GolemError::UnexpectedOplogEntry(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::UnexpectedOplogEntry(err.into())),
                 }
-            },
+            }
             GolemError::RuntimeError(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::RuntimeError(err.into())),
                 }
-            },
+            }
             GolemError::InvalidShardId(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::InvalidShardId(err.into())),
                 }
-            },
+            }
             GolemError::PreviousInvocationFailed(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PreviousInvocationFailed(err.into())),
                 }
-            },
+            }
             GolemError::PreviousInvocationExited(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PreviousInvocationExited(err.into())),
                 }
-            },
+            }
             GolemError::Unknown(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::Unknown(err.into())),
                 }
-            },
+            }
             GolemError::InvalidAccount(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::InvalidAccount(err.into())),
@@ -2611,7 +2838,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerExecutionError> for Gol
 
     fn try_from(
         value: golem_api_grpc::proto::golem::worker::WorkerExecutionError,
-    ) -> std::result::Result<Self, Self::Error> {
+    ) -> Result<Self, Self::Error> {
         Ok(Self {
             golem_error: value.try_into()?,
         })

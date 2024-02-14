@@ -28,6 +28,7 @@ use golem_common::model as common_model;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, ShardId, WorkerMetadata, WorkerStatus,
 };
+use golem_wasm_rpc::protobuf::Val;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -526,10 +527,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn invoke_worker_internal<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<Option<Result<Vec<golem::worker::Val>, GolemError>>, GolemError> {
+    ) -> Result<Option<Result<Vec<Val>, GolemError>>, GolemError> {
         let full_function_name = request.name();
 
-        let function_input: Vec<golem::worker::Val> = request.input();
+        let function_input: Vec<Val> = request.input();
         let worker_id = request.worker_id()?;
         let account_id: AccountId = request.account_id()?;
 
@@ -583,7 +584,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         let public_state = &worker_details.public_state;
 
                         let bytes = match function_input.first().unwrap().val.as_ref() {
-                            Some(golem::worker::val::Val::String(value)) => {
+                            Some(golem_wasm_rpc::protobuf::val::Val::String(value)) => {
                                 Ok(Bytes::from(format!("{}\n", value).to_string()))
                             }
                             _ => Err(GolemError::invalid_request(
@@ -1260,7 +1261,7 @@ trait GrpcInvokeRequest {
     fn account_id(&self) -> Result<AccountId, GolemError>;
     fn account_limits(&self) -> Option<GrpcResourceLimits>;
     fn calling_convention(&self) -> CallingConvention;
-    fn input(&self) -> Vec<golem::worker::Val>;
+    fn input(&self) -> Vec<Val>;
     fn worker_id(&self) -> Result<common_model::WorkerId, GolemError>;
     fn invocation_key(&self) -> Result<Option<InvocationKey>, GolemError>;
     fn name(&self) -> String;
@@ -1283,7 +1284,7 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeWorkerRequest {
         CallingConvention::Component
     }
 
-    fn input(&self) -> Vec<golem::worker::Val> {
+    fn input(&self) -> Vec<Val> {
         self.input.clone()
     }
 
@@ -1325,7 +1326,7 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
         }
     }
 
-    fn input(&self) -> Vec<golem::worker::Val> {
+    fn input(&self) -> Vec<Val> {
         self.input.clone()
     }
 

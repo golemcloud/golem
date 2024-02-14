@@ -18,11 +18,11 @@ use std::sync::{Arc, RwLock};
 use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::worker::Val;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus,
 };
+use golem_wasm_rpc::protobuf::Val;
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
