@@ -219,14 +219,14 @@ mod test {
 
     #[tokio::test]
     async fn conflict_error_returned() {
+        let api = make_route();
+        let client = TestClient::new(api);
+
         let definition = api_definition::ApiDefinition {
             id: ApiDefinitionId("test".to_string()),
             version: Version("1.0".to_string()),
             routes: vec![],
         };
-
-        let api = make_route();
-        let client = TestClient::new(api);
 
         let response = client
             .put("/v1/api/definitions")
@@ -243,6 +243,41 @@ mod test {
             .await;
 
         response.assert_status(http::StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn get_all() {
+        let api = make_route();
+        let client = TestClient::new(api);
+
+        let definition = api_definition::ApiDefinition {
+            id: ApiDefinitionId("test".to_string()),
+            version: Version("1.0".to_string()),
+            routes: vec![],
+        };
+        let response = client
+            .put("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status_is_ok();
+
+        let definition = api_definition::ApiDefinition {
+            id: ApiDefinitionId("test".to_string()),
+            version: Version("2.0".to_string()),
+            routes: vec![],
+        };
+        let response = client
+            .put("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status_is_ok();
+
+        let response = client.get("/v1/api/definitions/all").send().await;
+        response.assert_status_is_ok();
+        let body = response.json().await;
+        body.value().array().assert_len(2)
     }
 }
 
