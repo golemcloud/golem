@@ -260,7 +260,7 @@ async fn invoke<Ctx: WorkerCtx>(
                         .clone()
                         .try_into()
                         .map_err(|err| GolemError::ValueMismatch { details: err })?;
-                    decode_param(&param_value, param_type).map_err(|err| GolemError::from(err))
+                    decode_param(&param_value, param_type).map_err(GolemError::from)
                 })
                 .collect::<Result<Vec<Val>, GolemError>>()?;
 
@@ -270,7 +270,7 @@ async fn invoke<Ctx: WorkerCtx>(
 
             let mut output: Vec<golem_wasm_rpc::protobuf::Val> = Vec::new();
             for result in results.iter() {
-                let result_value = encode_output(result).map_err(|err| GolemError::from(err))?;
+                let result_value = encode_output(result).map_err(GolemError::from)?;
                 let proto_value = result_value.into();
                 output.push(proto_value);
             }

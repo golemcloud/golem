@@ -117,9 +117,8 @@ mod tests {
         spec_path_literals.insert(0, "users".to_string());
         spec_path_literals.insert(1, "1".to_string());
 
-        assert_eq!(
-            match_literals(&request_path_values, &spec_path_literals),
-            true
+        assert!(
+            match_literals(&request_path_values, &spec_path_literals)
         );
     }
 
@@ -130,9 +129,8 @@ mod tests {
         let mut spec_path_literals = HashMap::new();
         spec_path_literals.insert(0, "get-cart-contents".to_string());
 
-        assert_eq!(
-            match_literals(&request_path_values, &spec_path_literals),
-            false
+        assert!(
+            !match_literals(&request_path_values, &spec_path_literals)
         );
     }
 
@@ -143,9 +141,8 @@ mod tests {
 
         let spec_path_literals = HashMap::new();
 
-        assert_eq!(
-            match_literals(&request_path_values, &spec_path_literals),
-            false
+        assert!(
+            !match_literals(&request_path_values, &spec_path_literals)
         );
     }
 }

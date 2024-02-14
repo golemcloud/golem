@@ -64,7 +64,7 @@ impl TypeCheckIn for Vec<Val> {
     ) -> Result<Vec<Val>, Vec<String>> {
         match calling_convention {
             CallingConvention::Component => {
-                let _ = protobuf::function_parameters(&self, expected_parameters)?;
+                protobuf::function_parameters(&self, expected_parameters)?;
                 Ok(self)
             }
             CallingConvention::Stdio | CallingConvention::StdioEventloop => {
