@@ -14,7 +14,7 @@ use crate::api_definition;
 use crate::api_definition::{ApiDefinitionId, MethodPattern, Version};
 use crate::expr::Expr;
 use crate::oas_worker_bridge::*;
-use crate::register::RegisterApiDefinition;
+use crate::register::{ApiRegistrationError, RegisterApiDefinition};
 
 pub struct ApiDefinitionEndpoints {
     pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
@@ -38,16 +38,7 @@ impl ApiDefinitionEndpoints {
 
         let api_definition_id = &definition.id;
 
-        self.definition_service
-            .register(&definition)
-            .await
-            .map_err(|e| {
-                error!(
-                    "API definition id: {} - register error: {}",
-                    api_definition_id, e
-                );
-                ApiEndpointError::internal(e)
-            })?;
+        register_api(self.definition_service.clone(), &definition).await?;
 
         let data = self
             .definition_service
@@ -78,16 +69,7 @@ impl ApiDefinitionEndpoints {
             .try_into()
             .map_err(ApiEndpointError::bad_request)?;
 
-        self.definition_service
-            .register(&definition)
-            .await
-            .map_err(|e| {
-                error!(
-                    "API definition id: {} - register error: {}",
-                    api_definition_id, e
-                );
-                ApiEndpointError::internal(e)
-            })?;
+        register_api(self.definition_service.clone(), &definition).await?;
 
         let data = self
             .definition_service
@@ -175,6 +157,23 @@ impl ApiDefinitionEndpoints {
 
         Err(ApiEndpointError::not_found("API definition not found"))
     }
+}
+
+async fn register_api(definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>, definition: &api_definition::ApiDefinition) -> Result<(), ApiEndpointError>{
+    definition_service
+        .register(definition)
+        .await
+        .map_err(|reg_error| {
+            error!(
+                    "API definition id: {} - register error: {}",
+                    definition.id, reg_error
+                );
+
+            match reg_error {
+                ApiRegistrationError::AlreadyExists(_) => ApiEndpointError::already_exists(reg_error),
+                ApiRegistrationError::InternalError(_) => ApiEndpointError::bad_request(reg_error),
+            }
+        })
 }
 
 // Mostly this data structures that represents the actual incoming request
