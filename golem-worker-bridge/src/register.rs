@@ -384,7 +384,7 @@ mod tests {
 
         assert_eq!(
             get_api_definition_redis_key(&api_id),
-            "apidefinition:definition:api1"
+            "apidefinition:definition:api1:0.0.1"
         );
     }
 }
