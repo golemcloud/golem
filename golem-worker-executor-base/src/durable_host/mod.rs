@@ -75,7 +75,7 @@ pub mod blobstore;
 mod cli;
 mod clocks;
 mod filesystem;
-pub mod golem;
+mod golem;
 mod http;
 pub mod io;
 pub mod keyvalue;
@@ -83,8 +83,7 @@ mod logging;
 mod random;
 pub mod serialized;
 mod sockets;
-
-pub use self::golem::*;
+mod wasm_rpc;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {

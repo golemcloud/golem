@@ -74,7 +74,10 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 
+use golem::api;
 use golem_common::config::RedisConfig;
+use golem_worker_executor_base::preview2::golem;
+use golem_worker_executor_base::preview2::golem::rpc;
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -1288,7 +1291,11 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             create_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(engine, |x| {
                 &mut x.durable_ctx
             })?;
-        durable_host::host::add_to_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(
+        api::host::add_to_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(
+            &mut linker,
+            |x| &mut x.durable_ctx,
+        )?;
+        rpc::types::add_to_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(
             &mut linker,
             |x| &mut x.durable_ctx,
         )?;

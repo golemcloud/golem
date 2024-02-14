@@ -16,6 +16,7 @@ wasmtime::component::bindgen!({
     path: "../golem-wit/wit",
     interfaces: "
       import golem:api/host;
+      import golem:rpc/types@0.1.0;
 
       import wasi:blobstore/blobstore;
       import wasi:blobstore/container;

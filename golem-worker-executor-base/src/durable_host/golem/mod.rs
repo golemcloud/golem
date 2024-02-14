@@ -17,25 +17,15 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::durable_host::DurableWorkerCtx;
-
-wasmtime::component::bindgen!({
-    path: "../golem-wit/wit",
-    interfaces: "
-        import golem:api/host;
-    ",
-    tracing: false,
-    async: true,
-});
-
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
+use crate::preview2::golem;
 use crate::workerctx::WorkerCtx;
-pub use golem::api::host;
 use golem_common::model::{PromiseId, TemplateId, WorkerId};
 
 #[async_trait]
-impl<Ctx: WorkerCtx> host::Host for DurableWorkerCtx<Ctx> {
-    async fn golem_create_promise(&mut self) -> Result<host::PromiseId, anyhow::Error> {
+impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
+    async fn golem_create_promise(&mut self) -> Result<golem::api::host::PromiseId, anyhow::Error> {
         record_host_function_call("golem::api", "golem_create_promise");
         Ok(
             DurableWorkerCtx::create_promise(self, self.private_state.oplog_idx)
@@ -46,7 +36,7 @@ impl<Ctx: WorkerCtx> host::Host for DurableWorkerCtx<Ctx> {
 
     async fn golem_await_promise(
         &mut self,
-        promise_id: host::PromiseId,
+        promise_id: golem::api::host::PromiseId,
     ) -> Result<Vec<u8>, anyhow::Error> {
         record_host_function_call("golem::api", "golem_await_promise");
         let promise_id: PromiseId = promise_id.into();
@@ -61,7 +51,7 @@ impl<Ctx: WorkerCtx> host::Host for DurableWorkerCtx<Ctx> {
 
     async fn golem_complete_promise(
         &mut self,
-        promise_id: host::PromiseId,
+        promise_id: golem::api::host::PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, anyhow::Error> {
         record_host_function_call("golem::api", "golem_complete_promise");
@@ -70,7 +60,7 @@ impl<Ctx: WorkerCtx> host::Host for DurableWorkerCtx<Ctx> {
 
     async fn golem_delete_promise(
         &mut self,
-        promise_id: host::PromiseId,
+        promise_id: golem::api::host::PromiseId,
     ) -> Result<(), anyhow::Error> {
         record_host_function_call("golem::api", "golem_delete_promise");
         self.public_state
@@ -80,26 +70,29 @@ impl<Ctx: WorkerCtx> host::Host for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn get_self_uri(&mut self, function_name: String) -> Result<host::Uri, anyhow::Error> {
+    async fn get_self_uri(
+        &mut self,
+        function_name: String,
+    ) -> Result<golem::api::host::Uri, anyhow::Error> {
         record_host_function_call("golem::api", "get_self_uri");
-        let uri = host::Uri {
-            uri: format!("{}/{}", self.private_state.worker_id.uri(), function_name),
+        let uri = golem::api::host::Uri {
+            value: format!("{}/{}", self.private_state.worker_id.uri(), function_name),
         };
         Ok(uri)
     }
 }
 
-impl From<WorkerId> for host::WorkerId {
+impl From<WorkerId> for golem::api::host::WorkerId {
     fn from(worker_id: WorkerId) -> Self {
-        host::WorkerId {
+        golem::api::host::WorkerId {
             template_id: worker_id.template_id.into(),
             worker_name: worker_id.worker_name,
         }
     }
 }
 
-impl From<host::WorkerId> for WorkerId {
-    fn from(host: host::WorkerId) -> Self {
+impl From<golem::api::host::WorkerId> for WorkerId {
+    fn from(host: golem::api::host::WorkerId) -> Self {
         Self {
             template_id: host.template_id.into(),
             worker_name: host.worker_name,
@@ -107,8 +100,8 @@ impl From<host::WorkerId> for WorkerId {
     }
 }
 
-impl From<host::TemplateId> for TemplateId {
-    fn from(host: host::TemplateId) -> Self {
+impl From<golem::api::host::TemplateId> for TemplateId {
+    fn from(host: golem::api::host::TemplateId) -> Self {
         let high_bits = host.uuid.high_bits;
         let low_bits = host.uuid.low_bits;
 
@@ -116,12 +109,12 @@ impl From<host::TemplateId> for TemplateId {
     }
 }
 
-impl From<TemplateId> for host::TemplateId {
+impl From<TemplateId> for golem::api::host::TemplateId {
     fn from(template_id: TemplateId) -> Self {
         let (high_bits, low_bits) = template_id.0.as_u64_pair();
 
-        host::TemplateId {
-            uuid: host::Uuid {
+        golem::api::host::TemplateId {
+            uuid: golem::api::host::Uuid {
                 high_bits,
                 low_bits,
             },
@@ -129,17 +122,17 @@ impl From<TemplateId> for host::TemplateId {
     }
 }
 
-impl From<PromiseId> for host::PromiseId {
+impl From<PromiseId> for golem::api::host::PromiseId {
     fn from(promise_id: PromiseId) -> Self {
-        host::PromiseId {
+        golem::api::host::PromiseId {
             worker_id: promise_id.worker_id.into(),
             oplog_idx: promise_id.oplog_idx,
         }
     }
 }
 
-impl From<host::PromiseId> for PromiseId {
-    fn from(host: host::PromiseId) -> Self {
+impl From<golem::api::host::PromiseId> for PromiseId {
+    fn from(host: golem::api::host::PromiseId) -> Self {
         Self {
             worker_id: host.worker_id.into(),
             oplog_idx: host.oplog_idx,

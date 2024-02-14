@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
+use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
@@ -113,10 +114,12 @@ impl Bootstrap<Context> for ServerBootstrap {
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
         let mut linker =
             create_linker::<Context, DurableWorkerCtx<Context>>(engine, |x| &mut x.durable_ctx)?;
-        durable_host::host::add_to_linker::<Context, DurableWorkerCtx<Context>>(
-            &mut linker,
-            |x| &mut x.durable_ctx,
-        )?;
+        golem::api::host::add_to_linker::<Context, DurableWorkerCtx<Context>>(&mut linker, |x| {
+            &mut x.durable_ctx
+        })?;
+        golem::rpc::types::add_to_linker::<Context, DurableWorkerCtx<Context>>(&mut linker, |x| {
+            &mut x.durable_ctx
+        })?;
         Ok(linker)
     }
 }
