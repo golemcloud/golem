@@ -22,6 +22,7 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use bytes::{Buf, BufMut, Bytes};
 use golem_common::model::{InvocationKey, WorkerId};
+use golem_wasm_rpc::Value;
 use tokio::sync::{mpsc, Mutex};
 
 use crate::error::GolemError;
@@ -351,15 +352,7 @@ impl ManagedStandardIo {
                                     Err(must_read_first_error())
                                 } else {
                                     let result = String::from_utf8(captured)
-                                        .map(|captured_string| {
-                                            vec![golem_wasm_rpc::protobuf::Val {
-                                                val: Some(
-                                                    golem_wasm_rpc::protobuf::val::Val::String(
-                                                        captured_string,
-                                                    ),
-                                                ),
-                                            }]
-                                        })
+                                        .map(|captured_string| vec![Value::String(captured_string)])
                                         .map_err(|_| GolemError::Runtime {
                                             details: "stdout did not contain a valid utf-8 string"
                                                 .to_string(),

@@ -22,7 +22,7 @@ use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus,
 };
-use golem_wasm_rpc::protobuf::Val;
+use golem_wasm_rpc::Value;
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -161,7 +161,7 @@ impl InvocationManagement for Context {
     async fn confirm_invocation_key(
         &mut self,
         key: &InvocationKey,
-        vals: Result<Vec<Val>, GolemError>,
+        vals: Result<Vec<Value>, GolemError>,
     ) {
         self.durable_ctx.confirm_invocation_key(key, vals).await
     }
@@ -212,7 +212,7 @@ impl InvocationHooks for Context {
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         calling_convention: Option<&CallingConvention>,
     ) -> anyhow::Result<()> {
         self.durable_ctx
@@ -236,10 +236,10 @@ impl InvocationHooks for Context {
     async fn on_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Val>,
-    ) -> Result<Option<Vec<Val>>, Error> {
+        output: Vec<Value>,
+    ) -> Result<Option<Vec<Value>>, Error> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await

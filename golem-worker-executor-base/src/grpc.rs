@@ -29,6 +29,7 @@ use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, ShardId, WorkerMetadata, WorkerStatus,
 };
 use golem_wasm_rpc::protobuf::Val;
+use golem_wasm_rpc::Value;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -512,7 +513,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         "Invalid invocation key {invocation_key} for {worker_id}"
                     ))),
                     LookupResult::Complete(Ok(output)) => {
-                        Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output })
+                        let proto_output = output.into_iter().map(|val| val.into()).collect();
+                        Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess {
+                            output: proto_output,
+                        })
                     }
                     LookupResult::Complete(Err(err)) => Err(err),
                     LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
@@ -530,7 +534,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<Option<Result<Vec<Val>, GolemError>>, GolemError> {
         let full_function_name = request.name();
 
-        let function_input: Vec<Val> = request.input();
+        let proto_function_input: Vec<Val> = request.input();
+        let function_input = proto_function_input
+            .iter()
+            .map(|val| val.clone().try_into())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
+
         let worker_id = request.worker_id()?;
         let account_id: AccountId = request.account_id()?;
 
@@ -571,7 +581,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
 
         match output {
-            LookupResult::Complete(output) => Ok(Some(output)),
+            LookupResult::Complete(output) => {
+                let proto_output =
+                    output.map(|values| values.into_iter().map(|val| val.into()).collect());
+                Ok(Some(proto_output))
+            }
             LookupResult::Invalid => Err(GolemError::invalid_request(format!(
                 "Invalid invocation key {} for {worker_id}",
                 invocation_key.unwrap()
@@ -583,8 +597,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let requires_invoke = {
                         let public_state = &worker_details.public_state;
 
-                        let bytes = match function_input.first().unwrap().val.as_ref() {
-                            Some(golem_wasm_rpc::protobuf::val::Val::String(value)) => {
+                        let bytes = match function_input.first() {
+                            Some(Value::String(value)) => {
                                 Ok(Bytes::from(format!("{}\n", value).to_string()))
                             }
                             _ => Err(GolemError::invalid_request(

@@ -51,7 +51,7 @@ use golem_common::model::{
     WorkerMetadata, WorkerStatus,
 };
 use golem_common::model::{OplogEntry, WrappedFunctionType};
-use golem_wasm_rpc::protobuf::Val;
+use golem_wasm_rpc::Value;
 use serde::de::DeserializeOwned;
 use tempfile::TempDir;
 use tracing::{debug, info};
@@ -131,7 +131,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> Result<
         Option<(
             String,
-            Vec<Val>,
+            Vec<Value>,
             Option<InvocationKey>,
             Option<CallingConvention>,
         )>,
@@ -144,7 +144,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub async fn get_oplog_entry_exported_function_completed(
         &mut self,
-    ) -> Result<Option<Vec<Val>>, GolemError> {
+    ) -> Result<Option<Vec<Value>>, GolemError> {
         self.private_state
             .get_oplog_entry_exported_function_completed()
             .await
@@ -620,7 +620,7 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
     async fn confirm_invocation_key(
         &mut self,
         key: &InvocationKey,
-        vals: Result<Vec<Val>, GolemError>,
+        vals: Result<Vec<Value>, GolemError>,
     ) {
         self.private_state.confirm_invocation_key(key, vals).await
     }
@@ -678,13 +678,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         calling_convention: Option<&CallingConvention>,
     ) -> anyhow::Result<()> {
+        let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
+            .iter()
+            .map(|value| value.clone().into())
+            .collect();
         let oplog_entry = OplogEntry::exported_function_invoked(
             Timestamp::now_utc(),
             full_function_name.to_string(),
-            function_input,
+            &proto_function_input,
             self.get_current_invocation_key().await,
             calling_convention.cloned(),
         )
@@ -756,17 +760,19 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Val>,
-    ) -> Result<Option<Vec<Val>>, anyhow::Error> {
+        output: Vec<Value>,
+    ) -> Result<Option<Vec<Value>>, anyhow::Error> {
         self.consume_hint_entries().await;
         let is_live_after = self.is_live();
 
         if is_live_after {
+            let proto_output: Vec<golem_wasm_rpc::protobuf::Val> =
+                output.iter().map(|value| value.clone().into()).collect();
             let oplog_entry = OplogEntry::exported_function_completed(
                 Timestamp::now_utc(),
-                &output,
+                &proto_output,
                 consumed_fuel,
             )
             .unwrap_or_else(|err| {
@@ -1089,7 +1095,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     ) -> Result<
         Option<(
             String,
-            Vec<Val>,
+            Vec<Value>,
             Option<InvocationKey>,
             Option<CallingConvention>,
         )>,
@@ -1109,6 +1115,13 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                             .payload_as_val_array()
                             .expect("failed to deserialize function request payload")
                             .unwrap();
+                        let request = request
+                            .into_iter()
+                            .map(|val| {
+                                val.try_into()
+                                    .expect("failed to decode serialized protobuf value")
+                            })
+                            .collect::<Vec<Value>>();
                         break Ok(Some((
                             function_name.to_string(),
                             request,
@@ -1134,7 +1147,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     async fn get_oplog_entry_exported_function_completed(
         &mut self,
-    ) -> Result<Option<Vec<Val>>, GolemError> {
+    ) -> Result<Option<Vec<Value>>, GolemError> {
         loop {
             if self.is_replay() {
                 let oplog_entry = self.get_oplog_entry().await;
@@ -1144,6 +1157,13 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                             .payload_as_val_array()
                             .expect("failed to deserialize function response payload")
                             .unwrap();
+                        let response = response
+                            .into_iter()
+                            .map(|val| {
+                                val.try_into()
+                                    .expect("failed to decode serialized protobuf value")
+                            })
+                            .collect();
                         break Ok(Some(response));
                     }
                     OplogEntry::Suspend { .. } => (),
@@ -1201,7 +1221,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     pub async fn confirm_invocation_key(
         &mut self,
         key: &InvocationKey,
-        vals: Result<Vec<Val>, GolemError>,
+        vals: Result<Vec<Value>, GolemError>,
     ) {
         self.invocation_key_service
             .confirm_key(&self.worker_id, key, vals)

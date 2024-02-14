@@ -510,7 +510,7 @@ mod tests {
         AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerId,
         WorkerMetadata, WorkerStatus,
     };
-    use golem_wasm_rpc::protobuf::Val;
+    use golem_wasm_rpc::Value;
     use tokio::runtime::Handle;
     use tokio::time::{timeout, Instant};
     use wasmtime::component::Instance;
@@ -580,7 +580,7 @@ mod tests {
         async fn confirm_invocation_key(
             &mut self,
             _key: &InvocationKey,
-            _vals: Result<Vec<Val>, GolemError>,
+            _vals: Result<Vec<Value>, GolemError>,
         ) {
             unimplemented!()
         }
@@ -629,7 +629,7 @@ mod tests {
         async fn on_exported_function_invoked(
             &mut self,
             _full_function_name: &str,
-            _function_input: &Vec<Val>,
+            _function_input: &Vec<Value>,
             _calling_convention: Option<&CallingConvention>,
         ) -> anyhow::Result<()> {
             unimplemented!()
@@ -649,10 +649,10 @@ mod tests {
         async fn on_invocation_success(
             &mut self,
             _full_function_name: &str,
-            _function_input: &Vec<Val>,
+            _function_input: &Vec<Value>,
             _consumed_fuel: i64,
-            _output: Vec<Val>,
-        ) -> Result<Option<Vec<Val>>, Error> {
+            _output: Vec<Value>,
+        ) -> Result<Option<Vec<Value>>, Error> {
             unimplemented!()
         }
     }

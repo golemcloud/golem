@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use golem_common::model::{InvocationKey, WorkerId};
+use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tracing::debug;
 use uuid::Uuid;
@@ -35,7 +36,7 @@ pub trait InvocationKeyService {
         &self,
         worker_id: &WorkerId,
         key: &InvocationKey,
-        vals: Result<Vec<golem_wasm_rpc::protobuf::Val>, GolemError>,
+        vals: Result<Vec<Value>, GolemError>,
     );
     fn interrupt_key(&self, worker_id: &WorkerId, key: &InvocationKey);
     fn resume_key(&self, worker_id: &WorkerId, key: &InvocationKey);
@@ -58,10 +59,8 @@ pub struct InvocationKeyServiceDefault {
 #[derive(Debug)]
 struct State {
     pending_keys: std::collections::HashMap<(WorkerId, InvocationKey), PendingStatus>,
-    confirmed_keys: std::collections::HashMap<
-        (WorkerId, InvocationKey),
-        Result<Vec<golem_wasm_rpc::protobuf::Val>, GolemError>,
-    >,
+    confirmed_keys:
+        std::collections::HashMap<(WorkerId, InvocationKey), Result<Vec<Value>, GolemError>>,
 }
 
 #[derive(Clone, Debug)]
@@ -84,7 +83,7 @@ pub enum LookupResult {
     Invalid,
     Pending,
     Interrupted,
-    Complete(Result<Vec<golem_wasm_rpc::protobuf::Val>, GolemError>),
+    Complete(Result<Vec<Value>, GolemError>),
 }
 
 impl Default for InvocationKeyServiceDefault {
@@ -161,7 +160,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
         &self,
         worker_id: &WorkerId,
         key: &InvocationKey,
-        vals: Result<Vec<golem_wasm_rpc::protobuf::Val>, GolemError>,
+        vals: Result<Vec<Value>, GolemError>,
     ) {
         self.cleanup();
         let key = (worker_id.clone(), key.clone());
@@ -238,7 +237,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
 #[cfg(test)]
 mod tests {
     use golem_common::model::{TemplateId, WorkerId};
-    use golem_wasm_rpc::protobuf::{val, Val};
+    use golem_wasm_rpc::Value;
 
     use crate::services::invocation_key::{
         InvocationKeyService, InvocationKeyServiceDefault, LookupResult,
@@ -260,49 +259,16 @@ mod tests {
         let key3 = svc1.generate_key(&worker_id);
 
         let svc2 = InvocationKeyServiceDefault::default();
-        svc2.confirm_key(
-            &worker_id,
-            &key1,
-            Ok(vec![Val {
-                val: Some(val::Val::U32(1)),
-            }]),
-        );
-        svc2.confirm_key(
-            &worker_id,
-            &key2,
-            Ok(vec![Val {
-                val: Some(val::Val::U32(2)),
-            }]),
-        );
-        svc2.confirm_key(
-            &worker_id,
-            &key3,
-            Ok(vec![Val {
-                val: Some(val::Val::U32(3)),
-            }]),
-        );
+        svc2.confirm_key(&worker_id, &key1, Ok(vec![Value::U32(1)]));
+        svc2.confirm_key(&worker_id, &key2, Ok(vec![Value::U32(2)]));
+        svc2.confirm_key(&worker_id, &key3, Ok(vec![Value::U32(3)]));
 
         let r1 = svc2.lookup_key(&worker_id, &key1);
         let r2 = svc2.lookup_key(&worker_id, &key2);
         let r3 = svc2.lookup_key(&worker_id, &key3);
 
-        assert_eq!(
-            r1,
-            LookupResult::Complete(Ok(vec!(Val {
-                val: Some(val::Val::U32(1))
-            })))
-        );
-        assert_eq!(
-            r2,
-            LookupResult::Complete(Ok(vec!(Val {
-                val: Some(val::Val::U32(2))
-            })))
-        );
-        assert_eq!(
-            r3,
-            LookupResult::Complete(Ok(vec!(Val {
-                val: Some(val::Val::U32(3))
-            })))
-        );
+        assert_eq!(r1, LookupResult::Complete(Ok(vec![Value::U32(1)])));
+        assert_eq!(r2, LookupResult::Complete(Ok(vec![Value::U32(2)])));
+        assert_eq!(r3, LookupResult::Complete(Ok(vec![Value::U32(3)])));
     }
 }

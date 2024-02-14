@@ -21,7 +21,7 @@ use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus,
 };
-use golem_wasm_rpc::protobuf::Val;
+use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use crate::error::GolemError;
@@ -177,7 +177,7 @@ pub trait InvocationManagement {
     async fn confirm_invocation_key(
         &mut self,
         key: &InvocationKey,
-        vals: Result<Vec<Val>, GolemError>,
+        vals: Result<Vec<Value>, GolemError>,
     );
 }
 
@@ -236,7 +236,7 @@ pub trait InvocationHooks {
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         calling_convention: Option<&CallingConvention>,
     ) -> anyhow::Result<()>;
 
@@ -259,10 +259,10 @@ pub trait InvocationHooks {
     async fn on_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Val>,
-    ) -> Result<Option<Vec<Val>>, anyhow::Error>;
+        output: Vec<Value>,
+    ) -> Result<Option<Vec<Value>>, anyhow::Error>;
 }
 
 /// Operations not requiring an active worker context, but still depending on the

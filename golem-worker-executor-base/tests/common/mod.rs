@@ -7,6 +7,7 @@ use golem_wasm_ast::IgnoreAllButMetadata;
 use golem_wasm_rpc::protobuf::{
     val, Val, ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple,
 };
+use golem_wasm_rpc::Value;
 use prometheus::Registry;
 use std::collections::HashMap;
 use std::path::Path;
@@ -68,7 +69,7 @@ use golem_worker_executor_base::workerctx::{
     StatusManagement, WorkerCtx,
 };
 use golem_worker_executor_base::{durable_host, Bootstrap};
-use serde_json::Value;
+use serde_json::Value as JsonValue;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
@@ -344,8 +345,8 @@ impl TestWorkerExecutor {
         &mut self,
         worker_id: &WorkerId,
         function_name: &str,
-        params: Value,
-    ) -> Result<Value, GolemError> {
+        params: JsonValue,
+    ) -> Result<JsonValue, GolemError> {
         let json_string = params.to_string();
         self.invoke_and_await_custom(
             worker_id,
@@ -361,9 +362,9 @@ impl TestWorkerExecutor {
                     match value_opt {
                         Some(val::Val::String(s)) => {
                             if s.is_empty() {
-                                Ok(Value::Null)
+                                Ok(JsonValue::Null)
                             } else {
-                                let result: Value = serde_json::from_str(s).unwrap_or(Value::String(s.to_string()));
+                                let result: JsonValue = serde_json::from_str(s).unwrap_or(JsonValue::String(s.to_string()));
                                 Ok(result)
                             }
                         }
@@ -379,8 +380,8 @@ impl TestWorkerExecutor {
         &mut self,
         worker_id: &WorkerId,
         function_name: &str,
-        params: Value,
-    ) -> Result<Value, GolemError> {
+        params: JsonValue,
+    ) -> Result<JsonValue, GolemError> {
         let json_string = params.to_string();
         self.invoke_and_await_custom(
             worker_id,
@@ -396,9 +397,9 @@ impl TestWorkerExecutor {
                     match value_opt {
                         Some(val::Val::String(s)) => {
                             if s.is_empty() {
-                                Ok(Value::Null)
+                                Ok(JsonValue::Null)
                             } else {
-                                let result: Value = serde_json::from_str(s).unwrap_or(Value::String(s.to_string()));
+                                let result: JsonValue = serde_json::from_str(s).unwrap_or(JsonValue::String(s.to_string()));
                                 Ok(result)
                             }
                         }
@@ -1045,7 +1046,7 @@ impl InvocationManagement for TestWorkerCtx {
     async fn confirm_invocation_key(
         &mut self,
         key: &InvocationKey,
-        vals: Result<Vec<Val>, GolemError>,
+        vals: Result<Vec<Value>, GolemError>,
     ) {
         self.durable_ctx.confirm_invocation_key(key, vals).await
     }
@@ -1096,7 +1097,7 @@ impl InvocationHooks for TestWorkerCtx {
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         calling_convention: Option<&golem_common::model::CallingConvention>,
     ) -> anyhow::Result<()> {
         self.durable_ctx
@@ -1120,10 +1121,10 @@ impl InvocationHooks for TestWorkerCtx {
     async fn on_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Val>,
-    ) -> Result<Option<Vec<Val>>, Error> {
+        output: Vec<Value>,
+    ) -> Result<Option<Vec<Value>>, Error> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
