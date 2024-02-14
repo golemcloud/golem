@@ -17,17 +17,18 @@ pub trait RegisterApiDefinition {
 
     async fn get(
         &self,
-        api_definition_id: &ApiDefinitionId,
+        api_definition_key: &ApiDefinitionKey,
     ) -> Result<Option<ApiDefinition>, ApiRegistrationError>;
 
     async fn delete(
         &self,
-        api_definition_id: &ApiDefinitionId,
+        api_definition_key: &ApiDefinitionKey,
     ) -> Result<bool, ApiRegistrationError>;
 
     async fn get_all(&self) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
 }
 
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 struct ApiDefinitionKey {
     id: ApiDefinitionId,
     version: Version,
@@ -85,7 +86,7 @@ impl Default for InMemoryRegistry {
 impl RegisterApiDefinition for InMemoryRegistry {
     async fn register(&self, definition: &ApiDefinition) -> Result<(), ApiRegistrationError> {
         let mut registry = self.registry.lock().unwrap();
-        let key: ApiDefinitionKey = ApiDefinitionKey::from(&definition);
+        let key: ApiDefinitionKey = ApiDefinitionKey::from(definition);
 
         if registry.contains_key(&key) {
             Err(ApiRegistrationError::AlreadyExists(key))
@@ -93,7 +94,6 @@ impl RegisterApiDefinition for InMemoryRegistry {
             registry.insert(key, definition.clone());
             Ok(())
         }
-
     }
 
     async fn get(
@@ -135,38 +135,36 @@ impl RedisApiRegistry {
 
 #[async_trait]
 impl RegisterApiDefinition for RedisApiRegistry {
-        async fn register(&self, definition: &ApiDefinition) -> Result<(), ApiRegistrationError> {
-            debug!("Register definition: id: {}", definition.id);
-            let key: ApiDefinitionKey = ApiDefinitionKey::from(definition);
-            let redis_key = get_api_definition_redis_key(&key);
+    async fn register(&self, definition: &ApiDefinition) -> Result<(), ApiRegistrationError> {
+        debug!("Register definition: id: {}", definition.id);
+        let key: ApiDefinitionKey = ApiDefinitionKey::from(definition);
+        let redis_key = get_api_definition_redis_key(&key);
 
-            // if key already exists return conflict error
-            let value: Option<Bytes> = self
-                .pool
-                .with("persistence", "get_definition")
-                .get(key.clone())
-                .await
-                .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+        // if key already exists return conflict error
+        let value: Option<Bytes> = self
+            .pool
+            .with("persistence", "get_definition")
+            .get(key.clone())
+            .await
+            .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
-            match value {
-                Some(_) => {
-                    Err(ApiRegistrationError::AlreadyExists(key))
-                }
-                None => {
-                    let definition_value = self
-                        .pool
-                        .serialize(definition)
-                        .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+        match value {
+            Some(_) => Err(ApiRegistrationError::AlreadyExists(key)),
+            None => {
+                let definition_value = self
+                    .pool
+                    .serialize(definition)
+                    .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
-                    self.pool
-                        .with("persistence", "register_definition")
-                        .set(redis_key, definition_value, None, None, false)
-                        .await
-                        .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
-                    Ok(())
-                }
+                self.pool
+                    .with("persistence", "register_definition")
+                    .set(redis_key, definition_value, None, None, false)
+                    .await
+                    .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+                Ok(())
             }
         }
+    }
 
     async fn get(
         &self,
@@ -211,7 +209,10 @@ impl RegisterApiDefinition for RedisApiRegistry {
 }
 
 fn get_api_definition_redis_key(api_id: &ApiDefinitionKey) -> String {
-    format!("{}:definition:{}:{}", API_DEFINITION_REDIS_NAMESPACE, api_id.id, api_id.version)
+    format!(
+        "{}:definition:{}:{}",
+        API_DEFINITION_REDIS_NAMESPACE, api_id.id, api_id.version
+    )
 }
 
 #[cfg(test)]
@@ -219,7 +220,10 @@ mod tests {
     use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
     use golem_common::config::RedisConfig;
 
-    use crate::register::{ApiDefinitionKey, get_api_definition_redis_key, InMemoryRegistry, RedisApiRegistry, RegisterApiDefinition};
+    use crate::register::{
+        get_api_definition_redis_key, ApiDefinitionKey, InMemoryRegistry, RedisApiRegistry,
+        RegisterApiDefinition,
+    };
 
     fn get_simple_api_definition_example(
         id: &ApiDefinitionKey,
@@ -253,10 +257,7 @@ mod tests {
         let id = ApiDefinitionId("api1".to_string());
         let version = Version("0.0.1".to_string());
 
-        let api_id1 = ApiDefinitionKey {
-            id,
-            version,
-        };
+        let api_id1 = ApiDefinitionKey { id, version };
 
         let api_definition1 = get_simple_api_definition_example(
             &api_id1,
@@ -266,10 +267,7 @@ mod tests {
 
         let id2 = ApiDefinitionId("api2".to_string());
         let version = Version("0.0.1".to_string());
-        let api_id2 = ApiDefinitionKey {
-            id: id2,
-            version,
-        };
+        let api_id2 = ApiDefinitionKey { id: id2, version };
 
         let api_definition2 = get_simple_api_definition_example(
             &api_id2,
@@ -325,10 +323,7 @@ mod tests {
 
         let id1 = ApiDefinitionId("api1".to_string());
         let version = Version("0.0.1".to_string());
-        let api_id1 = ApiDefinitionKey {
-            id: id1,
-            version,
-        };
+        let api_id1 = ApiDefinitionKey { id: id1, version };
 
         let api_definition1 = get_simple_api_definition_example(
             &api_id1,
@@ -338,10 +333,7 @@ mod tests {
 
         let id2 = ApiDefinitionId("api2".to_string());
         let version = Version("0.0.1".to_string());
-        let api_id2 = ApiDefinitionKey {
-            id: id2,
-            version,
-        };
+        let api_id2 = ApiDefinitionKey { id: id2, version };
 
         let api_definition2 = get_simple_api_definition_example(
             &api_id2,
@@ -388,10 +380,7 @@ mod tests {
     pub fn test_get_api_definition_redis_key() {
         let id = ApiDefinitionId("api1".to_string());
         let version = Version("0.0.1".to_string());
-        let api_id = ApiDefinitionKey {
-            id,
-            version,
-        };
+        let api_id = ApiDefinitionKey { id, version };
 
         assert_eq!(
             get_api_definition_redis_key(&api_id),

@@ -159,18 +159,23 @@ impl ApiDefinitionEndpoints {
     }
 }
 
-async fn register_api(definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>, definition: &api_definition::ApiDefinition) -> Result<(), ApiEndpointError>{
+async fn register_api(
+    definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
+    definition: &api_definition::ApiDefinition,
+) -> Result<(), ApiEndpointError> {
     definition_service
         .register(definition)
         .await
         .map_err(|reg_error| {
             error!(
-                    "API definition id: {} - register error: {}",
-                    definition.id, reg_error
-                );
+                "API definition id: {} - register error: {}",
+                definition.id, reg_error
+            );
 
             match reg_error {
-                ApiRegistrationError::AlreadyExists(_) => ApiEndpointError::already_exists(reg_error),
+                ApiRegistrationError::AlreadyExists(_) => {
+                    ApiEndpointError::already_exists(reg_error)
+                }
                 ApiRegistrationError::InternalError(_) => ApiEndpointError::bad_request(reg_error),
             }
         })
