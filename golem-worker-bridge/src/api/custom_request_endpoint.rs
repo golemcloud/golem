@@ -78,13 +78,7 @@ impl CustomRequestEndpoint {
         {
             Ok(api_definition_id) => ApiDefinitionId(api_definition_id.to_string()),
             Err(err) => {
-                error!(
-                    "{}",
-                    format!(
-                        "Invalid {} header: {}",
-                        GOLEM_API_DEFINITION_ID_EXTENSION, err
-                    )
-                );
+                error!(err);
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .body(Body::from_string(err.to_string()));
@@ -94,10 +88,7 @@ impl CustomRequestEndpoint {
         let version = match get_header_value(&headers, GOLEM_API_DEFINITION_VERSION) {
             Ok(version) => Version(version),
             Err(err) => {
-                error!(
-                    "{}",
-                    format!("Invalid {} header: {}", GOLEM_API_DEFINITION_VERSION, err)
-                );
+                error!(err);
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .body(Body::from_string(err.to_string()));
