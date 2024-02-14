@@ -24,7 +24,7 @@ serde_json = "1.0.113"
 serde_yaml = "0.9.31"
 strum = "0.26.1"
 strum_macros = "0.26.1"
-poem = { workspace = true, features = ["prometheus", "opentelemetry"] }
+poem = { workspace = true, features = ["prometheus", "opentelemetry", "test"] }
 poem-openapi = { workspace = true }
 derive_more = "0.99.17"
 uuid = { workspace = true }
@@ -42,3 +42,6 @@ tokio = { workspace = true }
 prometheus = "0.13.3"
 futures = "0.3.30"
 openapiv3 = "2.0.0"
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-prometheus = { workspace = true }

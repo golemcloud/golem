@@ -36,12 +36,12 @@ impl ApiDefinitionEndpoints {
             ApiEndpointError::bad_request(e)
         })?;
 
-        let api_definition_key = ApiDefinitionKey {
-            id: definition.id.clone(),
-            version: definition.version.clone(),
-        };
-
         register_api(self.definition_service.clone(), &definition).await?;
+
+        let api_definition_key = ApiDefinitionKey {
+            id: definition.id,
+            version: definition.version,
+        };
 
         let data = self
             .definition_service
@@ -161,6 +161,23 @@ impl ApiDefinitionEndpoints {
 
         Err(ApiEndpointError::not_found("API definition not found"))
     }
+
+    #[oai(path = "/all", method = "get")]
+    async fn get_all(&self) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
+        let data = self
+            .definition_service
+            .get_all()
+            .await
+            .map_err(ApiEndpointError::internal)?;
+
+        let values = data
+            .into_iter()
+            .map(|d| d.try_into())
+            .collect::<Result<Vec<ApiDefinition>, _>>()
+            .map_err(ApiEndpointError::internal)?;
+
+        Ok(Json(values))
+    }
 }
 
 async fn register_api(
@@ -183,6 +200,85 @@ async fn register_api(
                 ApiRegistrationError::InternalError(_) => ApiEndpointError::bad_request(reg_error),
             }
         })
+}
+
+#[cfg(test)]
+mod test {
+    use poem::test::TestClient;
+
+    use crate::register::InMemoryRegistry;
+
+    use super::*;
+
+    fn make_route() -> poem::Route {
+        let definition_service = Arc::new(InMemoryRegistry::default());
+        let endpoint = ApiDefinitionEndpoints::new(definition_service);
+
+        poem::Route::new().nest("", OpenApiService::new(endpoint, "test", "1.0"))
+    }
+
+    #[tokio::test]
+    async fn conflict_error_returned() {
+        let api = make_route();
+        let client = TestClient::new(api);
+
+        let definition = api_definition::ApiDefinition {
+            id: ApiDefinitionId("test".to_string()),
+            version: Version("1.0".to_string()),
+            routes: vec![],
+        };
+
+        let response = client
+            .put("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+
+        response.assert_status_is_ok();
+
+        let response = client
+            .put("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+
+        response.assert_status(http::StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn get_all() {
+        let api = make_route();
+        let client = TestClient::new(api);
+
+        let definition = api_definition::ApiDefinition {
+            id: ApiDefinitionId("test".to_string()),
+            version: Version("1.0".to_string()),
+            routes: vec![],
+        };
+        let response = client
+            .put("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status_is_ok();
+
+        let definition = api_definition::ApiDefinition {
+            id: ApiDefinitionId("test".to_string()),
+            version: Version("2.0".to_string()),
+            routes: vec![],
+        };
+        let response = client
+            .put("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status_is_ok();
+
+        let response = client.get("/v1/api/definitions/all").send().await;
+        response.assert_status_is_ok();
+        let body = response.json().await;
+        body.value().array().assert_len(2)
+    }
 }
 
 // Mostly this data structures that represents the actual incoming request
