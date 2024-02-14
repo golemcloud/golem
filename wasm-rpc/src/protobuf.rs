@@ -434,11 +434,11 @@ impl TryFrom<Val> for Value {
 
 #[cfg(feature = "typeinfo")]
 pub fn function_parameters(
-    parameters: Vec<Val>,
+    parameters: &[Val],
     expected_parameters: Vec<AnalysedFunctionParameter>,
-) -> Result<Vec<Val>, Vec<String>> {
+) -> Result<(), Vec<String>> {
     if parameters.len() == expected_parameters.len() {
-        Ok(parameters)
+        Ok(())
     } else {
         Err(vec![format!(
             "Unexpected number of parameters (got {}, expected: {})",
