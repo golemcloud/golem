@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use tracing::debug;
 use uuid::Uuid;
 
+use crate::durable_host::wasm_rpc::UriExtensions;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
@@ -73,12 +74,13 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     async fn get_self_uri(
         &mut self,
         function_name: String,
-    ) -> Result<golem::api::host::Uri, anyhow::Error> {
+    ) -> Result<golem::rpc::types::Uri, anyhow::Error> {
         record_host_function_call("golem::api", "get_self_uri");
-        let uri = golem::api::host::Uri {
-            value: format!("{}/{}", self.private_state.worker_id.uri(), function_name),
-        };
-        Ok(uri)
+        let uri = golem_wasm_rpc::golem::rpc::types::Uri::golem_uri(
+            &self.private_state.worker_id,
+            Some(&function_name),
+        );
+        Ok(golem::rpc::types::Uri { value: uri.value })
     }
 }
 

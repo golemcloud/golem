@@ -31,14 +31,13 @@ use golem_common::model::TemplateId;
 use golem_common::retries::with_retries;
 use http::Uri;
 use prost::Message;
-use tonic::Request;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
 use crate::error::GolemError;
-use crate::grpc::{is_grpc_retriable, GrpcError, UriBackConversion};
+use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError, UriBackConversion};
 use crate::metrics::template::record_compilation_time;
 use crate::services::compiled_template;
 use crate::services::compiled_template::CompiledTemplateService;
@@ -257,7 +256,7 @@ async fn download_via_grpc(
                     .await?
                     .max_decoding_message_size(max_template_size);
 
-                let request = authorised_request(
+                let request = authorised_grpc_request(
                     DownloadTemplateRequest {
                         template_id: Some(template_id.clone().into()),
                         version: Some(template_version),
@@ -314,7 +313,7 @@ async fn get_latest_version_via_grpc(
             Box::pin(async move {
                 let mut client = TemplateServiceClient::connect(endpoint.as_http_02()).await?;
 
-                let request = authorised_request(
+                let request = authorised_grpc_request(
                     GetLatestTemplateVersionRequest {
                         template_id: Some(template_id.clone().into()),
                     },
@@ -383,15 +382,6 @@ fn create_template_cache(
         },
         "component",
     )
-}
-
-fn authorised_request<T>(request: T, access_token: &Uuid) -> Request<T> {
-    let mut req = Request::new(request);
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {}", access_token).parse().unwrap(),
-    );
-    req
 }
 
 impl From<std::io::Error> for GolemError {

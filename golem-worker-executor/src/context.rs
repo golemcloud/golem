@@ -38,6 +38,7 @@ use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::OplogService;
 use golem_worker_executor_base::services::promise::PromiseService;
 use golem_worker_executor_base::services::recovery::RecoveryManagement;
+use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
@@ -263,6 +264,7 @@ impl WorkerCtx for Context {
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -281,6 +283,7 @@ impl WorkerCtx for Context {
             oplog_service,
             scheduler_service,
             recovery_management,
+            rpc,
             config,
             worker_config,
             execution_status,
@@ -305,6 +308,10 @@ impl WorkerCtx for Context {
 
     fn is_exit(error: &Error) -> Option<i32> {
         DurableWorkerCtx::<Context>::is_exit(error)
+    }
+
+    fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+        self.durable_ctx.rpc()
     }
 }
 

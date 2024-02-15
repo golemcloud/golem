@@ -34,6 +34,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 use wasmtime::Error;
 
 use crate::error::*;
@@ -1374,4 +1375,13 @@ impl UriBackConversion for http::Uri {
     fn as_http_02(&self) -> http_02::Uri {
         self.to_string().parse().unwrap()
     }
+}
+
+pub fn authorised_grpc_request<T>(request: T, access_token: &Uuid) -> Request<T> {
+    let mut req = Request::new(request);
+    req.metadata_mut().insert(
+        "authorization",
+        format!("Bearer {}", access_token).parse().unwrap(),
+    );
+    req
 }

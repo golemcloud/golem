@@ -68,7 +68,7 @@ use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
     StatusManagement, WorkerCtx,
 };
-use golem_worker_executor_base::{durable_host, Bootstrap};
+use golem_worker_executor_base::Bootstrap;
 use serde_json::Value as JsonValue;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -77,7 +77,7 @@ use tokio::task::JoinHandle;
 use golem::api;
 use golem_common::config::RedisConfig;
 use golem_worker_executor_base::preview2::golem;
-use golem_worker_executor_base::preview2::golem::rpc;
+use golem_worker_executor_base::services::rpc::Rpc;
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -1153,6 +1153,7 @@ impl WorkerCtx for TestWorkerCtx {
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -1171,6 +1172,7 @@ impl WorkerCtx for TestWorkerCtx {
             oplog_service,
             scheduler_service,
             recovery_management,
+            rpc,
             config,
             worker_config,
             execution_status,
@@ -1193,6 +1195,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn is_exit(error: &Error) -> Option<i32> {
         DurableWorkerCtx::<TestWorkerCtx>::is_exit(error)
+    }
+
+    fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+        self.durable_ctx.rpc()
     }
 }
 
@@ -1248,6 +1254,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         _worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let recovery_management = Arc::new(RecoveryManagementDefault::new(
             active_workers.clone(),
@@ -1262,6 +1269,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             invocation_key_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rpc.clone(),
             golem_config.clone(),
             (),
         ));
@@ -1281,6 +1289,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             blob_store_service,
             oplog_service,
             recovery_management,
+            rpc,
             scheduler_service,
             (),
         ))
@@ -1295,10 +1304,10 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             &mut linker,
             |x| &mut x.durable_ctx,
         )?;
-        rpc::types::add_to_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(
-            &mut linker,
-            |x| &mut x.durable_ctx,
-        )?;
+        golem_wasm_rpc::golem::rpc::types::add_to_linker::<
+            TestWorkerCtx,
+            DurableWorkerCtx<TestWorkerCtx>,
+        >(&mut linker, |x| &mut x.durable_ctx)?;
         Ok(linker)
     }
 }

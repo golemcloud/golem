@@ -67,6 +67,7 @@ use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::services::oplog::OplogService;
 use crate::services::recovery::{RecoveryDecision, RecoveryManagement};
+use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::HasOplogService;
 use crate::wasi_host;
@@ -83,7 +84,7 @@ mod logging;
 mod random;
 pub mod serialized;
 mod sockets;
-mod wasm_rpc;
+pub mod wasm_rpc;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -180,9 +181,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         ));
         debug!("{}", dump);
     }
-}
 
-impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn create(
         worker_id: VersionedWorkerId,
         account_id: AccountId,
@@ -196,6 +195,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
@@ -258,6 +258,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         current_invocation_key: None,
                         active_workers: active_workers.clone(),
                         recovery_management,
+                        rpc,
                     },
                     temp_dir,
                     execution_status,
@@ -391,6 +392,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .lookup_key(&self.private_state.worker_id, key),
             None => LookupResult::Invalid,
         }
+    }
+
+    pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+        self.private_state.rpc.clone()
     }
 }
 
@@ -1009,6 +1014,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     current_invocation_key: Option<InvocationKey>,
     pub active_workers: Arc<ActiveWorkers<Ctx>>,
     pub recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+    pub rpc: Arc<dyn Rpc + Send + Sync>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {

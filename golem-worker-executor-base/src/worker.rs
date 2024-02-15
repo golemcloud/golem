@@ -129,6 +129,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 this.oplog_service(),
                 this.scheduler_service(),
                 this.recovery_management(),
+                this.rpc(),
                 this.extra_deps(),
                 this.config(),
                 WorkerConfig::new(worker_metadata.worker_id.clone(), worker_args, worker_env),

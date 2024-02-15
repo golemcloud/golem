@@ -17,11 +17,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::model::InterruptKind;
+use crate::services::rpc::Rpc;
 use crate::services::{
     active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, scheduler,
     template, worker, HasActiveWorkers, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps,
     HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
-    HasRecoveryManagement, HasSchedulerService, HasTemplateService, HasWasmtimeEngine,
+    HasRecoveryManagement, HasRpc, HasSchedulerService, HasTemplateService, HasWasmtimeEngine,
     HasWorkerService,
 };
 use crate::worker::Worker;
@@ -73,6 +74,7 @@ pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
     invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+    rpc: Arc<dyn Rpc + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -94,6 +96,7 @@ impl<Ctx: WorkerCtx> Clone for RecoveryManagementDefault<Ctx> {
             invocation_key_service: self.invocation_key_service.clone(),
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
+            rpc: self.rpc.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -181,6 +184,12 @@ impl<Ctx: WorkerCtx> HasRecoveryManagement for RecoveryManagementDefault<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasRpc for RecoveryManagementDefault<Ctx> {
+    fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+        self.rpc.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasExtraDeps<Ctx> for RecoveryManagementDefault<Ctx> {
     fn extra_deps(&self) -> Ctx::ExtraDeps {
         self.extra_deps.clone()
@@ -201,6 +210,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
@@ -220,6 +230,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             blob_store_service,
             golem_config,
             recovery_override: None,
+            rpc,
             extra_deps,
         }
     }
@@ -239,6 +250,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
         recovery_override: F,
     ) -> Self
@@ -261,6 +273,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             blob_store_service,
             golem_config,
             recovery_override: Some(Arc::new(recovery_override)),
+            rpc,
             extra_deps,
         }
     }
@@ -496,7 +509,7 @@ mod tests {
     use crate::services::worker_event::WorkerEventService;
     use crate::services::{
         All, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps, HasInvocationKeyService,
-        HasKeyValueService, HasPromiseService, HasTemplateService, HasWasmtimeEngine,
+        HasKeyValueService, HasPromiseService, HasRpc, HasTemplateService, HasWasmtimeEngine,
         HasWorkerService,
     };
     use crate::workerctx::{
@@ -518,12 +531,14 @@ mod tests {
 
     use crate::services::oplog::{OplogService, OplogServiceMock};
     use crate::services::recovery::{RecoveryManagement, RecoveryManagementDefault};
+    use crate::services::rpc::Rpc;
     use crate::services::scheduler;
     use crate::services::scheduler::SchedulerService;
 
     struct EmptyContext {
         worker_id: VersionedWorkerId,
         public_state: EmptyPublicState,
+        rpc: Arc<dyn Rpc + Send + Sync>,
     }
 
     #[derive(Clone)]
@@ -731,6 +746,7 @@ mod tests {
             _oplog_service: Arc<dyn OplogService + Send + Sync>,
             _scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
             _recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+            rpc: Arc<dyn Rpc + Send + Sync>,
             _extra_deps: Self::ExtraDeps,
             _config: Arc<GolemConfig>,
             _worker_config: WorkerConfig,
@@ -739,6 +755,7 @@ mod tests {
             Ok(EmptyContext {
                 worker_id: create_test_id(),
                 public_state: EmptyPublicState,
+                rpc,
             })
         }
 
@@ -756,6 +773,10 @@ mod tests {
 
         fn is_exit(_error: &Error) -> Option<i32> {
             None
+        }
+
+        fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+            self.rpc.clone()
         }
     }
 
@@ -808,6 +829,7 @@ mod tests {
             deps.key_value_service(),
             deps.blob_store_service(),
             deps.config(),
+            deps.rpc(),
             (),
             recovery_fn,
         )
