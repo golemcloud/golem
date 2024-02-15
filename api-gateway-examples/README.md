@@ -46,7 +46,7 @@ A typical worker bridge endpoint definition looks like this. Please refer to [en
 ```bash
 {
   "id": "shopping-cart-v1",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "routes": [
     {
       "method": "Get",
@@ -77,6 +77,7 @@ A typical worker bridge endpoint definition looks like this. Please refer to [en
 ```bash
 
 # register with worker bridge
+# Ensure to make change in template-id in endpoint_definition.json
 curl -X PUT http://localhost:9005/v1/api/definitions -H "Content-Type: application/json"  -d @endpoint_definition.json
 
 ```
@@ -120,7 +121,7 @@ curl --location --request POST 'http://localhost:8080/tyk/apis' \
                 "name": "Default",
                 "global_headers": {
                     "x-golem-api-definition-id":"shopping-cart-v1",
-                    "x-golem-api-definition-version": "0.0.1"
+                    "x-golem-api-definition-version": "0.0.2"
                 }
             }
         }
@@ -128,7 +129,7 @@ curl --location --request POST 'http://localhost:8080/tyk/apis' \
     "driver": "otto",
     "proxy": {
         "listen_path": "/v10",
-        "target_url": "http://192.168.18.202:9006/",
+        "target_url": "http://169.254.141.101:9006/",
         "strip_listen_path": true
     }
 }'
@@ -226,6 +227,13 @@ backed by API Gateway.
 By injecting these headers to every request, worker bridge can lookup the corresponding API definition and serve the request.
 It is the responsibility of whoever managing the API Gateway (Tyk in this case) to make sure that every request is configured to inject
 these headers.
+
+Please note that, if you are using open-api spec in registering with worker-bridge, x-golem-api-definition-version is _NOT_
+the version of the open-api spec. You may have to change the open-api spec that you upload to Tyk (with extra caching or authorisation for example),
+and still point to the same version of the API definition in worker-bridge. It is upto the user whether or not 
+they keep the version of the open-api spec and the version of the API definition in worker-bridge to be same. Conceptually,
+they don't necessarily be the same.
+
 
 ## What next?
 
