@@ -54,11 +54,17 @@ bindgen!({
     tracing: false,
     async: true,
     with: {
+        "golem:rpc/types/wasm-rpc": WasmRpcEntry
     }
 });
 
 #[cfg(feature = "host")]
-pub use golem::rpc::types::{HostWasmRpc, NodeIndex, WitNode, WitValue};
+pub use golem::rpc::types::{Host, HostWasmRpc, NodeIndex, WitNode, WitValue};
+
+#[cfg(feature = "host")]
+pub struct WasmRpcEntry {
+    pub payload: Box<dyn std::any::Any + Send + Sync>,
+}
 
 /// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
 #[derive(Debug, Clone, PartialEq)]
