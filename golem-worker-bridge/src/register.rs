@@ -315,10 +315,7 @@ impl RegisterApiDefinition for RedisApiRegistry {
             futures::future::try_join_all(futures).await?
         };
 
-        Ok(all_definitions
-            .into_iter()
-            .filter_map(std::convert::identity)
-            .collect::<Vec<_>>())
+        Ok(all_definitions.into_iter().flatten().collect::<Vec<_>>())
     }
 
     async fn get_all_versions(
@@ -349,10 +346,7 @@ impl RegisterApiDefinition for RedisApiRegistry {
             .await
             .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
-        Ok(api_definitions
-            .into_iter()
-            .filter_map(std::convert::identity)
-            .collect())
+        Ok(api_definitions.into_iter().flatten().collect())
     }
 }
 
