@@ -26,6 +26,11 @@ pub trait RegisterApiDefinition {
     ) -> Result<bool, ApiRegistrationError>;
 
     async fn get_all(&self) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
+
+    async fn get_all_versions(
+        &self,
+        api_id: &ApiDefinitionId,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
@@ -117,6 +122,21 @@ impl RegisterApiDefinition for InMemoryRegistry {
 
         Ok(result)
     }
+
+    async fn get_all_versions(
+        &self,
+        api_id: &ApiDefinitionId,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+        let registry = self.registry.lock().unwrap();
+
+        let result: Vec<ApiDefinition> = registry
+            .values()
+            .filter(|api| api.id == *api_id)
+            .cloned()
+            .collect();
+
+        Ok(result)
+    }
 }
 
 pub struct RedisApiRegistry {
@@ -140,29 +160,47 @@ impl RegisterApiDefinition for RedisApiRegistry {
         let key: ApiDefinitionKey = ApiDefinitionKey::from(definition);
         let redis_key = get_api_definition_redis_key(&key);
 
-        // if key already exists return conflict error
-        let value: Option<Bytes> = self
+        let value: u32 = self
             .pool
             .with("persistence", "get_definition")
-            .get(redis_key.clone())
+            .exists(redis_key.clone())
             .await
             .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
-        match value {
-            Some(_) => Err(ApiRegistrationError::AlreadyExists(key)),
-            None => {
-                let definition_value = self
-                    .pool
-                    .serialize(definition)
-                    .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+        // if key already exists return conflict error
+        if value > 0 {
+            Err(ApiRegistrationError::AlreadyExists(key))
+        } else {
+            let definition_value = self
+                .pool
+                .serialize(definition)
+                .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
-                self.pool
-                    .with("persistence", "register_definition")
-                    .set(redis_key, definition_value, None, None, false)
-                    .await
-                    .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
-                Ok(())
-            }
+            self.pool
+                .with("persistence", "register_definition")
+                .transaction({
+                    let api_id = key.id.clone();
+                    let api_version = key.version.0.clone();
+
+                    move |transaction| async move {
+                        let definition_key = get_api_definition_redis_key(&key);
+                        let version_set_key = get_api_definition_redis_key_version_set(&api_id);
+
+                        transaction
+                            .set(definition_key, definition_value, None, None, false)
+                            .await?;
+                        transaction.sadd(version_set_key, vec![api_version]).await?;
+                        transaction
+                            .sadd(get_all_apis_set_redis_key(), vec![api_id.0])
+                            .await?;
+
+                        Ok(transaction)
+                    }
+                })
+                .await
+                .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+
+            Ok(())
         }
     }
 
@@ -194,30 +232,151 @@ impl RegisterApiDefinition for RedisApiRegistry {
     async fn delete(&self, api_id: &ApiDefinitionKey) -> Result<bool, ApiRegistrationError> {
         debug!("Delete definition: id: {}", api_id);
         let definition_key = get_api_definition_redis_key(api_id);
-        let definition_delete: u32 = self
+        let version_set_key = get_api_definition_redis_key_version_set(&api_id.id);
+
+        let (definition_delete, _, num_versions): (u32, (), u32) = self
             .pool
             .with("persistence", "delete_definition")
-            .del(definition_key)
+            .transaction({
+                let api_version = api_id.version.0.clone();
+
+                move |transaction| async move {
+                    transaction.del(definition_key).await?;
+                    transaction
+                        .srem(version_set_key.clone(), vec![api_version])
+                        .await?;
+                    transaction.scard(version_set_key).await?;
+
+                    Ok(transaction)
+                }
+            })
             .await
             .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+
+        // If the definition was deleted and there are no more versions, remove the definition from the all_api_definitions set.
+        if definition_delete > 1 && num_versions == 0 {
+            let all_apis_key = get_all_apis_set_redis_key();
+            let api_version = api_id.version.0.clone();
+            self.pool
+                .with("persistence", "delete_definition")
+                .srem(all_apis_key, vec![api_version])
+                .await
+                .map_err(|e| {
+                    tracing::error!(
+                        "Failed to remove definition from all_api_definitions set: {}",
+                        e
+                    );
+                    ApiRegistrationError::InternalError(e.to_string())
+                })?;
+        }
+
         Ok(definition_delete > 0)
     }
 
     async fn get_all(&self) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
-        unimplemented!("get_all")
+        let all_apis: Vec<ApiDefinitionId> = {
+            let result: Vec<String> = self
+                .pool
+                .with("persistence", "get_all_definitions")
+                .smembers(get_all_apis_set_redis_key())
+                .await
+                .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+
+            result.into_iter().map(ApiDefinitionId).collect()
+        };
+
+        let all_versions: Vec<(ApiDefinitionId, Vec<String>)> = {
+            let futures = all_apis.into_iter().map(|api_id| async move {
+                let version_set_key = get_api_definition_redis_key_version_set(&api_id);
+                let versions: Vec<String> = self
+                    .pool
+                    .with("persistence", "get_all_definitions")
+                    .smembers(version_set_key)
+                    .await
+                    .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+                Ok((api_id, versions))
+            });
+
+            futures::future::try_join_all(futures).await?
+        };
+
+        let all_definitions: Vec<Option<ApiDefinition>> = {
+            let futures = all_versions
+                .into_iter()
+                .flat_map(|(api_id, versions)| {
+                    versions.into_iter().map(move |version| ApiDefinitionKey {
+                        id: api_id.clone(),
+                        version: Version(version),
+                    })
+                })
+                .map(|api_id| async move { self.get(&api_id).await })
+                .collect::<Vec<_>>();
+
+            futures::future::try_join_all(futures).await?
+        };
+
+        Ok(all_definitions
+            .into_iter()
+            .filter_map(std::convert::identity)
+            .collect::<Vec<_>>())
+    }
+
+    async fn get_all_versions(
+        &self,
+        api_id: &ApiDefinitionId,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+        let version_set_key = get_api_definition_redis_key_version_set(api_id);
+
+        // Fetch all versions from the set
+        let versions: Vec<String> = self
+            .pool
+            .with("persistence", "get_all_versions")
+            .smembers(version_set_key)
+            .await
+            .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+
+        // For each version, construct an ApiDefinitionKey and fetch the ApiDefinition
+        let futures: Vec<_> = versions
+            .into_iter()
+            .map(|version| ApiDefinitionKey {
+                id: api_id.clone(),
+                version: Version(version),
+            })
+            .map(|api_id| async move { self.get(&api_id).await })
+            .collect();
+
+        let api_definitions: Vec<Option<ApiDefinition>> = futures::future::try_join_all(futures)
+            .await
+            .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+
+        Ok(api_definitions
+            .into_iter()
+            .filter_map(std::convert::identity)
+            .collect())
     }
 }
 
+// Specific Api Definition Key.
 fn get_api_definition_redis_key(api_id: &ApiDefinitionKey) -> String {
     format!(
-        "{}:definition:{}:{}",
-        API_DEFINITION_REDIS_NAMESPACE, api_id.id, api_id.version
+        "{API_DEFINITION_REDIS_NAMESPACE}:definition:{}:{}",
+        api_id.id, api_id.version
     )
+}
+
+// All Api Definition IDs.
+fn get_all_apis_set_redis_key() -> String {
+    format!("{API_DEFINITION_REDIS_NAMESPACE}:definition:all_api_definitions")
+}
+
+// All Api Versions for a given Api Definition ID.
+fn get_api_definition_redis_key_version_set(api_id: &ApiDefinitionId) -> String {
+    format!("{API_DEFINITION_REDIS_NAMESPACE}:definition:{api_id}:versions",)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
+    use super::*;
     use golem_common::config::RedisConfig;
 
     use crate::register::{
@@ -385,6 +544,15 @@ mod tests {
         assert_eq!(
             get_api_definition_redis_key(&api_id),
             "apidefinition:definition:api1:0.0.1"
+        );
+    }
+
+    #[test]
+    pub fn test_get_all_apis_set_redis_key() {
+        let id = ApiDefinitionId("api1".to_string());
+        assert_eq!(
+            get_api_definition_redis_key_version_set(&id),
+            "apidefinition:definition:api1:versions"
         );
     }
 }

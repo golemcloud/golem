@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use bincode::{Decode, Encode};
 use bytes::Bytes;
+use fred::clients::Transaction;
 use fred::prelude::{RedisPool as FredRedisPool, *};
 use fred::types::{
     Limit, MultipleKeys, MultipleOrderedPairs, MultipleValues, MultipleZaddValues, Ordering,
@@ -156,6 +157,20 @@ impl<'a> RedisLabelledApi<'a> {
         self.ensure_connected().await?;
         let start = Instant::now();
         self.record(start, "GET", self.pool.get(self.prefixed_key(key)).await)
+    }
+
+    pub async fn exists<R, K>(&self, key: K) -> RedisResult<R>
+    where
+        R: FromRedis,
+        K: AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(
+            start,
+            "EXISTS",
+            self.pool.exists(self.prefixed_key(key)).await,
+        )
     }
 
     pub async fn hdel<R, K, F>(&self, key: K, fields: F) -> RedisResult<R>
@@ -332,6 +347,20 @@ impl<'a> RedisLabelledApi<'a> {
             start,
             "SREM",
             self.pool.srem(self.prefixed_key(key), members).await,
+        )
+    }
+
+    pub async fn scard<R, K>(&self, key: K) -> RedisResult<R>
+    where
+        R: FromRedis,
+        K: AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(
+            start,
+            "SCARD",
+            self.pool.scard(self.prefixed_key(key)).await,
         )
     }
 
@@ -552,5 +581,88 @@ impl<'a> RedisLabelledApi<'a> {
             "ZREM",
             self.pool.zrem(self.prefixed_key(key), members).await,
         )
+    }
+
+    pub async fn transaction<R, F, Fu>(&self, func: F) -> RedisResult<R>
+    where
+        R: FromRedis,
+        F: FnOnce(RedisTransaction) -> Fu,
+        Fu: std::future::Future<Output = RedisResult<RedisTransaction>>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+
+        let client = self.pool.next_connected();
+        let trx = client.multi();
+        let trx = RedisTransaction::new(trx, self.key_prefix.clone());
+        let trx = func(trx).await?;
+
+        self.record(start, "MULTI", trx.trx.exec(true).await)
+    }
+}
+
+pub struct RedisTransaction {
+    trx: Transaction,
+    key_prefix: String,
+}
+
+impl RedisTransaction {
+    fn new(trx: Transaction, key_prefix: String) -> Self {
+        Self { trx, key_prefix }
+    }
+
+    fn prefixed_key<K>(&self, key: K) -> String
+    where
+        K: AsRef<str>,
+    {
+        format!("{}{}", &self.key_prefix, key.as_ref())
+    }
+
+    pub async fn del<K>(&self, key: K) -> RedisResult<()>
+    where
+        K: AsRef<str>,
+    {
+        self.trx.del(self.prefixed_key(key)).await
+    }
+
+    pub async fn set<K, V>(
+        &self,
+        key: K,
+        value: V,
+        expire: Option<Expiration>,
+        options: Option<SetOptions>,
+        get: bool,
+    ) -> RedisResult<()>
+    where
+        K: AsRef<str>,
+        V: TryInto<RedisValue> + Send,
+        V::Error: Into<RedisError> + Send,
+    {
+        self.trx
+            .set(self.prefixed_key(key), value, expire, options, get)
+            .await
+    }
+
+    pub async fn sadd<K, V>(&self, key: K, members: V) -> RedisResult<()>
+    where
+        K: AsRef<str>,
+        V: TryInto<MultipleValues> + Send,
+        V::Error: Into<RedisError> + Send,
+    {
+        self.trx.sadd(self.prefixed_key(key), members).await
+    }
+
+    pub async fn srem<K>(&self, key: K, members: Vec<String>) -> RedisResult<()>
+    where
+        K: AsRef<str>,
+    {
+        self.trx.srem(self.prefixed_key(key), members).await
+    }
+
+    pub async fn scard<K>(&self, key: K) -> RedisResult<()>
+    where
+        K: AsRef<str>,
+    {
+        self.trx.scard(self.prefixed_key(key)).await
     }
 }
