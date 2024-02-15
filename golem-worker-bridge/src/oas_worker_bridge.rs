@@ -10,8 +10,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
-const GOLEM_WORKER_BRIDGE_EXTENSION: &str = "x-golem-worker-bridge";
+pub const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
+pub const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
+pub const GOLEM_WORKER_BRIDGE_EXTENSION: &str = "x-golem-worker-bridge";
 
 pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
     let openapi: OpenAPI = serde_json::from_str(open_api).map_err(|e| e.to_string())?;
