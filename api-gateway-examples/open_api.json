@@ -1,13 +1,14 @@
 {
   "openapi": "3.0.0",
   "x-golem-api-definition-id": "shopping-cart-v2",
+  "x-golem-api-definition-version": "0.0.1",
   "info": {
     "title": "Sample API",
-    "version": "1.0.0"
+    "version": "1.0.1"
   },
     "servers": [
         {
-        "url": "http://192.168.18.202:9006"
+        "url": "http://169.254.141.101:9006"
         }
     ],
   "paths": {
@@ -16,7 +17,7 @@
         "worker-id": "worker-${request.path.user-id}",
         "function-name": "golem:it/api/get-cart-contents",
         "function-params": [],
-        "template-id": "c0e881af-cd94-4993-a2c2-15e489527b2a",
+        "template-id": "d70ddb67-9310-4df7-ac5c-583f9803ddcb",
         "response" : {
           "status": "200",
           "body": {
