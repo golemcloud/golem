@@ -37,7 +37,7 @@ use golem_worker_executor_base::services::golem_config::{
     BlobStoreServiceConfig, BlobStoreServiceInMemoryConfig, CompiledTemplateServiceConfig,
     CompiledTemplateServiceLocalConfig, GolemConfig, KeyValueServiceConfig, PromisesConfig,
     ShardManagerServiceConfig, TemplateServiceConfig, TemplateServiceLocalConfig,
-    WorkersServiceConfig,
+    WorkerServiceGrpcConfig, WorkersServiceConfig,
 };
 
 use golem_worker_executor_base::durable_host::{
@@ -707,6 +707,11 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
             port: REDIS.port,
             key_prefix: context.redis_prefix(),
             ..Default::default()
+        },
+        public_worker_api: WorkerServiceGrpcConfig {
+            host: "localhost".to_string(),
+            port: context.grpc_port(),
+            access_token: "03494299-B515-4427-8C37-4C1C915679B7".to_string(),
         },
         ..Default::default()
     };
