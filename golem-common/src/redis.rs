@@ -173,6 +173,16 @@ impl<'a> RedisLabelledApi<'a> {
         )
     }
 
+    pub async fn mget<R, K>(&self, keys: K) -> RedisResult<R>
+    where
+        R: FromRedis,
+        K: Into<MultipleKeys> + Send,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(start, "MGET", self.pool.mget(keys).await)
+    }
+
     pub async fn hdel<R, K, F>(&self, key: K, fields: F) -> RedisResult<R>
     where
         R: FromRedis,

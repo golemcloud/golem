@@ -300,22 +300,19 @@ impl RegisterApiDefinition for RedisApiRegistry {
             futures::future::try_join_all(futures).await?
         };
 
-        let all_definitions: Vec<Option<ApiDefinition>> = {
-            let futures = all_versions
-                .into_iter()
-                .flat_map(|(api_id, versions)| {
-                    versions.into_iter().map(move |version| ApiDefinitionKey {
-                        id: api_id.clone(),
-                        version: Version(version),
-                    })
+        let all_definitions: Vec<ApiDefinitionKey> = all_versions
+            .into_iter()
+            .flat_map(|(api_id, versions)| {
+                versions.into_iter().map(move |version| ApiDefinitionKey {
+                    id: api_id.clone(),
+                    version: Version(version),
                 })
-                .map(|api_id| async move { self.get(&api_id).await })
-                .collect::<Vec<_>>();
+            })
+            .collect::<Vec<_>>();
 
-            futures::future::try_join_all(futures).await?
-        };
+        let api_definitions = self.get_all_api_definitions(all_definitions).await?;
 
-        Ok(all_definitions.into_iter().flatten().collect::<Vec<_>>())
+        Ok(api_definitions)
     }
 
     async fn get_all_versions(
@@ -332,21 +329,48 @@ impl RegisterApiDefinition for RedisApiRegistry {
             .await
             .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
-        // For each version, construct an ApiDefinitionKey and fetch the ApiDefinition
-        let futures: Vec<_> = versions
+        let versions: Vec<_> = versions
             .into_iter()
             .map(|version| ApiDefinitionKey {
                 id: api_id.clone(),
                 version: Version(version),
             })
-            .map(|api_id| async move { self.get(&api_id).await })
             .collect();
 
-        let api_definitions: Vec<Option<ApiDefinition>> = futures::future::try_join_all(futures)
+        let api_definitions = self.get_all_api_definitions(versions).await?;
+
+        Ok(api_definitions)
+    }
+}
+
+impl RedisApiRegistry {
+    async fn get_all_api_definitions(
+        &self,
+        keys: Vec<ApiDefinitionKey>,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+        let keys = keys
+            .into_iter()
+            .map(|api_id| get_api_definition_redis_key(&api_id))
+            .collect::<Vec<_>>();
+
+        let result: Vec<Option<Bytes>> = self
+            .pool
+            .with("persistence", "mget_all_definitions")
+            .mget(keys)
             .await
             .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
-        Ok(api_definitions.into_iter().flatten().collect())
+        let definitions = result
+            .into_iter()
+            .flatten()
+            .map(|value| {
+                self.pool
+                    .deserialize(&value)
+                    .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))
+            })
+            .collect::<Result<Vec<ApiDefinition>, ApiRegistrationError>>()?;
+
+        Ok(definitions)
     }
 }
 
