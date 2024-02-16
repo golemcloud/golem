@@ -1,6 +1,7 @@
 package golem:api;
 
 interface host {
+    use golem:rpc/types@0.1.0.{uri};
 
     record promise-id {
         worker-id: worker-id,
@@ -24,10 +25,6 @@ interface host {
     
     record account-id {
         account-name: string
-    }
-
-    record uri {
-        uri: string
     }
 
     golem-create-promise: func() -> promise-id;
