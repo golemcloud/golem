@@ -6,6 +6,7 @@ use http::Uri;
 use serde::Deserialize;
 use url::Url;
 use uuid::Uuid;
+use golem_service_base::routing_table::RoutingTableConfig;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct WorkerBridgeConfig {
@@ -16,8 +17,10 @@ pub struct WorkerBridgeConfig {
     pub enable_json_log: bool,
     pub management_port: u16,
     pub port: u16,
+    pub routing_table: RoutingTableConfig,
     pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
+
 
 
 #[derive(Clone, Debug, Deserialize)]

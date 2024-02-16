@@ -25,6 +25,7 @@ use poem_openapi::payload::{Binary, Json};
 use poem_openapi::types::multipart::Upload;
 use poem_openapi::*;
 
+
 #[derive(ApiResponse)]
 pub enum TemplateError {
     #[oai(status = 400)]
@@ -167,6 +168,28 @@ impl TemplateApi {
         }
     }
 
+    #[oai(path = "/:template_id/info", method = "get")]
+    async fn get_template_info(&self, template_id: Path<TemplateId>, version: Query<Option<i32>>) -> Result<Json<Template>> {
+       let response =  match version.0 {
+            Some(version) => {
+                self.template_service.get_by_version(&VersionedTemplateId  {
+                    template_id: template_id.0,
+                    version
+                }).await?
+            }
+            None => {
+                self.template_service.get_latest_version(&template_id.0).await?;
+            }
+        };
+
+        match response {
+            Some(template) => Ok(Json(template)),
+            None => Err(TemplateError::NotFound(Json(ErrorBody {
+                error: "Template not found".to_string(),
+            }))),
+        }
+    }
+
     #[oai(path = "/", method = "get")]
     async fn get_all_templates(
         &self,
@@ -176,4 +199,5 @@ impl TemplateApi {
 
         Ok(Json(response))
     }
+
 }

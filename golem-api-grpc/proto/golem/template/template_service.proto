@@ -72,6 +72,11 @@ message GetTemplateRequest {
   golem.template.TemplateId templateId = 1;
 }
 
+message GetVersionedTemplateRequest {
+  golem.template.TemplateId templateId = 1;
+  int32 version = 2;
+}
+
 message GetTemplateResponse {
   oneof result {
     GetTemplateSuccessResponse success = 1;

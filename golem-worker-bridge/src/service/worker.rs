@@ -40,8 +40,9 @@ use tokio_stream::Stream;
 use tonic::transport::Channel;
 use tonic::{Status, Streaming};
 use tracing::{debug, info};
+use crate::service::template::TemplateServiceError;
+use crate::service::template::TemplateService;
 
-use golem_service::service::template::{TemplateError, TemplateService};
 use golem_service_base::model::*;
 use golem_service_base::routing_table::{RoutingTableError, RoutingTableService};
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
@@ -71,7 +72,7 @@ impl Stream for ConnectWorkerStream {
 pub enum WorkerError {
     Internal(String),
     TypeCheckerError(String),
-    DelegatedTemplateServiceError(TemplateError),
+    DelegatedTemplateServiceError(TemplateServiceError),
     VersionedTemplateIdNotFound(VersionedTemplateId),
     TemplateNotFound(TemplateId),
     AccountIdNotFound(AccountId), // FIXME: Once worker is independent of account
@@ -114,8 +115,8 @@ impl From<RoutingTableError> for WorkerError {
     }
 }
 
-impl From<TemplateError> for WorkerError {
-    fn from(error: TemplateError) -> Self {
+impl From<TemplateServiceError> for WorkerError {
+    fn from(error: TemplateServiceError) -> Self {
         WorkerError::DelegatedTemplateServiceError(error)
     }
 }
@@ -491,7 +492,7 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_by_version(&VersionedTemplateId {
+            .get_versioned_template(&VersionedTemplateId {
                 template_id: worker_id.template_id.clone(),
                 version: template_version,
             })

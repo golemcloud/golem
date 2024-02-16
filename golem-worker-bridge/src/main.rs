@@ -12,6 +12,7 @@ use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::{EndpointExt, Route};
 use std::sync::Arc;
 use tracing::error;
+use golem_service::service::worker;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -75,6 +76,30 @@ async fn get_api_services(config: &WorkerBridgeConfig) -> Result<ApiServices, st
 
             std::io::Error::new(std::io::ErrorKind::Other, "Init error")
         })?);
+
+    let routing_table_service: Arc<
+        dyn golem_service_base::routing_table::RoutingTableService + Send + Sync,
+    > = Arc::new(
+        golem_service_base::routing_table::RoutingTableServiceDefault::new(
+            config.routing_table.clone(),
+        ),
+    );
+
+    let worker_executor_clients: Arc<
+        dyn golem_service_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
+    > = Arc::new(
+        golem_service_base::worker_executor_clients::WorkerExecutorClientsDefault::new(
+            config.worker_executor_client_cache.max_capacity,
+            config.worker_executor_client_cache.time_to_idle,
+        ),
+    );
+
+    let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
+        Arc::new(worker::WorkerServiceDefault::new(
+            worker_executor_clients.clone(),
+            template_service.clone(),
+            routing_table_service.clone(),
+        ));
 
     let request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send> =
         Arc::new(WorkerRequestExecutorDefault {

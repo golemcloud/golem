@@ -22,7 +22,6 @@ multiplier = 2
 [template_service]
 # host
 # port
-# access_token
 
 [template_service.retries]
 max_attempts = 3
@@ -33,3 +32,7 @@ multiplier = 3
 [worker_executor_client_cache]
 max_capacity = 1000
 time_to_idle = "4h"
+
+[routing_table]
+# host
+# port
