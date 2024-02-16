@@ -55,12 +55,7 @@ pub fn all(context: Arc<ContextInfo>) -> Vec<Trial> {
     let short_cli = CliLive::make(&context.golem_service)
         .unwrap()
         .with_short_args();
-    let mut short_args = make(
-        "_short",
-        "CLI_short",
-        short_cli.clone(),
-        context.clone(),
-    );
+    let mut short_args = make("_short", "CLI_short", short_cli.clone(), context.clone());
 
     let mut long_args = make(
         "_long",
@@ -73,13 +68,11 @@ pub fn all(context: Arc<ContextInfo>) -> Vec<Trial> {
 
     short_args.append(&mut long_args);
 
-    short_args.push(
-        Trial::test_in_context(
-            "auction_example".to_string(),
-            (context.clone(), "".to_string(), short_cli),
-            auction_example,
-        ),
-    );
+    short_args.push(Trial::test_in_context(
+        "auction_example".to_string(),
+        (context.clone(), "".to_string(), short_cli),
+        auction_example,
+    ));
 
     short_args
 }
@@ -437,21 +430,25 @@ fn auction_example(
     let auction_registry_template_name = format!("{name}_auction_registry");
     let auction_template_name = format!("{name}_auction");
 
-    let auction_registry = cli.run::<TemplateView, &str>(&[
-        "template",
-        "add",
-        &cfg.arg('t', "template-name"),
-        &auction_registry_template_name,
-        auction_registry_wasm.to_str().unwrap(),
-    ])?.template_id;
+    let auction_registry = cli
+        .run::<TemplateView, &str>(&[
+            "template",
+            "add",
+            &cfg.arg('t', "template-name"),
+            &auction_registry_template_name,
+            auction_registry_wasm.to_str().unwrap(),
+        ])?
+        .template_id;
 
-    let auction = cli.run::<TemplateView, &str>(&[
-        "template",
-        "add",
-        &cfg.arg('t', "template-name"),
-        &auction_template_name,
-        auction_wasm.to_str().unwrap(),
-    ])?.template_id;
+    let auction = cli
+        .run::<TemplateView, &str>(&[
+            "template",
+            "add",
+            &cfg.arg('t', "template-name"),
+            &auction_template_name,
+            auction_wasm.to_str().unwrap(),
+        ])?
+        .template_id;
 
     let worker_name = format!("{name}_auction_registry_1");
 
@@ -490,7 +487,10 @@ fn auction_example(
             &cfg.arg('k', "invocation-key"),
             &args_key.0,
         ])?;
-        assert!(args.as_array().and_then(|arr| arr[0].as_object().map(|obj| obj.contains_key("auction-id"))).unwrap_or(false));
+        assert!(args
+            .as_array()
+            .and_then(|arr| arr[0].as_object().map(|obj| obj.contains_key("auction-id")))
+            .unwrap_or(false));
     }
 
     Ok(())
