@@ -1,0 +1,22 @@
+package auction:auction-stub;
+
+interface stub-auction {
+  use golem:rpc/types@0.1.0.{uri};
+  use auction:auction/api.{bidder-id};
+  use auction:auction/api.{auction-id};
+  use auction:auction/api.{deadline};
+  use auction:auction/api.{auction};
+  use auction:auction/api.{bid-result};
+
+  resource api {
+    constructor(location: uri);
+    initialize: func(auction: auction);
+    bid: func(bidder-id: bidder-id, price: f32) -> bid-result;
+    close-auction: func() -> option<bidder-id>;
+  }
+
+}
+
+world wasm-rpc-stub-auction {
+  export stub-auction;
+}
