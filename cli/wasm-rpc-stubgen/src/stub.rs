@@ -89,6 +89,10 @@ impl StubDefinition {
         self.target_root.join("Cargo.toml")
     }
 
+    pub fn target_crate_name(&self) -> anyhow::Result<String> {
+        Ok(format!("{}-stub", self.source_world_name()?))
+    }
+
     pub fn target_rust_path(&self) -> PathBuf {
         self.target_root.join("src/lib.rs")
     }
@@ -315,10 +319,12 @@ fn get_unresolved_packages(
 
     let mut deps = BTreeMap::new();
     let deps_path = root_path.join(Path::new("deps"));
-    for dep_entry in fs::read_dir(deps_path)? {
-        let dep_entry = dep_entry?;
-        let dep = UnresolvedPackage::parse_path(&dep_entry.path())?;
-        deps.insert(dep.name.clone(), dep);
+    if deps_path.exists() {
+        for dep_entry in fs::read_dir(deps_path)? {
+            let dep_entry = dep_entry?;
+            let dep = UnresolvedPackage::parse_path(&dep_entry.path())?;
+            deps.insert(dep.name.clone(), dep);
+        }
     }
 
     // Perform a simple topological sort which will bail out on cycles

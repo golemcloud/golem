@@ -14,7 +14,7 @@
 
 use crate::stub::{FunctionResultStub, FunctionStub, StubDefinition};
 use anyhow::anyhow;
-use heck::{ToShoutySnakeCase, ToUpperCamelCase};
+use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use std::fs;
@@ -51,20 +51,24 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         let mut fn_impls = Vec::new();
         for function in &interface.functions {
             fn_impls.push(generate_function_stub_source(
+                def,
                 function,
-                &root_ns,
-                &root_name,
                 if interface.global {
                     None
                 } else {
                     Some(&interface.name)
                 },
-                &def.resolve,
             )?);
         }
 
+        let stub_interface_name = format!("stub-{}", def.source_world_name()?);
+        let stub_interface_name = Ident::new(
+            &to_rust_ident(&stub_interface_name).to_snake_case(),
+            Span::call_site(),
+        );
+
         interface_impls.push(quote! {
-            impl crate::bindings::exports::#root_ns::#root_name::stub_api::#guest_interface_name for #interface_name {
+            impl crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#guest_interface_name for #interface_name {
                 fn new(location: crate::bindings::golem::rpc::types::Uri) -> Self {
                     let location = Uri { value: location.value };
                     Self {
@@ -101,11 +105,9 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
 }
 
 fn generate_function_stub_source(
+    def: &StubDefinition,
     function: &FunctionStub,
-    root_ns: &Ident,
-    root_name: &Ident,
     interface_name: Option<&String>,
-    resolve: &Resolve,
 ) -> anyhow::Result<TokenStream> {
     let function_name = Ident::new(&to_rust_ident(&function.name), Span::call_site());
     let mut params = Vec::new();
@@ -114,7 +116,7 @@ fn generate_function_stub_source(
 
     for param in &function.params {
         let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
-        let param_typ = type_to_rust_ident(&param.typ, resolve)?;
+        let param_typ = type_to_rust_ident(&param.typ, &def.resolve)?;
         params.push(quote! {
             #param_name: #param_typ
         });
@@ -123,14 +125,14 @@ fn generate_function_stub_source(
         input_values.push(wit_value_builder(
             &param.typ,
             &param_name_access,
-            resolve,
+            &def.resolve,
             quote! { WitValue::builder() },
         )?);
     }
 
     let result_type = match &function.results {
         FunctionResultStub::Single(typ) => {
-            let typ = type_to_rust_ident(typ, resolve)?;
+            let typ = type_to_rust_ident(typ, &def.resolve)?;
             quote! {
                 #typ
             }
@@ -139,7 +141,7 @@ fn generate_function_stub_source(
             let mut results = Vec::new();
             for param in params {
                 let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
-                let param_typ = type_to_rust_ident(&param.typ, resolve)?;
+                let param_typ = type_to_rust_ident(&param.typ, &def.resolve)?;
                 results.push(quote! {
                     #param_name: #param_typ
                 });
@@ -158,13 +160,17 @@ fn generate_function_stub_source(
 
     match &function.results {
         FunctionResultStub::Single(typ) => {
-            output_values.push(extract_from_wit_value(typ, resolve, quote! { result })?);
+            output_values.push(extract_from_wit_value(
+                typ,
+                &def.resolve,
+                quote! { result },
+            )?);
         }
         FunctionResultStub::Multi(params) => {
             for (n, param) in params.iter().enumerate() {
                 output_values.push(extract_from_wit_value(
                     &param.typ,
-                    resolve,
+                    &def.resolve,
                     quote! { result.tuple_element(#n).expect("tuple not found") },
                 )?);
             }
@@ -174,9 +180,15 @@ fn generate_function_stub_source(
     let remote_function_name = match interface_name {
         Some(remote_interface) => format!(
             "{}:{}/{}/{}",
-            root_ns, root_name, remote_interface, function.name
+            def.root_package_name.namespace,
+            def.root_package_name.name,
+            remote_interface,
+            function.name
         ),
-        None => format!("{}:{}/{}", root_ns, root_name, function.name),
+        None => format!(
+            "{}:{}/{}",
+            def.root_package_name.namespace, def.root_package_name.name, function.name
+        ),
     };
 
     Ok(quote! {
