@@ -638,205 +638,196 @@ impl TryFrom<wasmparser::ComponentStartFunction> for ComponentStart {
     }
 }
 
-impl<Ast> TryFrom<(Parser, &[u8])>
-    for Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>
+#[allow(clippy::type_complexity)]
+fn parse_component_sections<Ast>(
+    mut parser: Parser,
+    mut remaining: &[u8],
+) -> Result<
+    (
+        Sections<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>,
+        &[u8],
+    ),
+    String,
+>
 where
     Ast: AstCustomization,
     Ast::Expr: TryFromExprSource,
     Ast::Data: From<Data<Ast::Expr>>,
     Ast::Custom: From<Custom>,
 {
-    type Error = String;
+    let mut sections = Vec::new();
+    loop {
+        let payload = match parser
+            .parse(remaining, true)
+            .map_err(|e| format!("Error parsing core module: {:?}", e))?
+        {
+            Chunk::Parsed { payload, consumed } => {
+                remaining = &remaining[consumed..];
+                payload
+            }
+            Chunk::NeedMoreData { .. } => {
+                return Err("Unexpected end of component binary".to_string());
+            }
+        };
+        match payload {
+            Payload::Version { .. } => {}
+            Payload::TypeSection(_) => {
+                return Err("Unexpected core type section in component".to_string());
+            }
 
-    fn try_from(value: (Parser, &[u8])) -> Result<Self, Self::Error> {
-        let (mut parser, data) = value;
-        let mut sections = Vec::new();
-        let mut remaining = data;
-        loop {
-            let payload = match parser
-                .parse(remaining, true)
-                .map_err(|e| format!("Error parsing core module: {:?}", e))?
-            {
-                Chunk::Parsed { payload, consumed } => {
-                    remaining = &remaining[consumed..];
-                    payload
-                }
-                Chunk::NeedMoreData { .. } => {
-                    return Err("Unexpected end of component binary".to_string());
-                }
-            };
-            match payload {
-                Payload::Version { .. } => {}
-                Payload::TypeSection(_) => {
-                    return Err("Unexpected core type section in component".to_string());
-                }
+            Payload::ImportSection(_) => {
+                return Err("Unexpected core import section in component".to_string());
+            }
 
-                Payload::ImportSection(_) => {
-                    return Err("Unexpected core import section in component".to_string());
-                }
+            Payload::FunctionSection(_) => {
+                return Err("Unexpected core function section in component".to_string());
+            }
 
-                Payload::FunctionSection(_) => {
-                    return Err("Unexpected core function section in component".to_string());
-                }
+            Payload::TableSection(_) => {
+                return Err("Unexpected core table section in component".to_string());
+            }
 
-                Payload::TableSection(_) => {
-                    return Err("Unexpected core table section in component".to_string());
-                }
+            Payload::MemorySection(_) => {
+                return Err("Unexpected core memory section in component".to_string());
+            }
 
-                Payload::MemorySection(_) => {
-                    return Err("Unexpected core memory section in component".to_string());
-                }
+            Payload::TagSection(_) => {
+                return Err("Unexpected core tag section in component".to_string());
+            }
+            Payload::GlobalSection(_) => {
+                return Err("Unexpected core global section in component".to_string());
+            }
 
-                Payload::TagSection(_) => {
-                    return Err("Unexpected core tag section in component".to_string());
-                }
-                Payload::GlobalSection(_) => {
-                    return Err("Unexpected core global section in component".to_string());
-                }
+            Payload::ExportSection(_) => {
+                return Err("Unexpected core export section in component".to_string());
+            }
 
-                Payload::ExportSection(_) => {
-                    return Err("Unexpected core export section in component".to_string());
-                }
+            Payload::StartSection { .. } => {
+                return Err("Unexpected core start section in component".to_string());
+            }
 
-                Payload::StartSection { .. } => {
-                    return Err("Unexpected core start section in component".to_string());
-                }
+            Payload::ElementSection(_) => {
+                return Err("Unexpected core element section in component".to_string());
+            }
 
-                Payload::ElementSection(_) => {
-                    return Err("Unexpected core element section in component".to_string());
-                }
+            Payload::DataCountSection { .. } => {
+                return Err("Unexpected core data count section in component".to_string());
+            }
 
-                Payload::DataCountSection { .. } => {
-                    return Err("Unexpected core data count section in component".to_string());
-                }
+            Payload::DataSection(_) => {
+                return Err("Unexpected core data section in component".to_string());
+            }
 
-                Payload::DataSection(_) => {
-                    return Err("Unexpected core data section in component".to_string());
-                }
+            Payload::CodeSectionStart { .. } => {
+                return Err("Unexpected core code section in component".to_string());
+            }
 
-                Payload::CodeSectionStart { .. } => {
-                    return Err("Unexpected core code section in component".to_string());
-                }
+            Payload::CodeSectionEntry(_) => {
+                return Err("Unexpected core code section in component".to_string());
+            }
 
-                Payload::CodeSectionEntry(_) => {
-                    return Err("Unexpected core code section in component".to_string());
+            Payload::CustomSection(reader) => sections.push(ComponentSection::Custom(
+                Custom {
+                    name: reader.name().to_string(),
+                    data: reader.data().to_vec(),
                 }
-
-                Payload::CustomSection(reader) => sections.push(ComponentSection::Custom(
-                    Custom {
-                        name: reader.name().to_string(),
-                        data: reader.data().to_vec(),
-                    }
-                    .into(),
-                )),
-                Payload::End(_) => {
-                    break;
-                }
-                Payload::InstanceSection(reader) => {
-                    for instance in reader {
-                        let instance = instance.map_err(|e| {
-                            format!("Error parsing component core instance section: {:?}", e)
-                        })?;
-                        sections.push(ComponentSection::CoreInstance(instance.try_into()?))
-                    }
-                }
-                Payload::CoreTypeSection(reader) => {
-                    for core_type in reader {
-                        let core_type = core_type.map_err(|e| {
-                            format!("Error parsing component core type section: {:?}", e)
-                        })?;
-                        sections.push(ComponentSection::CoreType(core_type.try_into()?))
-                    }
-                }
-                Payload::ModuleSection { parser, range } => {
-                    let module: Module<Ast> = (parser, &data[range.start..range.end]).try_into()?;
-                    remaining = &remaining[(range.end - range.start)..];
-                    sections.push(ComponentSection::Module(module))
-                }
-                Payload::ComponentSection { parser, range } => {
-                    let component: Component<Ast> =
-                        (parser, &data[range.start..range.end]).try_into()?;
-                    remaining = &remaining[(range.end - range.start)..];
-                    sections.push(ComponentSection::Component(component))
-                }
-                Payload::ComponentInstanceSection(reader) => {
-                    for component_instance in reader {
-                        let component_instance = component_instance.map_err(|e| {
-                            format!("Error parsing component instance section: {:?}", e)
-                        })?;
-                        sections.push(ComponentSection::Instance(component_instance.try_into()?))
-                    }
-                }
-                Payload::ComponentAliasSection(reader) => {
-                    for alias in reader {
-                        let alias = alias.map_err(|e| {
-                            format!("Error parsing component alias section: {:?}", e)
-                        })?;
-                        sections.push(ComponentSection::Alias(alias.try_into()?))
-                    }
-                }
-                Payload::ComponentTypeSection(reader) => {
-                    for component_type in reader {
-                        let component_type = component_type.map_err(|e| {
-                            format!("Error parsing component type section: {:?}", e)
-                        })?;
-                        sections.push(ComponentSection::Type(component_type.try_into()?))
-                    }
-                }
-                Payload::ComponentCanonicalSection(reader) => {
-                    for canon in reader {
-                        let canon = canon.map_err(|e| {
-                            format!("Error parsing component canonical section: {:?}", e)
-                        })?;
-                        sections.push(ComponentSection::Canon(canon.try_into()?))
-                    }
-                }
-                Payload::ComponentStartSection { start, .. } => {
-                    sections.push(ComponentSection::Start(start.try_into()?))
-                }
-                Payload::ComponentImportSection(reader) => {
-                    for import in reader {
-                        let import = import.map_err(|e| {
-                            format!("Error parsing component import section: {:?}", e)
-                        })?;
-                        sections.push(ComponentSection::Import(import.try_into()?))
-                    }
-                }
-                Payload::ComponentExportSection(reader) => {
-                    for export in reader {
-                        let export = export.map_err(|e| {
-                            format!("Error parsing component export section: {:?}", e)
-                        })?;
-                        sections.push(ComponentSection::Export(export.try_into()?))
-                    }
-                }
-                Payload::UnknownSection { .. } => {
-                    return Err("Unexpected unknown section in component".to_string());
+                .into(),
+            )),
+            Payload::End(_) => {
+                break;
+            }
+            Payload::InstanceSection(reader) => {
+                for instance in reader {
+                    let instance = instance.map_err(|e| {
+                        format!("Error parsing component core instance section: {:?}", e)
+                    })?;
+                    sections.push(ComponentSection::CoreInstance(instance.try_into()?))
                 }
             }
-        }
-        if remaining.is_empty() {
-            Ok(Sections::from_flat(sections))
-        } else {
-            Err(format!("Unexpected {} trailing bytes in component", remaining.len()).to_string())
+            Payload::CoreTypeSection(reader) => {
+                for core_type in reader {
+                    let core_type = core_type.map_err(|e| {
+                        format!("Error parsing component core type section: {:?}", e)
+                    })?;
+                    sections.push(ComponentSection::CoreType(core_type.try_into()?))
+                }
+            }
+            Payload::ModuleSection { parser, range } => {
+                let module: Module<Ast> = (parser, &remaining[..range.len()]).try_into()?;
+                remaining = &remaining[(range.end - range.start)..];
+                sections.push(ComponentSection::Module(module))
+            }
+            Payload::ComponentSection { parser, .. } => {
+                let (component, new_remaining) = parse_component(parser, remaining)?;
+                remaining = new_remaining;
+                sections.push(ComponentSection::Component(component))
+            }
+            Payload::ComponentInstanceSection(reader) => {
+                for component_instance in reader {
+                    let component_instance = component_instance.map_err(|e| {
+                        format!("Error parsing component instance section: {:?}", e)
+                    })?;
+                    sections.push(ComponentSection::Instance(component_instance.try_into()?))
+                }
+            }
+            Payload::ComponentAliasSection(reader) => {
+                for alias in reader {
+                    let alias = alias
+                        .map_err(|e| format!("Error parsing component alias section: {:?}", e))?;
+                    sections.push(ComponentSection::Alias(alias.try_into()?))
+                }
+            }
+            Payload::ComponentTypeSection(reader) => {
+                for component_type in reader {
+                    let component_type = component_type
+                        .map_err(|e| format!("Error parsing component type section: {:?}", e))?;
+                    sections.push(ComponentSection::Type(component_type.try_into()?))
+                }
+            }
+            Payload::ComponentCanonicalSection(reader) => {
+                for canon in reader {
+                    let canon = canon.map_err(|e| {
+                        format!("Error parsing component canonical section: {:?}", e)
+                    })?;
+                    sections.push(ComponentSection::Canon(canon.try_into()?))
+                }
+            }
+            Payload::ComponentStartSection { start, .. } => {
+                sections.push(ComponentSection::Start(start.try_into()?))
+            }
+            Payload::ComponentImportSection(reader) => {
+                for import in reader {
+                    let import = import
+                        .map_err(|e| format!("Error parsing component import section: {:?}", e))?;
+                    sections.push(ComponentSection::Import(import.try_into()?))
+                }
+            }
+            Payload::ComponentExportSection(reader) => {
+                for export in reader {
+                    let export = export
+                        .map_err(|e| format!("Error parsing component export section: {:?}", e))?;
+                    sections.push(ComponentSection::Export(export.try_into()?))
+                }
+            }
+            Payload::UnknownSection { .. } => {
+                return Err("Unexpected unknown section in component".to_string());
+            }
         }
     }
+
+    Ok((Sections::from_flat(sections), remaining))
 }
 
-impl<Ast> TryFrom<(Parser, &[u8])> for Component<Ast>
+pub fn parse_component<Ast>(
+    parser: Parser,
+    remaining: &[u8],
+) -> Result<(Component<Ast>, &[u8]), String>
 where
     Ast: AstCustomization,
     Ast::Expr: TryFromExprSource,
     Ast::Data: From<Data<Ast::Expr>>,
     Ast::Custom: From<Custom>,
 {
-    type Error = String;
-
-    fn try_from(value: (Parser, &[u8])) -> Result<Self, Self::Error> {
-        let sections =
-            Sections::<ComponentIndexSpace, ComponentSectionType, ComponentSection<Ast>>::try_from(
-                value,
-            )?;
-        Ok(sections.into())
-    }
+    let (sections, remaining) = parse_component_sections(parser, remaining)?;
+    Ok((sections.into(), remaining))
 }

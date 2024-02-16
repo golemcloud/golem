@@ -8,15 +8,15 @@ description = "WASM AST"
 
 [dependencies]
 mappable-rc = "0.1.1"
-wasmparser = { version = "0.121.0", optional = true }
-wasm-encoder = { version = "0.41.0", optional = true }
-wasm-metadata = { version = "0.10.17", optional = true }
+wasmparser = { version = "0.121.2", optional = true }
+wasm-encoder = { version = "0.41.2", optional = true }
+wasm-metadata = { version = "0.10.20", optional = true }
 leb128 = {  version = "0.2.5", optional = true }
 
 [dev-dependencies]
 colored-diff = "0.2.3"
 pretty_assertions = "1.4.0"
-wasmprinter = "0.2.78"
+wasmprinter = "0.2.80"
 
 [features]
 default = ["parser", "writer", "component", "metadata", "analysis"]

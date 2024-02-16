@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::component::parser::parse_component;
 use crate::core::{
     Custom, Data, Export, FuncIdx, FuncType, Import, MemIdx, Module, RetainsCustomSection,
     RetainsInstructions, TryFromExprSource, TypeRef, ValType,
@@ -808,7 +809,8 @@ where
     /// Parses a Component Model AST from the binary WASM byte array
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         let parser = wasmparser::Parser::new(0);
-        Self::try_from((parser, bytes))
+        let (component, _) = parse_component(parser, bytes)?;
+        Ok(component)
     }
 }
 

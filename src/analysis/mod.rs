@@ -384,6 +384,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                         format!("component {component_idx}"),
                         |component| component.get_component(*component_idx),
                     )?;
+
                     match &*component_section {
                         ComponentSection::Component(referenced_component) => {
                             let next_ctx = next_ctx
@@ -591,7 +592,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                     .iter()
                     .find(|export| export.name == *name)
                     .cloned();
-                Ok((export, next_ctx))
+                Ok((export, next_ctx.push_component(component)))
             }
             ComponentInstance::FromExports { exports } => {
                 let export = exports.iter().find(|export| export.name == *name).cloned();
