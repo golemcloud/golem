@@ -6,6 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tonic_build::configure()
         .file_descriptor_set_path(out_dir.join("services.bin"))
+        .extern_path(".wasm.rpc", "::golem_wasm_rpc::protobuf")
         .type_attribute(
             ".",
             "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
@@ -31,7 +32,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/template/template_error.proto",
                 "proto/golem/template/template_id.proto",
                 "proto/golem/template/template_metadata.proto",
-                "proto/golem/template/type.proto",
                 "proto/golem/template/user_template_id.proto",
                 "proto/golem/template/versioned_name.proto",
                 "proto/golem/template/versioned_template_id.proto",
@@ -49,7 +49,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/worker/worker_id.proto",
                 "proto/golem/worker/worker_metadata.proto",
                 "proto/golem/worker/worker_status.proto",
-                "proto/golem/worker/val.proto",
                 "proto/golem/worker/worker_service.proto",
                 "proto/golem/workerexecutor/worker_executor.proto",
                 "proto/golem/shardmanager/pod.proto",
@@ -59,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/shardmanager/shard_manager_error.proto",
                 "proto/golem/shardmanager/shard_manager_service.proto",
             ],
-            &["proto"],
+            &["../wasm-rpc/wasm-rpc/proto", "proto"],
         )
         .unwrap();
 

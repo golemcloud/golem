@@ -22,7 +22,6 @@ pub mod model;
 pub mod preview2;
 pub mod services;
 pub mod wasi_host;
-pub mod wasm_types;
 pub mod worker;
 pub mod workerctx;
 

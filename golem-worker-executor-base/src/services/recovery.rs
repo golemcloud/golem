@@ -17,11 +17,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::model::InterruptKind;
+use crate::services::rpc::Rpc;
 use crate::services::{
     active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, scheduler,
     template, worker, HasActiveWorkers, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps,
     HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
-    HasRecoveryManagement, HasSchedulerService, HasTemplateService, HasWasmtimeEngine,
+    HasRecoveryManagement, HasRpc, HasSchedulerService, HasTemplateService, HasWasmtimeEngine,
     HasWorkerService,
 };
 use crate::worker::Worker;
@@ -73,6 +74,7 @@ pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
     invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+    rpc: Arc<dyn Rpc + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -94,6 +96,7 @@ impl<Ctx: WorkerCtx> Clone for RecoveryManagementDefault<Ctx> {
             invocation_key_service: self.invocation_key_service.clone(),
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
+            rpc: self.rpc.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -181,6 +184,12 @@ impl<Ctx: WorkerCtx> HasRecoveryManagement for RecoveryManagementDefault<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasRpc for RecoveryManagementDefault<Ctx> {
+    fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+        self.rpc.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasExtraDeps<Ctx> for RecoveryManagementDefault<Ctx> {
     fn extra_deps(&self) -> Ctx::ExtraDeps {
         self.extra_deps.clone()
@@ -201,6 +210,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
@@ -220,6 +230,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             blob_store_service,
             golem_config,
             recovery_override: None,
+            rpc,
             extra_deps,
         }
     }
@@ -239,6 +250,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
         recovery_override: F,
     ) -> Self
@@ -261,6 +273,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             blob_store_service,
             golem_config,
             recovery_override: Some(Arc::new(recovery_override)),
+            rpc,
             extra_deps,
         }
     }
@@ -419,9 +432,9 @@ where
 
     match this.worker_service().get(&worker_id.worker_id).await {
         Some(worker) => {
-            let worker_details = Worker::get_or_create(
+            let worker_details = Worker::get_or_create_with_config(
                 this,
-                worker_id.worker_id.clone(),
+                &worker_id.worker_id.clone(),
                 worker.args,
                 worker.env,
                 Some(worker_id.template_version),
@@ -496,7 +509,7 @@ mod tests {
     use crate::services::worker_event::WorkerEventService;
     use crate::services::{
         All, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps, HasInvocationKeyService,
-        HasKeyValueService, HasPromiseService, HasTemplateService, HasWasmtimeEngine,
+        HasKeyValueService, HasPromiseService, HasRpc, HasTemplateService, HasWasmtimeEngine,
         HasWorkerService,
     };
     use crate::workerctx::{
@@ -506,11 +519,11 @@ mod tests {
     use anyhow::Error;
     use async_trait::async_trait;
     use bytes::Bytes;
-    use golem_api_grpc::proto::golem::worker::Val;
     use golem_common::model::{
         AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerId,
         WorkerMetadata, WorkerStatus,
     };
+    use golem_wasm_rpc::Value;
     use tokio::runtime::Handle;
     use tokio::time::{timeout, Instant};
     use wasmtime::component::Instance;
@@ -518,12 +531,14 @@ mod tests {
 
     use crate::services::oplog::{OplogService, OplogServiceMock};
     use crate::services::recovery::{RecoveryManagement, RecoveryManagementDefault};
+    use crate::services::rpc::Rpc;
     use crate::services::scheduler;
     use crate::services::scheduler::SchedulerService;
 
     struct EmptyContext {
         worker_id: VersionedWorkerId,
         public_state: EmptyPublicState,
+        rpc: Arc<dyn Rpc + Send + Sync>,
     }
 
     #[derive(Clone)]
@@ -580,7 +595,7 @@ mod tests {
         async fn confirm_invocation_key(
             &mut self,
             _key: &InvocationKey,
-            _vals: Result<Vec<Val>, GolemError>,
+            _vals: Result<Vec<Value>, GolemError>,
         ) {
             unimplemented!()
         }
@@ -629,7 +644,7 @@ mod tests {
         async fn on_exported_function_invoked(
             &mut self,
             _full_function_name: &str,
-            _function_input: &Vec<Val>,
+            _function_input: &Vec<Value>,
             _calling_convention: Option<&CallingConvention>,
         ) -> anyhow::Result<()> {
             unimplemented!()
@@ -649,10 +664,10 @@ mod tests {
         async fn on_invocation_success(
             &mut self,
             _full_function_name: &str,
-            _function_input: &Vec<Val>,
+            _function_input: &Vec<Value>,
             _consumed_fuel: i64,
-            _output: Vec<Val>,
-        ) -> Result<Option<Vec<Val>>, Error> {
+            _output: Vec<Value>,
+        ) -> Result<Option<Vec<Value>>, Error> {
             unimplemented!()
         }
     }
@@ -731,6 +746,7 @@ mod tests {
             _oplog_service: Arc<dyn OplogService + Send + Sync>,
             _scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
             _recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+            rpc: Arc<dyn Rpc + Send + Sync>,
             _extra_deps: Self::ExtraDeps,
             _config: Arc<GolemConfig>,
             _worker_config: WorkerConfig,
@@ -739,6 +755,7 @@ mod tests {
             Ok(EmptyContext {
                 worker_id: create_test_id(),
                 public_state: EmptyPublicState,
+                rpc,
             })
         }
 
@@ -756,6 +773,10 @@ mod tests {
 
         fn is_exit(_error: &Error) -> Option<i32> {
             None
+        }
+
+        fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+            self.rpc.clone()
         }
     }
 
@@ -808,6 +829,7 @@ mod tests {
             deps.key_value_service(),
             deps.blob_store_service(),
             deps.config(),
+            deps.rpc(),
             (),
             recovery_fn,
         )

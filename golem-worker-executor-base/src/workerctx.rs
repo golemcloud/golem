@@ -17,11 +17,11 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_api_grpc::proto::golem::worker::Val;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus,
 };
+use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use crate::error::GolemError;
@@ -34,6 +34,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::oplog::OplogService;
 use crate::services::promise::PromiseService;
 use crate::services::recovery::RecoveryManagement;
+use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
@@ -75,6 +76,7 @@ pub trait WorkerCtx:
     /// - `oplog_service`: The service for reading and writing the oplog
     /// - `scheduler_service`: The scheduler implementation responsible for waking up suspended workers
     /// - `recovery_management`: The service for deciding if a worker should be recovered
+    /// - `rpc`: The RPC implementation used for worker to worker communication
     /// - `extra_deps`: Extra dependencies that are required by this specific worker context
     /// - `config`: The shared worker configuration
     /// - `worker_config`: Configuration for this specific worker
@@ -92,6 +94,7 @@ pub trait WorkerCtx:
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -114,6 +117,9 @@ pub trait WorkerCtx:
     /// on the actual WASI implementation installed by the worker context, this function is used to
     ///determine if an error is an exit error and if so, what the exit code is.
     fn is_exit(error: &anyhow::Error) -> Option<i32>;
+
+    /// Gets the worker-executor's WASM RPC implementation
+    fn rpc(&self) -> Arc<dyn Rpc + Send + Sync>;
 }
 
 /// The fuel management interface of a worker context is responsible for borrowing and returning
@@ -177,7 +183,7 @@ pub trait InvocationManagement {
     async fn confirm_invocation_key(
         &mut self,
         key: &InvocationKey,
-        vals: Result<Vec<Val>, GolemError>,
+        vals: Result<Vec<Value>, GolemError>,
     );
 }
 
@@ -203,7 +209,7 @@ pub trait IoCapturing {
 #[async_trait]
 pub trait StatusManagement {
     /// Checks if the worker is being interrupted, or has been interrupted. If not, the result
-    /// is None. Otherwise it is the kind of interrupt that happened.
+    /// is None. Otherwise, it is the kind of interrupt that happened.
     fn check_interrupt(&self) -> Option<InterruptKind>;
 
     /// Sets the worker status to suspended
@@ -236,7 +242,7 @@ pub trait InvocationHooks {
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         calling_convention: Option<&CallingConvention>,
     ) -> anyhow::Result<()>;
 
@@ -259,10 +265,10 @@ pub trait InvocationHooks {
     async fn on_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Val>,
-    ) -> Result<Option<Vec<Val>>, anyhow::Error>;
+        output: Vec<Value>,
+    ) -> Result<Option<Vec<Value>>, anyhow::Error>;
 }
 
 /// Operations not requiring an active worker context, but still depending on the

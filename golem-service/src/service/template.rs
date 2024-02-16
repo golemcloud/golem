@@ -39,7 +39,7 @@ pub enum TemplateError {
     TemplateProcessingError(String),
 }
 
-impl std::fmt::Display for TemplateError {
+impl Display for TemplateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
             TemplateError::AlreadyExists(ref template_id) => {
@@ -389,7 +389,7 @@ impl TemplateServiceDefault {
         let producers = component
             .get_all_producers()
             .into_iter()
-            .map(wasm_converter::convert_producers)
+            .map(|producers| producers.into())
             .collect::<Vec<_>>();
 
         let state = AnalysisContext::new(component);
@@ -405,7 +405,7 @@ impl TemplateServiceDefault {
 
         let exports = exports
             .into_iter()
-            .map(wasm_converter::convert_export)
+            .map(|export| export.into())
             .collect::<Vec<_>>();
 
         Ok(TemplateMetadata { exports, producers })
@@ -567,151 +567,5 @@ impl TemplateService for TemplateServiceNoOp {
 
     async fn get(&self, _template_id: &TemplateId) -> Result<Vec<Template>, TemplateError> {
         Ok(vec![])
-    }
-}
-
-// Converters from golem_wasm_ast to crate model.
-mod wasm_converter {
-    use golem_wasm_ast::analysis::{
-        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-        AnalysedInstance, AnalysedType,
-    };
-    use golem_wasm_ast::metadata::{Producers, ProducersField};
-
-    use golem_service_base::model::*;
-
-    pub fn convert_producers(producer: Producers) -> golem_service_base::model::Producers {
-        golem_service_base::model::Producers {
-            fields: producer
-                .fields
-                .into_iter()
-                .map(convert_producer)
-                .collect::<Vec<_>>(),
-        }
-    }
-
-    fn convert_producer(producer: ProducersField) -> ProducerField {
-        ProducerField {
-            name: producer.name,
-            values: producer
-                .values
-                .into_iter()
-                .map(|value| golem_service_base::model::VersionedName {
-                    name: value.name,
-                    version: value.version,
-                })
-                .collect(),
-        }
-    }
-
-    pub fn convert_export(export: AnalysedExport) -> Export {
-        match export {
-            AnalysedExport::Function(analysed_function) => {
-                Export::Function(convert_function(analysed_function))
-            }
-            AnalysedExport::Instance(analysed_instance) => {
-                Export::Instance(convert_instance(analysed_instance))
-            }
-        }
-    }
-
-    fn convert_function(analysed_function: AnalysedFunction) -> ExportFunction {
-        ExportFunction {
-            name: analysed_function.name,
-            parameters: analysed_function
-                .params
-                .into_iter()
-                .map(convert_function_param)
-                .collect(),
-            results: analysed_function
-                .results
-                .into_iter()
-                .map(convert_function_result)
-                .collect(),
-        }
-    }
-
-    fn convert_instance(analysed_instance: AnalysedInstance) -> ExportInstance {
-        ExportInstance {
-            name: analysed_instance.name,
-            functions: analysed_instance
-                .funcs
-                .into_iter()
-                .map(convert_function)
-                .collect(),
-        }
-    }
-
-    fn convert_function_param(param: AnalysedFunctionParameter) -> FunctionParameter {
-        FunctionParameter {
-            name: param.name,
-            typ: convert_type(param.typ),
-        }
-    }
-
-    fn convert_function_result(result: AnalysedFunctionResult) -> FunctionResult {
-        FunctionResult {
-            name: result.name,
-            typ: convert_type(result.typ),
-        }
-    }
-
-    fn convert_type(analysed_type: AnalysedType) -> Type {
-        match analysed_type {
-            AnalysedType::Bool => Type::Bool(golem_service_base::model::TypeBool),
-            AnalysedType::S8 => Type::S8(golem_service_base::model::TypeS8),
-            AnalysedType::U8 => Type::U8(golem_service_base::model::TypeU8),
-            AnalysedType::S16 => Type::S16(golem_service_base::model::TypeS16),
-            AnalysedType::U16 => Type::U16(golem_service_base::model::TypeU16),
-            AnalysedType::S32 => Type::S32(golem_service_base::model::TypeS32),
-            AnalysedType::U32 => Type::U32(golem_service_base::model::TypeU32),
-            AnalysedType::S64 => Type::S64(golem_service_base::model::TypeS64),
-            AnalysedType::U64 => Type::U64(golem_service_base::model::TypeU64),
-            AnalysedType::F32 => Type::F32(golem_service_base::model::TypeF32),
-            AnalysedType::F64 => Type::F64(golem_service_base::model::TypeF64),
-            AnalysedType::Chr => Type::Chr(golem_service_base::model::TypeChr),
-            AnalysedType::Str => Type::Str(golem_service_base::model::TypeStr),
-            AnalysedType::List(inner) => Type::List(golem_service_base::model::TypeList {
-                inner: Box::new(convert_type(*inner)),
-            }),
-            AnalysedType::Tuple(items) => Type::Tuple(golem_service_base::model::TypeTuple {
-                items: items.into_iter().map(convert_type).collect(),
-            }),
-            AnalysedType::Record(cases) => Type::Record(golem_service_base::model::TypeRecord {
-                cases: cases
-                    .into_iter()
-                    .map(|(name, typ)| golem_service_base::model::NameTypePair {
-                        name,
-                        typ: Box::new(convert_type(typ)),
-                    })
-                    .collect(),
-            }),
-            AnalysedType::Flags(cases) => {
-                Type::Flags(golem_service_base::model::TypeFlags { cases })
-            }
-            AnalysedType::Enum(cases) => Type::Enum(golem_service_base::model::TypeEnum { cases }),
-            AnalysedType::Option(inner) => Type::Option(golem_service_base::model::TypeOption {
-                inner: Box::new(convert_type(*inner)),
-            }),
-            AnalysedType::Result { ok, error } => {
-                Type::Result(golem_service_base::model::TypeResult {
-                    ok: ok.map(|t| Box::new(convert_type(*t))),
-                    err: error.map(|t| Box::new(convert_type(*t))),
-                })
-            }
-            AnalysedType::Variant(variants) => {
-                Type::Variant(golem_service_base::model::TypeVariant {
-                    cases: variants
-                        .into_iter()
-                        .map(
-                            |(name, typ)| golem_service_base::model::NameOptionTypePair {
-                                name,
-                                typ: typ.map(|t| Box::new(convert_type(t))),
-                            },
-                        )
-                        .collect(),
-                })
-            }
-        }
     }
 }

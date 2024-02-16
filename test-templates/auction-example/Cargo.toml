@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "auction",
+    "auction-registry",
+    "auction-stub"
+]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

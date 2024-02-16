@@ -16,6 +16,7 @@ path = "src/server.rs"
 [dependencies]
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc/wasm-rpc", default-features = false, features = ["host"] }
 golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "0.0.0" }
 
 anyhow = { workspace = true }

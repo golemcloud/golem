@@ -1448,3 +1448,16 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
 
     check!(metadata.is_none());
 }
+
+#[tokio::test]
+#[ignore] // TODO
+async fn shopping_cart_resource_example() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id =
+        executor.store_template(Path::new("../test-templates/shopping-cart-resource.wasm"));
+    let _worker_id = executor
+        .start_worker(&template_id, "shopping-cart-resource-1")
+        .await;
+}

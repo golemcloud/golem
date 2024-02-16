@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package golem.worker;
 
-import "golem/worker/val.proto";
+import "wasm/rpc/val.proto";
 
 message InvokeParameters {
-  repeated Val params = 1;
+  repeated wasm.rpc.Val params = 1;
 }

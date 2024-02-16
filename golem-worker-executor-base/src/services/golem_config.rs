@@ -43,6 +43,7 @@ pub struct GolemConfig {
     pub active_workers: ActiveWorkersConfig,
     pub scheduler: SchedulerConfig,
     pub invocation_keys: InvocationKeysConfig,
+    pub public_worker_api: WorkerServiceGrpcConfig,
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
     pub grpc_address: String,
@@ -175,6 +176,13 @@ pub enum WorkersServiceConfig {
     InMemory,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct WorkerServiceGrpcConfig {
+    pub host: String,
+    pub port: u16,
+    pub access_token: String,
+}
+
 impl GolemConfig {
     pub fn new() -> Self {
         Figment::new()
@@ -230,6 +238,22 @@ impl ShardManagerServiceGrpcConfig {
     }
 }
 
+impl WorkerServiceGrpcConfig {
+    pub fn url(&self) -> Url {
+        Url::parse(&format!("http://{}:{}", self.host, self.port))
+            .expect("Failed to parse worker service URL")
+    }
+
+    pub fn uri(&self) -> Uri {
+        Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build worker service URI")
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct SuspendConfig {
     #[serde(with = "humantime_serde")]
@@ -282,6 +306,7 @@ impl Default for GolemConfig {
             scheduler: SchedulerConfig::default(),
             invocation_keys: InvocationKeysConfig::default(),
             active_workers: ActiveWorkersConfig::default(),
+            public_worker_api: WorkerServiceGrpcConfig::default(),
             enable_tracing_console: false,
             enable_json_log: false,
             grpc_address: "0.0.0.0".to_string(),
@@ -442,6 +467,16 @@ impl Default for InvocationKeysConfig {
         Self {
             pending_key_retention: Duration::from_secs(60),
             confirm_queue_capacity: 1024,
+        }
+    }
+}
+
+impl Default for WorkerServiceGrpcConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 9090,
+            access_token: "access_token".to_string(),
         }
     }
 }

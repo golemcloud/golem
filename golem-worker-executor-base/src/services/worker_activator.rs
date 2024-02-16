@@ -29,7 +29,7 @@ use crate::workerctx::WorkerCtx;
 #[async_trait]
 pub trait WorkerActivator {
     /// Makes sure an already existing worker is active in a background task. Returns immediately
-    async fn activate_worker(&self, worker_id: WorkerId);
+    async fn activate_worker(&self, worker_id: &WorkerId);
 }
 
 pub struct LazyWorkerActivator {
@@ -56,7 +56,7 @@ impl Default for LazyWorkerActivator {
 
 #[async_trait]
 impl WorkerActivator for LazyWorkerActivator {
-    async fn activate_worker(&self, worker_id: WorkerId) {
+    async fn activate_worker(&self, worker_id: &WorkerId) {
         let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
         match maybe_worker_activator {
             Some(worker_activator) => worker_activator.activate_worker(worker_id).await,
@@ -84,8 +84,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerActivator<Ctx, Svcs> {
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator
     for DefaultWorkerActivator<Ctx, Svcs>
 {
-    async fn activate_worker(&self, worker_id: WorkerId) {
-        let metadata = self.all.worker_service().get(&worker_id).await;
+    async fn activate_worker(&self, worker_id: &WorkerId) {
+        let metadata = self.all.worker_service().get(worker_id).await;
         match metadata {
             Some(metadata) => {
                 Worker::activate(
@@ -125,7 +125,7 @@ impl WorkerActivatorMock {
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl WorkerActivator for WorkerActivatorMock {
-    async fn activate_worker(&self, worker_id: WorkerId) {
+    async fn activate_worker(&self, worker_id: &WorkerId) {
         info!("WorkerActivatorMock::activate_worker {worker_id}");
     }
 }
