@@ -18,6 +18,7 @@ pub mod api;
 pub mod blobstore;
 pub mod guest_languages;
 pub mod keyvalue;
+pub mod rpc;
 pub mod scalability;
 pub mod wasi;
 

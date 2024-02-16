@@ -624,7 +624,6 @@ impl WorkerService for WorkerServiceDefault {
                 })
             },
         ).await?;
-        debug!("Invoke_response: {:?}", invoke_response);
         Ok(invoke_response)
     }
 

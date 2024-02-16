@@ -14,7 +14,7 @@
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
-use crate::services::rpc::RpcDemand;
+use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -22,6 +22,7 @@ use golem_common::model::{TemplateId, WorkerId};
 use golem_wasm_rpc::golem::rpc::types::Uri;
 use golem_wasm_rpc::{HostWasmRpc, WasmRpcEntry, WitValue};
 use std::str::FromStr;
+use tracing::{debug, error};
 use wasmtime::component::Resource;
 
 #[async_trait]
@@ -47,38 +48,49 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn invoke_and_await_json(
-        &mut self,
-        self_: Resource<WasmRpcEntry>,
-        function_name: String,
-        function_params: Vec<String>,
-    ) -> anyhow::Result<Result<String, ()>> {
-        record_host_function_call("golem::rpc::wasm-rpc", "invoke-and-await-json");
-
-        let entry = self.table.get(&self_)?;
-        let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-        let result = self
-            .rpc()
-            .invoke_and_await_json(&payload.remote_worker_id, function_name, function_params)
-            .await;
-        Ok(result.map_err(|_| ())) // TODO: add error type to the wit interface
-    }
-
     async fn invoke_and_await(
         &mut self,
         self_: Resource<WasmRpcEntry>,
         function_name: String,
         function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Result<WitValue, ()>> {
+    ) -> anyhow::Result<Result<WitValue, golem_wasm_rpc::RpcError>> {
         record_host_function_call("golem::rpc::wasm-rpc", "invoke-and-await");
 
         let entry = self.table.get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let result = self
             .rpc()
-            .invoke_and_await(&payload.remote_worker_id, function_name, function_params)
+            .invoke_and_await(
+                &payload.remote_worker_id,
+                function_name,
+                function_params,
+                &self.private_state.account_id,
+            )
             .await;
-        Ok(result.map_err(|_| ())) // TODO: add error type to the wit interface
+
+        match result {
+            Ok(result) => {
+                debug!("RPC result: {result:?}");
+                Ok(Ok(result))
+            }
+            Err(err) => {
+                error!("RPC error: {err}");
+                match err {
+                    RpcError::ProtocolError { details } => {
+                        Ok(Err(golem_wasm_rpc::RpcError::ProtocolError(details)))
+                    }
+                    RpcError::Denied { details } => {
+                        Ok(Err(golem_wasm_rpc::RpcError::Denied(details)))
+                    }
+                    RpcError::NotFound { details } => {
+                        Ok(Err(golem_wasm_rpc::RpcError::NotFound(details)))
+                    }
+                    RpcError::RemoteInternalError { details } => {
+                        Ok(Err(golem_wasm_rpc::RpcError::RemoteInternalError(details)))
+                    }
+                }
+            }
+        }
     }
 
     fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {

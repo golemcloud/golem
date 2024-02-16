@@ -16,10 +16,8 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::net::{IpAddr, SocketAddr};
-use std::ops::DerefMut;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
@@ -29,7 +27,6 @@ use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, ShardId, WorkerMetadata, WorkerStatus,
 };
 use golem_wasm_rpc::protobuf::Val;
-use golem_wasm_rpc::Value;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -38,19 +35,17 @@ use uuid::Uuid;
 use wasmtime::Error;
 
 use crate::error::*;
-use crate::invocation::*;
 use crate::metrics::grpc::{
     record_closed_grpc_active_stream, record_new_grpc_active_stream, RecordedGrpcRequest,
 };
 use crate::model::InterruptKind;
-use crate::services::invocation_key::LookupResult;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
 use crate::services::{
     worker_event, All, HasActiveWorkers, HasAll, HasInvocationKeyService, HasPromiseService,
     HasShardManagerService, HasShardService, HasWorkerService, UsesAllDeps,
 };
-use crate::worker::Worker;
+use crate::worker::{invoke, invoke_and_await, Worker};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
 pub enum GrpcError<E> {
@@ -236,9 +231,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        Worker::get_or_create(
+        Worker::get_or_create_with_config(
             self,
-            worker_id,
+            &worker_id,
             args,
             env,
             Some(template_version),
@@ -294,7 +289,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             // be notified when we complete it below.
             Worker::activate(
                 &self.services,
-                metadata.worker_id.worker_id,
+                &metadata.worker_id.worker_id,
                 metadata.args,
                 metadata.env,
                 Some(metadata.worker_id.template_version),
@@ -330,9 +325,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
 
         if should_interrupt {
-            let worker_details = Worker::get_or_create(
+            let worker_details = Worker::get_or_create_with_config(
                 self,
-                metadata.worker_id.worker_id,
+                &metadata.worker_id.worker_id,
                 metadata.args,
                 metadata.env,
                 Some(metadata.worker_id.template_version),
@@ -426,9 +421,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ctx::set_worker_status(self, &worker_id, WorkerStatus::Interrupted).await;
             }
             WorkerStatus::Running => {
-                let worker_state = Worker::get_or_create(
+                let worker_state = Worker::get_or_create_with_config(
                     self,
-                    metadata.worker_id.worker_id,
+                    &metadata.worker_id.worker_id,
                     metadata.args,
                     metadata.env,
                     Some(metadata.worker_id.template_version),
@@ -470,7 +465,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 info!("Activating ${worker_status:?} worker {worker_id} due to explicit resume request");
                 Worker::activate(
                     &self.services,
-                    metadata.worker_id.worker_id,
+                    &metadata.worker_id.worker_id,
                     metadata.args,
                     metadata.env,
                     Some(metadata.worker_id.template_version),
@@ -488,45 +483,69 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn invoke_and_await_worker_internal(
         &self,
-        request: golem::workerexecutor::InvokeAndAwaitWorkerRequest,
+        request: &golem::workerexecutor::InvokeAndAwaitWorkerRequest,
     ) -> Result<golem::workerexecutor::InvokeAndAwaitWorkerSuccess, GolemError> {
-        match self.invoke_worker_internal(&request).await? {
-            Some(Ok(output)) => Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output }),
-            Some(Err(err)) => Err(err),
-            None => {
-                let worker_id = request.worker_id()?;
-                let invocation_key = request
-                    .invocation_key()?
-                    .expect("missing invocation key for invoke-and-await");
+        let full_function_name = request.name();
 
-                debug!("Waiting for invocation key {} to complete", invocation_key);
-                let result = self
-                    .invocation_key_service()
-                    .wait_for_confirmation(&worker_id, &invocation_key)
-                    .await;
+        let proto_function_input: Vec<Val> = request.input();
+        let function_input = proto_function_input
+            .iter()
+            .map(|val| val.clone().try_into())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
-                debug!(
-                    "Invocation key {} lookup result: {:?}",
-                    invocation_key, result
-                );
-                match result {
-                    LookupResult::Invalid => Err(GolemError::invalid_request(format!(
-                        "Invalid invocation key {invocation_key} for {worker_id}"
-                    ))),
-                    LookupResult::Complete(Ok(output)) => {
-                        let proto_output = output.into_iter().map(|val| val.into()).collect();
-                        Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess {
-                            output: proto_output,
-                        })
-                    }
-                    LookupResult::Complete(Err(err)) => Err(err),
-                    LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
-                    LookupResult::Pending => {
-                        Err(GolemError::unknown("Unexpected pending invocation key"))
-                    }
-                }
-            }
+        let calling_convention = request.calling_convention();
+        let invocation_key = request.invocation_key()?;
+
+        let worker_details = self.get_or_create(request).await?;
+        let values = invoke_and_await(
+            worker_details,
+            self,
+            invocation_key,
+            calling_convention.into(),
+            full_function_name,
+            function_input,
+        )
+        .await?;
+        let output = values.into_iter().map(|val| val.into()).collect();
+        Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output })
+    }
+
+    async fn get_or_create<Req: GrpcInvokeRequest>(
+        &self,
+        request: &Req,
+    ) -> Result<Arc<Worker<Ctx>>, GolemError> {
+        let worker_id = request.worker_id()?;
+        let account_id: AccountId = request.account_id()?;
+
+        self.validate_worker_id(&worker_id)?;
+
+        let metadata = self.worker_service().get(&worker_id).await;
+        self.validate_worker_status(&worker_id, &metadata).await?;
+
+        if let Some(limits) = request.account_limits() {
+            Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
         }
+
+        let (worker_args, worker_env, template_version, account_id) = match metadata {
+            Some(metadata) => (
+                metadata.args,
+                metadata.env,
+                Some(metadata.worker_id.template_version),
+                metadata.account_id,
+            ),
+            None => (vec![], vec![], None, account_id),
+        };
+
+        Worker::get_or_create_with_config(
+            self,
+            &worker_id,
+            worker_args.clone(),
+            worker_env.clone(),
+            template_version,
+            account_id,
+        )
+        .await
     }
 
     async fn invoke_worker_internal<Req: GrpcInvokeRequest>(
@@ -542,134 +561,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .collect::<Result<Vec<_>, _>>()
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
-        let worker_id = request.worker_id()?;
-        let account_id: AccountId = request.account_id()?;
-
-        if let Some(limits) = request.account_limits() {
-            Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
-        }
-
-        self.validate_worker_id(&worker_id)?;
-
-        let metadata = self.worker_service().get(&worker_id).await;
-        self.validate_worker_status(&worker_id, &metadata).await?;
-
-        let (worker_args, worker_env, template_version, account_id) = match metadata {
-            Some(metadata) => (
-                metadata.args,
-                metadata.env,
-                Some(metadata.worker_id.template_version),
-                metadata.account_id,
-            ),
-            None => (vec![], vec![], None, account_id),
-        };
-
-        let worker_details = Worker::get_or_create(
-            self,
-            worker_id.clone(),
-            worker_args.clone(),
-            worker_env.clone(),
-            template_version,
-            account_id,
-        )
-        .await?;
-
         let calling_convention = request.calling_convention();
         let invocation_key = request.invocation_key()?;
-        let output = match &invocation_key {
-            Some(invocation_key) => worker_details.lookup_result(self, invocation_key),
-            None => LookupResult::Pending,
-        };
 
-        match output {
-            LookupResult::Complete(output) => {
-                let proto_output =
-                    output.map(|values| values.into_iter().map(|val| val.into()).collect());
-                Ok(Some(proto_output))
-            }
-            LookupResult::Invalid => Err(GolemError::invalid_request(format!(
-                "Invalid invocation key {} for {worker_id}",
-                invocation_key.unwrap()
-            ))),
-            LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
-            LookupResult::Pending => {
-                if calling_convention == CallingConvention::StdioEventloop {
-                    // We only have to invoke the function if it is not running yet
-                    let requires_invoke = {
-                        let public_state = &worker_details.public_state;
-
-                        let bytes = match function_input.first() {
-                            Some(Value::String(value)) => {
-                                Ok(Bytes::from(format!("{}\n", value).to_string()))
-                            }
-                            _ => Err(GolemError::invalid_request(
-                                "unexpected function input for stdio-eventloop calling convention",
-                            )),
-                        }?;
-
-                        public_state
-                            .enqueue(
-                                bytes,
-                                invocation_key
-                                    .clone()
-                                    .expect("stdio-eventloop mode requires an invocation key"),
-                            )
-                            .await;
-                        let execution_status =
-                            worker_details.execution_status.read().unwrap().clone();
-                        !execution_status.is_running()
-                    };
-
-                    if requires_invoke {
-                        // Invoke the function in the background
-                        tokio::spawn(async move {
-                            let instance = &worker_details.instance;
-                            let store = &worker_details.store;
-                            let mut store_mutex = store.lock().await;
-                            let store = store_mutex.deref_mut();
-
-                            store
-                                .data_mut()
-                                .set_current_invocation_key(invocation_key)
-                                .await;
-                            let _ = invoke_worker(
-                                full_function_name.to_string(),
-                                vec![],
-                                store,
-                                instance,
-                                &CallingConvention::Component,
-                                true,
-                            )
-                            .await;
-                        });
-                    }
-                    Ok(None)
-                } else {
-                    // Invoke the function in the background
-                    tokio::spawn(async move {
-                        let instance = &worker_details.instance;
-                        let store = &worker_details.store;
-                        let mut store_mutex = store.lock().await;
-                        let store = store_mutex.deref_mut();
-
-                        store
-                            .data_mut()
-                            .set_current_invocation_key(invocation_key)
-                            .await;
-                        let _ = invoke_worker(
-                            full_function_name.to_string(),
-                            function_input,
-                            store,
-                            instance,
-                            &calling_convention,
-                            true,
-                        )
-                        .await;
-                    });
-                    Ok(None)
-                }
-            }
-        }
+        let worker_details = self.get_or_create(request).await?;
+        let result = invoke(
+            worker_details,
+            self,
+            invocation_key,
+            calling_convention,
+            full_function_name,
+            function_input,
+        )
+        .await?;
+        Ok(result.map(|inner_result| {
+            inner_result.map(|values| values.into_iter().map(|val| val.into()).collect())
+        }))
     }
 
     async fn revoke_shards_internal(
@@ -834,7 +741,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 request.worker_id, request.name, request.invocation_key, request.calling_convention, request.account_id
             ),
         );
-        match self.invoke_and_await_worker_internal(request).await {
+        match self.invoke_and_await_worker_internal(&request).await {
             Ok(result) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::InvokeAndAwaitWorkerResponse {
                     result: Some(
@@ -1220,6 +1127,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     result: Some(
                         golem::workerexecutor::get_worker_metadata_response::Result::Success(
                             result,
+                        ),
+                    ),
+                },
+            ))),
+            Err(err@GolemError::WorkerNotFound { .. }) => record.succeed(Ok(Response::new(
+                golem::workerexecutor::GetWorkerMetadataResponse {
+                    result: Some(
+                        golem::workerexecutor::get_worker_metadata_response::Result::Failure(
+                            err.clone().into(),
                         ),
                     ),
                 },

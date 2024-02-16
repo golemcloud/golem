@@ -2107,15 +2107,15 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-ast"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cba6f849347531c4d4b7808091a5397cc7db8d5da2705a016e6ce3d71c2e20c"
+checksum = "cd98959700ee261c0b4af61358df70830a29001a06afd1ccdfa5c0f3d2db0fa6"
 dependencies = [
  "leb128",
  "mappable-rc",
- "wasm-encoder 0.41.0",
+ "wasm-encoder 0.41.2",
  "wasm-metadata",
- "wasmparser 0.121.0",
+ "wasmparser 0.121.2",
 ]
 
 [[package]]
@@ -5654,18 +5654,18 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.41.0"
+version = "0.41.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e09bca7d6388637d27fb5edbeab11f56bfabcef8743c55ae34370e1e5030a071"
+checksum = "972f97a5d8318f908dded23594188a90bcd09365986b1163e66d70170e5287ae"
 dependencies = [
  "leb128",
 ]
 
 [[package]]
 name = "wasm-metadata"
-version = "0.10.17"
+version = "0.10.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c853d3809fc9fccf3bc0ad63f4f51d8eefad0bacf88f957aa991c1d9b88b016e"
+checksum = "18ebaa7bd0f9e7a5e5dd29b9a998acf21c4abed74265524dd7e85934597bfb10"
 dependencies = [
  "anyhow",
  "indexmap 2.2.2",
@@ -5673,8 +5673,8 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "spdx",
- "wasm-encoder 0.41.0",
- "wasmparser 0.121.0",
+ "wasm-encoder 0.41.2",
+ "wasmparser 0.121.2",
 ]
 
 [[package]]
@@ -5689,9 +5689,9 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.121.0"
+version = "0.121.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "953cf6a7606ab31382cb1caa5ae403e77ba70c7f8e12eeda167e7040d42bfda8"
+checksum = "9dbe55c8f9d0dbd25d9447a5a889ff90c0cc3feaa7395310d3d826b2c703eaab"
 dependencies = [
  "bitflags 2.4.2",
  "indexmap 2.2.2",
@@ -5705,7 +5705,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05e32c13c59fdc64d3f6998a1d52eb1d362b6904a88b754190ccb85661ad577a"
 dependencies = [
  "anyhow",
- "wasmparser 0.121.0",
+ "wasmparser 0.121.2",
 ]
 
 [[package]]
@@ -6052,7 +6052,7 @@ dependencies = [
  "leb128",
  "memchr",
  "unicode-width",
- "wasm-encoder 0.41.0",
+ "wasm-encoder 0.41.2",
 ]
 
 [[package]]

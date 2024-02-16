@@ -13,26 +13,31 @@
 // limitations under the License.
 
 use std::fmt::{Debug, Formatter};
+use std::ops::DerefMut;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use async_mutex::Mutex;
+use bytes::Bytes;
 use golem_common::cache::PendingOrFinal;
 use golem_common::model::{
-    AccountId, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
+    WorkerStatusRecord,
 };
+use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::Receiver;
 use tracing::{debug, error, info};
 use wasmtime::{Store, UpdateDeadline};
 
 use crate::error::GolemError;
+use crate::invocation::invoke_worker;
 use crate::metrics::wasm::{record_create_worker, record_create_worker_failure};
 use crate::model::{ExecutionStatus, InterruptKind, WorkerConfig};
 use crate::services::golem_config::GolemConfig;
 use crate::services::invocation_key::LookupResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{HasAll, HasInvocationKeyService};
-use crate::workerctx::WorkerCtx;
+use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
 /// Worker is one active wasmtime instance representing a Golem worker with its corresponding
 /// worker context. The worker struct itself is responsible for creating/reactivating/interrupting
@@ -201,7 +206,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Makes sure that the worker is active, but without waiting for it to be idle.
     ///
-    /// If the worker is already in memory this does nothing. Otherwise the worker will be
+    /// If the worker is already in memory this does nothing. Otherwise, the worker will be
     /// created (same as get_or_create_worker) but in a background task.
     ///
     /// If the active worker cache is not full, this newly created worker will be added to it.
@@ -209,7 +214,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// a previously interrupted / suspended invocation might be resumed.
     pub async fn activate<T>(
         this: &T,
-        worker_id: WorkerId,
+        worker_id: &WorkerId,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
         template_version: Option<i32>,
@@ -220,9 +225,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let worker_id_clone = worker_id.clone();
         let this_clone = this.clone();
         tokio::task::spawn(async move {
-            let result = Worker::get_or_create(
+            let result = Worker::get_or_create_with_config(
                 &this_clone,
-                worker_id,
+                &worker_id_clone,
                 worker_args,
                 worker_env,
                 template_version,
@@ -237,7 +242,37 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn get_or_create<T>(
         this: &T,
-        worker_id: WorkerId,
+        worker_id: &WorkerId,
+        worker_args: Option<Vec<String>>,
+        worker_env: Option<Vec<(String, String)>>,
+        template_version: Option<i32>,
+        account_id: AccountId,
+    ) -> Result<Arc<Self>, GolemError>
+    where
+        T: HasAll<Ctx> + Send + Sync + Clone + 'static,
+    {
+        let (worker_args, worker_env) = match this.worker_service().get(&worker_id).await {
+            Some(metadata) => (metadata.args, metadata.env),
+            None => (
+                worker_args.unwrap_or_default(),
+                worker_env.unwrap_or_default(),
+            ),
+        };
+
+        Worker::get_or_create_with_config(
+            this,
+            worker_id,
+            worker_args,
+            worker_env,
+            template_version,
+            account_id,
+        )
+        .await
+    }
+
+    pub async fn get_or_create_with_config<T>(
+        this: &T,
+        worker_id: &WorkerId,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
         template_version: Option<i32>,
@@ -441,5 +476,163 @@ fn validate_worker(
             worker_metadata.worker_id.worker_id,
             errors.join("\n"),
         ))
+    }
+}
+
+pub async fn invoke<Ctx: WorkerCtx, T>(
+    worker: Arc<Worker<Ctx>>,
+    this: &T,
+    invocation_key: Option<InvocationKey>,
+    calling_convention: CallingConvention,
+    full_function_name: String,
+    function_input: Vec<Value>,
+) -> Result<Option<Result<Vec<Value>, GolemError>>, GolemError>
+where
+    T: HasInvocationKeyService,
+{
+    let output = match &invocation_key {
+        Some(invocation_key) => worker.lookup_result(this, invocation_key),
+        None => LookupResult::Pending,
+    };
+
+    match output {
+        LookupResult::Complete(output) => Ok(Some(output)),
+        LookupResult::Invalid => Err(GolemError::invalid_request(format!(
+            "Invalid invocation key {} for {}",
+            invocation_key.unwrap(),
+            worker.metadata.worker_id.worker_id
+        ))),
+        LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
+        LookupResult::Pending => {
+            if calling_convention == CallingConvention::StdioEventloop {
+                // We only have to invoke the function if it is not running yet
+                let requires_invoke = {
+                    let public_state = &worker.public_state;
+
+                    let bytes = match function_input.first() {
+                        Some(Value::String(value)) => {
+                            Ok(Bytes::from(format!("{}\n", value).to_string()))
+                        }
+                        _ => Err(GolemError::invalid_request(
+                            "unexpected function input for stdio-eventloop calling convention",
+                        )),
+                    }?;
+
+                    public_state
+                        .enqueue(
+                            bytes,
+                            invocation_key
+                                .clone()
+                                .expect("stdio-eventloop mode requires an invocation key"),
+                        )
+                        .await;
+                    let execution_status = worker.execution_status.read().unwrap().clone();
+                    !execution_status.is_running()
+                };
+
+                if requires_invoke {
+                    // Invoke the function in the background
+                    let worker_clone = worker.clone();
+                    tokio::spawn(async move {
+                        let instance = &worker_clone.instance;
+                        let store = &worker_clone.store;
+                        let mut store_mutex = store.lock().await;
+                        let store = store_mutex.deref_mut();
+
+                        store
+                            .data_mut()
+                            .set_current_invocation_key(invocation_key)
+                            .await;
+                        let _ = invoke_worker(
+                            full_function_name,
+                            vec![],
+                            store,
+                            instance,
+                            &CallingConvention::Component,
+                            true,
+                        )
+                        .await;
+                    });
+                }
+                Ok(None)
+            } else {
+                // Invoke the function in the background
+                let worker_clone = worker.clone();
+                tokio::spawn(async move {
+                    let instance = &worker_clone.instance;
+                    let store = &worker_clone.store;
+                    let mut store_mutex = store.lock().await;
+                    let store = store_mutex.deref_mut();
+
+                    store
+                        .data_mut()
+                        .set_current_invocation_key(invocation_key)
+                        .await;
+                    let _ = invoke_worker(
+                        full_function_name,
+                        function_input,
+                        store,
+                        instance,
+                        &calling_convention,
+                        true,
+                    )
+                    .await;
+                });
+                Ok(None)
+            }
+        }
+    }
+}
+
+pub async fn invoke_and_await<Ctx: WorkerCtx, T>(
+    worker: Arc<Worker<Ctx>>,
+    this: &T,
+    invocation_key: Option<InvocationKey>,
+    calling_convention: CallingConvention,
+    full_function_name: String,
+    function_input: Vec<Value>,
+) -> Result<Vec<Value>, GolemError>
+where
+    T: HasInvocationKeyService,
+{
+    match invoke(
+        worker.clone(),
+        this,
+        invocation_key.clone(),
+        calling_convention,
+        full_function_name,
+        function_input,
+    )
+    .await?
+    {
+        Some(Ok(output)) => Ok(output),
+        Some(Err(err)) => Err(err),
+        None => {
+            let worker_id = &worker.metadata.worker_id.worker_id;
+            let invocation_key =
+                invocation_key.expect("missing invocation key for invoke-and-await");
+
+            debug!("Waiting for invocation key {} to complete", invocation_key);
+            let result = this
+                .invocation_key_service()
+                .wait_for_confirmation(&worker_id, &invocation_key)
+                .await;
+
+            debug!(
+                "Invocation key {} lookup result: {:?}",
+                invocation_key, result
+            );
+            match result {
+                LookupResult::Invalid => Err(GolemError::invalid_request(format!(
+                    "Invalid invocation key {invocation_key} for {worker_id}"
+                ))),
+                LookupResult::Complete(Ok(output)) => Ok(output),
+                LookupResult::Complete(Err(err)) => Err(err),
+                LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
+                LookupResult::Pending => {
+                    Err(GolemError::unknown("Unexpected pending invocation key"))
+                }
+            }
+        }
     }
 }

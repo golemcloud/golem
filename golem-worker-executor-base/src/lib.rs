@@ -33,7 +33,6 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tonic::transport::Server;
 use tracing::info;
-use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::{Config, Engine};
 
@@ -46,7 +45,6 @@ use crate::services::invocation_key::{InvocationKeyService, InvocationKeyService
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{OplogService, OplogServiceDefault};
 use crate::services::promise::PromiseService;
-use crate::services::rpc::{RemoteInvocationRpc, Rpc};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
 use crate::services::shard_manager::ShardManagerService;
@@ -85,7 +83,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        rpc: Arc<dyn Rpc + Send + Sync>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -184,15 +181,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             golem_config.scheduler.refresh_interval,
         );
 
-        let rpc = Arc::new(RemoteInvocationRpc::new(
-            golem_config.public_worker_api.uri(),
-            golem_config
-                .public_worker_api
-                .access_token
-                .parse::<Uuid>()
-                .expect("Access token must be an UUID"),
-        ));
-
         let services = self
             .create_services(
                 active_workers,
@@ -211,7 +199,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 lazy_worker_activator.clone(),
                 oplog_service,
                 scheduler_service,
-                rpc,
             )
             .await?;
 

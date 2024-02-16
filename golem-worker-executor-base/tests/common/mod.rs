@@ -77,7 +77,7 @@ use tokio::task::JoinHandle;
 use golem::api;
 use golem_common::config::RedisConfig;
 use golem_worker_executor_base::preview2::golem;
-use golem_worker_executor_base::services::rpc::Rpc;
+use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -1259,8 +1259,33 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         _worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        rpc: Arc<dyn Rpc + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
+        let rpc = Arc::new(DirectWorkerInvocationRpc::new(
+            Arc::new(RemoteInvocationRpc::new(
+                golem_config.public_worker_api.uri(),
+                golem_config
+                    .public_worker_api
+                    .access_token
+                    .parse::<Uuid>()
+                    .expect("Access token must be an UUID"),
+            )),
+            active_workers.clone(),
+            engine.clone(),
+            linker.clone(),
+            runtime.clone(),
+            template_service.clone(),
+            worker_service.clone(),
+            promise_service.clone(),
+            golem_config.clone(),
+            invocation_key_service.clone(),
+            shard_service.clone(),
+            shard_manager_service.clone(),
+            key_value_service.clone(),
+            blob_store_service.clone(),
+            oplog_service.clone(),
+            scheduler_service.clone(),
+            ()
+        ));
         let recovery_management = Arc::new(RecoveryManagementDefault::new(
             active_workers.clone(),
             engine.clone(),
@@ -1278,6 +1303,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             golem_config.clone(),
             (),
         ));
+        rpc.set_recovery_management(recovery_management.clone());
+
         Ok(All::new(
             active_workers,
             engine,

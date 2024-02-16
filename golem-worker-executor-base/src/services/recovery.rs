@@ -432,9 +432,9 @@ where
 
     match this.worker_service().get(&worker_id.worker_id).await {
         Some(worker) => {
-            let worker_details = Worker::get_or_create(
+            let worker_details = Worker::get_or_create_with_config(
                 this,
-                worker_id.worker_id.clone(),
+                &worker_id.worker_id.clone(),
                 worker.args,
                 worker.env,
                 Some(worker_id.template_version),

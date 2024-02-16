@@ -28,7 +28,9 @@ use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::OplogService;
 use golem_worker_executor_base::services::promise::PromiseService;
 use golem_worker_executor_base::services::recovery::RecoveryManagementDefault;
-use golem_worker_executor_base::services::rpc::Rpc;
+use golem_worker_executor_base::services::rpc::{
+    DirectWorkerInvocationRpc, RemoteInvocationRpc,
+};
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
 use golem_worker_executor_base::services::shard_manager::ShardManagerService;
@@ -41,6 +43,7 @@ use golem_worker_executor_base::Bootstrap;
 use prometheus::Registry;
 use tokio::runtime::Handle;
 use tracing::info;
+use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
@@ -73,9 +76,35 @@ impl Bootstrap<Context> for ServerBootstrap {
         _worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        rpc: Arc<dyn Rpc + Send + Sync>,
     ) -> anyhow::Result<All<Context>> {
         let additional_deps = AdditionalDeps {};
+
+        let rpc = Arc::new(DirectWorkerInvocationRpc::new(
+            Arc::new(RemoteInvocationRpc::new(
+                golem_config.public_worker_api.uri(),
+                golem_config
+                    .public_worker_api
+                    .access_token
+                    .parse::<Uuid>()
+                    .expect("Access token must be an UUID"),
+            )),
+            active_workers.clone(),
+            engine.clone(),
+            linker.clone(),
+            runtime.clone(),
+            template_service.clone(),
+            worker_service.clone(),
+            promise_service.clone(),
+            golem_config.clone(),
+            invocation_key_service.clone(),
+            shard_service.clone(),
+            shard_manager_service.clone(),
+            key_value_service.clone(),
+            blob_store_service.clone(),
+            oplog_service.clone(),
+            scheduler_service.clone(),
+            additional_deps.clone(),
+        ));
         let recovery_management = Arc::new(RecoveryManagementDefault::new(
             active_workers.clone(),
             engine.clone(),
@@ -93,6 +122,8 @@ impl Bootstrap<Context> for ServerBootstrap {
             golem_config.clone(),
             additional_deps.clone(),
         ));
+        rpc.set_recovery_management(recovery_management.clone());
+
         Ok(All::new(
             active_workers,
             engine,
