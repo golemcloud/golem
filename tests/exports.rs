@@ -356,3 +356,92 @@ fn exports_file_service_component() {
 
     pretty_assertions::assert_eq!(metadata, expected);
 }
+
+#[test]
+fn exports_auction_registry_composed_component() {
+    let source_bytes = include_bytes!("../wasm/auction_registry_composed.wasm");
+    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
+
+    let state = AnalysisContext::new(component);
+    let metadata = state.get_top_level_exports().unwrap();
+
+    println!("{:?}", metadata);
+    // [Instance(AnalysedInstance { name: "auction:registry/api", funcs: [AnalysedFunction { name: "create-bidder", params: [AnalysedFunctionParameter { name: "name", typ: Str }, AnalysedFunctionParameter { name: "address", typ: Str }], results: [AnalysedFunctionResult { name: None, typ: Record([("bidder-id", Str)]) }] }, AnalysedFunction { name: "create-auction", params: [AnalysedFunctionParameter { name: "name", typ: Str }, AnalysedFunctionParameter { name: "description", typ: Str }, AnalysedFunctionParameter { name: "limit-price", typ: F32 }, AnalysedFunctionParameter { name: "expiration", typ: U64 }], results: [AnalysedFunctionResult { name: None, typ: Record([("auction-id", Str)]) }] }, AnalysedFunction { name: "get-auctions", params: [], results: [AnalysedFunctionResult { name: None, typ: List(Record([("auction-id", Record([("auction-id", Str)])), ("name", Str), ("description", Str), ("limit-price", F32), ("expiration", U64)])) }] }] })]
+
+    pretty_assertions::assert_eq!(
+        metadata,
+        vec![AnalysedExport::Instance(AnalysedInstance {
+            name: "auction:registry/api".to_string(),
+            funcs: vec![
+                AnalysedFunction {
+                    name: "create-bidder".to_string(),
+                    params: vec![
+                        AnalysedFunctionParameter {
+                            name: "name".to_string(),
+                            typ: AnalysedType::Str,
+                        },
+                        AnalysedFunctionParameter {
+                            name: "address".to_string(),
+                            typ: AnalysedType::Str,
+                        },
+                    ],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: AnalysedType::Record(vec![(
+                            "bidder-id".to_string(),
+                            AnalysedType::Str
+                        )]),
+                    }],
+                },
+                AnalysedFunction {
+                    name: "create-auction".to_string(),
+                    params: vec![
+                        AnalysedFunctionParameter {
+                            name: "name".to_string(),
+                            typ: AnalysedType::Str,
+                        },
+                        AnalysedFunctionParameter {
+                            name: "description".to_string(),
+                            typ: AnalysedType::Str,
+                        },
+                        AnalysedFunctionParameter {
+                            name: "limit-price".to_string(),
+                            typ: AnalysedType::F32,
+                        },
+                        AnalysedFunctionParameter {
+                            name: "expiration".to_string(),
+                            typ: AnalysedType::U64,
+                        },
+                    ],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: AnalysedType::Record(vec![(
+                            "auction-id".to_string(),
+                            AnalysedType::Str
+                        )]),
+                    }],
+                },
+                AnalysedFunction {
+                    name: "get-auctions".to_string(),
+                    params: vec![],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: AnalysedType::List(Box::new(AnalysedType::Record(vec![
+                            (
+                                "auction-id".to_string(),
+                                AnalysedType::Record(vec![(
+                                    "auction-id".to_string(),
+                                    AnalysedType::Str
+                                )])
+                            ),
+                            ("name".to_string(), AnalysedType::Str),
+                            ("description".to_string(), AnalysedType::Str),
+                            ("limit-price".to_string(), AnalysedType::F32),
+                            ("expiration".to_string(), AnalysedType::U64),
+                        ]))),
+                    }],
+                },
+            ],
+        })]
+    );
+}
