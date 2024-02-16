@@ -35,11 +35,17 @@ interface types {
     value: string,
   }
 
+  variant rpc-error {
+    protocol-error(string),
+    denied(string),
+    not-found(string),
+    remote-internal-error(string)
+  }
+
   resource wasm-rpc {
     constructor(location: uri);
 
-    invoke-and-await-json: func(function-name: string, function-params: list<string>) -> result<string>;
-    invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> result<wit-value>;
+    invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> result<wit-value, rpc-error>;
   }
 }
 

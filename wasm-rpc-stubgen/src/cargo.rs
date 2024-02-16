@@ -103,7 +103,7 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         }),
     };
 
-    let mut package = cargo_toml::Package::new(def.source_world_name()?, &def.stub_crate_version);
+    let mut package = cargo_toml::Package::new(def.target_crate_name()?, &def.stub_crate_version);
     package.edition = Inheritable::Set(Edition::E2021);
     package.metadata = Some(metadata);
     manifest.package = Some(package);

@@ -41,7 +41,7 @@ pub use extractor::{WitNodePointer, WitValueExtractor};
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc::types::{NodeIndex, Uri, WasmRpc, WitNode, WitValue};
+pub use bindings::golem::rpc::types::{NodeIndex, RpcError, Uri, WasmRpc, WitNode, WitValue};
 
 #[cfg(feature = "host")]
 use ::wasmtime::component::bindgen;
@@ -59,7 +59,7 @@ bindgen!({
 });
 
 #[cfg(feature = "host")]
-pub use golem::rpc::types::{Host, HostWasmRpc, NodeIndex, WitNode, WitValue};
+pub use golem::rpc::types::{Host, HostWasmRpc, NodeIndex, RpcError, WitNode, WitValue};
 
 #[cfg(feature = "host")]
 pub struct WasmRpcEntry {
