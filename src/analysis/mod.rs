@@ -373,21 +373,17 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
         name: String,
         idx: InstanceIdx,
     ) -> AnalysisResult<AnalysedInstance> {
-        println!("analyse_instance_export {name} {idx}");
         let (instance_section, next_ctx) = self
             .get_final_referenced(format!("instance {idx}"), |component| {
                 component.get_instance_wrapped(idx)
             })?;
-        println!("got instance section");
         match &*instance_section {
             ComponentSection::Instance(instance) => match instance {
                 ComponentInstance::Instantiate { component_idx, .. } => {
-                    println!("instantiate -> finding component {component_idx}");
                     let (component_section, next_ctx) = next_ctx.get_final_referenced(
                         format!("component {component_idx}"),
                         |component| component.get_component(*component_idx),
                     )?;
-                    println!("got component section");
 
                     match &*component_section {
                         ComponentSection::Component(referenced_component) => {
@@ -476,7 +472,6 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
         &self,
         section: Mrc<ComponentSection<Ast>>,
     ) -> AnalysisResult<(Mrc<ComponentSection<Ast>>, AnalysisContext<Ast>)> {
-        println!("follow_redirects {section:?}");
         let component = self.get_component();
         match &*section {
             ComponentSection::Export(ComponentExport { kind, idx, .. }) => {
@@ -585,7 +580,6 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
         instance: &ComponentInstance,
         name: &String,
     ) -> AnalysisResult<(Option<Mrc<ComponentExport>>, AnalysisContext<Ast>)> {
-        println!("find_export_by_name {name}");
         match instance {
             ComponentInstance::Instantiate { component_idx, .. } => {
                 let (component, next_ctx) = self
@@ -598,7 +592,6 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                     .iter()
                     .find(|export| export.name == *name)
                     .cloned();
-                println!("found export {export:?}");
                 Ok((export, next_ctx.push_component(component)))
             }
             ComponentInstance::FromExports { exports } => {
