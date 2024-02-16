@@ -52,14 +52,10 @@ fn make(suffix: &str, name: &str, cli: CliLive, context: Arc<ContextInfo>) -> Ve
 }
 
 pub fn all(context: Arc<ContextInfo>) -> Vec<Trial> {
-    let mut short_args = make(
-        "_short",
-        "CLI_short",
-        CliLive::make(&context.golem_service)
-            .unwrap()
-            .with_short_args(),
-        context.clone(),
-    );
+    let short_cli = CliLive::make(&context.golem_service)
+        .unwrap()
+        .with_short_args();
+    let mut short_args = make("_short", "CLI_short", short_cli.clone(), context.clone());
 
     let mut long_args = make(
         "_long",
@@ -72,6 +68,12 @@ pub fn all(context: Arc<ContextInfo>) -> Vec<Trial> {
 
     short_args.append(&mut long_args);
 
+    short_args.push(Trial::test_in_context(
+        "auction_example".to_string(),
+        (context.clone(), "".to_string(), short_cli),
+        auction_example,
+    ));
+
     short_args
 }
 
@@ -80,7 +82,7 @@ fn make_template(
     template_name: &str,
     cli: &CliLive,
 ) -> Result<TemplateView, Failed> {
-    let env_service = context.env.wasi_root.join("environment-service.wasm");
+    let env_service = context.env.wasm_root.join("environment-service.wasm");
     let cfg = &cli.config;
     Ok(cli.run(&[
         "template",
@@ -252,7 +254,7 @@ fn worker_invoke((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> R
 fn worker_connect((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> Result<(), Failed> {
     let cfg = &cli.config;
 
-    let stdout_service = context.env.wasi_root.join("write-stdout.wasm");
+    let stdout_service = context.env.wasm_root.join("write-stdout.wasm");
     let template: TemplateView = cli.run(&[
         "template",
         "add",
@@ -321,7 +323,7 @@ fn worker_connect_failed(
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
 
-    let stdout_service = context.env.wasi_root.join("write-stdout.wasm");
+    let stdout_service = context.env.wasm_root.join("write-stdout.wasm");
     let template: TemplateView = cli.run(&[
         "template",
         "add",
@@ -353,7 +355,7 @@ fn worker_interrupt(
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
 
-    let interruption_service = context.env.wasi_root.join("interruption.wasm");
+    let interruption_service = context.env.wasm_root.join("interruption.wasm");
     let template: TemplateView = cli.run(&[
         "template",
         "add",
@@ -388,7 +390,7 @@ fn worker_simulated_crash(
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
 
-    let interruption_service = context.env.wasi_root.join("interruption.wasm");
+    let interruption_service = context.env.wasm_root.join("interruption.wasm");
     let template: TemplateView = cli.run(&[
         "template",
         "add",
@@ -414,6 +416,82 @@ fn worker_simulated_crash(
         &cfg.arg('T', "template-id"),
         &template_id,
     ])?;
+
+    Ok(())
+}
+
+fn auction_example(
+    (context, name, cli): (Arc<ContextInfo>, String, CliLive),
+) -> Result<(), Failed> {
+    let auction_registry_wasm = context.env.wasm_root.join("auction_registry_composed.wasm");
+    let auction_wasm = context.env.wasm_root.join("auction.wasm");
+    let cfg = &cli.config;
+
+    let auction_registry_template_name = format!("{name}_auction_registry");
+    let auction_template_name = format!("{name}_auction");
+
+    let auction_registry = cli
+        .run::<TemplateView, &str>(&[
+            "template",
+            "add",
+            &cfg.arg('t', "template-name"),
+            &auction_registry_template_name,
+            auction_registry_wasm.to_str().unwrap(),
+        ])?
+        .template_id;
+
+    let auction = cli
+        .run::<TemplateView, &str>(&[
+            "template",
+            "add",
+            &cfg.arg('t', "template-name"),
+            &auction_template_name,
+            auction_wasm.to_str().unwrap(),
+        ])?
+        .template_id;
+
+    let worker_name = format!("{name}_auction_registry_1");
+
+    let _: VersionedWorkerId = cli.run(&[
+        "worker",
+        "add",
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('T', "template-id"),
+        &auction_registry,
+        &cfg.arg('e', "env"),
+        &format!("AUCTION_TEMPLATE_ID={auction}"),
+        "",
+    ])?;
+    let args_key: InvocationKey = cli.run(&[
+        "worker",
+        "invocation-key",
+        &cfg.arg('T', "template-id"),
+        &auction_registry,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+    ])?;
+
+    for _ in 1..100 {
+        let args = cli.run_json(&[
+            "worker",
+            "invoke-and-await",
+            &cfg.arg('T', "template-id"),
+            &auction_registry,
+            &cfg.arg('w', "worker-name"),
+            &worker_name,
+            &cfg.arg('f', "function"),
+            "auction:registry/api/create-auction",
+            &cfg.arg('j', "parameters"),
+            "[\"test-auction\", \"this is a test\", 100.0, 600]",
+            &cfg.arg('k', "invocation-key"),
+            &args_key.0,
+        ])?;
+        assert!(args
+            .as_array()
+            .and_then(|arr| arr[0].as_object().map(|obj| obj.contains_key("auction-id")))
+            .unwrap_or(false));
+    }
 
     Ok(())
 }

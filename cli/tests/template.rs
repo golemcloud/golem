@@ -53,7 +53,7 @@ fn template_add_and_find_all(
     (context, name, cli): (Arc<ContextInfo>, String, CliLive),
 ) -> Result<(), Failed> {
     let template_name = format!("{name} template add and find all");
-    let env_service = context.env.wasi_root.join("environment-service.wasm");
+    let env_service = context.env.wasm_root.join("environment-service.wasm");
     let cfg = &cli.config;
     let template: TemplateView = cli.run(&[
         "template",
@@ -72,7 +72,7 @@ fn template_add_and_find_by_name(
 ) -> Result<(), Failed> {
     let template_name_other = format!("{name} template add and find by name other");
     let template_name = format!("{name} template add and find by name");
-    let env_service = context.env.wasi_root.join("environment-service.wasm");
+    let env_service = context.env.wasm_root.join("environment-service.wasm");
     let cfg = &cli.config;
     let _: TemplateView = cli.run(&[
         "template",
@@ -103,7 +103,7 @@ fn template_update(
     (context, name, cli): (Arc<ContextInfo>, String, CliLive),
 ) -> Result<(), Failed> {
     let template_name = format!("{name} template update");
-    let env_service = context.env.wasi_root.join("environment-service.wasm");
+    let env_service = context.env.wasm_root.join("environment-service.wasm");
     let cfg = &cli.config;
     let template: TemplateView = cli.run(&[
         "template",
