@@ -1,13 +1,13 @@
 {
   "id": "shopping-cart-v1",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "routes": [
     {
       "method": "Get",
       "path": "/{user-id}/get-cart-contents",
       "binding": {
         "type": "wit-worker",
-        "template": "08930752-d868-412f-a608-b834bda159be",
+        "template": "d70ddb67-9310-4df7-ac5c-583f9803ddcb",
         "workerId": "worker-${request.path.user-id}",
         "functionName": "golem:it/api/get-cart-contents",
         "functionParams": [],

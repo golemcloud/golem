@@ -14,7 +14,7 @@ use crate::api_definition;
 use crate::api_definition::{ApiDefinitionId, MethodPattern, Version};
 use crate::expr::Expr;
 use crate::oas_worker_bridge::*;
-use crate::register::RegisterApiDefinition;
+use crate::register::{ApiDefinitionKey, ApiRegistrationError, RegisterApiDefinition};
 
 pub struct ApiDefinitionEndpoints {
     pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
@@ -36,22 +36,16 @@ impl ApiDefinitionEndpoints {
             ApiEndpointError::bad_request(e)
         })?;
 
-        let api_definition_id = &definition.id;
+        register_api(self.definition_service.clone(), &definition).await?;
 
-        self.definition_service
-            .register(&definition)
-            .await
-            .map_err(|e| {
-                error!(
-                    "API definition id: {} - register error: {}",
-                    api_definition_id, e
-                );
-                ApiEndpointError::internal(e)
-            })?;
+        let api_definition_key = ApiDefinitionKey {
+            id: definition.id,
+            version: definition.version,
+        };
 
         let data = self
             .definition_service
-            .get(api_definition_id)
+            .get(&api_definition_key)
             .await
             .map_err(ApiEndpointError::internal)?;
 
@@ -68,9 +62,12 @@ impl ApiDefinitionEndpoints {
         &self,
         payload: Json<ApiDefinition>,
     ) -> Result<Json<ApiDefinition>, ApiEndpointError> {
-        let api_definition_id = &payload.id;
+        let api_definition_key = ApiDefinitionKey {
+            id: payload.id.clone(),
+            version: payload.version.clone(),
+        };
 
-        info!("Save API definition - id: {}", api_definition_id);
+        info!("Save API definition - id: {}", &api_definition_key.id);
 
         let definition: api_definition::ApiDefinition = payload
             .0
@@ -78,20 +75,11 @@ impl ApiDefinitionEndpoints {
             .try_into()
             .map_err(ApiEndpointError::bad_request)?;
 
-        self.definition_service
-            .register(&definition)
-            .await
-            .map_err(|e| {
-                error!(
-                    "API definition id: {} - register error: {}",
-                    api_definition_id, e
-                );
-                ApiEndpointError::internal(e)
-            })?;
+        register_api(self.definition_service.clone(), &definition).await?;
 
         let data = self
             .definition_service
-            .get(api_definition_id)
+            .get(&api_definition_key)
             .await
             .map_err(ApiEndpointError::internal)?;
 
@@ -106,67 +94,65 @@ impl ApiDefinitionEndpoints {
     #[oai(path = "/", method = "get")]
     async fn get(
         &self,
-        #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
+        #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
+        #[oai(name = "version")] api_definition_id_version: Query<Version>,
     ) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
         let api_definition_id_optional = api_definition_id_query.0;
 
-        if let Some(api_definition_id) = api_definition_id_optional {
-            info!("Get API definition - id: {}", api_definition_id);
+        let api_version = api_definition_id_version.0;
 
-            let data = self
-                .definition_service
-                .get(&api_definition_id)
-                .await
-                .map_err(ApiEndpointError::internal)?;
+        let api_definition_key = ApiDefinitionKey {
+            id: api_definition_id_optional,
+            version: api_version,
+        };
 
-            let values: Vec<ApiDefinition> = match data {
-                Some(d) => {
-                    let definition: ApiDefinition =
-                        d.try_into().map_err(ApiEndpointError::internal)?;
-                    vec![definition]
-                }
-                None => vec![],
-            };
+        info!(
+            "Get API definition - id: {}, version: {}",
+            &api_definition_key.id, &api_definition_key.version
+        );
 
-            Ok(Json(values))
-        } else {
-            info!("Get all API definitions");
+        let data = self
+            .definition_service
+            .get(&api_definition_key)
+            .await
+            .map_err(ApiEndpointError::internal)?;
 
-            let data = self
-                .definition_service
-                .get_all()
-                .await
-                .map_err(ApiEndpointError::internal)?;
-
-            let mut values: Vec<ApiDefinition> = vec![];
-
-            for d in data {
+        let values: Vec<ApiDefinition> = match data {
+            Some(d) => {
                 let definition: ApiDefinition = d.try_into().map_err(ApiEndpointError::internal)?;
-                values.push(definition);
+                vec![definition]
             }
+            None => vec![],
+        };
 
-            Ok(Json(values))
-        }
+        Ok(Json(values))
     }
 
     #[oai(path = "/", method = "delete")]
     async fn delete(
         &self,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
+        #[oai(name = "version")] api_definition_version_query: Query<Version>,
     ) -> Result<Json<String>, ApiEndpointError> {
         let api_definition_id = api_definition_id_query.0;
+        let api_definition_version = api_definition_version_query.0;
 
-        info!("Delete API definition - id: {}", api_definition_id);
+        let api_definition_key = ApiDefinitionKey {
+            id: api_definition_id.clone(),
+            version: api_definition_version,
+        };
+
+        info!("Delete API definition - id: {}", &api_definition_id);
 
         let data = self
             .definition_service
-            .get(&api_definition_id)
+            .get(&api_definition_key)
             .await
             .map_err(ApiEndpointError::internal)?;
 
         if data.is_some() {
             self.definition_service
-                .delete(&api_definition_id)
+                .delete(&api_definition_key)
                 .await
                 .map_err(ApiEndpointError::internal)?;
 
@@ -174,6 +160,124 @@ impl ApiDefinitionEndpoints {
         }
 
         Err(ApiEndpointError::not_found("API definition not found"))
+    }
+
+    #[oai(path = "/all", method = "get")]
+    async fn get_all(&self) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
+        let data = self
+            .definition_service
+            .get_all()
+            .await
+            .map_err(ApiEndpointError::internal)?;
+
+        let values = data
+            .into_iter()
+            .map(|d| d.try_into())
+            .collect::<Result<Vec<ApiDefinition>, _>>()
+            .map_err(ApiEndpointError::internal)?;
+
+        Ok(Json(values))
+    }
+}
+
+async fn register_api(
+    definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
+    definition: &api_definition::ApiDefinition,
+) -> Result<(), ApiEndpointError> {
+    definition_service
+        .register(definition)
+        .await
+        .map_err(|reg_error| {
+            error!(
+                "API definition id: {} - register error: {}",
+                definition.id, reg_error
+            );
+
+            match reg_error {
+                ApiRegistrationError::AlreadyExists(_) => {
+                    ApiEndpointError::already_exists(reg_error)
+                }
+                ApiRegistrationError::InternalError(_) => ApiEndpointError::bad_request(reg_error),
+            }
+        })
+}
+
+#[cfg(test)]
+mod test {
+    use poem::test::TestClient;
+
+    use crate::register::InMemoryRegistry;
+
+    use super::*;
+
+    fn make_route() -> poem::Route {
+        let definition_service = Arc::new(InMemoryRegistry::default());
+        let endpoint = ApiDefinitionEndpoints::new(definition_service);
+
+        poem::Route::new().nest("", OpenApiService::new(endpoint, "test", "1.0"))
+    }
+
+    #[tokio::test]
+    async fn conflict_error_returned() {
+        let api = make_route();
+        let client = TestClient::new(api);
+
+        let definition = api_definition::ApiDefinition {
+            id: ApiDefinitionId("test".to_string()),
+            version: Version("1.0".to_string()),
+            routes: vec![],
+        };
+
+        let response = client
+            .put("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+
+        response.assert_status_is_ok();
+
+        let response = client
+            .put("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+
+        response.assert_status(http::StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn get_all() {
+        let api = make_route();
+        let client = TestClient::new(api);
+
+        let definition = api_definition::ApiDefinition {
+            id: ApiDefinitionId("test".to_string()),
+            version: Version("1.0".to_string()),
+            routes: vec![],
+        };
+        let response = client
+            .put("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status_is_ok();
+
+        let definition = api_definition::ApiDefinition {
+            id: ApiDefinitionId("test".to_string()),
+            version: Version("2.0".to_string()),
+            routes: vec![],
+        };
+        let response = client
+            .put("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status_is_ok();
+
+        let response = client.get("/v1/api/definitions/all").send().await;
+        response.assert_status_is_ok();
+        let body = response.json().await;
+        body.value().array().assert_len(2)
     }
 }
 

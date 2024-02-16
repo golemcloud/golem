@@ -10,39 +10,40 @@ use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
-const GOLEM_WORKER_BRIDGE_EXTENSION: &str = "x-golem-worker-bridge";
+pub const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
+pub const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
+pub const GOLEM_WORKER_BRIDGE_EXTENSION: &str = "x-golem-worker-bridge";
 
 pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
     let openapi: OpenAPI = serde_json::from_str(open_api).map_err(|e| e.to_string())?;
 
-    let version = Version(openapi.info.version);
+    let api_definition_id = ApiDefinitionId(get_root_extension(
+        &openapi,
+        GOLEM_API_DEFINITION_ID_EXTENSION,
+    )?);
 
-    let api_definition_id = ApiDefinitionId(
-        openapi
-            .extensions
-            .iter()
-            .find(|(key, _)| key.to_lowercase() == GOLEM_API_DEFINITION_ID_EXTENSION)
-            .map(|(_, value)| value)
-            .ok_or(format!(
-                "{} not found in the open API spec",
-                GOLEM_API_DEFINITION_ID_EXTENSION
-            ))?
-            .as_str()
-            .ok_or(format!(
-                "Invalid value for {}",
-                GOLEM_API_DEFINITION_ID_EXTENSION
-            ))?
-            .to_string(),
-    );
+    let api_definition_version =
+        Version(get_root_extension(&openapi, GOLEM_API_DEFINITION_VERSION)?);
 
     let routes = get_routes(openapi.paths)?;
 
     Ok(ApiDefinition {
         id: api_definition_id,
-        version,
+        version: api_definition_version,
         routes,
     })
+}
+
+fn get_root_extension(open_api: &OpenAPI, key_name: &str) -> Result<String, String> {
+    open_api
+        .extensions
+        .iter()
+        .find(|(key, _)| key.to_lowercase() == key_name)
+        .map(|(_, value)| value)
+        .ok_or(format!("{} not found in the open API spec", key_name))?
+        .as_str()
+        .ok_or(format!("Invalid value for {}", key_name))
+        .map(|x| x.to_string())
 }
 
 fn get_routes(paths: Paths) -> Result<Vec<Route>, String> {
