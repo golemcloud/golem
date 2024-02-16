@@ -1,6 +1,8 @@
 pub mod api_definition_endpoints;
 pub mod common;
 pub mod custom_request_endpoint;
+pub mod worker;
+pub mod worker_connect;
 
 use std::sync::Arc;
 

@@ -3,8 +3,10 @@ use std::error::Error;
 use async_trait::async_trait;
 use serde_json::json;
 use tracing::info;
+use golem_common::model::CallingConvention;
+use golem_service_base::model::{Id, WorkerId};
 
-use crate::worker::{WorkerName, WorkerService, WorkerServiceDefault};
+use crate::service::worker::{WorkerService, WorkerServiceDefault};
 use crate::worker_request::GolemWorkerRequest;
 
 #[async_trait]
@@ -26,9 +28,14 @@ impl WorkerRequestExecutor for WorkerRequestExecutorDefault {
         &self,
         worker_request_params: GolemWorkerRequest,
     ) -> Result<WorkerResponse, Box<dyn Error>> {
-        let worker_name = WorkerName(worker_request_params.worker_id);
+        let worker_name = worker_request_params.worker_id;
 
         let template_id = worker_request_params.template;
+
+        let worker_id = WorkerId {
+            template_id: template_id,
+            worker_name: Id(worker_name.clone())
+        };
 
         info!(
             "Executing request for template: {}, worker: {}, function: {}",
@@ -37,7 +44,7 @@ impl WorkerRequestExecutor for WorkerRequestExecutorDefault {
 
         let invocation_key = self
             .worker_service
-            .get_invocation_key(&worker_name, &template_id)
+            .get_invocation_key(&worker_id)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -50,13 +57,12 @@ impl WorkerRequestExecutor for WorkerRequestExecutorDefault {
 
         let invoke_result = self
             .worker_service
-            .invoke_and_await(
-                &worker_name,
-                &template_id,
+            .invoke_and_await_function(
+                &worker_id,
                 worker_request_params.function,
+                &invocation_key,
                 invoke_parameters,
-                invocation_key,
-                false,
+                &CallingConvention::Component,
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -75,8 +81,13 @@ impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
         &self,
         worker_request_params: GolemWorkerRequest,
     ) -> Result<WorkerResponse, Box<dyn Error>> {
-        let worker_name = WorkerName(worker_request_params.worker_id);
+        let worker_name = worker_request_params.worker_id;
         let template_id = worker_request_params.template;
+
+        let worker_id = WorkerId {
+            template_id: template_id,
+            worker_name: Id(worker_name.clone())
+        };
 
         info!(
             "Executing request for template: {}, worker: {}, function: {}",

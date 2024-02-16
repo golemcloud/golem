@@ -16,6 +16,9 @@ pub mod worker_bridge_reponse;
 pub mod worker_request;
 pub mod worker_request_executor;
 
+pub mod service;
+
+
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;
 }
