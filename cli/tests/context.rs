@@ -22,7 +22,7 @@ pub struct EnvConfig {
     pub on_ci: bool,
     pub quiet: bool,
     pub redis_key_prefix: String,
-    pub wasi_root: PathBuf,
+    pub wasm_root: PathBuf,
     pub local_golem: bool,
     pub db_type: DbType,
 }
@@ -53,7 +53,7 @@ impl EnvConfig {
             on_ci: std::env::var("CI").is_ok(),
             quiet: std::env::var("QUIET").is_ok(),
             redis_key_prefix: std::env::var("REDIS_KEY_PREFIX").unwrap_or("".to_string()),
-            wasi_root: PathBuf::from(
+            wasm_root: PathBuf::from(
                 std::env::var("GOLEM_TEST_TEMPLATES").unwrap_or("../test-templates".to_string()),
             ),
             local_golem: std::env::var("GOLEM_DOCKER_SERVICES").is_err(),
