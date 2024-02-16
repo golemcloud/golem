@@ -77,7 +77,9 @@ use tokio::task::JoinHandle;
 use golem::api;
 use golem_common::config::RedisConfig;
 use golem_worker_executor_base::preview2::golem;
-use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
+use golem_worker_executor_base::services::rpc::{
+    DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
+};
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -1284,7 +1286,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             blob_store_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
-            ()
+            (),
         ));
         let recovery_management = Arc::new(RecoveryManagementDefault::new(
             active_workers.clone(),

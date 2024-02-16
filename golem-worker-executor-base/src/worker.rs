@@ -251,7 +251,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let (worker_args, worker_env) = match this.worker_service().get(&worker_id).await {
+        let (worker_args, worker_env) = match this.worker_service().get(worker_id).await {
             Some(metadata) => (metadata.args, metadata.env),
             None => (
                 worker_args.unwrap_or_default(),
@@ -615,7 +615,7 @@ where
             debug!("Waiting for invocation key {} to complete", invocation_key);
             let result = this
                 .invocation_key_service()
-                .wait_for_confirmation(&worker_id, &invocation_key)
+                .wait_for_confirmation(worker_id, &invocation_key)
                 .await;
 
             debug!(

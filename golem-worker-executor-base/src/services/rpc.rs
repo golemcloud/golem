@@ -543,7 +543,7 @@ impl Rpc for RpcMock {
         _worker_id: &WorkerId,
         _function_name: String,
         _function_params: Vec<WitValue>,
-        _account_id: AccountId,
+        _account_id: &AccountId,
     ) -> Result<WitValue, RpcError> {
         todo!()
     }

@@ -85,12 +85,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator
     for DefaultWorkerActivator<Ctx, Svcs>
 {
     async fn activate_worker(&self, worker_id: &WorkerId) {
-        let metadata = self.all.worker_service().get(&worker_id).await;
+        let metadata = self.all.worker_service().get(worker_id).await;
         match metadata {
             Some(metadata) => {
                 Worker::activate(
                     &self.all,
-                    &worker_id,
+                    worker_id,
                     metadata.args,
                     metadata.env,
                     Some(metadata.worker_id.template_version),
@@ -125,7 +125,7 @@ impl WorkerActivatorMock {
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl WorkerActivator for WorkerActivatorMock {
-    async fn activate_worker(&self, worker_id: WorkerId) {
+    async fn activate_worker(&self, worker_id: &WorkerId) {
         info!("WorkerActivatorMock::activate_worker {worker_id}");
     }
 }

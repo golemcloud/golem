@@ -1131,7 +1131,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 },
             ))),
-            Err(err@GolemError::WorkerNotFound { .. }) => record.succeed(Ok(Response::new(
+            Err(err @ GolemError::WorkerNotFound { .. }) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::GetWorkerMetadataResponse {
                     result: Some(
                         golem::workerexecutor::get_worker_metadata_response::Result::Failure(
