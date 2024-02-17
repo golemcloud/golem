@@ -16,7 +16,6 @@ path = "src/main.rs"
 golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
-golem-service = { path = "../golem-service" }
 
 async-trait = { workspace = true }
 regex = "1.10.3"

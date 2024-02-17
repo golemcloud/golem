@@ -18,16 +18,7 @@ use futures_util::stream::BoxStream;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::template::template_service_server::TemplateService;
-use golem_api_grpc::proto::golem::template::{
-    create_template_request, create_template_response, download_template_response,
-    get_latest_template_version_response, get_template_response, get_templates_response,
-    update_template_request, update_template_response, CreateTemplateRequest,
-    CreateTemplateRequestHeader, CreateTemplateResponse, DownloadTemplateRequest,
-    DownloadTemplateResponse, GetLatestTemplateVersionRequest, GetLatestTemplateVersionResponse,
-    GetTemplateRequest, GetTemplateResponse, GetTemplateSuccessResponse, GetTemplatesRequest,
-    GetTemplatesResponse, GetTemplatesSuccessResponse, UpdateTemplateRequest,
-    UpdateTemplateRequestHeader, UpdateTemplateResponse,
-};
+use golem_api_grpc::proto::golem::template::{create_template_request, create_template_response, download_template_response, get_latest_template_version_response, get_template_response, get_templates_response, update_template_request, update_template_response, CreateTemplateRequest, CreateTemplateRequestHeader, CreateTemplateResponse, DownloadTemplateRequest, DownloadTemplateResponse, GetLatestTemplateVersionRequest, GetLatestTemplateVersionResponse, GetTemplateRequest, GetTemplateResponse, GetTemplateSuccessResponse, GetTemplatesRequest, GetTemplatesResponse, GetTemplatesSuccessResponse, UpdateTemplateRequest, UpdateTemplateRequestHeader, UpdateTemplateResponse, GetVersionedTemplateRequest, GetVersionedTemplateResponse, GetVersionedTemplateSuccessResponse, get_versioned_template_response};
 use golem_api_grpc::proto::golem::template::{template_error, Template, TemplateError};
 use golem_common::model::TemplateId;
 use tonic::{Request, Response, Status, Streaming};
@@ -88,6 +79,23 @@ impl TemplateGrpcApi {
             .ok_or_else(|| bad_request_error("Missing template id"))?;
         let result = self.template_service.get(&id).await?;
         Ok(result.into_iter().map(|p| p.into()).collect())
+    }
+
+    async fn get_template_info(&self, request: GetVersionedTemplateRequest) -> Result<Option<Template>, TemplateError> {
+        let id: TemplateId = request
+            .template_id
+            .and_then(|id| id.try_into().ok())
+            .ok_or_else(|| bad_request_error("Missing template id"))?;
+
+        let version = request.version;
+
+        let versioned_template_id = golem_service_base::model::VersionedTemplateId {
+            template_id: id,
+            version,
+        };
+
+        let result = self.template_service.get_by_version(&versioned_template_id).await?;
+        Ok(result.map(|p| p.into()))
     }
 
     async fn get_all(&self, request: GetTemplatesRequest) -> Result<Vec<Template>, TemplateError> {
@@ -242,6 +250,19 @@ impl TemplateService for TemplateGrpcApi {
             })),
             Err(err) => Ok(Response::new(GetTemplateResponse {
                 result: Some(get_template_response::Result::Error(err)),
+            })),
+        }
+    }
+
+    async fn get_versioned_template(&self, request: Request<GetVersionedTemplateRequest>) -> Result<Response<GetVersionedTemplateResponse>, Status> {
+        match self.get_template_info(request.into_inner()).await {
+            Ok(optional_template) => Ok(Response::new(GetVersionedTemplateResponse {
+                result: Some(get_versioned_template_response::Result::Success(
+                    GetVersionedTemplateSuccessResponse { template: optional_template },
+                )),
+            })),
+            Err(err) => Ok(Response::new(GetVersionedTemplateResponse {
+                result: Some(get_versioned_template_response::Result::Error(err)),
             })),
         }
     }

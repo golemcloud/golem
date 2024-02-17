@@ -15,6 +15,7 @@ service TemplateService {
   rpc GetTemplate (GetTemplateRequest) returns (GetTemplateResponse);
   rpc GetLatestTemplateVersion (GetLatestTemplateVersionRequest) returns (GetLatestTemplateVersionResponse);
   rpc UpdateTemplate (stream UpdateTemplateRequest) returns (UpdateTemplateResponse);
+  rpc GetVersionedTemplate(GetVersionedTemplateRequest) returns (GetVersionedTemplateResponse);
 }
 
 message GetTemplatesRequest {
@@ -82,6 +83,17 @@ message GetTemplateResponse {
     GetTemplateSuccessResponse success = 1;
     golem.template.TemplateError error = 2;
   }
+}
+
+message GetVersionedTemplateResponse {
+  oneof result {
+    GetVersionedTemplateSuccessResponse success = 1;
+    golem.template.TemplateError error = 2;
+  }
+}
+
+message GetVersionedTemplateSuccessResponse {
+  optional golem.template.Template template = 1;
 }
 
 message GetTemplateSuccessResponse {
