@@ -23,9 +23,9 @@ use poem_openapi::*;
 use tap::TapFallible;
 use tonic::Status;
 
-use golem_service::service::template::{TemplateError, TemplateService};
 use crate::service::worker::WorkerService;
 use golem_service_base::model::*;
+use crate::service::template::{TemplateError, TemplateService};
 
 #[derive(ApiResponse)]
 pub enum WorkerError {
@@ -105,30 +105,22 @@ impl From<crate::service::worker::WorkerError> for WorkerError {
 impl From<TemplateError> for WorkerError {
     fn from(value: TemplateError) -> Self {
         match value {
-            TemplateError::Internal(error) => WorkerError::InternalError(Json(GolemErrorBody {
-                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
+            TemplateError::Connection(error) => WorkerError::InternalError(Json(GolemErrorBody {
+                golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Internal connection error: {error}") }),
             })),
-            TemplateError::AlreadyExists(template_id) => {
-                WorkerError::BadRequest(Json(ErrorsBody {
-                    errors: vec![format!("Template already exists: {template_id}")],
-                }))
-            }
-            TemplateError::UnknownTemplateId(template_id) => {
-                WorkerError::NotFound(Json(ErrorBody {
-                    error: format!("Template not found: {template_id}"),
-                }))
-            }
-            TemplateError::UnknownVersionedTemplateId(template_id) => {
-                WorkerError::NotFound(Json(ErrorBody {
-                    error: format!("Template not found: {template_id}"),
-                }))
-            }
-            TemplateError::IOError(error) => WorkerError::InternalError(Json(GolemErrorBody {
-                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
-            })),
-            TemplateError::TemplateProcessingError(error) => {
+            TemplateError::Other(error) => {
                 WorkerError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
+                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Internal error: {error}") }),
+                }))
+            },
+            TemplateError::Transport(transport_error) => {
+                WorkerError::InternalError(Json(GolemErrorBody {
+                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Internal error: {transport_error}") }),
+                }))
+            },
+            TemplateError::Server(transport_error) => {
+                WorkerError::InternalError(Json(GolemErrorBody {
+                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Internal error: {transport_error}") }),
                 }))
             }
         }
