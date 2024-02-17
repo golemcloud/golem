@@ -1,43 +1,30 @@
 use std::fmt::Display;
 
 use async_trait::async_trait;
-use cloud_common::model::TokenSecret;
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
-use golem_api_grpc::proto::golem::template::{
-    get_template_response, get_templates_response, GetTemplateRequest, GetTemplatesRequest,
-};
+use golem_api_grpc::proto::golem::template::{get_versioned_template_response, GetVersionedTemplateRequest};
 use golem_common::config::RetryConfig;
-use golem_common::model::ProjectId;
 use golem_common::model::TemplateId;
 use golem_common::retries::with_retries;
 use http::Uri;
 use tonic::Status;
 use tracing::info;
-use uuid::Uuid;
 use golem_service_base::model::Template;
 use crate::app_config::TemplateServiceConfig;
-use crate::model::TemplateView;
 use crate::UriBackConversion;
 
 #[async_trait]
 pub trait TemplateService {
-    async fn get_template(
+    async fn get_versioned_template(
         &self,
         template_id: &TemplateId,
         version: i32
-    ) -> Result<Vec<TemplateView>, TemplateError>;
-
-    async fn get_templates(
-        &self,
-        project_id: &ProjectId,
-        request_ctx: &TokenSecret,
-    ) -> Result<Vec<TemplateView>, TemplateError>;
+    ) -> Result<Option<Template>, TemplateError>;
 }
 
 #[derive(Clone)]
 pub struct TemplateServiceDefault {
     pub uri: Uri,
-    pub access_token: Uuid,
     pub retry_config: RetryConfig,
 }
 
@@ -45,7 +32,6 @@ impl TemplateServiceDefault {
     pub fn new(config: &TemplateServiceConfig) -> Self {
         Self {
             uri: config.uri(),
-            access_token: config.access_token,
             retry_config: config.retries.clone(),
         }
     }
@@ -53,7 +39,7 @@ impl TemplateServiceDefault {
 
 #[async_trait]
 impl TemplateService for TemplateServiceDefault {
-    async fn get_template(
+    async fn get_versioned_template(
         &self,
         template_id: &TemplateId,
         version: i32
@@ -65,71 +51,30 @@ impl TemplateService for TemplateServiceDefault {
             "template",
             "get_template",
             &self.retry_config,
-            &(self.uri.clone(), template_id.clone(), token.clone()),
-            |(uri, id, access_token)| {
+            &(self.uri.clone(), template_id.clone()),
+            |(uri, id)| {
                 Box::pin(async move {
                     let mut client = TemplateServiceClient::connect(uri.as_http_02()).await?;
-                    let request = GetTemplateRequest {
+                    let request = GetVersionedTemplateRequest {
                         template_id: Some(id.clone().into()),
-                    }
+                        version,
+                    };
 
-                    let response = client.get_template(request).await?.into_inner();
-
-                    match response.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(get_template_response::Result::Success(response)) => {
-                            let template_views = response
-                                .templates
-                                .iter()
-                                .map(|template| template.clone().try_into())
-                                .collect::<Result<Vec<TemplateView>, String>>();
-                            Ok(template_views?)
-                        }
-                        Some(get_template_response::Result::Error(error)) => Err(error.into()),
-                    }
-                })
-            },
-            TemplateError::is_retriable,
-        )
-            .await
-    }
-
-    async fn get_templates(
-        &self,
-        project_id: &ProjectId,
-        token: &TokenSecret,
-    ) -> Result<Vec<TemplateView>, TemplateError> {
-        let desc = format!("Getting templates for project: {}", project_id);
-        info!("{}", &desc);
-        with_retries(
-            &desc,
-            "template",
-            "get_templates",
-            &self.retry_config,
-            &(self.uri.clone(), project_id.clone(), token.clone()),
-            |(uri, id, token)| {
-                Box::pin(async move {
-                    let mut client = TemplateServiceClient::connect(uri.as_http_02()).await?;
-                    let request = authorised_request(
-                        GetTemplatesRequest {
-                            project_id: Some(id.clone().into()),
-                            template_name: None,
-                        },
-                        &token.value,
-                    );
-                    let response = client.get_templates(request).await?.into_inner();
+                    let response = client.get_versioned_template(request).await?.into_inner();
 
                     match response.result {
                         None => Err("Empty response".to_string().into()),
-                        Some(get_templates_response::Result::Success(response)) => {
-                            let template_views = response
-                                .templates
-                                .iter()
-                                .map(|template| template.clone().try_into())
-                                .collect::<Result<Vec<TemplateView>, String>>();
+                        Some(get_versioned_template_response::Result::Success(response)) => {
+                            let template_views = match response.template {
+                                Some(template) => {
+                                    let template = template.clone().try_into();
+                                    Ok(template?)
+                                }
+                                None => Err("Empty response".to_string().into()),
+                            };
                             Ok(template_views?)
                         }
-                        Some(get_templates_response::Result::Error(error)) => Err(error.into()),
+                        Some(get_versioned_template_response::Result::Error(error)) => Err(error.into()),
                     }
                 })
             },

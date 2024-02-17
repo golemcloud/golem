@@ -40,7 +40,7 @@ use tokio_stream::Stream;
 use tonic::transport::Channel;
 use tonic::{Status, Streaming};
 use tracing::{debug, info};
-use crate::service::template::TemplateServiceError;
+use crate::service::template::{TemplateError, TemplateServiceError};
 use crate::service::template::TemplateService;
 
 use golem_service_base::model::*;
@@ -72,7 +72,7 @@ impl Stream for ConnectWorkerStream {
 pub enum WorkerError {
     Internal(String),
     TypeCheckerError(String),
-    DelegatedTemplateServiceError(TemplateServiceError),
+    DelegatedTemplateServiceError(TemplateError),
     VersionedTemplateIdNotFound(VersionedTemplateId),
     TemplateNotFound(TemplateId),
     AccountIdNotFound(AccountId), // FIXME: Once worker is independent of account
@@ -492,10 +492,7 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_versioned_template(&VersionedTemplateId {
-                template_id: worker_id.template_id.clone(),
-                version: template_version,
-            })
+            .get_versioned_template(&worker_id.template_id, template_version)
             .await?
             .ok_or_else(|| {
                 WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
@@ -553,10 +550,7 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_by_version(&VersionedTemplateId {
-                template_id: worker_id.template_id.clone(),
-                version: template_version,
-            })
+            .get_versioned_template(&worker_id.template_id, template_version)
             .await?
             .ok_or_else(|| {
                 WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
@@ -638,10 +632,7 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_by_version(&VersionedTemplateId {
-                template_id: worker_id.template_id.clone(),
-                version: template_version,
-            })
+            .get_versioned_template(&worker_id.template_id, template_version)
             .await?
             .ok_or_else(|| {
                 WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
@@ -679,10 +670,7 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_by_version(&VersionedTemplateId {
-                template_id: worker_id.template_id.clone(),
-                version: template_version,
-            })
+            .get_versioned_template(&worker_id.template_id, template_version)
             .await?
             .ok_or_else(|| {
                 WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
