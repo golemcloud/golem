@@ -16,12 +16,12 @@ use crate::expr::Expr;
 use crate::oas_worker_bridge::*;
 use crate::register::{ApiDefinitionKey, ApiRegistrationError, RegisterApiDefinition};
 
-pub struct ApiDefinitionEndpoints {
+pub struct RegisterApiDefinitionApi {
     pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
-impl ApiDefinitionEndpoints {
+impl RegisterApiDefinitionApi {
     pub fn new(definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>) -> Self {
         Self { definition_service }
     }
@@ -212,7 +212,7 @@ mod test {
 
     fn make_route() -> poem::Route {
         let definition_service = Arc::new(InMemoryRegistry::default());
-        let endpoint = ApiDefinitionEndpoints::new(definition_service);
+        let endpoint = RegisterApiDefinitionApi::new(definition_service);
 
         poem::Route::new().nest("", OpenApiService::new(endpoint, "test", "1.0"))
     }

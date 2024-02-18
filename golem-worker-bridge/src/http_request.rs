@@ -65,7 +65,7 @@ impl<'a> ApiInputPath<'a> {
 #[cfg(test)]
 mod tests {
     use crate::api_definition::ApiDefinition;
-    use crate::worker_request::GolemWorkerRequest;
+    use crate::worker_request::WorkerRequestParameters;
 
     use crate::api_request_route_resolver::RouteResolver;
     use golem_common::model::TemplateId;
@@ -85,11 +85,11 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -99,7 +99,6 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -118,7 +117,7 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
@@ -126,7 +125,7 @@ mod tests {
 
         expected_map.insert("x".to_string(), serde_json::Value::String("y".to_string()));
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -135,7 +134,6 @@ mod tests {
             function_params: serde_json::Value::Array(vec![serde_json::Value::Object(
                 expected_map,
             )]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -154,7 +152,7 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
@@ -165,7 +163,7 @@ mod tests {
             serde_json::Value::Number(serde_json::Number::from(1)),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -174,7 +172,6 @@ mod tests {
             function_params: serde_json::Value::Array(vec![serde_json::Value::Object(
                 expected_map,
             )]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -198,7 +195,7 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
@@ -209,7 +206,7 @@ mod tests {
             serde_json::Value::Number(serde_json::Number::from(1)),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -219,7 +216,6 @@ mod tests {
                 serde_json::Value::Number(serde_json::Number::from(1)),
                 serde_json::Value::Number(serde_json::Number::from(2)),
             ]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -251,11 +247,11 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -266,7 +262,6 @@ mod tests {
                 serde_json::Value::Number(serde_json::Number::from(2)),
                 serde_json::Value::String("age-10".to_string()),
             ]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -304,7 +299,7 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
@@ -322,7 +317,7 @@ mod tests {
             serde_json::Value::String("foo".to_string()),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -334,7 +329,6 @@ mod tests {
                 serde_json::Value::String("age-10".to_string()),
                 serde_json::Value::Object(user_name_map),
             ]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -352,11 +346,11 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -366,7 +360,6 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -391,11 +384,11 @@ mod tests {
             function_params,
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -404,7 +397,6 @@ mod tests {
             function_params: serde_json::Value::Array(vec![serde_json::Value::String(
                 "address".to_string(),
             )]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -426,18 +418,17 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![serde_json::Value::Bool(true)]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -459,18 +450,17 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![serde_json::Value::Bool(true)]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -492,11 +482,11 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -505,7 +495,6 @@ mod tests {
             function_params: serde_json::Value::Array(vec![serde_json::Value::Number(
                 serde_json::Number::from(1),
             )]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -530,11 +519,11 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -543,7 +532,6 @@ mod tests {
             function_params: serde_json::Value::Array(vec![serde_json::Value::Number(
                 serde_json::Number::from(0),
             )]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -565,11 +553,11 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -579,7 +567,6 @@ mod tests {
                 serde_json::Value::Number(serde_json::Number::from(2)),
                 serde_json::Value::Number(serde_json::Number::from(1)),
             ]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -619,11 +606,11 @@ mod tests {
             function_params.as_str(),
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -633,7 +620,6 @@ mod tests {
                 serde_json::Value::String("foo_value".to_string()),
                 serde_json::Value::String("bar_value".to_string()),
             ]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -673,11 +659,11 @@ mod tests {
             function_params.as_str(),
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -687,7 +673,6 @@ mod tests {
                 serde_json::Value::String("foo_value".to_string()),
                 serde_json::Value::String("bar_value".to_string()),
             ]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -726,11 +711,11 @@ mod tests {
             function_params.as_str(),
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -739,7 +724,6 @@ mod tests {
             function_params: serde_json::Value::Array(vec![serde_json::Value::Object(
                 request_body.clone(),
             )]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -785,11 +769,11 @@ mod tests {
             function_params.as_str(),
         );
 
-        let result = GolemWorkerRequest::from_resolved_route(
+        let result = WorkerRequestParameters::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = GolemWorkerRequest {
+        let expected = WorkerRequestParameters {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -800,7 +784,6 @@ mod tests {
                 serde_json::Value::String("bar_value".to_string()),
                 serde_json::Value::String("token_value".to_string()),
             ]),
-            response_mapping: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -822,7 +805,7 @@ mod tests {
             );
 
             let result = match &api_request.resolve(&api_specification) {
-                Some(resolved) => GolemWorkerRequest::from_resolved_route(resolved),
+                Some(resolved) => WorkerRequestParameters::from_resolved_route(resolved),
                 None => Err("err".to_string()),
             };
 

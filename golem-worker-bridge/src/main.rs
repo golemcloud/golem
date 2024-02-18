@@ -2,7 +2,7 @@ use golem_worker_bridge::api;
 use golem_worker_bridge::api::ApiServices;
 use golem_worker_bridge::app_config::WorkerBridgeConfig;
 use golem_worker_bridge::register::{RedisApiRegistry, RegisterApiDefinition};
-use golem_worker_bridge::worker::WorkerServiceDefault;
+use golem_worker_bridge::service::worker::WorkerServiceDefault;
 use golem_worker_bridge::worker_request_executor::{
     WorkerRequestExecutor, WorkerRequestExecutorDefault,
 };
@@ -12,7 +12,7 @@ use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::{EndpointExt, Route};
 use std::sync::Arc;
 use tracing::error;
-use golem_service::service::worker;
+use golem_worker_bridge::service::template::{TemplateService, TemplateServiceDefault};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -85,6 +85,10 @@ async fn get_api_services(config: &WorkerBridgeConfig) -> Result<ApiServices, st
         ),
     );
 
+    let template_service: Arc<dyn TemplateService + Send + Sync> = Arc::new(
+        TemplateServiceDefault::new(&config.template_service)
+    );
+
     let worker_executor_clients: Arc<
         dyn golem_service_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
     > = Arc::new(
@@ -94,17 +98,12 @@ async fn get_api_services(config: &WorkerBridgeConfig) -> Result<ApiServices, st
         ),
     );
 
-    let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
-        Arc::new(worker::WorkerServiceDefault::new(
+    let worker_service: Arc<dyn golem_worker_bridge::service::worker::WorkerService + Sync + Send> =
+        Arc::new(WorkerServiceDefault::new(
             worker_executor_clients.clone(),
             template_service.clone(),
             routing_table_service.clone(),
         ));
-
-    let request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send> =
-        Arc::new(WorkerRequestExecutorDefault {
-            worker_service: WorkerServiceDefault::new(&config.template_service),
-        });
 
     Ok(ApiServices {
         definition_service,

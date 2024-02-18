@@ -13,17 +13,17 @@ use crate::http_request::{ApiInputPath, InputHttpRequest};
 use crate::oas_worker_bridge::{GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION};
 use crate::register::{ApiDefinitionKey, RegisterApiDefinition};
 use crate::worker_bridge_reponse::GetWorkerBridgeResponse;
-use crate::worker_request::GolemWorkerRequest;
+use crate::worker_request::WorkerRequestParameters;
 use crate::worker_request_executor::{WorkerRequestExecutor, WorkerResponse};
 
 // Executes custom request with the help of worker_request_executor and definition_service
 #[derive(Clone)]
-pub struct CustomRequestEndpoint {
+pub struct CustomRequestApi {
     worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
 }
 
-impl CustomRequestEndpoint {
+impl CustomRequestApi {
     pub fn new(
         worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
         definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
@@ -127,7 +127,7 @@ impl CustomRequestEndpoint {
         match api_request.resolve(&api_definition) {
             Some(resolved_route) => {
                 let golem_worker_request =
-                    match GolemWorkerRequest::from_resolved_route(&resolved_route) {
+                    match WorkerRequestParameters::from_resolved_route(&resolved_route) {
                         Ok(golem_worker_request) => golem_worker_request,
                         Err(e) => {
                             error!(
@@ -159,31 +159,7 @@ impl CustomRequestEndpoint {
                     }
                 };
 
-                match golem_worker_request.response_mapping {
-                    Some(response_mapping) => {
-                        let worker_bridge_response = worker_response.to_worker_bridge_response(
-                            &response_mapping,
-                            &resolved_route.resolved_variables,
-                        );
-
-                        match worker_bridge_response {
-                            Ok(worker_bridge_response) => worker_bridge_response.to_http_response(),
-                            Err(e) => {
-                                error!(
-                                    "API request id: {} - request error: {}",
-                                    &api_definition_id, e
-                                );
-                                Response::builder().status(StatusCode::BAD_REQUEST).body(
-                                    Body::from_string(format!("Bad request {}", e).to_string()),
-                                )
-                            }
-                        }
-                    }
-                    None => {
-                        let body: Body = Body::from_json(worker_response.result).unwrap();
-                        Response::builder().body(body)
-                    }
-                }
+                worker_response.to_http_response(&resolved_route.route_definition.binding.response,  &resolved_route.resolved_variables)
             }
 
             None => {
@@ -214,7 +190,7 @@ fn get_header_value(headers: &HeaderMap, header_name: &str) -> Result<String, St
 }
 
 #[async_trait]
-impl Endpoint for CustomRequestEndpoint {
+impl Endpoint for CustomRequestApi {
     type Output = Response;
 
     async fn call(&self, req: Request) -> poem::Result<Self::Output> {

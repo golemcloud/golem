@@ -1,23 +1,21 @@
 use golem_common::model::TemplateId;
 use serde_json::Value;
 
-use crate::api_definition::ResponseMapping;
 use crate::api_request_route_resolver::ResolvedRoute;
 use crate::evaluator::{Evaluator, Primitive};
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct GolemWorkerRequest {
+pub struct WorkerRequestParameters {
     pub template: TemplateId,
     pub worker_id: String,
     pub function: String,
     pub function_params: Value,
-    pub response_mapping: Option<ResponseMapping>,
 }
 
-impl GolemWorkerRequest {
+impl WorkerRequestParameters {
     pub fn from_resolved_route(
         resolved_route: &ResolvedRoute,
-    ) -> Result<GolemWorkerRequest, String> {
+    ) -> Result<WorkerRequestParameters, String> {
         let worker_id: Value = resolved_route
             .route_definition
             .binding
@@ -44,12 +42,11 @@ impl GolemWorkerRequest {
             worker_id
         ))?;
 
-        Ok(GolemWorkerRequest {
+        Ok(WorkerRequestParameters {
             worker_id: worker_id_str.to_string(),
             template: resolved_route.route_definition.binding.template.clone(),
             function: function_name,
             function_params: Value::Array(function_params),
-            response_mapping: resolved_route.route_definition.binding.response.clone(),
         })
     }
 }
