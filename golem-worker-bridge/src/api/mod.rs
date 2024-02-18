@@ -11,6 +11,7 @@ use poem::Route;
 use poem_openapi::OpenApiService;
 
 use crate::register::RegisterApiDefinition;
+use crate::service::Services;
 use crate::worker_request_executor::WorkerRequestExecutor;
 
 #[derive(Clone)]
@@ -55,3 +56,22 @@ pub fn custom_request_route(services: ApiServices) -> Route {
 
     Route::new().nest("/", custom_request_executor)
 }
+
+
+pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices, ()> {
+    OpenApiService::new(
+        (
+            template::TemplateApi {
+                template_service: services.template_service.clone(),
+            },
+            worker::WorkerApi {
+                template_service: services.template_service.clone(),
+                worker_service: services.worker_service.clone(),
+            },
+            healthcheck::HealthcheckApi,
+        ),
+        "Golem API",
+        "2.0",
+    )
+}
+

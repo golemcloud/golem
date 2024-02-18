@@ -53,10 +53,11 @@ impl WorkerApi {
             .template_service
             .get_latest_version(&template_id)
             .await
-            .tap_err(|error| tracing::error!("Error getting latest template version: {:?}", error))?
-            .ok_or(WorkerError::NotFound(Json(ErrorBody {
-                error: format!("Template not found: {}", &template_id),
+            .tap_err(|error| tracing::error!("Error getting latest template version: {:?}", error))
+            .map_err(|error| WorkerError::NotFound(Json(ErrorBody {
+                error: format!("Couldn't retrieve the template not found: {}. error: {}", &template_id, error),
             })))?;
+
 
         let WorkerCreationRequest { name, args, env } = request.0;
 
@@ -65,7 +66,7 @@ impl WorkerApi {
             .worker_service
             .create(
                 &worker_id,
-                latest_template.versioned_template_id.version,
+                latest_template,
                 args,
                 env,
             )

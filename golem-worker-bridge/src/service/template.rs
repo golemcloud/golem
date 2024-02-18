@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
-use golem_api_grpc::proto::golem::template::{get_versioned_template_response, GetVersionedTemplateRequest};
+use golem_api_grpc::proto::golem::template::{get_latest_template_version_response, get_versioned_template_response, GetLatestTemplateVersionRequest, GetVersionedTemplateRequest};
 use golem_common::config::RetryConfig;
 use golem_common::model::TemplateId;
 use golem_common::retries::with_retries;
@@ -20,6 +20,11 @@ pub trait TemplateService {
         template_id: &TemplateId,
         version: i32
     ) -> Result<Option<Template>, TemplateError>;
+
+    async fn get_latest_version(
+        &self,
+        template_id: &TemplateId
+    ) ->  Result<i32, TemplateError>;
 }
 
 #[derive(Clone)]
@@ -39,6 +44,38 @@ impl TemplateServiceDefault {
 
 #[async_trait]
 impl TemplateService for TemplateServiceDefault {
+    async fn get_latest_version(&self, template_id: &TemplateId) -> Result<i32, TemplateError> {
+        let desc = format!("Getting latest version of template: {}", template_id);
+        info!("{}", &desc);
+        with_retries(
+            &desc,
+            "template",
+            "get_latest_version",
+            &self.retry_config,
+            &(self.uri.clone(), template_id.clone()),
+            |(uri, id)| {
+                Box::pin(async move {
+                    let mut client = TemplateServiceClient::connect(uri.as_http_02()).await?;
+                    let request = GetLatestTemplateVersionRequest {
+                        template_id: Some(id.clone().into()),
+                    };
+
+                    let response = client.get_latest_template_version(request).await?.into_inner();
+
+                    match response.result {
+                        None => Err("Empty response".to_string().into()),
+                        Some(get_latest_template_version_response::Result::Success(response)) => {
+                            Ok(response)
+                        }
+                        Some(get_latest_template_version_response::Result::Error(error)) => Err(error.into()),
+                    }
+                })
+            },
+            TemplateError::is_retriable,
+        )
+            .await
+
+    }
     async fn get_versioned_template(
         &self,
         template_id: &TemplateId,
