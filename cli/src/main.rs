@@ -65,7 +65,7 @@ enum Command {
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about, rename_all = "kebab-case")]
+#[command(author, version=option_env!("VERSION").unwrap_or(env!("CARGO_PKG_VERSION")), about, long_about, rename_all = "kebab-case")]
 /// Command line interface for OSS version of Golem.
 ///
 /// For Golem Cloud client see golem-cloud-cli instead: https://github.com/golemcloud/golem-cloud-cli
