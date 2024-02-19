@@ -9,12 +9,11 @@ import public "golem/worker/promise_id.proto";
 import public "golem/common/resource_limits.proto";
 import public "golem/shardmanager/shard_id.proto";
 import public "golem/template/template_id.proto";
-//import public "golem/common/type.proto";
-import public "golem/worker/val.proto";
 import public "golem/worker/worker_id.proto";
 import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/worker_status.proto";
 import public "golem/worker/worker_execution_error.proto";
+import public "wasm/rpc/val.proto";
 
 package golem.workerexecutor;
 
@@ -104,7 +103,7 @@ message GetInvocationKeySuccess {
 message InvokeAndAwaitWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   string name = 2;
-  repeated golem.worker.Val input = 3;
+  repeated wasm.rpc.Val input = 3;
   golem.worker.InvocationKey invocation_key = 4;
   golem.worker.CallingConvention calling_convention = 5;
   golem.common.AccountId account_id = 6;
@@ -119,13 +118,13 @@ message InvokeAndAwaitWorkerResponse {
 }
 
 message InvokeAndAwaitWorkerSuccess {
-  repeated golem.worker.Val output = 1;
+  repeated wasm.rpc.Val output = 1;
 }
 
 message InvokeWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   string name = 2;
-  repeated golem.worker.Val input = 3;
+  repeated wasm.rpc.Val input = 3;
   golem.common.AccountId account_id = 4;
   golem.common.ResourceLimits account_limits = 5;
 }

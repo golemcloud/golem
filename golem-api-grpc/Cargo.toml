@@ -21,5 +21,7 @@ tonic = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
+golem-wasm-rpc = { path = "../wasm-rpc/wasm-rpc", default-features = false, features = ["host"] }
+
 [build-dependencies]
-tonic-build = "0.10.2"
+tonic-build = "0.11.0"

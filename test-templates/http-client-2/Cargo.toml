@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 [profile.release]
 lto = true
 opt-level = 's'
+strip = true
 
 [dependencies]
 reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-feb-2024", features = ["json"] }

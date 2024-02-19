@@ -112,6 +112,9 @@ name = "arbitrary"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d5a26814d8dcb93b0e5a0ff3c6d80a8843bafb21b39e8e18a6f05471870e110"
+dependencies = [
+ "derive_arbitrary",
+]
 
 [[package]]
 name = "arc-swap"
@@ -1422,6 +1425,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "derive_arbitrary"
+version = "1.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67e77553c4162a157adbf834ebae5b415acbecbeafc7a74b0e886657506a7611"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.48",
+]
+
+[[package]]
 name = "derive_more"
 version = "0.99.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1972,6 +1986,7 @@ dependencies = [
  "bincode 2.0.0-rc.3",
  "bytes 1.5.0",
  "futures-core",
+ "golem-wasm-rpc",
  "prost",
  "serde",
  "tokio",
@@ -1993,6 +2008,7 @@ dependencies = [
  "fred",
  "futures-core",
  "golem-api-grpc",
+ "golem-wasm-rpc",
  "humantime-serde",
  "iso8601-timestamp",
  "lazy_static",
@@ -2022,6 +2038,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
+ "golem-wasm-rpc",
  "humantime-serde",
  "lazy_static",
  "mappable-rc",
@@ -2056,6 +2073,8 @@ dependencies = [
  "bigdecimal",
  "golem-api-grpc",
  "golem-common",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "http 0.2.11",
  "http 1.0.0",
  "hyper 1.1.0",
@@ -2103,15 +2122,31 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-ast"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cba6f849347531c4d4b7808091a5397cc7db8d5da2705a016e6ce3d71c2e20c"
+checksum = "cd98959700ee261c0b4af61358df70830a29001a06afd1ccdfa5c0f3d2db0fa6"
 dependencies = [
  "leb128",
  "mappable-rc",
- "wasm-encoder 0.41.0",
+ "wasm-encoder 0.41.2",
  "wasm-metadata",
- "wasmparser 0.121.0",
+ "wasmparser 0.121.2",
+]
+
+[[package]]
+name = "golem-wasm-rpc"
+version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "bigdecimal",
+ "bincode 2.0.0-rc.3",
+ "golem-wasm-ast",
+ "prost",
+ "prost-build",
+ "serde",
+ "serde_json",
+ "wasmtime",
+ "wit-bindgen",
 ]
 
 [[package]]
@@ -2172,6 +2207,7 @@ dependencies = [
  "figment",
  "golem-api-grpc",
  "golem-common",
+ "golem-wasm-rpc",
  "golem-worker-executor-base",
  "humantime-serde",
  "prometheus",
@@ -2222,6 +2258,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
+ "golem-wasm-rpc",
  "http 0.2.11",
  "http 1.0.0",
  "http-body 1.0.0",
@@ -5265,9 +5302,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-build"
-version = "0.10.2"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d021fc044c18582b9a2408cd0dd05b1596e3ecdb5c4df822bb0183545683889"
+checksum = "be4ef6dd70a610078cb4e338a0f79d06bc759ff1b22d2120c2ff02ae264ba9c2"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -5794,18 +5831,18 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.41.0"
+version = "0.41.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e09bca7d6388637d27fb5edbeab11f56bfabcef8743c55ae34370e1e5030a071"
+checksum = "972f97a5d8318f908dded23594188a90bcd09365986b1163e66d70170e5287ae"
 dependencies = [
  "leb128",
 ]
 
 [[package]]
 name = "wasm-metadata"
-version = "0.10.17"
+version = "0.10.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c853d3809fc9fccf3bc0ad63f4f51d8eefad0bacf88f957aa991c1d9b88b016e"
+checksum = "18ebaa7bd0f9e7a5e5dd29b9a998acf21c4abed74265524dd7e85934597bfb10"
 dependencies = [
  "anyhow",
  "indexmap 2.2.2",
@@ -5813,8 +5850,8 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "spdx",
- "wasm-encoder 0.41.0",
- "wasmparser 0.121.0",
+ "wasm-encoder 0.41.2",
+ "wasmparser 0.121.2",
 ]
 
 [[package]]
@@ -5829,9 +5866,9 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.121.0"
+version = "0.121.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "953cf6a7606ab31382cb1caa5ae403e77ba70c7f8e12eeda167e7040d42bfda8"
+checksum = "9dbe55c8f9d0dbd25d9447a5a889ff90c0cc3feaa7395310d3d826b2c703eaab"
 dependencies = [
  "bitflags 2.4.2",
  "indexmap 2.2.2",
@@ -5845,7 +5882,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05e32c13c59fdc64d3f6998a1d52eb1d362b6904a88b754190ccb85661ad577a"
 dependencies = [
  "anyhow",
- "wasmparser 0.121.0",
+ "wasmparser 0.121.2",
 ]
 
 [[package]]
@@ -6192,7 +6229,7 @@ dependencies = [
  "leb128",
  "memchr",
  "unicode-width",
- "wasm-encoder 0.41.0",
+ "wasm-encoder 0.41.2",
 ]
 
 [[package]]
@@ -6550,6 +6587,15 @@ checksum = "f9643b83820c0cd246ecabe5fa454dd04ba4fa67996369466d0747472d337346"
 dependencies = [
  "bitflags 2.4.2",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "wit-bindgen"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d78a762c4fbc1bc0dedf4aaa280ac5ea87e0d3a7ec83487b7b25999a55ec4b73"
+dependencies = [
+ "bitflags 2.4.2",
 ]
 
 [[package]]

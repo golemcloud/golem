@@ -4,6 +4,10 @@ use ctor::ctor;
 use golem_wasm_ast::analysis::AnalysisContext;
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
+use golem_wasm_rpc::protobuf::{
+    val, Val, ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple,
+};
+use golem_wasm_rpc::Value;
 use prometheus::Registry;
 use std::collections::HashMap;
 use std::path::Path;
@@ -14,8 +18,8 @@ use std::{env, panic};
 
 use crate::REDIS;
 use golem_api_grpc::proto::golem::worker::{
-    log_event, val, worker_execution_error, CallingConvention, LogEvent, StdErrLog, StdOutLog, Val,
-    ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple, WorkerExecutionError,
+    log_event, worker_execution_error, CallingConvention, LogEvent, StdErrLog, StdOutLog,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
@@ -33,7 +37,7 @@ use golem_worker_executor_base::services::golem_config::{
     BlobStoreServiceConfig, BlobStoreServiceInMemoryConfig, CompiledTemplateServiceConfig,
     CompiledTemplateServiceLocalConfig, GolemConfig, KeyValueServiceConfig, PromisesConfig,
     ShardManagerServiceConfig, TemplateServiceConfig, TemplateServiceLocalConfig,
-    WorkersServiceConfig,
+    WorkerServiceGrpcConfig, WorkersServiceConfig,
 };
 
 use golem_worker_executor_base::durable_host::{
@@ -64,13 +68,18 @@ use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
     StatusManagement, WorkerCtx,
 };
-use golem_worker_executor_base::{durable_host, Bootstrap};
-use serde_json::Value;
+use golem_worker_executor_base::Bootstrap;
+use serde_json::Value as JsonValue;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 
+use golem::api;
 use golem_common::config::RedisConfig;
+use golem_worker_executor_base::preview2::golem;
+use golem_worker_executor_base::services::rpc::{
+    DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
+};
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -341,8 +350,8 @@ impl TestWorkerExecutor {
         &mut self,
         worker_id: &WorkerId,
         function_name: &str,
-        params: Value,
-    ) -> Result<Value, GolemError> {
+        params: JsonValue,
+    ) -> Result<JsonValue, GolemError> {
         let json_string = params.to_string();
         self.invoke_and_await_custom(
             worker_id,
@@ -358,9 +367,9 @@ impl TestWorkerExecutor {
                     match value_opt {
                         Some(val::Val::String(s)) => {
                             if s.is_empty() {
-                                Ok(Value::Null)
+                                Ok(JsonValue::Null)
                             } else {
-                                let result: Value = serde_json::from_str(s).unwrap_or(Value::String(s.to_string()));
+                                let result: JsonValue = serde_json::from_str(s).unwrap_or(JsonValue::String(s.to_string()));
                                 Ok(result)
                             }
                         }
@@ -376,8 +385,8 @@ impl TestWorkerExecutor {
         &mut self,
         worker_id: &WorkerId,
         function_name: &str,
-        params: Value,
-    ) -> Result<Value, GolemError> {
+        params: JsonValue,
+    ) -> Result<JsonValue, GolemError> {
         let json_string = params.to_string();
         self.invoke_and_await_custom(
             worker_id,
@@ -393,9 +402,9 @@ impl TestWorkerExecutor {
                     match value_opt {
                         Some(val::Val::String(s)) => {
                             if s.is_empty() {
-                                Ok(Value::Null)
+                                Ok(JsonValue::Null)
                             } else {
-                                let result: Value = serde_json::from_str(s).unwrap_or(Value::String(s.to_string()));
+                                let result: JsonValue = serde_json::from_str(s).unwrap_or(JsonValue::String(s.to_string()));
                                 Ok(result)
                             }
                         }
@@ -700,6 +709,11 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
             port: REDIS.port,
             key_prefix: context.redis_prefix(),
             ..Default::default()
+        },
+        public_worker_api: WorkerServiceGrpcConfig {
+            host: "localhost".to_string(),
+            port: context.grpc_port(),
+            access_token: "03494299-B515-4427-8C37-4C1C915679B7".to_string(),
         },
         ..Default::default()
     };
@@ -1042,7 +1056,7 @@ impl InvocationManagement for TestWorkerCtx {
     async fn confirm_invocation_key(
         &mut self,
         key: &InvocationKey,
-        vals: Result<Vec<Val>, GolemError>,
+        vals: Result<Vec<Value>, GolemError>,
     ) {
         self.durable_ctx.confirm_invocation_key(key, vals).await
     }
@@ -1093,7 +1107,7 @@ impl InvocationHooks for TestWorkerCtx {
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         calling_convention: Option<&golem_common::model::CallingConvention>,
     ) -> anyhow::Result<()> {
         self.durable_ctx
@@ -1117,10 +1131,10 @@ impl InvocationHooks for TestWorkerCtx {
     async fn on_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Val>,
-    ) -> Result<Option<Vec<Val>>, Error> {
+        output: Vec<Value>,
+    ) -> Result<Option<Vec<Value>>, Error> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
@@ -1146,6 +1160,7 @@ impl WorkerCtx for TestWorkerCtx {
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -1164,6 +1179,7 @@ impl WorkerCtx for TestWorkerCtx {
             oplog_service,
             scheduler_service,
             recovery_management,
+            rpc,
             config,
             worker_config,
             execution_status,
@@ -1186,6 +1202,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn is_exit(error: &Error) -> Option<i32> {
         DurableWorkerCtx::<TestWorkerCtx>::is_exit(error)
+    }
+
+    fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+        self.durable_ctx.rpc()
     }
 }
 
@@ -1242,6 +1262,32 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
+        let rpc = Arc::new(DirectWorkerInvocationRpc::new(
+            Arc::new(RemoteInvocationRpc::new(
+                golem_config.public_worker_api.uri(),
+                golem_config
+                    .public_worker_api
+                    .access_token
+                    .parse::<Uuid>()
+                    .expect("Access token must be an UUID"),
+            )),
+            active_workers.clone(),
+            engine.clone(),
+            linker.clone(),
+            runtime.clone(),
+            template_service.clone(),
+            worker_service.clone(),
+            promise_service.clone(),
+            golem_config.clone(),
+            invocation_key_service.clone(),
+            shard_service.clone(),
+            shard_manager_service.clone(),
+            key_value_service.clone(),
+            blob_store_service.clone(),
+            oplog_service.clone(),
+            scheduler_service.clone(),
+            (),
+        ));
         let recovery_management = Arc::new(RecoveryManagementDefault::new(
             active_workers.clone(),
             engine.clone(),
@@ -1255,9 +1301,12 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             invocation_key_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
+            rpc.clone(),
             golem_config.clone(),
             (),
         ));
+        rpc.set_recovery_management(recovery_management.clone());
+
         Ok(All::new(
             active_workers,
             engine,
@@ -1274,6 +1323,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             blob_store_service,
             oplog_service,
             recovery_management,
+            rpc,
             scheduler_service,
             (),
         ))
@@ -1284,10 +1334,14 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             create_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(engine, |x| {
                 &mut x.durable_ctx
             })?;
-        durable_host::host::add_to_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(
+        api::host::add_to_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(
             &mut linker,
             |x| &mut x.durable_ctx,
         )?;
+        golem_wasm_rpc::golem::rpc::types::add_to_linker::<
+            TestWorkerCtx,
+            DurableWorkerCtx<TestWorkerCtx>,
+        >(&mut linker, |x| &mut x.durable_ctx)?;
         Ok(linker)
     }
 }

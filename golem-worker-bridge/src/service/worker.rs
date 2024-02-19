@@ -7,10 +7,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use golem_api_grpc::proto::golem::template::FunctionResult;
-use golem_api_grpc::proto::golem::worker::{
-    InvokeResult as ProtoInvokeResult, LogEvent, Val as ProtoVal,
-};
+use golem_api_grpc::proto::golem::worker::{InvokeResult as ProtoInvokeResult, LogEvent};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
@@ -20,6 +17,8 @@ use golem_api_grpc::proto::golem::workerexecutor::{
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, ShardId, TemplateId, WorkerStatus,
 };
+use golem_wasm_ast::analysis::AnalysedFunctionResult;
+use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use serde_json::Value;
 use tokio::time::sleep;
 use tokio_stream::Stream;
@@ -61,7 +60,8 @@ pub enum WorkerError {
     DelegatedTemplateServiceError(TemplateError),
     VersionedTemplateIdNotFound(VersionedTemplateId),
     TemplateNotFound(TemplateId),
-    AccountIdNotFound(AccountId), // FIXME: Once worker is independent of account
+    AccountIdNotFound(AccountId),
+    // FIXME: Once worker is independent of account
     WorkerNotFound(WorkerId),
     Golem(GolemError),
 }
@@ -512,7 +512,7 @@ impl WorkerService for WorkerServiceDefault {
             )
             .await?;
 
-        let function_results: Vec<FunctionResult> = function_type
+        let function_results: Vec<AnalysedFunctionResult> = function_type
             .results
             .iter()
             .map(|x| x.clone().into())
@@ -576,7 +576,7 @@ impl WorkerService for WorkerServiceDefault {
                             account_id: Some(golem_api_grpc::proto::golem::common::AccountId {
                                 name: "-1".to_string(),
                             }),
-                            account_limits: None
+                            account_limits: None,
                         }
                     ).await.map_err(|err| {
                         GolemError::RuntimeError(GolemErrorRuntimeError {
@@ -605,7 +605,6 @@ impl WorkerService for WorkerServiceDefault {
                 })
             },
         ).await?;
-        debug!("Invoke_response: {:?}", invoke_response);
         Ok(invoke_response)
     }
 

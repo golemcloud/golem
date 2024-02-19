@@ -162,7 +162,7 @@ impl SchedulerServiceDefault {
         }
 
         for worker_id in worker_ids {
-            self.worker_activator.activate_worker(worker_id).await;
+            self.worker_activator.activate_worker(&worker_id).await;
         }
 
         Ok(())

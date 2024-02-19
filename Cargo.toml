@@ -35,6 +35,7 @@ exclude = [
     "test-templates/read-stdin",
     "test-templates/runtime-service",
     "test-templates/shopping-cart",
+    "test-templates/shopping-cart-resource",
     "test-templates/stdio-cc",
     "test-templates/variant-service",
     "test-templates/write-stderr",
@@ -43,6 +44,7 @@ exclude = [
     "golem-client",
     "golem-cli",
     "libtest-mimic",
+    "wasm-rpc"
 ]
 
 [workspace.dependencies]
@@ -60,7 +62,7 @@ fred = { version = "8.0.0", features = ["metrics", "serde-json", "partial-tracin
 futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
-golem-wasm-ast = "0.1.4"
+golem-wasm-ast = "0.1.5"
 http = "1.0.0" # keep in sync with wasmtime
 humantime-serde = "1.1.1"
 hyper = { version = "1.0.1", features = ["full"] } # keep in sync with wasmtime

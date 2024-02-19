@@ -387,16 +387,4 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         working-directory: golem-client
         run: cargo publish --all-features --allow-dirty
-      - name: Publish crate
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          export VERSION="${{ steps.get_version.outputs.version-without-v }}"
-          sed -i "s/0.0.0/$VERSION/g" golem-api-grpc/Cargo.toml
-          sed -i "s/0.0.0/$VERSION/g" golem-common/Cargo.toml
-          sed -i "s/0.0.0/$VERSION/g" golem-worker-executor-base/Cargo.toml
-          sed -i "s/0.0.0/$VERSION/g" golem-worker-executor/Cargo.toml
-          cargo publish -p golem-api-grpc --all-features --allow-dirty
-          cargo publish -p golem-common --all-features --allow-dirty
-          cargo publish -p golem-worker-executor-base --all-features --allow-dirty
-          cargo publish -p golem-worker-executor --all-features --allow-dirty
+

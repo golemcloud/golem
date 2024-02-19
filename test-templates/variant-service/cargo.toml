@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 [profile.release]
 lto = true
 opt-level = 's'
+strip = true
 
 [dependencies]
 once_cell = "1.17.1"

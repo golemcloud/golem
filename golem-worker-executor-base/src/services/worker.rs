@@ -379,7 +379,7 @@ impl WorkerService for WorkerServiceRedis {
                 });
         } else {
             debug!(
-                "removing instance {worker_id} to the set of running workers in shard {shard_id}"
+                "removing instance {worker_id} from the set of running workers in shard {shard_id}"
             );
 
             let _: u32 = self

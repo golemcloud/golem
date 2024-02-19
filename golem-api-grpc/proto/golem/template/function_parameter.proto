@@ -2,9 +2,9 @@ syntax = "proto3";
 
 package golem.template;
 
-import "golem/template/type.proto";
+import "wasm/rpc/type.proto";
 
 message FunctionParameter {
   string name = 1;
-  Type tpe = 2;
+  wasm.rpc.Type tpe = 2;
 }

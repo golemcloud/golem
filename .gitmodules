@@ -10,3 +10,6 @@
 [submodule "golem-cli"]
 	path = golem-cli
 	url = git@github.com:golemcloud/golem-cli.git
+[submodule "wasm-rpc"]
+	path = wasm-rpc
+	url = https://github.com/golemcloud/wasm-rpc
