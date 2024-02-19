@@ -1,5 +1,5 @@
+use std::net::{Ipv4Addr, SocketAddrV4};
 use golem_worker_bridge::api;
-use golem_worker_bridge::api::ApiServices;
 use golem_worker_bridge::app_config::WorkerBridgeConfig;
 use golem_worker_bridge::register::{RedisApiRegistry, RegisterApiDefinition};
 use golem_worker_bridge::service::worker::WorkerServiceDefault;
@@ -16,7 +16,7 @@ use prometheus::Registry;
 use tracing::error;
 use golem_worker_bridge::service::Services;
 use golem_worker_bridge::service::template::{TemplateService, TemplateServiceDefault};
-
+use crate::grpcapi::start_grpc_server;
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let config = WorkerBridgeConfig::default();
@@ -26,7 +26,9 @@ async fn main() -> std::io::Result<()> {
 pub async fn app(config: &WorkerBridgeConfig, prometheus_registry: Registry) -> std::io::Result<()> {
     init_tracing_metrics();
 
-    let http_services: Services = Services::new(config).await?;
+    let services: Services = Services::new(config).await?;
+
+    let http_services = services.clone();
 
     let worker_server = tokio::spawn(async move {
         let prometheus_registry = Arc::new(prometheus_registry);
@@ -49,6 +51,18 @@ pub async fn app(config: &WorkerBridgeConfig, prometheus_registry: Registry) -> 
             .name("gateway")
             .run(route)
     };
+
+    let grpc_services = services.clone();
+
+
+    let grpc_server = tokio::spawn(async move {
+        grpcapi::start_grpc_server(
+            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), grpc_port).into(),
+            &grpc_services,
+        )
+            .await
+            .expect("gRPC server failed");
+    });
 
     futures::future::try_join(worker_server, custom_request_server).await?;
 

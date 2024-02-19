@@ -11,12 +11,10 @@ pub mod register;
 pub mod resolved_variables;
 pub mod tokeniser;
 pub mod value_typed;
-pub mod worker;
-pub mod worker_bridge_reponse;
 pub mod worker_request;
 pub mod worker_request_to_http;
-
 pub mod service;
+pub mod grpcapi;
 
 
 pub trait UriBackConversion {
