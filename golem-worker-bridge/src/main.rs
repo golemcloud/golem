@@ -11,11 +11,15 @@ use poem::listener::TcpListener;
 use prometheus::Registry;
 use golem_worker_bridge::service::Services;
 use golem_worker_bridge::grpcapi;
+use golem_worker_bridge::metrics;
+use tokio::select;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    let prometheus = metrics::register_all();
+
     let config = WorkerBridgeConfig::default();
-    app(&config).await
+    app(&config, prometheus).await
 }
 
 pub async fn app(config: &WorkerBridgeConfig, prometheus_registry: Registry) -> std::io::Result<()> {
@@ -45,10 +49,11 @@ pub async fn app(config: &WorkerBridgeConfig, prometheus_registry: Registry) -> 
         poem::Server::new(poem::listener::TcpListener::bind(("0.0.0.0", config.custom_request_port)))
             .name("gateway")
             .run(route)
+            .await
+            .expect("Custom Request server failed")
     };
 
     let grpc_services = services.clone();
-
 
     let grpc_server = tokio::spawn(async move {
         grpcapi::start_grpc_server(
@@ -59,7 +64,10 @@ pub async fn app(config: &WorkerBridgeConfig, prometheus_registry: Registry) -> 
             .expect("gRPC server failed");
     });
 
-    futures::future::try_join(worker_server, custom_request_server).await?;
+    select! {
+        _ = worker_server => {},
+        _ = custom_request_server => {},
+        _ = grpc_server => {},
 
     Ok(())
 }

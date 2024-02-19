@@ -16,6 +16,7 @@ pub mod worker_request_to_http;
 pub mod service;
 pub mod grpcapi;
 
+pub mod metrics;
 
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;
