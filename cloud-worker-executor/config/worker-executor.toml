@@ -136,3 +136,8 @@ type = "Redis"
 [invocation_keys]
 pending_key_retention = "1m"
 confirm_queue_capacity = 1024
+
+[public_worker_api]
+# host
+# port
+# access_token

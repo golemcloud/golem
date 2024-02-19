@@ -754,7 +754,7 @@ impl TemplateServiceDefault {
         &self,
         storage_limit: CheckLimitResult,
         upload_limit: CheckLimitResult,
-        data: &Vec<u8>,
+        data: &[u8],
     ) -> Result<(), TemplateError> {
         let num_bytes: i32 = data
             .len()

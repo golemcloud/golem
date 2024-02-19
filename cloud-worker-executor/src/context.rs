@@ -2,11 +2,11 @@ use crate::services::resource_limits::ResourceLimits;
 use crate::services::{AdditionalDeps, HasResourceLimits};
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::worker::Val;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus,
 };
+use golem_wasm_rpc::Value;
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -23,6 +23,7 @@ use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::OplogService;
 use golem_worker_executor_base::services::promise::PromiseService;
 use golem_worker_executor_base::services::recovery::RecoveryManagement;
+use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
@@ -148,7 +149,7 @@ impl InvocationManagement for Context {
     async fn confirm_invocation_key(
         &mut self,
         key: &InvocationKey,
-        vals: Result<Vec<Val>, GolemError>,
+        vals: Result<Vec<Value>, GolemError>,
     ) {
         self.durable_ctx.confirm_invocation_key(key, vals).await
     }
@@ -199,7 +200,7 @@ impl InvocationHooks for Context {
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         calling_convention: Option<&CallingConvention>,
     ) -> anyhow::Result<()> {
         self.durable_ctx
@@ -223,10 +224,10 @@ impl InvocationHooks for Context {
     async fn on_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Val>,
+        function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Val>,
-    ) -> Result<Option<Vec<Val>>, Error> {
+        output: Vec<Value>,
+    ) -> Result<Option<Vec<Value>>, Error> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
@@ -347,6 +348,7 @@ impl WorkerCtx for Context {
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -365,6 +367,7 @@ impl WorkerCtx for Context {
             oplog_service,
             scheduler_service,
             recovery_management,
+            rpc,
             config.clone(),
             worker_config,
             execution_status,
@@ -392,5 +395,9 @@ impl WorkerCtx for Context {
 
     fn is_exit(error: &Error) -> Option<i32> {
         DurableWorkerCtx::<Context>::is_exit(error)
+    }
+
+    fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+        self.durable_ctx.rpc()
     }
 }

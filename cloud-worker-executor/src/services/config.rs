@@ -116,6 +116,9 @@ mod tests {
         std::env::set_var("GOLEM__RESOURCE_LIMITS__CONFIG__ACCESS_TOKEN", "token");
         std::env::set_var("GOLEM__HTTP_PORT", "1235");
         std::env::set_var("GOLEM__ENABLE_JSON_LOG", "true");
+        std::env::set_var("GOLEM__PUBLIC_WORKER_API__HOST", "localhost");
+        std::env::set_var("GOLEM__PUBLIC_WORKER_API__PORT", "1234");
+        std::env::set_var("GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN", "token");
 
         // The rest can be loaded from the toml
         let _ = GolemConfig::new();

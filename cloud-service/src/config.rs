@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use cloud_common::model::PlanId;
 use figment::providers::{Env, Format, Toml};
@@ -25,6 +26,7 @@ pub struct CloudServiceConfig {
     pub ed_dsa: EdDsaConfig,
     pub accounts: AccountsConfig,
     pub oauth2: OAuth2Config,
+    pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
 
 impl CloudServiceConfig {
@@ -127,6 +129,14 @@ pub struct AccountConfig {
     pub email: String,
     pub token: Uuid,
     pub role: Role,
+}
+
+// TODO: move to the base library
+#[derive(Clone, Debug, Deserialize)]
+pub struct WorkerExecutorClientCacheConfig {
+    pub max_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub time_to_idle: Duration,
 }
 
 #[cfg(test)]

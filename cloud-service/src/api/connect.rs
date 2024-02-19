@@ -613,7 +613,7 @@ mod keep_alive {
                 let pong_tx = pong_tx.clone();
                 let send_pong = send_pong.clone();
                 async move {
-                    while let Some(_) = ping_rx.recv().await {
+                    while ping_rx.recv().await.is_some() {
                         if send_pong.load(Ordering::Relaxed) {
                             pong_tx
                                 .send(Ok(Message::Pong(Vec::new())))

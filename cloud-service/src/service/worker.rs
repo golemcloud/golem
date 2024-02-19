@@ -7,10 +7,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use golem_api_grpc::proto::golem::template::FunctionResult;
-use golem_api_grpc::proto::golem::worker::{
-    InvokeResult as ProtoInvokeResult, LogEvent, Val as ProtoVal,
-};
+use golem_api_grpc::proto::golem::worker::{InvokeResult as ProtoInvokeResult, LogEvent};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
@@ -21,6 +18,7 @@ use golem_common::model::ProjectId;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, ShardId, TemplateId, WorkerStatus,
 };
+use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use serde_json::Value;
 use tokio::time::sleep;
 use tokio_stream::wrappers::ReceiverStream;
@@ -40,6 +38,7 @@ use golem_service_base::model::*;
 use golem_service_base::routing_table::{RoutingTableError, RoutingTableService};
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::worker_executor_clients::WorkerExecutorClients;
+use golem_wasm_ast::analysis::AnalysedFunctionResult;
 
 pub struct ConnectWorkerStream {
     stream: ReceiverStream<Result<LogEvent, Status>>,
@@ -466,7 +465,7 @@ impl WorkerServiceDefault {
             Some(pod) => {
                 let worker_executor_client = self
                     .worker_executor_clients
-                    .lookup(pod)
+                    .lookup(pod.clone())
                     .await
                     .map_err(|err| {
                         WorkerError::Internal(format!(
@@ -809,7 +808,7 @@ impl WorkerService for WorkerServiceDefault {
             )
             .await?;
 
-        let function_results: Vec<FunctionResult> = function_type
+        let function_results: Vec<AnalysedFunctionResult> = function_type
             .results
             .iter()
             .map(|x| x.clone().into())

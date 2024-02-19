@@ -55,3 +55,7 @@ id = "marketing"
 role = "MarketingAdmin"
 name = "Marketing User"
 email = "marketing@user"
+
+[worker_executor_client_cache]
+max_capacity = 1000
+time_to_idle = "4h"

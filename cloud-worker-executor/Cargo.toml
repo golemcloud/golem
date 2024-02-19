@@ -12,6 +12,7 @@ path = "src/server.rs"
 [dependencies]
 golem-common = { path = "../golem-services/golem-common" }
 golem-api-grpc = { path = "../golem-services/golem-api-grpc" }
+golem-wasm-rpc = { path = "../golem-services/wasm-rpc/wasm-rpc", default-features = false, features = ["host"] }
 golem-worker-executor-base = { path = "../golem-services/golem-worker-executor-base" }
 cloud-api-grpc = { path = "../cloud-api-grpc" }
 

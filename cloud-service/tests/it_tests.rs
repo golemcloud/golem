@@ -177,14 +177,14 @@ mod tests {
         let create_result = project_service.create(&project, &auth).await;
         let delete_result = project_service.delete(project_id, &auth).await;
 
-        dbg!(create_result.clone());
+        println!("{create_result:?}");
         assert!(
             create_result.is_ok(),
             "Failed to create project: {:?}",
             project
         );
 
-        dbg!(delete_result.clone());
+        println!("{delete_result:?}");
 
         assert!(
             delete_result.is_ok(),
