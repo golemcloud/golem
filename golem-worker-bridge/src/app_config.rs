@@ -15,8 +15,8 @@ pub struct WorkerBridgeConfig {
     pub template_service: TemplateServiceConfig,
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
-    pub management_port: u16,
     pub port: u16,
+    pub custom_request_port: u16,
     pub routing_table: RoutingTableConfig,
     pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }

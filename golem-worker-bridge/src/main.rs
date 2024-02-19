@@ -11,7 +11,10 @@ use opentelemetry_sdk::metrics::MeterProvider;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::{EndpointExt, Route};
 use std::sync::Arc;
+use poem::listener::TcpListener;
+use prometheus::Registry;
 use tracing::error;
+use golem_worker_bridge::service::Services;
 use golem_worker_bridge::service::template::{TemplateService, TemplateServiceDefault};
 
 #[tokio::main]
@@ -20,36 +23,34 @@ async fn main() -> std::io::Result<()> {
     app(&config).await
 }
 
-pub async fn app(config: &WorkerBridgeConfig) -> std::io::Result<()> {
+pub async fn app(config: &WorkerBridgeConfig, prometheus_registry: Registry) -> std::io::Result<()> {
     init_tracing_metrics();
 
-    let services: ApiServices = get_api_services(config).await?;
+    let http_services: Services = Services::new(config).await?;
 
-    let api_definition_server = {
-        let route = Route::new()
-            .nest("/", api::api_definition_routes(services.clone()))
+    let worker_server = tokio::spawn(async move {
+        let prometheus_registry = Arc::new(prometheus_registry);
+        let app = api::combined_routes(prometheus_registry, &http_services)
             .with(OpenTelemetryMetrics::new())
             .with(Tracing);
 
-        poem::Server::new(poem::listener::TcpListener::bind((
-            "0.0.0.0",
-            config.management_port,
-        )))
-        .name("api")
-        .run(route)
-    };
+        poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", config.port)))
+            .run(app)
+            .await
+            .expect("HTTP server failed");
+    });
 
     let custom_request_server = {
-        let route = api::custom_request_route(services)
+        let route = api::custom_request_route(http_services)
             .with(OpenTelemetryMetrics::new())
             .with(Tracing);
 
-        poem::Server::new(poem::listener::TcpListener::bind(("0.0.0.0", config.port)))
+        poem::Server::new(poem::listener::TcpListener::bind(("0.0.0.0", config.custom_request_port)))
             .name("gateway")
             .run(route)
     };
 
-    futures::future::try_join(api_definition_server, custom_request_server).await?;
+    futures::future::try_join(worker_server, custom_request_server).await?;
 
     Ok(())
 }

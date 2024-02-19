@@ -2,8 +2,8 @@ enable_tracing_console = false
 enable_json_log = false
 # workspace
 # environment
-management_port = 9000
-port = 9001
+port = 9000
+custom_request_port = 9001
 
 [redis]
 # host
