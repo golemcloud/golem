@@ -491,10 +491,10 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_by_version(&VersionedTemplateId {
-                template_id: worker_id.template_id.clone(),
-                version: template_version,
-            })
+            .get_by_version(
+                &worker_id.template_id,
+                template_version,
+            )
             .await?
             .ok_or_else(|| {
                 WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
@@ -552,10 +552,10 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_by_version(&VersionedTemplateId {
-                template_id: worker_id.template_id.clone(),
-                version: template_version,
-            })
+            .get_by_version(
+                &worker_id.template_id,
+                template_version,
+            )
             .await?
             .ok_or_else(|| {
                 WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
@@ -636,10 +636,10 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_by_version(&VersionedTemplateId {
-                template_id: worker_id.template_id.clone(),
-                version: template_version,
-            })
+            .get_by_version(
+                &worker_id.template_id,
+                template_version,
+            )
             .await?
             .ok_or_else(|| {
                 WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
@@ -677,10 +677,10 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_by_version(&VersionedTemplateId {
-                template_id: worker_id.template_id.clone(),
-                version: template_version,
-            })
+            .get_by_version(
+                 &worker_id.template_id,
+                template_version,
+            )
             .await?
             .ok_or_else(|| {
                 WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {

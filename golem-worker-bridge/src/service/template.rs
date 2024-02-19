@@ -15,7 +15,7 @@ use crate::UriBackConversion;
 
 #[async_trait]
 pub trait TemplateService {
-    async fn get_versioned_template(
+    async fn get_by_version(
         &self,
         template_id: &TemplateId,
         version: i32
@@ -76,7 +76,7 @@ impl TemplateService for TemplateServiceDefault {
             .await
 
     }
-    async fn get_versioned_template(
+    async fn get_by_version(
         &self,
         template_id: &TemplateId,
         version: i32

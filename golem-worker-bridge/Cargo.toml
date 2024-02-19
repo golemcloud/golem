@@ -16,7 +16,9 @@ path = "src/main.rs"
 golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
+golem-wasm-rpc = { path = "../wasm-rpc/wasm-rpc", default-features = false, features = ["host"] }
 
+golem-wasm-ast = { workspace = true }
 async-trait = { workspace = true }
 regex = "1.10.3"
 bincode = "2.0.0-rc.3"

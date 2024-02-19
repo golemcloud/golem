@@ -2163,6 +2163,8 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "http 0.2.11",
  "http 1.0.0",
  "humantime-serde",
