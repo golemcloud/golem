@@ -27,7 +27,7 @@ pub struct WorkerToHttpResponseDefault {
 }
 
 impl WorkerToHttpResponseDefault {
-    fn new(worker_service: WorkerServiceDefault) -> Self {
+   pub fn new(worker_service: WorkerServiceDefault) -> Self {
         Self {
             worker_service
         }

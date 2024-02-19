@@ -3,7 +3,6 @@ pub mod template;
 
 use std::sync::Arc;
 use tracing::error;
-use golem_service_base::worker_executor_clients::WorkerExecutorClientsDefault;
 use crate::app_config::WorkerBridgeConfig;
 use crate::register::{RedisApiRegistry, RegisterApiDefinition};
 use crate::worker_request_to_http::{WorkerToHttpResponse, WorkerToHttpResponseDefault};
@@ -13,6 +12,7 @@ pub struct Services {
     pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
     pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
     pub worker_to_http_service: Arc<dyn WorkerToHttpResponse + Sync + Send>,
+    pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
 }
 
 impl Services {
@@ -62,17 +62,9 @@ impl Services {
         Ok(Services {
             worker_service,
             definition_service,
-            worker_to_http_service
+            worker_to_http_service,
+            template_service
         })
-    }
-
-    pub fn noop() -> Self {
-        let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
-            Arc::new(worker::WorkerServiceNoOp::default());
-
-        Services {
-            worker_service,
-        }
     }
 }
 
