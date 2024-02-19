@@ -2131,6 +2131,7 @@ dependencies = [
  "http 0.2.11",
  "http 1.0.0",
  "hyper 1.1.0",
+ "lazy_static",
  "nom",
  "openapiv3",
  "opentelemetry",

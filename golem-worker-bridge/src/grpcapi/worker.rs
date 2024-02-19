@@ -517,42 +517,34 @@ impl From<TemplateError> for GrpcWorkerError {
 impl From<TemplateError> for worker_error::Error {
     fn from(value: TemplateError) -> Self {
         match value {
-            TemplateError::Internal(error) => worker_error::Error::InternalError(
+            TemplateError::Connection(status) => worker_error::Error::InternalError(
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: error,
+                        details: format!("Connection error:  Status: {status}"),
                     })),
                 },
             ),
-            TemplateError::AlreadyExists(template_id) => {
-                worker_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![format!("Template already exists: {template_id}")],
-                })
-            }
-            TemplateError::UnknownTemplateId(template_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Template not found: {template_id}"),
-                })
-            }
-            TemplateError::UnknownVersionedTemplateId(template_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Versioned template not found: {template_id}"),
-                })
-            }
-            TemplateError::IOError(error) => worker_error::Error::InternalError(
+            TemplateError::Transport(transport_error) => worker_error::Error::InternalError(
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: error,
+                        details: format!("Transport error: {transport_error}"),
                     })),
                 },
             ),
-            TemplateError::TemplateProcessingError(error) => worker_error::Error::InternalError(
+            TemplateError::Server(template_error) =>  worker_error::Error::InternalError(
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: error,
+                        details: format!("Template Fetch error: {template_error}"),
                     })),
                 },
             ),
+            TemplateError::Other(error) => worker_error::Error::InternalError(
+                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                        details: format!("Unknown error: {error}"),
+                    })),
+                },
+            )
         }
     }
 }

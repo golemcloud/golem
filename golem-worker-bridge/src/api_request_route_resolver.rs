@@ -10,7 +10,7 @@ pub trait RouteResolver {
     fn resolve(&self, api_specification: &ApiDefinition) -> Option<ResolvedRoute>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedRoute {
     pub route_definition: Route,
     pub resolved_variables: ResolvedVariables,

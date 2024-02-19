@@ -80,7 +80,7 @@ impl TemplateService for TemplateServiceDefault {
         &self,
         template_id: &TemplateId,
         version: i32
-    ) -> Result<Vec<Template>, TemplateError> {
+    ) -> Result<Option<Template>, TemplateError> {
         let desc = format!("Getting template: {}", template_id);
         info!("{}", &desc);
         with_retries(
@@ -102,14 +102,15 @@ impl TemplateService for TemplateServiceDefault {
                     match response.result {
                         None => Err("Empty response".to_string().into()),
                         Some(get_versioned_template_response::Result::Success(response)) => {
-                            let template_views = match response.template {
+                            let template_view: Result<Option<golem_service_base::model::Template>, TemplateError> = match response.template {
                                 Some(template) => {
-                                    let template = template.clone().try_into();
-                                    Ok(template?)
+                                    let template: golem_service_base::model::Template =
+                                        template.clone().try_into().unwrap();
+                                    Ok(Some(template))
                                 }
                                 None => Err("Empty response".to_string().into()),
                             };
-                            Ok(template_views?)
+                            Ok(template_view?)
                         }
                         Some(get_versioned_template_response::Result::Error(error)) => Err(error.into()),
                     }

@@ -246,7 +246,7 @@ impl WorkerToHttpResponse for NoOpWorkerRequestExecutor {
         let sample_json_data = json!(
             [{
               "description" : "This is a sample in-memory response",
-              "worker" : worker_name.0,
+              "worker" : worker_name,
               "name": "John Doe",
               "age": 30,
               "email": "johndoe@example.com",
@@ -266,7 +266,7 @@ impl WorkerToHttpResponse for NoOpWorkerRequestExecutor {
         let worker_response = WorkerResponse {
             result: sample_json_data,
         };
-        
+
         worker_response.to_http_response(response_mapping, &worker_request_params.resolved_route.resolved_variables)
     }
 }

@@ -11,7 +11,7 @@ use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
 // Data that represent the resolved variables
 // Values are often resolved from input request, or output response of a worker, both of which are JSON.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedVariables {
     pub variables: HashMap<Path, Value>,
 }
