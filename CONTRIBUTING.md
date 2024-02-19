@@ -116,7 +116,7 @@ From the root of the project
 
 ```bash
 rustup target add x86_64-unknown-linux-gnu
-cargo build --target x86_64-unknown-linux-gnu
+cargo build --release --target x86_64-unknown-linux-gnu
 ```
 
 ### ARM MAC
@@ -139,7 +139,7 @@ From the root of the project
 
 ```bash
 rustup target add aarch64-unknown-linux-gnu-gcc
-cargo build --target aarch64-unknown-linux-gnu-gcc
+cargo build --release --target aarch64-unknown-linux-gnu-gcc
 ```
 
 ### LINUX

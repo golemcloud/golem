@@ -18,7 +18,7 @@ pub enum ApiTags {
 
 #[derive(Union)]
 #[oai(discriminator_name = "type", one_of = true)]
-pub enum ErrorsBody {
+pub enum WorkerServiceErrorsBody {
     Messages(MessagesErrorsBody),
     Validation(ValidationErrorsBody),
 }
@@ -54,7 +54,7 @@ pub struct RouteValidationError {
 #[derive(ApiResponse)]
 pub enum ApiEndpointError {
     #[oai(status = 400)]
-    BadRequest(Json<ErrorsBody>),
+    BadRequest(Json<WorkerServiceErrorsBody>),
     #[oai(status = 401)]
     Unauthorized(Json<ErrorBody>),
     #[oai(status = 403)]
@@ -81,7 +81,7 @@ impl ApiEndpointError {
     }
 
     pub fn bad_request<T: Display>(error: T) -> Self {
-        Self::BadRequest(Json(ErrorsBody::Messages(MessagesErrorsBody {
+        Self::BadRequest(Json(WorkerServiceErrorsBody::Messages(MessagesErrorsBody {
             errors: vec![error.to_string()],
         })))
     }
