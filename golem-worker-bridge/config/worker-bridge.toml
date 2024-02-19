@@ -4,6 +4,8 @@ enable_json_log = false
 # environment
 port = 9000
 custom_request_port = 9001
+worker_grpc_port = 9092
+
 
 [redis]
 # host

@@ -1,22 +1,17 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 use golem_worker_bridge::api;
 use golem_worker_bridge::app_config::WorkerBridgeConfig;
-use golem_worker_bridge::register::{RedisApiRegistry, RegisterApiDefinition};
-use golem_worker_bridge::service::worker::WorkerServiceDefault;
-use golem_worker_bridge::worker_request_to_http::{
-    WorkerToHttpResponse, WorkerToHttpResponseDefault,
-};
+use golem_worker_bridge::register::{RegisterApiDefinition};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProvider;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
-use poem::{EndpointExt, Route};
+use poem::{EndpointExt};
 use std::sync::Arc;
 use poem::listener::TcpListener;
 use prometheus::Registry;
-use tracing::error;
 use golem_worker_bridge::service::Services;
-use golem_worker_bridge::service::template::{TemplateService, TemplateServiceDefault};
-use crate::grpcapi::start_grpc_server;
+use golem_worker_bridge::grpcapi;
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let config = WorkerBridgeConfig::default();
@@ -57,7 +52,7 @@ pub async fn app(config: &WorkerBridgeConfig, prometheus_registry: Registry) -> 
 
     let grpc_server = tokio::spawn(async move {
         grpcapi::start_grpc_server(
-            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), grpc_port).into(),
+            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), config.worker_grpc_port).into(),
             &grpc_services,
         )
             .await
@@ -82,46 +77,4 @@ fn init_tracing_metrics() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_ansi(true)
         .init();
-}
-
-async fn get_api_services(config: &WorkerBridgeConfig) -> Result<ApiServices, std::io::Error> {
-    let definition_service: Arc<dyn RegisterApiDefinition + Sync + Send> =
-        Arc::new(RedisApiRegistry::new(&config.redis).await.map_err(|e| {
-            error!("RedisApiRegistry - init error: {}", e);
-
-            std::io::Error::new(std::io::ErrorKind::Other, "Init error")
-        })?);
-
-    let routing_table_service: Arc<
-        dyn golem_service_base::routing_table::RoutingTableService + Send + Sync,
-    > = Arc::new(
-        golem_service_base::routing_table::RoutingTableServiceDefault::new(
-            config.routing_table.clone(),
-        ),
-    );
-
-    let template_service: Arc<dyn TemplateService + Send + Sync> = Arc::new(
-        TemplateServiceDefault::new(&config.template_service)
-    );
-
-    let worker_executor_clients: Arc<
-        dyn golem_service_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
-    > = Arc::new(
-        golem_service_base::worker_executor_clients::WorkerExecutorClientsDefault::new(
-            config.worker_executor_client_cache.max_capacity,
-            config.worker_executor_client_cache.time_to_idle,
-        ),
-    );
-
-    let worker_service: Arc<dyn golem_worker_bridge::service::worker::WorkerService + Sync + Send> =
-        Arc::new(WorkerServiceDefault::new(
-            worker_executor_clients.clone(),
-            template_service.clone(),
-            routing_table_service.clone(),
-        ));
-
-    Ok(ApiServices {
-        definition_service,
-        worker_request_executor: request_executor,
-    })
 }

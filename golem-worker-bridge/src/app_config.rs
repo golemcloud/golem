@@ -17,6 +17,7 @@ pub struct WorkerBridgeConfig {
     pub enable_json_log: bool,
     pub port: u16,
     pub custom_request_port: u16,
+    pub worker_grpc_port: u16,
     pub routing_table: RoutingTableConfig,
     pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
