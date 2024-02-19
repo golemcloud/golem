@@ -16,7 +16,9 @@ use crate::component::*;
 use crate::AstCustomization;
 use mappable_rc::Mrc;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Debug;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysedExport {
@@ -63,6 +65,21 @@ pub enum AnalysedType {
         error: Option<Box<AnalysedType>>,
     },
     Variant(Vec<(String, Option<AnalysedType>)>),
+    Resource {
+        id: AnalysedResourceId,
+        resource_mode: AnalysedResourceMode,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnalysedResourceMode {
+    Owned,
+    Borrowed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalysedResourceId {
+    pub value: u64,
 }
 
 impl From<&PrimitiveValueType> for AnalysedType {
@@ -129,9 +146,18 @@ impl AnalysisFailure {
 pub type AnalysisResult<A> = Result<A, AnalysisFailure>;
 
 #[derive(Debug, Clone)]
+struct ComponentStackItem<Ast: AstCustomization + 'static> {
+    component: Mrc<Component<Ast>>,
+    component_idx: Option<ComponentIdx>,
+}
+
+type ResourceIdMap = HashMap<(Vec<ComponentIdx>, ComponentTypeIdx), AnalysedResourceId>;
+
+#[derive(Debug, Clone)]
 pub struct AnalysisContext<Ast: AstCustomization + 'static> {
-    component_stack: Vec<Mrc<Component<Ast>>>,
-    warnings: RefCell<Vec<AnalysisWarning>>,
+    component_stack: Vec<ComponentStackItem<Ast>>,
+    warnings: Rc<RefCell<Vec<AnalysisWarning>>>,
+    resource_ids: Rc<RefCell<ResourceIdMap>>,
 }
 
 impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
@@ -142,8 +168,12 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
     /// Initializes an analyzer for a given component
     pub fn from_rc(component: Mrc<Component<Ast>>) -> AnalysisContext<Ast> {
         AnalysisContext {
-            component_stack: vec![component],
-            warnings: RefCell::new(Vec::new()),
+            component_stack: vec![ComponentStackItem {
+                component,
+                component_idx: None,
+            }],
+            warnings: Rc::new(RefCell::new(Vec::new())),
+            resource_ids: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -179,6 +209,25 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
 
     fn warning(&self, warning: AnalysisWarning) {
         self.warnings.borrow_mut().push(warning);
+    }
+
+    fn get_resource_id(&self, type_idx: &ComponentTypeIdx) -> AnalysedResourceId {
+        let new_unique_id = self.resource_ids.borrow().len() as u64;
+        let mut resource_ids = self.resource_ids.borrow_mut();
+        let path = self
+            .component_stack
+            .iter()
+            .filter_map(|item| item.component_idx)
+            .collect();
+        let key = (path, *type_idx);
+        resource_ids
+            .entry(key)
+            .or_insert_with(|| {
+                AnalysedResourceId {
+                    value: new_unique_id, // We don't to associate all IDs in each component, so this simple method can always generate a unique one
+                }
+            })
+            .clone()
     }
 
     fn analyse_func_export(
@@ -263,6 +312,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
     fn analyse_component_type_idx(
         &self,
         component_type_idx: &ComponentTypeIdx,
+        analysed_resource_mode: Option<AnalysedResourceMode>,
     ) -> AnalysisResult<AnalysedType> {
         let (component_type_section, next_ctx) = self.get_final_referenced(
             format!("component type {component_type_idx}"),
@@ -286,7 +336,19 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
             )),
             ComponentSection::Import(ComponentImport { desc, .. }) => match desc {
                 ComponentTypeRef::Type(TypeBounds::Eq(component_type_idx)) => {
-                    self.analyse_component_type_idx(component_type_idx)
+                    self.analyse_component_type_idx(component_type_idx, analysed_resource_mode)
+                }
+                ComponentTypeRef::Type(TypeBounds::SubResource) => {
+                    match analysed_resource_mode {
+                        Some(resource_mode) => {
+                            let id = next_ctx.get_resource_id(component_type_idx);
+                            Ok(AnalysedType::Resource {
+                                id,
+                                resource_mode,
+                            })
+                        }
+                        None => Err(AnalysisFailure::failed("Reached a sub-resource type bound without a surrounding borrowed/owned resource type")),
+                    }
                 }
                 _ => Err(AnalysisFailure::failed(format!(
                     "Imports {desc:?} is not supported as a defined type"
@@ -303,7 +365,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
         match tpe {
             ComponentValType::Primitive(primitive_value_type) => Ok(primitive_value_type.into()),
             ComponentValType::Defined(component_type_idx) => {
-                self.analyse_component_type_idx(component_type_idx)
+                self.analyse_component_type_idx(component_type_idx, None)
             }
         }
     }
@@ -359,11 +421,11 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                     .map(|t| self.analyse_component_val_type(t).map(Box::new))
                     .transpose()?,
             }),
-            ComponentDefinedType::Owned { .. } => {
-                Err(AnalysisFailure::failed("Owned types are not supported"))
+            ComponentDefinedType::Owned { type_idx } => {
+                self.analyse_component_type_idx(type_idx, Some(AnalysedResourceMode::Owned))
             }
-            ComponentDefinedType::Borrowed { .. } => {
-                Err(AnalysisFailure::failed("Borrowed types are not supported"))
+            ComponentDefinedType::Borrowed { type_idx } => {
+                self.analyse_component_type_idx(type_idx, Some(AnalysedResourceMode::Borrowed))
             }
         }
     }
@@ -387,10 +449,10 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
 
                     match &*component_section {
                         ComponentSection::Component(referenced_component) => {
-                            let next_ctx = next_ctx
-                                .push_component(Mrc::map(component_section.clone(), |c| {
-                                    c.as_component()
-                                }));
+                            let next_ctx = next_ctx.push_component(
+                                Mrc::map(component_section.clone(), |c| c.as_component()),
+                                *component_idx,
+                            );
                             let mut funcs = Vec::new();
                             for export in referenced_component.exports() {
                                 match export.kind {
@@ -428,10 +490,10 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
     }
 
     fn get_component(&self) -> Mrc<Component<Ast>> {
-        self.component_stack.last().unwrap().clone()
+        self.component_stack.last().unwrap().component.clone()
     }
 
-    fn get_components_from_stack(&self, count: u32) -> Vec<Mrc<Component<Ast>>> {
+    fn get_components_from_stack(&self, count: u32) -> Vec<ComponentStackItem<Ast>> {
         self.component_stack
             .iter()
             .take(self.component_stack.len() - count as usize)
@@ -439,19 +501,27 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
             .collect()
     }
 
-    fn push_component(&self, component: Mrc<Component<Ast>>) -> AnalysisContext<Ast> {
+    fn push_component(
+        &self,
+        component: Mrc<Component<Ast>>,
+        component_idx: ComponentIdx,
+    ) -> AnalysisContext<Ast> {
         let mut component_stack = self.component_stack.clone();
-        component_stack.push(component);
+        component_stack.push(ComponentStackItem {
+            component,
+            component_idx: Some(component_idx),
+        });
         self.with_component_stack(component_stack)
     }
 
     fn with_component_stack(
         &self,
-        component_stack: Vec<Mrc<Component<Ast>>>,
+        component_stack: Vec<ComponentStackItem<Ast>>,
     ) -> AnalysisContext<Ast> {
         AnalysisContext {
             component_stack,
             warnings: self.warnings.clone(),
+            resource_ids: self.resource_ids.clone(),
         }
     }
 
@@ -538,13 +608,14 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                 target: AliasTarget { count, index },
             }) => {
                 let referenced_components = self.get_components_from_stack(*count);
-                let referenced_component =
-                    referenced_components
-                        .first()
-                        .ok_or(AnalysisFailure::failed(format!(
-                            "Component stack underflow (count={count}, size={}",
-                            self.component_stack.len()
-                        )))?;
+                let referenced_component = referenced_components
+                    .first()
+                    .ok_or(AnalysisFailure::failed(format!(
+                        "Component stack underflow (count={count}, size={}",
+                        self.component_stack.len()
+                    )))?
+                    .component
+                    .clone();
                 match kind {
                     OuterAliasKind::CoreModule => Err(AnalysisFailure::failed(
                         "Core module aliases are not supported",
@@ -592,7 +663,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                     .iter()
                     .find(|export| export.name == *name)
                     .cloned();
-                Ok((export, next_ctx.push_component(component)))
+                Ok((export, next_ctx.push_component(component, *component_idx)))
             }
             ComponentInstance::FromExports { exports } => {
                 let export = exports.iter().find(|export| export.name == *name).cloned();
