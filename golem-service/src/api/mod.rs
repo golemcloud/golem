@@ -15,7 +15,7 @@
 use crate::service::Services;
 use poem::endpoint::PrometheusExporter;
 use poem::Route;
-use poem::{get, EndpointExt};
+use poem::{EndpointExt};
 use poem_openapi::OpenApiService;
 use poem_openapi::Tags;
 use prometheus::Registry;
@@ -39,22 +39,15 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
     let spec = api_service.spec_endpoint_yaml();
     let metrics = PrometheusExporter::new(prometheus_registry.deref().clone());
 
-    let connect_services = worker_connect::ConnectService::new(services.worker_service.clone());
-
     Route::new()
         .nest("/", api_service)
         .nest("/docs", ui)
         .nest("/specs", spec)
         .nest("/metrics", metrics)
-        .at(
-            "/v2/templates/:template_id/workers/:worker_name/connect",
-            get(worker_connect::ws.data(connect_services)),
-        )
 }
 
 type ApiServices = (
     template::TemplateApi,
-    worker::WorkerApi,
     healthcheck::HealthcheckApi,
 );
 
@@ -63,10 +56,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
         (
             template::TemplateApi {
                 template_service: services.template_service.clone(),
-            },
-            worker::WorkerApi {
-                template_service: services.template_service.clone(),
-                worker_service: services.worker_service.clone(),
             },
             healthcheck::HealthcheckApi,
         ),
