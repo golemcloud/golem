@@ -531,13 +531,70 @@ impl From<TemplateError> for worker_error::Error {
                     })),
                 },
             ),
-            TemplateError::Server(template_error) =>  worker_error::Error::InternalError(
-                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: format!("Template Fetch error: {template_error}"),
-                    })),
-                },
-            ),
+            TemplateError::Server(template_error) =>  {
+                match template_error.error {
+                    Some(golem_api_grpc::proto::golem::template::template_error::Error::AlreadyExists(error)) => {
+                        worker_error::Error::AlreadyExists(error)
+                    }
+
+                    Some(
+                        golem_api_grpc::proto::golem::template::template_error::Error::BadRequest(
+                            errors,
+                        )
+                    ) => {
+                        worker_error::Error::BadRequest(ErrorsBody {
+                            errors: errors.errors,
+                        })
+                    }
+                    Some(
+                        golem_api_grpc::proto::golem::template::template_error::Error::InternalError(
+                            error,
+                        )
+                    ) => {
+                        let error0 = error.error;
+
+                        worker_error::Error::InternalError(
+                            golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                                error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                                    details: format!("Template Internal error: {error0}"),
+                                })),
+                            },
+                        )
+                    }
+                    Some(golem_api_grpc::proto::golem::template::template_error::Error::NotFound(
+                             error,
+                         )) => {
+                        worker_error::Error::NotFound(ErrorBody {
+                            error: error.error,
+                        })
+                    }
+                    Some(
+                        golem_api_grpc::proto::golem::template::template_error::Error::Unauthorized(
+                            error,
+                        )
+                    ) => {
+                        worker_error::Error::Unauthorized(ErrorBody {
+                            error: error.error,
+                        })
+                    }
+                    Some(
+                        golem_api_grpc::proto::golem::template::template_error::Error::LimitExceeded(
+                            error,
+                        )
+                    ) => {
+                        worker_error::Error::LimitExceeded(ErrorBody {
+                            error: error.error,
+                        })
+                    }
+                    None => worker_error::Error::InternalError(
+                        golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                            error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                                details: "Unknown error".to_string(),
+                            })),
+                        },
+                    ),
+                }
+            },
             TemplateError::Other(error) => worker_error::Error::InternalError(
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {

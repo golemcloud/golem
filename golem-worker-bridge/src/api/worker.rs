@@ -308,15 +308,51 @@ impl From<TemplateError> for WorkerError {
                     golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Internal error: {error}") }),
                 }))
             },
-            TemplateError::Transport(transport_error) => {
+            TemplateError::Transport(_) => {
                 WorkerError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Internal error: {transport_error}") }),
+                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Transport Error when connecting to template service") }),
                 }))
             },
-            TemplateError::Server(transport_error) => {
-                WorkerError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Internal error: {transport_error}") }),
-                }))
+            TemplateError::Server(template_error) => {
+                match template_error.error {
+                    Some(error) => match error {
+                        golem_api_grpc::proto::golem::template::template_error::Error::BadRequest(errors) => {
+                            WorkerError::BadRequest(Json(ErrorsBody {
+                                errors: errors.errors,
+                            }))
+                        },
+                        golem_api_grpc::proto::golem::template::template_error::Error::InternalError(error) => {
+                            WorkerError::InternalError(Json(GolemErrorBody {
+                                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error.error }),
+                            }))
+                        },
+                        golem_api_grpc::proto::golem::template::template_error::Error::NotFound(error) => {
+                            WorkerError::NotFound(Json(ErrorBody {
+                                error: error.error,
+                            }))
+                        },
+                        golem_api_grpc::proto::golem::template::template_error::Error::Unauthorized(error) => {
+                            WorkerError::InternalError(Json(GolemErrorBody {
+                                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error.error }),
+                            }))
+                        },
+                        golem_api_grpc::proto::golem::template::template_error::Error::LimitExceeded(error) => {
+                            WorkerError::InternalError(Json(GolemErrorBody {
+                                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error.error }),
+                            }))
+                        }
+                        golem_api_grpc::proto::golem::template::template_error::Error::AlreadyExists(error) => {
+                            WorkerError::InternalError(Json(GolemErrorBody {
+                                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error.error }),
+                            }))
+                        }
+                    }
+                    None => {
+                        WorkerError::InternalError(Json(GolemErrorBody {
+                            golem_error: GolemError::Unknown(GolemErrorUnknown { details: "Unknown error connecting to template service".to_string() }),
+                        }))
+                    }
+                }
             }
         }
     }

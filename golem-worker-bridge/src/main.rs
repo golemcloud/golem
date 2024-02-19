@@ -13,6 +13,7 @@ use golem_worker_bridge::service::Services;
 use golem_worker_bridge::grpcapi;
 use golem_worker_bridge::metrics;
 use tokio::select;
+use tonic::codegen::Body;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -22,27 +23,21 @@ async fn main() -> std::io::Result<()> {
     app(&config, prometheus).await
 }
 
-pub async fn app(config: &WorkerBridgeConfig, prometheus_registry: Registry) -> std::io::Result<()> {
+pub async fn app(worker_config: &WorkerBridgeConfig, prometheus_registry: Registry) -> std::io::Result<()> {
     init_tracing_metrics();
+    let config = worker_config.clone();
 
-    let services: Services = Services::new(config).await?;
+    let services: Services = Services::new(&config).await.map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::Other, e)
+    })?;
 
-    let http_services = services.clone();
+    let http_service1 = services.clone();
+    let http_service2 = services.clone();
+    let grpc_services = services.clone();
 
-    let worker_server = tokio::spawn(async move {
-        let prometheus_registry = Arc::new(prometheus_registry);
-        let app = api::combined_routes(prometheus_registry, &http_services)
-            .with(OpenTelemetryMetrics::new())
-            .with(Tracing);
 
-        poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", config.port)))
-            .run(app)
-            .await
-            .expect("HTTP server failed");
-    });
-
-    let custom_request_server = {
-        let route = api::custom_request_route(http_services)
+    let custom_request_server = tokio::spawn(async move {
+        let route = api::custom_request_route(http_service1)
             .with(OpenTelemetryMetrics::new())
             .with(Tracing);
 
@@ -51,9 +46,20 @@ pub async fn app(config: &WorkerBridgeConfig, prometheus_registry: Registry) -> 
             .run(route)
             .await
             .expect("Custom Request server failed")
-    };
+    });
 
-    let grpc_services = services.clone();
+
+    let worker_server = tokio::spawn(async move {
+        let prometheus_registry = Arc::new(prometheus_registry);
+        let app = api::combined_routes(prometheus_registry, &http_service2)
+            .with(OpenTelemetryMetrics::new())
+            .with(Tracing);
+
+        poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", config.port)))
+            .run(app)
+            .await
+            .expect("HTTP server failed");
+    });
 
     let grpc_server = tokio::spawn(async move {
         grpcapi::start_grpc_server(
@@ -68,7 +74,7 @@ pub async fn app(config: &WorkerBridgeConfig, prometheus_registry: Registry) -> 
         _ = worker_server => {},
         _ = custom_request_server => {},
         _ = grpc_server => {},
-
+    }
     Ok(())
 }
 

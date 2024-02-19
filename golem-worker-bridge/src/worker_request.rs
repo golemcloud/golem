@@ -46,7 +46,7 @@ impl ResolvedRouteAsWorkerRequest {
         ))?;
 
         Ok(ResolvedRouteAsWorkerRequest {
-            resolved_route,
+            resolved_route: resolved_route.clone(),
             worker_id: worker_id_str.to_string(),
             template: resolved_route.route_definition.binding.template.clone(),
             function: function_name,

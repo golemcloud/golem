@@ -41,7 +41,7 @@ impl WorkerToHttpResponse for WorkerToHttpResponseDefault {
         worker_request_params: ResolvedRouteAsWorkerRequest,
         response_mapping: &Option<ResponseMapping>,
     ) -> Response {
-        match execute(self, worker_request_params).await {
+        match execute(self, worker_request_params.clone()).await {
             Ok(worker_response) => worker_response.to_http_response(response_mapping, &worker_request_params.resolved_route.resolved_variables),
             Err(e) => {
                 Response::builder()
