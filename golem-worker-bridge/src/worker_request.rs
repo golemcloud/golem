@@ -4,8 +4,7 @@ use serde_json::Value;
 use crate::api_request_route_resolver::ResolvedRoute;
 use crate::evaluator::{Evaluator, Primitive};
 
-// A resolved route definition is mapped to a worker request
-// consisting of all required info
+// Every resolved route definition can be mapped to a worker request
 #[derive(PartialEq, Debug, Clone)]
 pub struct ResolvedRouteAsWorkerRequest {
     pub resolved_route: ResolvedRoute,
