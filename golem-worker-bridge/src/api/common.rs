@@ -34,7 +34,7 @@ pub struct ValidationErrorsBody {
 }
 
 #[derive(Object)]
-pub struct ErrorBody {
+pub struct WorkerServiceErrorBody {
     error: String,
 }
 
@@ -56,26 +56,26 @@ pub enum ApiEndpointError {
     #[oai(status = 400)]
     BadRequest(Json<WorkerServiceErrorsBody>),
     #[oai(status = 401)]
-    Unauthorized(Json<ErrorBody>),
+    Unauthorized(Json<WorkerServiceErrorBody>),
     #[oai(status = 403)]
-    LimitExceeded(Json<ErrorBody>),
+    LimitExceeded(Json<WorkerServiceErrorBody>),
     #[oai(status = 404)]
     NotFound(Json<MessageBody>),
     #[oai(status = 409)]
     AlreadyExists(Json<String>),
     #[oai(status = 500)]
-    InternalError(Json<ErrorBody>),
+    InternalError(Json<WorkerServiceErrorBody>),
 }
 
 impl ApiEndpointError {
     pub fn unauthorized<T: Display>(error: T) -> Self {
-        Self::Unauthorized(Json(ErrorBody {
+        Self::Unauthorized(Json(WorkerServiceErrorBody {
             error: error.to_string(),
         }))
     }
 
     pub fn internal<T: Display>(error: T) -> Self {
-        Self::InternalError(Json(ErrorBody {
+        Self::InternalError(Json(WorkerServiceErrorBody {
             error: error.to_string(),
         }))
     }
