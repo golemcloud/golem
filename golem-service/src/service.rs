@@ -58,24 +58,6 @@ impl Services {
             template::TemplateServiceDefault::new(template_repo.clone(), object_store.clone()),
         );
 
-        let routing_table_service: Arc<
-            dyn golem_service_base::routing_table::RoutingTableService + Send + Sync,
-        > = Arc::new(
-            golem_service_base::routing_table::RoutingTableServiceDefault::new(
-                config.routing_table.clone(),
-            ),
-        );
-
-        let worker_executor_clients: Arc<
-            dyn golem_service_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
-        > = Arc::new(
-            golem_service_base::worker_executor_clients::WorkerExecutorClientsDefault::new(
-                config.worker_executor_client_cache.max_capacity,
-                config.worker_executor_client_cache.time_to_idle,
-            ),
-        );
-
-
         Ok(Services {
             template_service,
         })
