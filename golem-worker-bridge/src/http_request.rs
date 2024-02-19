@@ -65,7 +65,7 @@ impl<'a> ApiInputPath<'a> {
 #[cfg(test)]
 mod tests {
     use crate::api_definition::ApiDefinition;
-    use crate::worker_request::WorkerRequestParameters;
+    use crate::worker_request::ResolvedRouteAsWorkerRequest;
 
     use crate::api_request_route_resolver::RouteResolver;
     use golem_common::model::TemplateId;
@@ -85,11 +85,14 @@ mod tests {
             function_params,
         );
 
-        let result = WorkerRequestParameters::from_resolved_route(
-            &api_request.resolve(&api_specification).unwrap(),
+        let resolved_route = api_request.resolve(&api_specification).unwrap();
+
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
+            &resolved_route,
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
+            resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -117,7 +120,7 @@ mod tests {
             function_params,
         );
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
@@ -125,7 +128,7 @@ mod tests {
 
         expected_map.insert("x".to_string(), serde_json::Value::String("y".to_string()));
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -152,7 +155,7 @@ mod tests {
             function_params,
         );
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
@@ -163,7 +166,7 @@ mod tests {
             serde_json::Value::Number(serde_json::Number::from(1)),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -195,7 +198,7 @@ mod tests {
             function_params,
         );
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
@@ -206,7 +209,7 @@ mod tests {
             serde_json::Value::Number(serde_json::Number::from(1)),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -247,11 +250,11 @@ mod tests {
             function_params,
         );
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -299,7 +302,7 @@ mod tests {
             function_params,
         );
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
@@ -317,7 +320,7 @@ mod tests {
             serde_json::Value::String("foo".to_string()),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -346,11 +349,11 @@ mod tests {
             function_params,
         );
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -384,11 +387,11 @@ mod tests {
             function_params,
         );
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -418,11 +421,11 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -450,11 +453,11 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -482,11 +485,11 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -519,11 +522,11 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -553,11 +556,11 @@ mod tests {
         let api_specification: ApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -606,11 +609,11 @@ mod tests {
             function_params.as_str(),
         );
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -659,11 +662,11 @@ mod tests {
             function_params.as_str(),
         );
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -711,11 +714,11 @@ mod tests {
             function_params.as_str(),
         );
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -769,11 +772,11 @@ mod tests {
             function_params.as_str(),
         );
 
-        let result = WorkerRequestParameters::from_resolved_route(
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
             &api_request.resolve(&api_specification).unwrap(),
         );
 
-        let expected = WorkerRequestParameters {
+        let expected = ResolvedRouteAsWorkerRequest {
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
                 .unwrap(),
@@ -805,7 +808,7 @@ mod tests {
             );
 
             let result = match &api_request.resolve(&api_specification) {
-                Some(resolved) => WorkerRequestParameters::from_resolved_route(resolved),
+                Some(resolved) => ResolvedRouteAsWorkerRequest::from_resolved_route(resolved),
                 None => Err("err".to_string()),
             };
 

@@ -14,15 +14,85 @@ use crate::expr::Expr;
 use crate::resolved_variables::ResolvedVariables;
 
 use crate::service::worker::{WorkerService, WorkerServiceDefault};
-use crate::worker_request::WorkerRequestParameters;
+use crate::worker_request::ResolvedRouteAsWorkerRequest;
 
 
 #[async_trait]
-pub trait WorkerRequestExecutor {
-    async fn execute(&self, request: WorkerRequestParameters) -> Result<WorkerResponse, Box<dyn Error>>; // return type???
+pub trait WorkerToHttpResponse {
+    async fn execute(&self, resolved_worker_request: ResolvedRouteAsWorkerRequest, response_mapping: &Option<ResponseMapping>,) -> Response;
 }
 
-pub struct WorkerResponse {
+pub struct WorkerToHttpResponseDefault {
+    pub worker_service: WorkerServiceDefault,
+}
+
+#[async_trait]
+impl WorkerToHttpResponse for WorkerToHttpResponseDefault {
+    async fn execute(
+        &self,
+        worker_request_params: ResolvedRouteAsWorkerRequest,
+        response_mapping: &Option<ResponseMapping>,
+    ) -> Response {
+        match execute(self, worker_request_params).await {
+            Ok(worker_response) => worker_response.to_http_response(response_mapping, &worker_request_params.resolved_route.resolved_variables),
+            Err(e) => {
+                Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from_string(format!("Error when executing resolved worker request. Error: {}", e)))
+            }
+        }
+    }
+}
+
+async fn execute(
+    default_executor: &WorkerToHttpResponseDefault,
+    worker_request_params: ResolvedRouteAsWorkerRequest,
+) -> Result<WorkerResponse, Box<dyn Error>> {
+    let worker_name = worker_request_params.worker_id;
+
+    let template_id = worker_request_params.template;
+
+    let worker_id = WorkerId {
+        template_id: template_id,
+        worker_name: Id(worker_name.clone())
+    };
+
+    info!(
+            "Executing request for template: {}, worker: {}, function: {}",
+            template_id, worker_name, worker_request_params.function
+        );
+
+    let invocation_key = default_executor
+        .worker_service
+        .get_invocation_key(&worker_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let invoke_parameters = worker_request_params.function_params;
+
+    info!(
+            "Executing request for template: {}, worker: {}, invocation key: {}, invocation params: {:?}",
+            template_id, worker_name, invocation_key, invoke_parameters
+        );
+
+    let invoke_result = default_executor
+        .worker_service
+        .invoke_and_await_function(
+            &worker_id,
+            worker_request_params.function,
+            &invocation_key,
+            invoke_parameters,
+            &CallingConvention::Component,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(WorkerResponse {
+        result: invoke_result,
+    })
+}
+
+struct WorkerResponse {
     pub result: Value,
 }
 
@@ -64,62 +134,6 @@ impl WorkerResponse {
             body: response_body,
             status: status_code,
             headers,
-        })
-    }
-
-}
-
-pub struct WorkerRequestExecutorDefault {
-    pub worker_service: WorkerServiceDefault,
-}
-
-#[async_trait]
-impl WorkerRequestExecutor for WorkerRequestExecutorDefault {
-    async fn execute(
-        &self,
-        worker_request_params: WorkerRequestParameters,
-    ) -> Result<WorkerResponse, Box<dyn Error>> {
-        let worker_name = worker_request_params.worker_id;
-
-        let template_id = worker_request_params.template;
-
-        let worker_id = WorkerId {
-            template_id: template_id,
-            worker_name: Id(worker_name.clone())
-        };
-
-        info!(
-            "Executing request for template: {}, worker: {}, function: {}",
-            template_id, worker_name, worker_request_params.function
-        );
-
-        let invocation_key = self
-            .worker_service
-            .get_invocation_key(&worker_id)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let invoke_parameters = worker_request_params.function_params;
-
-        info!(
-            "Executing request for template: {}, worker: {}, invocation key: {}, invocation params: {:?}",
-            template_id, worker_name, invocation_key, invoke_parameters
-        );
-
-        let invoke_result = self
-            .worker_service
-            .invoke_and_await_function(
-                &worker_id,
-                worker_request_params.function,
-                &invocation_key,
-                invoke_parameters,
-                &CallingConvention::Component,
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-
-        Ok(WorkerResponse {
-            result: invoke_result,
         })
     }
 }
@@ -208,10 +222,11 @@ impl ResolvedResponseHeaders {
 pub struct NoOpWorkerRequestExecutor {}
 
 #[async_trait]
-impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
+impl WorkerToHttpResponse for NoOpWorkerRequestExecutor {
     async fn execute(
         &self,
-        worker_request_params: WorkerRequestParameters,
+        worker_request_params: ResolvedRouteAsWorkerRequest,
+        response_mapping: &ResponseMapping
     ) -> Result<WorkerResponse, Box<dyn Error>> {
         let worker_name = worker_request_params.worker_id;
         let template_id = worker_request_params.template;

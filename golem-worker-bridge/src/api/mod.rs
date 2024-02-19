@@ -12,12 +12,12 @@ use poem_openapi::OpenApiService;
 
 use crate::register::RegisterApiDefinition;
 use crate::service::Services;
-use crate::worker_request_executor::WorkerRequestExecutor;
+use crate::worker_request_to_http::WorkerToHttpResponse;
 
 #[derive(Clone)]
 pub struct ApiServices {
     pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
-    pub worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
+    pub worker_request_executor: Arc<dyn WorkerToHttpResponse + Sync + Send>,
 }
 
 pub struct ManagementOpenApiService {

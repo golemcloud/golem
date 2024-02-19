@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::tokeniser::cursor::TokenCursor;
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
-use crate::worker_request_executor::WorkerResponse;
+use crate::worker_request_to_http::WorkerResponse;
 
 // Data that represent the resolved variables
 // Values are often resolved from input request, or output response of a worker, both of which are JSON.

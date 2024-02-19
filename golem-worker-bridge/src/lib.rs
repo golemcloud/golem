@@ -14,7 +14,7 @@ pub mod value_typed;
 pub mod worker;
 pub mod worker_bridge_reponse;
 pub mod worker_request;
-pub mod worker_request_executor;
+pub mod worker_request_to_http;
 
 pub mod service;
 

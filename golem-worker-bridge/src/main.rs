@@ -3,8 +3,8 @@ use golem_worker_bridge::api::ApiServices;
 use golem_worker_bridge::app_config::WorkerBridgeConfig;
 use golem_worker_bridge::register::{RedisApiRegistry, RegisterApiDefinition};
 use golem_worker_bridge::service::worker::WorkerServiceDefault;
-use golem_worker_bridge::worker_request_executor::{
-    WorkerRequestExecutor, WorkerRequestExecutorDefault,
+use golem_worker_bridge::worker_request_to_http::{
+    WorkerToHttpResponse, WorkerToHttpResponseDefault,
 };
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProvider;

@@ -5,13 +5,13 @@ use std::sync::Arc;
 use tracing::error;
 use crate::app_config::WorkerBridgeConfig;
 use crate::register::{RedisApiRegistry, RegisterApiDefinition};
-use crate::worker_request_executor::WorkerRequestExecutor;
+use crate::worker_request_to_http::WorkerToHttpResponse;
 
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
     pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
-    pub worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
+    pub worker_request_executor: Arc<dyn WorkerToHttpResponse + Sync + Send>,
 }
 
 impl Services {

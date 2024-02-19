@@ -13,19 +13,19 @@ use crate::http_request::{ApiInputPath, InputHttpRequest};
 use crate::oas_worker_bridge::{GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION};
 use crate::register::{ApiDefinitionKey, RegisterApiDefinition};
 use crate::worker_bridge_reponse::GetWorkerBridgeResponse;
-use crate::worker_request::WorkerRequestParameters;
-use crate::worker_request_executor::{WorkerRequestExecutor, WorkerResponse};
+use crate::worker_request::ResolvedRouteAsWorkerRequest;
+use crate::worker_request_to_http::{WorkerToHttpResponse, WorkerResponse};
 
 // Executes custom request with the help of worker_request_executor and definition_service
 #[derive(Clone)]
 pub struct CustomRequestApi {
-    worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
+    worker_request_executor: Arc<dyn WorkerToHttpResponse + Sync + Send>,
     definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
 }
 
 impl CustomRequestApi {
     pub fn new(
-        worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
+        worker_request_executor: Arc<dyn WorkerToHttpResponse + Sync + Send>,
         definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
     ) -> Self {
         Self {
@@ -127,7 +127,7 @@ impl CustomRequestApi {
         match api_request.resolve(&api_definition) {
             Some(resolved_route) => {
                 let golem_worker_request =
-                    match WorkerRequestParameters::from_resolved_route(&resolved_route) {
+                    match ResolvedRouteAsWorkerRequest::from_resolved_route(resolved_route) {
                         Ok(golem_worker_request) => golem_worker_request,
                         Err(e) => {
                             error!(
