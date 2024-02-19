@@ -24,8 +24,6 @@ use std::sync::Arc;
 
 mod healthcheck;
 mod template;
-mod worker;
-mod worker_connect;
 
 #[derive(Tags)]
 enum ApiTags {

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod template;
-pub mod worker;
 
 use golem_service_base::config::TemplateStoreConfig;
 use golem_service_base::service::template_object_store;
@@ -26,7 +25,6 @@ use crate::repo::template::{DbTemplateRepo, TemplateRepo};
 #[derive(Clone)]
 pub struct Services {
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
-    pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
 }
 
 impl Services {
@@ -77,16 +75,9 @@ impl Services {
             ),
         );
 
-        let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
-            Arc::new(worker::WorkerServiceDefault::new(
-                worker_executor_clients.clone(),
-                template_service.clone(),
-                routing_table_service.clone(),
-            ));
 
         Ok(Services {
             template_service,
-            worker_service,
         })
     }
 
@@ -94,12 +85,8 @@ impl Services {
         let template_service: Arc<dyn template::TemplateService + Sync + Send> =
             Arc::new(template::TemplateServiceNoOp::default());
 
-        let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
-            Arc::new(worker::WorkerServiceNoOp::default());
-
         Services {
             template_service,
-            worker_service,
         }
     }
 }
