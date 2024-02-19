@@ -255,12 +255,12 @@ impl WorkerGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing template id"))?;
 
-        let latest_template = self
+        let latest_template_version = self
             .template_service
             .get_latest_version(&template_id)
             .await
-            .tap_err(|error| tracing::error!("Error getting latest template version: {:?}", error))?
-            .ok_or(GrpcWorkerError {
+            .tap_err(|error| tracing::error!("Error getting latest template version: {:?}", error))
+            .map_err(|_| GrpcWorkerError {
                 error: Some(worker_error::Error::NotFound(ErrorBody {
                     error: format!("Template not found: {}", &template_id),
                 })),
@@ -272,7 +272,7 @@ impl WorkerGrpcApi {
             .worker_service
             .create(
                 &worker_id,
-                latest_template.versioned_template_id.version,
+                latest_template_version,
                 request.args,
                 request.env,
             )

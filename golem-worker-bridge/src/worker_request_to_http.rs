@@ -7,7 +7,7 @@ use poem::{Body, Response, ResponseParts};
 use serde_json::{json, Value};
 use tracing::info;
 use golem_common::model::CallingConvention;
-use golem_service_base::model::{Id, WorkerId};
+use golem_service_base::model::WorkerId;
 use crate::api_definition::ResponseMapping;
 use crate::evaluator::{EvaluationError, Evaluator};
 use crate::expr::Expr;

@@ -12,9 +12,7 @@ use poem_openapi::OpenApiService;
 use prometheus::Registry;
 use std::ops::Deref;
 
-use crate::register::RegisterApiDefinition;
 use crate::service::Services;
-use crate::worker_request_to_http::WorkerToHttpResponse;
 
 type ApiServices = (
     worker::WorkerApi,
