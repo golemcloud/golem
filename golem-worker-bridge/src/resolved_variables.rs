@@ -8,7 +8,6 @@ use serde_json::Value;
 
 use crate::tokeniser::cursor::TokenCursor;
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
-use crate::worker_request_to_http::WorkerResponse;
 
 // Data that represent the resolved variables
 // Values are often resolved from input request, or output response of a worker, both of which are JSON.
@@ -30,11 +29,11 @@ impl ResolvedVariables {
         }
     }
 
-    pub fn from_worker_response(worker_response: &WorkerResponse) -> ResolvedVariables {
+    pub fn from_worker_response(worker_response: &Value) -> ResolvedVariables {
         let mut vars: ResolvedVariables = ResolvedVariables::new();
         let path = Path::from_string_unsafe(Token::WorkerResponse.to_string().as_str());
 
-        vars.insert(path, worker_response.result.clone());
+        vars.insert(path, worker_response.clone());
 
         vars
     }

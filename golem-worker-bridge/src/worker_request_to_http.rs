@@ -60,14 +60,11 @@ async fn execute(
 
     let template_id = worker_request_params.template;
 
-    let worker_id = WorkerId {
-        template_id: template_id,
-        worker_name: Id(worker_name.clone())
-    };
+    let worker_id = WorkerId::new(template_id.clone(), worker_name.clone())?;
 
     info!(
             "Executing request for template: {}, worker: {}, function: {}",
-            template_id, worker_name, worker_request_params.function
+            template_id, worker_name.clone(), worker_request_params.function
         );
 
     let invocation_key = default_executor
@@ -80,7 +77,7 @@ async fn execute(
 
     info!(
             "Executing request for template: {}, worker: {}, invocation key: {}, invocation params: {:?}",
-            template_id, worker_name, invocation_key, invoke_parameters
+            template_id, worker_name.clone(), invocation_key, invoke_parameters
         );
 
     let invoke_result = default_executor
@@ -127,7 +124,7 @@ impl WorkerResponse {
         resolved_variables_from_request: &ResolvedVariables,
     ) -> Result<IntermediateHttpResponse, EvaluationError> {
         let variables = {
-            let mut response_variables = ResolvedVariables::from_worker_response(self);
+            let mut response_variables = ResolvedVariables::from_worker_response(&self.result);
             response_variables.extend(resolved_variables_from_request);
             response_variables
         };
@@ -234,15 +231,12 @@ impl WorkerToHttpResponse for NoOpWorkerRequestExecutor {
     async fn execute(
         &self,
         worker_request_params: ResolvedRouteAsWorkerRequest,
-        response_mapping: &ResponseMapping
-    ) -> Result<WorkerResponse, Box<dyn Error>> {
+        response_mapping: &Option<ResponseMapping>,
+    ) -> Response {
         let worker_name = worker_request_params.worker_id;
         let template_id = worker_request_params.template;
 
-        let worker_id = WorkerId {
-            template_id: template_id,
-            worker_name: Id(worker_name.clone())
-        };
+        let worker_id = WorkerId::new(template_id.clone(), worker_name.clone()).unwrap();
 
         info!(
             "Executing request for template: {}, worker: {}, function: {}",
@@ -269,9 +263,11 @@ impl WorkerToHttpResponse for NoOpWorkerRequestExecutor {
             }]
         );
 
-        Ok(WorkerResponse {
+        let worker_response = WorkerResponse {
             result: sample_json_data,
-        })
+        };
+        
+        worker_response.to_http_response(response_mapping, &worker_request_params.resolved_route.resolved_variables)
     }
 }
 

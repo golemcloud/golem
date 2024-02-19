@@ -126,7 +126,7 @@ impl CustomRequestApi {
         match api_request.resolve(&api_definition) {
             Some(resolved_route) => {
                 let worker_request_with_resolved_route =
-                    match ResolvedRouteAsWorkerRequest::from_resolved_route(resolved_route) {
+                    match ResolvedRouteAsWorkerRequest::from_resolved_route(resolved_route.clone()) {
                         Ok(golem_worker_request) => golem_worker_request,
                         Err(e) => {
                             error!(
