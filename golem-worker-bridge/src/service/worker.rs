@@ -1,3 +1,17 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use core::task::{Context, Poll};
 use std::collections::HashMap;
 use std::future::Future;
@@ -25,9 +39,8 @@ use tokio_stream::Stream;
 use tonic::transport::Channel;
 use tonic::{Status, Streaming};
 use tracing::{debug, info};
-use crate::service::template::{TemplateError};
-use crate::service::template::TemplateService;
 
+use crate::service::template::{TemplateError, TemplateService};
 use golem_service_base::model::*;
 use golem_service_base::routing_table::{RoutingTableError, RoutingTableService};
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
@@ -241,12 +254,12 @@ impl WorkerServiceDefault {
         i: &In,
         f: F,
     ) -> Result<Out, WorkerError>
-    where
-        F: for<'b> Fn(
-            &'b mut WorkerExecutorClient<Channel>,
-            &'b In,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
+        where
+            F: for<'b> Fn(
+                &'b mut WorkerExecutorClient<Channel>,
+                &'b In,
+            )
+                -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
     {
         loop {
             match self.get_worker_executor_client(worker_id).await {
@@ -254,24 +267,24 @@ impl WorkerServiceDefault {
                     match f(&mut worker_executor_client, i).await {
                         Ok(result) => return Ok(result),
                         Err(GolemError::InvalidShardId(GolemErrorInvalidShardId {
-                            shard_id,
-                            shard_ids,
-                        })) => {
+                                                           shard_id,
+                                                           shard_ids,
+                                                       })) => {
                             info!("InvalidShardId: {} not in {:?}", shard_id, shard_ids);
                             info!("Invalidating routing table");
                             self.routing_table_service.invalidate_routing_table().await;
                             sleep(Duration::from_secs(1)).await;
                         }
                         Err(GolemError::RuntimeError(GolemErrorRuntimeError { details }))
-                            if details.contains("UNAVAILABLE")
-                                || details.contains("CHANNEL CLOSED")
-                                || details.contains("transport error") =>
-                        {
-                            info!("Worker executor unavailable");
-                            info!("Invalidating routing table");
-                            self.routing_table_service.invalidate_routing_table().await;
-                            sleep(Duration::from_secs(1)).await;
-                        }
+                        if details.contains("UNAVAILABLE")
+                            || details.contains("CHANNEL CLOSED")
+                            || details.contains("transport error") =>
+                            {
+                                info!("Worker executor unavailable");
+                                info!("Invalidating routing table");
+                                self.routing_table_service.invalidate_routing_table().await;
+                                sleep(Duration::from_secs(1)).await;
+                            }
                         Err(other) => {
                             debug!("Got {:?}, not retrying", other);
                             return Err(WorkerError::Golem(other));
@@ -285,13 +298,13 @@ impl WorkerServiceDefault {
                     sleep(Duration::from_secs(1)).await;
                 }
                 Err(WorkerError::Internal { 0: details })
-                    if details.contains("transport error") =>
-                {
-                    info!("Shard manager unavailable");
-                    info!("Invalidating routing table");
-                    self.routing_table_service.invalidate_routing_table().await;
-                    sleep(Duration::from_secs(1)).await;
-                }
+                if details.contains("transport error") =>
+                    {
+                        info!("Shard manager unavailable");
+                        info!("Invalidating routing table");
+                        self.routing_table_service.invalidate_routing_table().await;
+                        sleep(Duration::from_secs(1)).await;
+                    }
                 Err(other) => {
                     debug!("Got {}, not retrying", other);
                     return Err(other);
@@ -478,7 +491,10 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_versioned_template(&worker_id.template_id, template_version)
+            .get_by_version(&VersionedTemplateId {
+                template_id: worker_id.template_id.clone(),
+                version: template_version,
+            })
             .await?
             .ok_or_else(|| {
                 WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
@@ -536,7 +552,10 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_versioned_template(&worker_id.template_id, template_version)
+            .get_by_version(&VersionedTemplateId {
+                template_id: worker_id.template_id.clone(),
+                version: template_version,
+            })
             .await?
             .ok_or_else(|| {
                 WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
@@ -617,7 +636,10 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_versioned_template(&worker_id.template_id, template_version)
+            .get_by_version(&VersionedTemplateId {
+                template_id: worker_id.template_id.clone(),
+                version: template_version,
+            })
             .await?
             .ok_or_else(|| {
                 WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
@@ -655,7 +677,10 @@ impl WorkerService for WorkerServiceDefault {
         let template_version = self.try_get_template_version_for_worker(worker_id).await?;
         let template_details = self
             .template_service
-            .get_versioned_template(&worker_id.template_id, template_version)
+            .get_by_version(&VersionedTemplateId {
+                template_id: worker_id.template_id.clone(),
+                version: template_version,
+            })
             .await?
             .ok_or_else(|| {
                 WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
@@ -755,15 +780,15 @@ impl WorkerService for WorkerServiceDefault {
                         match response.into_inner() {
                             workerexecutor::CompletePromiseResponse {
                                 result:
-                                    Some(workerexecutor::complete_promise_response::Result::Success(
-                                        success,
-                                    )),
+                                Some(workerexecutor::complete_promise_response::Result::Success(
+                                         success,
+                                     )),
                             } => Ok(success.completed),
                             workerexecutor::CompletePromiseResponse {
                                 result:
-                                    Some(workerexecutor::complete_promise_response::Result::Failure(
-                                        err,
-                                    )),
+                                Some(workerexecutor::complete_promise_response::Result::Failure(
+                                         err,
+                                     )),
                             } => Err(err.try_into().unwrap()),
                             workerexecutor::CompletePromiseResponse { .. } => {
                                 Err(GolemError::Unknown(GolemErrorUnknown {

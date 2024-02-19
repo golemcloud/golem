@@ -103,6 +103,9 @@ Typically, the following should allow you to run it successfully.
 ```bash
 brew tap messense/macos-cross-toolchains
 brew install messense/macos-cross-toolchains/x86_64-unknown-linux-gnu
+# If openssl is not in system
+# brew install openssl 
+export OPENSSL_DIR=$(brew --prefix openssl)
 export CC_X86_64_UNKNOWN_LINUX_GNU=x86_64-unknown-linux-gnu-gcc
 export CXX_X86_64_UNKNOWN_LINUX_GNU=x86_64-unknown-linux-gnu-g++
 export AR_X86_64_UNKNOWN_LINUX_GNU=x86_64-unknown-linux-gnu-ar
@@ -123,6 +126,9 @@ Typically, the following should allow you to run it successfully.
 ```bash
 brew tap messense/macos-cross-toolchains
 brew install aarch64-unknown-linux-gnu
+# If openssl is not in system
+# brew install openssl 
+export OPENSSL_DIR=$(brew --prefix openssl)
 export CC_AARCH64_UNKNOWN_LINUX_GNU=aarch64-unknown-linux-gnu-gcc
 export CXX_AARCH64_UNKNOWN_LINUX_GNU=aarch64-unknown-linux-gnu-g++
 export AR_AARCH64_UNKNOWN_LINUX_GNU=aarch64-unknown-linux-gnu-ar
