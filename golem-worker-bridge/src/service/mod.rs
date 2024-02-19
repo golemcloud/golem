@@ -3,15 +3,16 @@ pub mod template;
 
 use std::sync::Arc;
 use tracing::error;
+use golem_service_base::worker_executor_clients::WorkerExecutorClientsDefault;
 use crate::app_config::WorkerBridgeConfig;
 use crate::register::{RedisApiRegistry, RegisterApiDefinition};
-use crate::worker_request_to_http::WorkerToHttpResponse;
+use crate::worker_request_to_http::{WorkerToHttpResponse, WorkerToHttpResponseDefault};
 
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
     pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
-    pub worker_request_executor: Arc<dyn WorkerToHttpResponse + Sync + Send>,
+    pub worker_to_http_service: Arc<dyn WorkerToHttpResponse + Sync + Send>,
 }
 
 impl Services {
@@ -28,7 +29,7 @@ impl Services {
             ),
         );
 
-        let worker_executor_clients: Arc<
+        let worker_executor_grpc_clients: Arc<
             dyn golem_service_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
         > = Arc::new(
             golem_service_base::worker_executor_clients::WorkerExecutorClientsDefault::new(
@@ -39,7 +40,7 @@ impl Services {
 
         let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
             Arc::new(worker::WorkerServiceDefault::new(
-                worker_executor_clients.clone(),
+                worker_executor_grpc_clients.clone(),
                 template_service.clone(),
                 routing_table_service.clone(),
             ));
@@ -51,9 +52,17 @@ impl Services {
                 std::io::Error::new(std::io::ErrorKind::Other, "Init error")
             })?);
 
+        let worker_to_http_service: Arc<dyn WorkerToHttpResponse + Sync + Send> =
+            Arc::new(WorkerToHttpResponseDefault::new(worker::WorkerServiceDefault::new(
+                worker_executor_grpc_clients.clone(),
+                template_service.clone(),
+                routing_table_service.clone(),
+            )));
+
         Ok(Services {
             worker_service,
             definition_service,
+            worker_to_http_service
         })
     }
 

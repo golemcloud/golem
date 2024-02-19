@@ -4,8 +4,6 @@ pub mod custom_request_endpoint;
 pub mod worker;
 pub mod worker_connect;
 
-use std::sync::Arc;
-
 use crate::api::api_definition_endpoints::RegisterApiDefinitionApi;
 use poem::Route;
 use poem_openapi::OpenApiService;
@@ -14,18 +12,12 @@ use crate::register::RegisterApiDefinition;
 use crate::service::Services;
 use crate::worker_request_to_http::WorkerToHttpResponse;
 
-#[derive(Clone)]
-pub struct ApiServices {
-    pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
-    pub worker_request_executor: Arc<dyn WorkerToHttpResponse + Sync + Send>,
-}
-
 pub struct ManagementOpenApiService {
     pub route: Route,
     pub yaml: String,
 }
 
-pub fn management_open_api_service(services: ApiServices) -> ManagementOpenApiService {
+pub fn management_open_api_service(services: Services) -> ManagementOpenApiService {
     let api_service = OpenApiService::new(
         RegisterApiDefinitionApi::new(services.definition_service.clone()),
         "Golem Api Gateway Management API",
@@ -44,13 +36,13 @@ pub fn management_open_api_service(services: ApiServices) -> ManagementOpenApiSe
     ManagementOpenApiService { route, yaml }
 }
 
-pub fn api_definition_routes(services: ApiServices) -> Route {
+pub fn api_definition_routes(services: Services) -> Route {
     management_open_api_service(services).route
 }
 
-pub fn custom_request_route(services: ApiServices) -> Route {
+pub fn custom_request_route(services: Services) -> Route {
     let custom_request_executor = custom_request_endpoint::CustomRequestApi::new(
-        services.worker_request_executor,
+        services.worker_to_http_service,
         services.definition_service,
     );
 

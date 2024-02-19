@@ -26,6 +26,14 @@ pub struct WorkerToHttpResponseDefault {
     pub worker_service: WorkerServiceDefault,
 }
 
+impl WorkerToHttpResponseDefault {
+    fn new(worker_service: WorkerServiceDefault) -> Self {
+        Self {
+            worker_service
+        }
+    }
+}
+
 #[async_trait]
 impl WorkerToHttpResponse for WorkerToHttpResponseDefault {
     async fn execute(
