@@ -13,8 +13,8 @@ ENV RUST_TARGET=aarch64-unknown-linux-gnu
 FROM platform-${TARGETARCH} AS final
 
 WORKDIR /app
-COPY /target/$RUST_TARGET/release/template-service ./
-COPY /template-service/config/template-service.toml ./config/template-service.toml
+COPY /target/$RUST_TARGET/release/golem-template-service ./
+COPY /golem-template-service/config/template-service.toml ./config/template-service.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates
@@ -23,4 +23,4 @@ RUN update-ca-certificates
 EXPOSE 8080
 EXPOSE 9090
 
-ENTRYPOINT ["./golem-service"]
+ENTRYPOINT ["./golem-template-service"]

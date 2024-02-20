@@ -24,23 +24,21 @@ services:
     depends_on:
       - redis
 
-  golem-service:
+  golem-template-service:
     build:
       context: .
-      dockerfile: golem-service/docker/Dockerfile
+      dockerfile: golem-template-service/docker/Dockerfile
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
       - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
-      - GOLEM__TEMPLATES__STORE__TYPE="Local"
-      - GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX=""
-      - GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH=/template_store
+      - GOLEM__TEMPLATES_STORE__TYPE="Local"
+      - GOLEM__TEMPLATES_STORE__CONFIG__OBJECT_PREFIX=""
+      - GOLEM__TEMPLATES_STORE__CONFIG__ROOT_PATH=/template_store
       - GOLEM__DB__TYPE=Sqlite
       - GOLEM__DB__CONFIG__DATABASE=/app/golem_db/golem.sqlite
       - GOLEM__DB__CONFIG__MAX_CONNECTIONS=10
-      - GOLEM__ROUTING_TABLE__HOST="golem-shard-manager"
-      - GOLEM__ROUTING_TABLE__PORT=${SHARD_MANAGER_GRPC_PORT}
       - GOLEM__GRPC_PORT=${TEMPLATE_SERVICE_GRPC_PORT}
       - GOLEM__HTTP_PORT=${TEMPLATE_SERVICE_HTTP_PORT}
     volumes:
@@ -63,7 +61,6 @@ services:
       - GOLEM__TEMPLATE_SERVICE__HOST=golem-service
       - GOLEM__TEMPLATE_SERVICE__PORT=${TEMPLATE_SERVICE_GRPC_PORT}
       - GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN="5C832D93-FF85-4A8F-9803-513950FDFDB1"
-      - GOLEM_SHARD_MANAGER_PORT=${SHARD_MANAGER_GRPC_PORT}
       - GOLEM__ROUTING_TABLE__HOST="golem-shard-manager"
       - GOLEM__ROUTING_TABLE__PORT=${SHARD_MANAGER_GRPC_PORT}
       - GOLEM__CUSTOM_REQUEST_PORT=${WORKER_SERVICE_CUSTOM_REQUEST_PORT}
@@ -87,7 +84,7 @@ services:
       - RUST_LOG=info
       - GOLEM__REDIS__PORT=${REDIS_PORT}
       - GOLEM__REDIS__HOST=redis
-      - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-service
+      - GOLEM__TEMPLATE_SERVICE__CONFIG__HOST=golem-template-service
       - GOLEM__TEMPLATE_SERVICE__CONFIG__PORT=${TEMPLATE_SERVICE_GRPC_PORT}
       - GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
       - GOLEM__PORT=${WORKER_EXECUTOR_GRPC_PORT}

@@ -2084,6 +2084,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-template-service"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "console-subscriber",
+ "figment",
+ "futures-util",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-service-base",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "humantime-serde",
+ "lazy_static",
+ "mappable-rc",
+ "opentelemetry",
+ "opentelemetry-prometheus",
+ "opentelemetry_sdk",
+ "poem",
+ "poem-openapi",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tap",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "golem-wasm-ast"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4995,43 +5032,6 @@ dependencies = [
  "redox_syscall",
  "rustix 0.38.30",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "template-service"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "console-subscriber",
- "figment",
- "futures-util",
- "golem-api-grpc",
- "golem-common",
- "golem-service-base",
- "golem-wasm-ast",
- "golem-wasm-rpc",
- "humantime-serde",
- "lazy_static",
- "mappable-rc",
- "opentelemetry",
- "opentelemetry-prometheus",
- "opentelemetry_sdk",
- "poem",
- "poem-openapi",
- "prometheus",
- "serde",
- "serde_json",
- "sqlx",
- "tap",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tonic-health",
- "tonic-reflection",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

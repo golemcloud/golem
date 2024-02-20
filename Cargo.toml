@@ -7,7 +7,7 @@ members = [
     "golem-common",
     "golem-api-grpc",
     "golem-service-base",
-    "template-service",
+    "golem-template-service",
     "golem-shard-manager",
     "golem-worker-bridge"
 ]

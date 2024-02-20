@@ -20,11 +20,6 @@ use serde::Deserialize;
 use std::time::Duration;
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct TemplatesConfig {
-    pub store: TemplateStoreConfig,
-}
-
-#[derive(Clone, Debug, Deserialize)]
 pub struct DbSqliteConfig {
     pub database: String,
     pub max_connections: u32,
@@ -38,14 +33,13 @@ pub struct WorkerExecutorClientCacheConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct CloudServiceConfig {
+pub struct TemplateServiceConfig {
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
     pub http_port: u16,
     pub grpc_port: u16,
     pub db: DbConfig,
     pub template_store: TemplateStoreConfig,
-    pub routing_table: RoutingTableConfig,
     pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
 
@@ -66,7 +60,7 @@ pub struct DbPostgresConfig {
     pub max_connections: u32,
 }
 
-impl CloudServiceConfig {
+impl TemplateServiceConfig {
     pub fn new() -> Self {
         Figment::new()
             .merge(Toml::file("config/template-service.toml"))
@@ -76,7 +70,7 @@ impl CloudServiceConfig {
     }
 }
 
-impl Default for CloudServiceConfig {
+impl Default for TemplateServiceConfig {
     fn default() -> Self {
         Self::new()
     }
@@ -101,6 +95,6 @@ mod tests {
         std::env::set_var("GOLEM__GRPC_PORT", "9002");
 
         // The rest can be loaded from the toml
-        let _ = super::CloudServiceConfig::new();
+        let _ = super::TemplateServiceConfig::new();
     }
 }
