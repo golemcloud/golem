@@ -15,7 +15,7 @@ database = "golem"
 #username
 #password
 
-[templates.store]
+[template_store]
 object_prefix = ""
 
 [worker_executor_client_cache]

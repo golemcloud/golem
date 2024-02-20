@@ -1,14 +1,14 @@
 [package]
-name = "golem-service"
+name = "template-service"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "golem-service"
+name = "template-service"
 path = "src/server.rs"
 
 [[bin]]
-name = "golem-service-yaml"
+name = "template-service-yaml"
 path = "src/openapi_yaml.rs"
 
 [lib]

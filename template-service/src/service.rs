@@ -45,7 +45,7 @@ impl Services {
         };
 
         let object_store: Arc<dyn template_object_store::TemplateObjectStore + Sync + Send> =
-            match config.templates.store.clone() {
+            match config.template_store.clone() {
                 TemplateStoreConfig::S3(c) => {
                     Arc::new(template_object_store::AwsS3TemplateObjectStore::new(&c).await)
                 }

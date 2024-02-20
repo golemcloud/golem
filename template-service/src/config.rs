@@ -44,7 +44,7 @@ pub struct CloudServiceConfig {
     pub http_port: u16,
     pub grpc_port: u16,
     pub db: DbConfig,
-    pub templates: TemplatesConfig,
+    pub template_store: TemplateStoreConfig,
     pub routing_table: RoutingTableConfig,
     pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
@@ -69,7 +69,7 @@ pub struct DbPostgresConfig {
 impl CloudServiceConfig {
     pub fn new() -> Self {
         Figment::new()
-            .merge(Toml::file("config/cloud-server.toml"))
+            .merge(Toml::file("config/template-service.toml"))
             .merge(Env::prefixed("GOLEM__").split("__"))
             .extract()
             .expect("Failed to parse config")
@@ -91,12 +91,12 @@ mod tests {
         std::env::set_var("GOLEM__DB__CONFIG__PASSWORD", "postgres");
         std::env::set_var("GOLEM__ROUTING_TABLE__HOST", "localhost");
         std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
-        std::env::set_var("GOLEM__TEMPLATES__STORE__TYPE", "Local");
+        std::env::set_var("GOLEM__TEMPLATE_STORE__TYPE", "Local");
         std::env::set_var(
-            "GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH",
+            "GOLEM__TEMPLATE_STORE__CONFIG__ROOT_PATH",
             "template_store",
         );
-        std::env::set_var("GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX", "");
+        std::env::set_var("GOLEM__TEMPLATE_STORE__CONFIG__OBJECT_PREFIX", "");
         std::env::set_var("GOLEM__HTTP_PORT", "9001");
         std::env::set_var("GOLEM__GRPC_PORT", "9002");
 
