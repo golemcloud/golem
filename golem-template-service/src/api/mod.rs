@@ -14,7 +14,6 @@
 
 use crate::service::Services;
 use poem::endpoint::PrometheusExporter;
-use poem::EndpointExt;
 use poem::Route;
 use poem_openapi::OpenApiService;
 use poem_openapi::Tags;

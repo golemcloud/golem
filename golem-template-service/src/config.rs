@@ -15,7 +15,6 @@
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use golem_service_base::config::TemplateStoreConfig;
-use golem_service_base::routing_table::RoutingTableConfig;
 use serde::Deserialize;
 use std::time::Duration;
 
