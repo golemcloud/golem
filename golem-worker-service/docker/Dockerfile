@@ -13,7 +13,7 @@ ENV RUST_TARGET=aarch64-unknown-linux-gnu
 FROM platform-${TARGETARCH} AS final
 
 WORKDIR /app
-COPY /target/$RUST_TARGET/release/golem-worker-bridge ./
+COPY /target/$RUST_TARGET/release/golem-worker-service ./
 COPY /golem-worker-service/config/worker-service.toml ./config/worker-service.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
