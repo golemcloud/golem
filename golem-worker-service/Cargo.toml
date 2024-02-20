@@ -1,5 +1,5 @@
 [package]
-name = "golem-worker-bridge"
+name = "golem-worker-service"
 version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
@@ -8,7 +8,7 @@ description = "Worker Bridge acts as a bridge between external API gateways and 
 
 
 [[bin]]
-name = "golem-worker-bridge"
+name = "golem-worker-service"
 path = "src/main.rs"
 
 

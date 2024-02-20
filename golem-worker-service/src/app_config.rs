@@ -40,7 +40,7 @@ impl WorkerBridgeConfig {
 impl Default for WorkerBridgeConfig {
     fn default() -> Self {
         Figment::new()
-            .merge(Toml::file("config/worker-bridge.toml"))
+            .merge(Toml::file("config/worker-service.toml"))
             .merge(Env::prefixed("GOLEM__").split("__"))
             .extract()
             .expect("Failed to parse config")

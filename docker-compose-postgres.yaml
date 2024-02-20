@@ -63,10 +63,10 @@ services:
     depends_on:
       - postgres
 
-  golem-worker-bridge:
+  golem-worker-service:
     build:
       context: .
-      dockerfile: golem-worker-bridge/docker/Dockerfile
+      dockerfile: golem-worker-service/docker/Dockerfile
     pull_policy: always
     environment:
       - GOLEM__REDIS__HOST=redis
@@ -111,7 +111,7 @@ services:
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY="100ms"
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY="2s"
       - GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER=2
-      - GOLEM__PUBLIC_WORKER_API__HOST=golem-worker-bridge
+      - GOLEM__PUBLIC_WORKER_API__HOST=golem-worker-service
       - GOLEM__PUBLIC_WORKER_API__PORT=${WORKER_SERVICE_GRPC_PORT}
       - GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
       - GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION=us-east-1
