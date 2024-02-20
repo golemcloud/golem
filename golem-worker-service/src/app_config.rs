@@ -9,7 +9,7 @@ use uuid::Uuid;
 use golem_service_base::routing_table::RoutingTableConfig;
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct WorkerBridgeConfig {
+pub struct WorkerServiceConfig {
     pub environment: String,
     pub redis: RedisConfig,
     pub template_service: TemplateServiceConfig,
@@ -22,8 +22,6 @@ pub struct WorkerBridgeConfig {
     pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
 
-
-
 #[derive(Clone, Debug, Deserialize)]
 pub struct WorkerExecutorClientCacheConfig {
     pub max_capacity: usize,
@@ -31,13 +29,13 @@ pub struct WorkerExecutorClientCacheConfig {
     pub time_to_idle: Duration,
 }
 
-impl WorkerBridgeConfig {
+impl WorkerServiceConfig {
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"
     }
 }
 
-impl Default for WorkerBridgeConfig {
+impl Default for WorkerServiceConfig {
     fn default() -> Self {
         Figment::new()
             .merge(Toml::file("config/worker-service.toml"))
@@ -89,7 +87,7 @@ mod tests {
         );
 
         // The rest can be loaded from the toml
-        let config = super::WorkerBridgeConfig::default();
+        let config = super::WorkerServiceConfig::default();
 
         println!("config: {:?}", config);
     }

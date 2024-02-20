@@ -3,7 +3,7 @@ pub mod template;
 
 use std::sync::Arc;
 use tracing::error;
-use crate::app_config::WorkerBridgeConfig;
+use crate::app_config::WorkerServiceConfig;
 use crate::register::{RedisApiRegistry, RegisterApiDefinition};
 use crate::worker_request_to_http::{WorkerToHttpResponse, WorkerToHttpResponseDefault};
 
@@ -16,7 +16,7 @@ pub struct Services {
 }
 
 impl Services {
-    pub async fn new(config: &WorkerBridgeConfig) -> Result<Services, String> {
+    pub async fn new(config: &WorkerServiceConfig) -> Result<Services, String> {
         let template_service: Arc<dyn template::TemplateService + Sync + Send> = Arc::new(
             template::TemplateServiceDefault::new(&config.template_service)
         );

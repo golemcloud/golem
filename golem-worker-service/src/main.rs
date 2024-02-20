@@ -1,7 +1,6 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
-use golem_worker_bridge::api;
-use golem_worker_bridge::app_config::WorkerBridgeConfig;
-use golem_worker_bridge::register::{RegisterApiDefinition};
+use golem_worker_service::api;
+use golem_worker_service::app_config::WorkerServiceConfig;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProvider;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
@@ -9,9 +8,9 @@ use poem::{EndpointExt};
 use std::sync::Arc;
 use poem::listener::TcpListener;
 use prometheus::Registry;
-use golem_worker_bridge::service::Services;
-use golem_worker_bridge::grpcapi;
-use golem_worker_bridge::metrics;
+use golem_worker_service::service::Services;
+use golem_worker_service::grpcapi;
+use golem_worker_service::metrics;
 use tokio::select;
 use tonic::codegen::Body;
 
@@ -19,11 +18,11 @@ use tonic::codegen::Body;
 async fn main() -> std::io::Result<()> {
     let prometheus = metrics::register_all();
 
-    let config = WorkerBridgeConfig::default();
+    let config = WorkerServiceConfig::default();
     app(&config, prometheus).await
 }
 
-pub async fn app(worker_config: &WorkerBridgeConfig, prometheus_registry: Registry) -> std::io::Result<()> {
+pub async fn app(worker_config: &WorkerServiceConfig, prometheus_registry: Registry) -> std::io::Result<()> {
     init_tracing_metrics();
     let config = worker_config.clone();
 
