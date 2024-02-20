@@ -1,16 +1,16 @@
-use std::net::{Ipv4Addr, SocketAddrV4};
 use golem_worker_service::api;
 use golem_worker_service::app_config::WorkerServiceConfig;
-use opentelemetry::global;
-use opentelemetry_sdk::metrics::MeterProvider;
-use poem::middleware::{OpenTelemetryMetrics, Tracing};
-use poem::{EndpointExt};
-use std::sync::Arc;
-use poem::listener::TcpListener;
-use prometheus::Registry;
-use golem_worker_service::service::Services;
 use golem_worker_service::grpcapi;
 use golem_worker_service::metrics;
+use golem_worker_service::service::Services;
+use opentelemetry::global;
+use opentelemetry_sdk::metrics::MeterProvider;
+use poem::listener::TcpListener;
+use poem::middleware::{OpenTelemetryMetrics, Tracing};
+use poem::EndpointExt;
+use prometheus::Registry;
+use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::Arc;
 use tokio::select;
 use tonic::codegen::Body;
 
@@ -22,31 +22,35 @@ async fn main() -> std::io::Result<()> {
     app(&config, prometheus).await
 }
 
-pub async fn app(worker_config: &WorkerServiceConfig, prometheus_registry: Registry) -> std::io::Result<()> {
+pub async fn app(
+    worker_config: &WorkerServiceConfig,
+    prometheus_registry: Registry,
+) -> std::io::Result<()> {
     init_tracing_metrics();
     let config = worker_config.clone();
 
-    let services: Services = Services::new(&config).await.map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::Other, e)
-    })?;
+    let services: Services = Services::new(&config)
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
     let http_service1 = services.clone();
     let http_service2 = services.clone();
     let grpc_services = services.clone();
-
 
     let custom_request_server = tokio::spawn(async move {
         let route = api::custom_request_route(http_service1)
             .with(OpenTelemetryMetrics::new())
             .with(Tracing);
 
-        poem::Server::new(poem::listener::TcpListener::bind(("0.0.0.0", config.custom_request_port)))
-            .name("gateway")
-            .run(route)
-            .await
-            .expect("Custom Request server failed")
+        poem::Server::new(poem::listener::TcpListener::bind((
+            "0.0.0.0",
+            config.custom_request_port,
+        )))
+        .name("gateway")
+        .run(route)
+        .await
+        .expect("Custom Request server failed")
     });
-
 
     let worker_server = tokio::spawn(async move {
         let prometheus_registry = Arc::new(prometheus_registry);
@@ -65,8 +69,8 @@ pub async fn app(worker_config: &WorkerServiceConfig, prometheus_registry: Regis
             SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), config.worker_grpc_port).into(),
             &grpc_services,
         )
-            .await
-            .expect("gRPC server failed");
+        .await
+        .expect("gRPC server failed");
     });
 
     select! {

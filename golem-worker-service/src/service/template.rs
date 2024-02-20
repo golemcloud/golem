@@ -1,30 +1,30 @@
 use std::fmt::Display;
 
+use crate::app_config::TemplateServiceConfig;
+use crate::UriBackConversion;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
-use golem_api_grpc::proto::golem::template::{get_latest_template_version_response, get_versioned_template_response, GetLatestTemplateVersionRequest, GetVersionedTemplateRequest};
+use golem_api_grpc::proto::golem::template::{
+    get_latest_template_version_response, get_versioned_template_response,
+    GetLatestTemplateVersionRequest, GetVersionedTemplateRequest,
+};
 use golem_common::config::RetryConfig;
 use golem_common::model::TemplateId;
 use golem_common::retries::with_retries;
+use golem_service_base::model::Template;
 use http::Uri;
 use tonic::Status;
 use tracing::info;
-use golem_service_base::model::Template;
-use crate::app_config::TemplateServiceConfig;
-use crate::UriBackConversion;
 
 #[async_trait]
 pub trait TemplateService {
     async fn get_by_version(
         &self,
         template_id: &TemplateId,
-        version: i32
+        version: i32,
     ) -> Result<Option<Template>, TemplateError>;
 
-    async fn get_latest_version(
-        &self,
-        template_id: &TemplateId
-    ) ->  Result<i32, TemplateError>;
+    async fn get_latest_version(&self, template_id: &TemplateId) -> Result<i32, TemplateError>;
 }
 
 #[derive(Clone)]
@@ -60,26 +60,30 @@ impl TemplateService for TemplateServiceDefault {
                         template_id: Some(id.clone().into()),
                     };
 
-                    let response = client.get_latest_template_version(request).await?.into_inner();
+                    let response = client
+                        .get_latest_template_version(request)
+                        .await?
+                        .into_inner();
 
                     match response.result {
                         None => Err("Empty response".to_string().into()),
                         Some(get_latest_template_version_response::Result::Success(response)) => {
                             Ok(response)
                         }
-                        Some(get_latest_template_version_response::Result::Error(error)) => Err(error.into()),
+                        Some(get_latest_template_version_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
                     }
                 })
             },
             TemplateError::is_retriable,
         )
-            .await
-
+        .await
     }
     async fn get_by_version(
         &self,
         template_id: &TemplateId,
-        version: i32
+        version: i32,
     ) -> Result<Option<Template>, TemplateError> {
         let desc = format!("Getting template: {}", template_id);
         info!("{}", &desc);
@@ -102,7 +106,10 @@ impl TemplateService for TemplateServiceDefault {
                     match response.result {
                         None => Err("Empty response".to_string().into()),
                         Some(get_versioned_template_response::Result::Success(response)) => {
-                            let template_view: Result<Option<golem_service_base::model::Template>, TemplateError> = match response.template {
+                            let template_view: Result<
+                                Option<golem_service_base::model::Template>,
+                                TemplateError,
+                            > = match response.template {
                                 Some(template) => {
                                     let template: golem_service_base::model::Template =
                                         template.clone().try_into().unwrap();
@@ -112,13 +119,15 @@ impl TemplateService for TemplateServiceDefault {
                             };
                             Ok(template_view?)
                         }
-                        Some(get_versioned_template_response::Result::Error(error)) => Err(error.into()),
+                        Some(get_versioned_template_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
                     }
                 })
             },
             TemplateError::is_retriable,
         )
-            .await
+        .await
     }
 }
 
@@ -179,8 +188,8 @@ impl Display for TemplateError {
                     write!(f, "Internal server error: {}", error.error)
                 }
                 Some(golem_api_grpc::proto::golem::template::template_error::Error::NotFound(
-                         error,
-                     )) => {
+                    error,
+                )) => {
                     write!(f, "Template not found: {}", error.error)
                 }
                 Some(

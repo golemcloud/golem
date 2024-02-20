@@ -1,25 +1,28 @@
 use std::collections::HashMap;
 use std::error::Error;
 
-use async_trait::async_trait;
-use http::{HeaderMap, StatusCode};
-use poem::{Body, Response, ResponseParts};
-use serde_json::{json, Value};
-use tracing::info;
-use golem_common::model::CallingConvention;
-use golem_service_base::model::WorkerId;
 use crate::api_definition::ResponseMapping;
 use crate::evaluator::{EvaluationError, Evaluator};
 use crate::expr::Expr;
 use crate::resolved_variables::ResolvedVariables;
+use async_trait::async_trait;
+use golem_common::model::CallingConvention;
+use golem_service_base::model::WorkerId;
+use http::{HeaderMap, StatusCode};
+use poem::{Body, Response, ResponseParts};
+use serde_json::{json, Value};
+use tracing::info;
 
 use crate::service::worker::{WorkerService, WorkerServiceDefault};
 use crate::worker_request::ResolvedRouteAsWorkerRequest;
 
-
 #[async_trait]
 pub trait WorkerToHttpResponse {
-    async fn execute(&self, resolved_worker_request: ResolvedRouteAsWorkerRequest, response_mapping: &Option<ResponseMapping>,) -> Response;
+    async fn execute(
+        &self,
+        resolved_worker_request: ResolvedRouteAsWorkerRequest,
+        response_mapping: &Option<ResponseMapping>,
+    ) -> Response;
 }
 
 pub struct WorkerToHttpResponseDefault {
@@ -27,10 +30,8 @@ pub struct WorkerToHttpResponseDefault {
 }
 
 impl WorkerToHttpResponseDefault {
-   pub fn new(worker_service: WorkerServiceDefault) -> Self {
-        Self {
-            worker_service
-        }
+    pub fn new(worker_service: WorkerServiceDefault) -> Self {
+        Self { worker_service }
     }
 }
 
@@ -42,12 +43,16 @@ impl WorkerToHttpResponse for WorkerToHttpResponseDefault {
         response_mapping: &Option<ResponseMapping>,
     ) -> Response {
         match execute(self, worker_request_params.clone()).await {
-            Ok(worker_response) => worker_response.to_http_response(response_mapping, &worker_request_params.resolved_route.resolved_variables),
-            Err(e) => {
-                Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from_string(format!("Error when executing resolved worker request. Error: {}", e)))
-            }
+            Ok(worker_response) => worker_response.to_http_response(
+                response_mapping,
+                &worker_request_params.resolved_route.resolved_variables,
+            ),
+            Err(e) => Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string(format!(
+                    "Error when executing resolved worker request. Error: {}",
+                    e
+                ))),
         }
     }
 }
@@ -63,9 +68,11 @@ async fn execute(
     let worker_id = WorkerId::new(template_id.clone(), worker_name.clone())?;
 
     info!(
-            "Executing request for template: {}, worker: {}, function: {}",
-            template_id, worker_name.clone(), worker_request_params.function
-        );
+        "Executing request for template: {}, worker: {}, function: {}",
+        template_id,
+        worker_name.clone(),
+        worker_request_params.function
+    );
 
     let invocation_key = default_executor
         .worker_service
@@ -102,14 +109,21 @@ struct WorkerResponse {
 }
 
 impl WorkerResponse {
-    pub fn to_http_response(&self, response_mapping: &Option<ResponseMapping>, resolved_variables_from_request: &ResolvedVariables) -> Response {
+    pub fn to_http_response(
+        &self,
+        response_mapping: &Option<ResponseMapping>,
+        resolved_variables_from_request: &ResolvedVariables,
+    ) -> Response {
         if let Some(mapping) = response_mapping {
             match &self.to_intermediate_http_response(mapping, resolved_variables_from_request) {
                 Ok(intermediate_response) => intermediate_response.to_http_response(),
                 Err(e) => {
                     Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .body(Body::from_string(format!("Error when  converting worker response to http response. Error: {}", e)))
+                        .body(Body::from_string(format!(
+                            "Error when  converting worker response to http response. Error: {}",
+                            e
+                        )))
                 }
             }
         } else {
@@ -151,10 +165,9 @@ pub struct IntermediateHttpResponse {
 
 impl IntermediateHttpResponse {
     fn to_http_response(&self) -> Response {
-        let headers: Result<HeaderMap, String> =
-            (&self.headers.to_string_map())
-                .try_into()
-                .map_err(|e: hyper::http::Error| e.to_string());
+        let headers: Result<HeaderMap, String> = (&self.headers.to_string_map())
+            .try_into()
+            .map_err(|e: hyper::http::Error| e.to_string());
 
         let status = &self.status;
         let body = &self.body;
@@ -181,7 +194,6 @@ impl IntermediateHttpResponse {
         }
     }
 }
-
 
 #[derive(Default)]
 pub struct ResolvedResponseHeaders {
@@ -267,7 +279,10 @@ impl WorkerToHttpResponse for NoOpWorkerRequestExecutor {
             result: sample_json_data,
         };
 
-        worker_response.to_http_response(response_mapping, &worker_request_params.resolved_route.resolved_variables)
+        worker_response.to_http_response(
+            response_mapping,
+            &worker_request_params.resolved_route.resolved_variables,
+        )
     }
 }
 
@@ -303,4 +318,3 @@ fn get_status_code(
         status_u16, e
     )))
 }
-

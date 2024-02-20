@@ -14,8 +14,8 @@
 
 use crate::service::Services;
 use poem::endpoint::PrometheusExporter;
+use poem::EndpointExt;
 use poem::Route;
-use poem::{EndpointExt};
 use poem_openapi::OpenApiService;
 use poem_openapi::Tags;
 use prometheus::Registry;
@@ -46,10 +46,7 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
         .nest("/metrics", metrics)
 }
 
-type ApiServices = (
-    template::TemplateApi,
-    healthcheck::HealthcheckApi,
-);
+type ApiServices = (template::TemplateApi, healthcheck::HealthcheckApi);
 
 pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices, ()> {
     OpenApiService::new(

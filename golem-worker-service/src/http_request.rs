@@ -87,9 +87,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(
-            &resolved_route,
-        );
+        let result = ResolvedRouteAsWorkerRequest::from_resolved_route(&resolved_route);
 
         let expected = ResolvedRouteAsWorkerRequest {
             resolved_route,

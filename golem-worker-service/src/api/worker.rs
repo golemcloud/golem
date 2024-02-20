@@ -15,17 +15,17 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use golem_service_base::api_tags::ApiTags;
 use golem_common::model::{CallingConvention, InvocationKey, TemplateId};
+use golem_service_base::api_tags::ApiTags;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tap::TapFallible;
 use tonic::Status;
 
+use crate::service::template::{TemplateError, TemplateService};
 use crate::service::worker::WorkerService;
 use golem_service_base::model::*;
-use crate::service::template::{TemplateError, TemplateService};
 
 pub struct WorkerApi {
     pub template_service: Arc<dyn TemplateService + Sync + Send>,
@@ -54,22 +54,21 @@ impl WorkerApi {
             .get_latest_version(&template_id)
             .await
             .tap_err(|error| tracing::error!("Error getting latest template version: {:?}", error))
-            .map_err(|error| WorkerError::NotFound(Json(ErrorBody {
-                error: format!("Couldn't retrieve the template not found: {}. error: {}", &template_id, error),
-            })))?;
-
+            .map_err(|error| {
+                WorkerError::NotFound(Json(ErrorBody {
+                    error: format!(
+                        "Couldn't retrieve the template not found: {}. error: {}",
+                        &template_id, error
+                    ),
+                }))
+            })?;
 
         let WorkerCreationRequest { name, args, env } = request.0;
 
         let worker_id = make_worker_id(template_id, name)?;
         let worker = self
             .worker_service
-            .create(
-                &worker_id,
-                latest_template,
-                args,
-                env,
-            )
+            .create(&worker_id, latest_template, args, env)
             .await?;
 
         Ok(Json(worker))
@@ -102,8 +101,8 @@ impl WorkerApi {
     }
 
     #[oai(
-    path = "/:template_id/workers/:worker_name/invoke-and-await",
-    method = "post"
+        path = "/:template_id/workers/:worker_name/invoke-and-await",
+        method = "post"
     )]
     async fn invoke_and_await_function(
         &self,

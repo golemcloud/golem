@@ -18,7 +18,7 @@ use golem_service_base::config::TemplateStoreConfig;
 use golem_service_base::service::template_object_store;
 use std::sync::Arc;
 
-use crate::config::{TemplateServiceConfig, DbConfig};
+use crate::config::{DbConfig, TemplateServiceConfig};
 use crate::db;
 use crate::repo::template::{DbTemplateRepo, TemplateRepo};
 
@@ -58,17 +58,13 @@ impl Services {
             template::TemplateServiceDefault::new(template_repo.clone(), object_store.clone()),
         );
 
-        Ok(Services {
-            template_service,
-        })
+        Ok(Services { template_service })
     }
 
     pub fn noop() -> Self {
         let template_service: Arc<dyn template::TemplateService + Sync + Send> =
             Arc::new(template::TemplateServiceNoOp::default());
 
-        Services {
-            template_service,
-        }
+        Services { template_service }
     }
 }

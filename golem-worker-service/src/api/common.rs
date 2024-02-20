@@ -81,9 +81,11 @@ impl ApiEndpointError {
     }
 
     pub fn bad_request<T: Display>(error: T) -> Self {
-        Self::BadRequest(Json(WorkerServiceErrorsBody::Messages(MessagesErrorsBody {
-            errors: vec![error.to_string()],
-        })))
+        Self::BadRequest(Json(WorkerServiceErrorsBody::Messages(
+            MessagesErrorsBody {
+                errors: vec![error.to_string()],
+            },
+        )))
     }
 
     pub fn not_found<T: Display>(error: T) -> Self {

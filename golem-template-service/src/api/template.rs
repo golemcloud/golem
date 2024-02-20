@@ -25,7 +25,6 @@ use poem_openapi::payload::{Binary, Json};
 use poem_openapi::types::multipart::Upload;
 use poem_openapi::*;
 
-
 #[derive(ApiResponse)]
 pub enum TemplateError {
     #[oai(status = 400)]
@@ -177,5 +176,4 @@ impl TemplateApi {
 
         Ok(Json(response))
     }
-
 }

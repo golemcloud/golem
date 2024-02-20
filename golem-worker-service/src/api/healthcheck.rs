@@ -1,7 +1,6 @@
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 
-
 use golem_service_base::api_tags::ApiTags;
 
 pub struct HealthcheckApi;
@@ -9,12 +8,12 @@ pub struct HealthcheckApi;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(
-Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
+    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
 )]
 pub struct HealthcheckResponse {}
 
 #[derive(
-Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
+    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
 )]
 pub struct VersionInfo {
     pub version: String,

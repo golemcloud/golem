@@ -1,11 +1,11 @@
-pub mod worker;
 pub mod template;
+pub mod worker;
 
-use std::sync::Arc;
-use tracing::error;
 use crate::app_config::WorkerServiceConfig;
 use crate::register::{RedisApiRegistry, RegisterApiDefinition};
 use crate::worker_request_to_http::{WorkerToHttpResponse, WorkerToHttpResponseDefault};
+use std::sync::Arc;
+use tracing::error;
 
 #[derive(Clone)]
 pub struct Services {
@@ -18,7 +18,7 @@ pub struct Services {
 impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> Result<Services, String> {
         let template_service: Arc<dyn template::TemplateService + Sync + Send> = Arc::new(
-            template::TemplateServiceDefault::new(&config.template_service)
+            template::TemplateServiceDefault::new(&config.template_service),
         );
 
         let routing_table_service: Arc<
@@ -52,19 +52,19 @@ impl Services {
                 format!("RedisApiRegistry - init error: {}", e.to_string())
             })?);
 
-        let worker_to_http_service: Arc<dyn WorkerToHttpResponse + Sync + Send> =
-            Arc::new(WorkerToHttpResponseDefault::new(worker::WorkerServiceDefault::new(
+        let worker_to_http_service: Arc<dyn WorkerToHttpResponse + Sync + Send> = Arc::new(
+            WorkerToHttpResponseDefault::new(worker::WorkerServiceDefault::new(
                 worker_executor_grpc_clients.clone(),
                 template_service.clone(),
                 routing_table_service.clone(),
-            )));
+            )),
+        );
 
         Ok(Services {
             worker_service,
             definition_service,
             worker_to_http_service,
-            template_service
+            template_service,
         })
     }
 }
-

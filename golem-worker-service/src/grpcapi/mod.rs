@@ -1,4 +1,3 @@
-
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerServiceServer;
 use std::net::SocketAddr;

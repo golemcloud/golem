@@ -1,16 +1,16 @@
 pub mod api_definition_endpoints;
 pub mod common;
 pub mod custom_request_endpoint;
+pub mod healthcheck;
 pub mod worker;
 pub mod worker_connect;
-pub mod healthcheck;
 
-use std::sync::Arc;
 use poem::endpoint::PrometheusExporter;
-use poem::{EndpointExt, get, Route};
+use poem::{get, EndpointExt, Route};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use crate::service::Services;
 
@@ -56,11 +56,12 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
                 template_service: services.template_service.clone(),
                 worker_service: services.worker_service.clone(),
             },
-            api_definition_endpoints::RegisterApiDefinitionApi::new(services.definition_service.clone()),
+            api_definition_endpoints::RegisterApiDefinitionApi::new(
+                services.definition_service.clone(),
+            ),
             healthcheck::HealthcheckApi,
         ),
         "Golem API",
         "2.0",
     )
 }
-

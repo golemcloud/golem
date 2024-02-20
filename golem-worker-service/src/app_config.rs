@@ -1,12 +1,12 @@
-use std::time::Duration;
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use golem_common::config::{RedisConfig, RetryConfig};
+use golem_service_base::routing_table::RoutingTableConfig;
 use http::Uri;
 use serde::Deserialize;
+use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
-use golem_service_base::routing_table::RoutingTableConfig;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct WorkerServiceConfig {

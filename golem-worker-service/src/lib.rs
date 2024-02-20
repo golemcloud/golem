@@ -4,17 +4,17 @@ pub mod api_request_route_resolver;
 pub mod app_config;
 pub mod evaluator;
 pub mod expr;
+pub mod grpcapi;
 mod http_request;
 pub mod oas_worker_bridge;
 pub mod parser;
 pub mod register;
 pub mod resolved_variables;
+pub mod service;
 pub mod tokeniser;
 pub mod value_typed;
 pub mod worker_request;
 pub mod worker_request_to_http;
-pub mod service;
-pub mod grpcapi;
 
 pub mod metrics;
 

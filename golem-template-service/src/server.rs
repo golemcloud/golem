@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_template_service::config::{TemplateServiceConfig, DbConfig};
+use golem_template_service::config::{DbConfig, TemplateServiceConfig};
 use golem_template_service::service::Services;
 use golem_template_service::{api, db, grpcapi, metrics};
 use opentelemetry::global;

@@ -27,7 +27,6 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
         .set_serving::<TemplateServiceServer<TemplateGrpcApi>>()
         .await;
 
-
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
         .build()
