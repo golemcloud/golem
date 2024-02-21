@@ -1,0 +1,1628 @@
+openapi: 3.0.0
+info:
+  title: Golem API
+  version: '2.0'
+servers: []
+tags:
+- name: ApiCertificate
+- name: ApiDefinition
+- name: ApiDeployment
+- name: ApiDomain
+- name: HealthCheck
+- name: Healthcheck
+- name: Template
+- name: Worker
+paths:
+  /v2/templates/workers/{worker_id}:
+    get:
+      tags:
+      - Worker
+      parameters:
+      - name: worker_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/VersionedWorkerId'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+  /v2/templates/{template_id}/workers:
+    post:
+      tags:
+      - Worker
+      parameters:
+      - name: template_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/WorkerCreationRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/VersionedWorkerId'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+  /v2/templates/{template_id}/workers/{worker_name}:
+    delete:
+      tags:
+      - Worker
+      parameters:
+      - name: template_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: worker_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeleteWorkerResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+    get:
+      tags:
+      - Worker
+      parameters:
+      - name: template_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: worker_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerMetadata'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+  /v2/templates/{template_id}/workers/{worker_name}/key:
+    post:
+      tags:
+      - Worker
+      parameters:
+      - name: template_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: worker_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvocationKey'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+  /v2/templates/{template_id}/workers/{worker_name}/invoke-and-await:
+    post:
+      tags:
+      - Worker
+      parameters:
+      - name: template_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: worker_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: invocation-key
+        schema:
+          type: string
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      - name: function
+        schema:
+          type: string
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      - name: calling-convention
+        schema:
+          $ref: '#/components/schemas/CallingConvention'
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/InvokeParameters'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvokeResult'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+  /v2/templates/{template_id}/workers/{worker_name}/invoke:
+    post:
+      tags:
+      - Worker
+      parameters:
+      - name: template_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: worker_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: function
+        schema:
+          type: string
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/InvokeParameters'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvokeResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+  /v2/templates/{template_id}/workers/{worker_name}/complete:
+    post:
+      tags:
+      - Worker
+      parameters:
+      - name: template_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: worker_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/CompleteParameters'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: boolean
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+  /v2/templates/{template_id}/workers/{worker_name}/interrupt:
+    post:
+      tags:
+      - Worker
+      parameters:
+      - name: template_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: worker_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: recovery-immediately
+        schema:
+          type: boolean
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InterruptResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+  /v2/templates/{template_id}/workers/{worker_name}/resume:
+    post:
+      tags:
+      - Worker
+      parameters:
+      - name: template_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: worker_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ResumeResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+  /v1/api/definitions/oas:
+    put:
+      tags:
+      - ApiDefinition
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+  /v1/api/definitions:
+    put:
+      tags:
+      - ApiDefinition
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ApiDefinition'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+    get:
+      tags:
+      - ApiDefinition
+      parameters:
+      - name: api-definition-id
+        schema:
+          type: string
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+    delete:
+      tags:
+      - ApiDefinition
+      parameters:
+      - name: api-definition-id
+        schema:
+          type: string
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+  /v1/api/definitions/all:
+    get:
+      tags:
+      - ApiDefinition
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+  /healthcheck:
+    get:
+      tags:
+      - HealthCheck
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HealthcheckResponse'
+  /version:
+    get:
+      tags:
+      - HealthCheck
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/VersionInfo'
+components:
+  schemas:
+    ApiDefinition:
+      type: object
+      required:
+      - id
+      - version
+      - routes
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Route'
+    CallingConvention:
+      type: string
+      enum:
+      - Component
+      - Stdio
+      - StdioEventloop
+    CompleteParameters:
+      type: object
+      required:
+      - oplogIdx
+      - data
+      properties:
+        oplogIdx:
+          type: integer
+          format: int32
+        data:
+          type: array
+          items:
+            type: integer
+            format: uint8
+    DeleteWorkerResponse:
+      type: object
+    ErrorBody:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: string
+    ErrorsBody:
+      type: object
+      required:
+      - errors
+      properties:
+        errors:
+          type: array
+          items:
+            type: string
+    GolemError:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
+      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerAlreadyExists'
+      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerNotFound'
+      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerCreationFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorFailedToResumeWorker'
+      - $ref: '#/components/schemas/GolemError_GolemErrorTemplateDownloadFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorTemplateParseFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorGetLatestVersionOfTemplateFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseNotFound'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseDropped'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseAlreadyCompleted'
+      - $ref: '#/components/schemas/GolemError_GolemErrorInterrupted'
+      - $ref: '#/components/schemas/GolemError_GolemErrorParamTypeMismatch'
+      - $ref: '#/components/schemas/GolemError_GolemErrorNoValueInMessage'
+      - $ref: '#/components/schemas/GolemError_GolemErrorValueMismatch'
+      - $ref: '#/components/schemas/GolemError_GolemErrorUnexpectedOplogEntry'
+      - $ref: '#/components/schemas/GolemError_GolemErrorRuntimeError'
+      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidShardId'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationExited'
+      - $ref: '#/components/schemas/GolemError_GolemErrorUnknown'
+      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
+      discriminator:
+        propertyName: type
+        mapping:
+          InvalidRequest: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
+          WorkerAlreadyExists: '#/components/schemas/GolemError_GolemErrorWorkerAlreadyExists'
+          WorkerNotFound: '#/components/schemas/GolemError_GolemErrorWorkerNotFound'
+          WorkerCreationFailed: '#/components/schemas/GolemError_GolemErrorWorkerCreationFailed'
+          FailedToResumeWorker: '#/components/schemas/GolemError_GolemErrorFailedToResumeWorker'
+          TemplateDownloadFailed: '#/components/schemas/GolemError_GolemErrorTemplateDownloadFailed'
+          TemplateParseFailed: '#/components/schemas/GolemError_GolemErrorTemplateParseFailed'
+          GetLatestVersionOfTemplateFailed: '#/components/schemas/GolemError_GolemErrorGetLatestVersionOfTemplateFailed'
+          PromiseNotFound: '#/components/schemas/GolemError_GolemErrorPromiseNotFound'
+          PromiseDropped: '#/components/schemas/GolemError_GolemErrorPromiseDropped'
+          PromiseAlreadyCompleted: '#/components/schemas/GolemError_GolemErrorPromiseAlreadyCompleted'
+          Interrupted: '#/components/schemas/GolemError_GolemErrorInterrupted'
+          ParamTypeMismatch: '#/components/schemas/GolemError_GolemErrorParamTypeMismatch'
+          NoValueInMessage: '#/components/schemas/GolemError_GolemErrorNoValueInMessage'
+          ValueMismatch: '#/components/schemas/GolemError_GolemErrorValueMismatch'
+          UnexpectedOplogEntry: '#/components/schemas/GolemError_GolemErrorUnexpectedOplogEntry'
+          RuntimeError: '#/components/schemas/GolemError_GolemErrorRuntimeError'
+          InvalidShardId: '#/components/schemas/GolemError_GolemErrorInvalidShardId'
+          PreviousInvocationFailed: '#/components/schemas/GolemError_GolemErrorPreviousInvocationFailed'
+          PreviousInvocationExited: '#/components/schemas/GolemError_GolemErrorPreviousInvocationExited'
+          Unknown: '#/components/schemas/GolemError_GolemErrorUnknown'
+          InvalidAccount: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
+    GolemErrorBody:
+      type: object
+      required:
+      - golemError
+      properties:
+        golemError:
+          $ref: '#/components/schemas/GolemError'
+    GolemErrorFailedToResumeWorker:
+      type: object
+      required:
+      - workerId
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+    GolemErrorGetLatestVersionOfTemplateFailed:
+      type: object
+      required:
+      - templateId
+      - reason
+      properties:
+        templateId:
+          type: string
+          format: uuid
+        reason:
+          type: string
+    GolemErrorInterrupted:
+      type: object
+      required:
+      - recoverImmediately
+      properties:
+        recoverImmediately:
+          type: boolean
+    GolemErrorInvalidAccount:
+      type: object
+    GolemErrorInvalidRequest:
+      type: object
+      required:
+      - details
+      properties:
+        details:
+          type: string
+    GolemErrorInvalidShardId:
+      type: object
+      required:
+      - shardId
+      - shardIds
+      properties:
+        shardId:
+          $ref: '#/components/schemas/ShardId'
+        shardIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShardId'
+    GolemErrorNoValueInMessage:
+      type: object
+    GolemErrorParamTypeMismatch:
+      type: object
+    GolemErrorPreviousInvocationExited:
+      type: object
+    GolemErrorPreviousInvocationFailed:
+      type: object
+    GolemErrorPromiseAlreadyCompleted:
+      type: object
+      required:
+      - promiseId
+      properties:
+        promiseId:
+          $ref: '#/components/schemas/PromiseId'
+    GolemErrorPromiseDropped:
+      type: object
+      required:
+      - promiseId
+      properties:
+        promiseId:
+          $ref: '#/components/schemas/PromiseId'
+    GolemErrorPromiseNotFound:
+      type: object
+      required:
+      - promiseId
+      properties:
+        promiseId:
+          $ref: '#/components/schemas/PromiseId'
+    GolemErrorRuntimeError:
+      type: object
+      required:
+      - details
+      properties:
+        details:
+          type: string
+    GolemErrorTemplateDownloadFailed:
+      type: object
+      required:
+      - templateId
+      - reason
+      properties:
+        templateId:
+          $ref: '#/components/schemas/VersionedTemplateId'
+        reason:
+          type: string
+    GolemErrorTemplateParseFailed:
+      type: object
+      required:
+      - templateId
+      - reason
+      properties:
+        templateId:
+          $ref: '#/components/schemas/VersionedTemplateId'
+        reason:
+          type: string
+    GolemErrorUnexpectedOplogEntry:
+      type: object
+      required:
+      - expected
+      - got
+      properties:
+        expected:
+          type: string
+        got:
+          type: string
+    GolemErrorUnknown:
+      type: object
+      required:
+      - details
+      properties:
+        details:
+          type: string
+    GolemErrorValueMismatch:
+      type: object
+      required:
+      - details
+      properties:
+        details:
+          type: string
+    GolemErrorWorkerAlreadyExists:
+      type: object
+      required:
+      - workerId
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+    GolemErrorWorkerCreationFailed:
+      type: object
+      required:
+      - workerId
+      - details
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        details:
+          type: string
+    GolemErrorWorkerNotFound:
+      type: object
+      required:
+      - workerId
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+    GolemError_GolemErrorFailedToResumeWorker:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: FailedToResumeWorker
+      - $ref: '#/components/schemas/GolemErrorFailedToResumeWorker'
+    GolemError_GolemErrorGetLatestVersionOfTemplateFailed:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: GetLatestVersionOfTemplateFailed
+      - $ref: '#/components/schemas/GolemErrorGetLatestVersionOfTemplateFailed'
+    GolemError_GolemErrorInterrupted:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: Interrupted
+      - $ref: '#/components/schemas/GolemErrorInterrupted'
+    GolemError_GolemErrorInvalidAccount:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: InvalidAccount
+      - $ref: '#/components/schemas/GolemErrorInvalidAccount'
+    GolemError_GolemErrorInvalidRequest:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: InvalidRequest
+      - $ref: '#/components/schemas/GolemErrorInvalidRequest'
+    GolemError_GolemErrorInvalidShardId:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: InvalidShardId
+      - $ref: '#/components/schemas/GolemErrorInvalidShardId'
+    GolemError_GolemErrorNoValueInMessage:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: NoValueInMessage
+      - $ref: '#/components/schemas/GolemErrorNoValueInMessage'
+    GolemError_GolemErrorParamTypeMismatch:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: ParamTypeMismatch
+      - $ref: '#/components/schemas/GolemErrorParamTypeMismatch'
+    GolemError_GolemErrorPreviousInvocationExited:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: PreviousInvocationExited
+      - $ref: '#/components/schemas/GolemErrorPreviousInvocationExited'
+    GolemError_GolemErrorPreviousInvocationFailed:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: PreviousInvocationFailed
+      - $ref: '#/components/schemas/GolemErrorPreviousInvocationFailed'
+    GolemError_GolemErrorPromiseAlreadyCompleted:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: PromiseAlreadyCompleted
+      - $ref: '#/components/schemas/GolemErrorPromiseAlreadyCompleted'
+    GolemError_GolemErrorPromiseDropped:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: PromiseDropped
+      - $ref: '#/components/schemas/GolemErrorPromiseDropped'
+    GolemError_GolemErrorPromiseNotFound:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: PromiseNotFound
+      - $ref: '#/components/schemas/GolemErrorPromiseNotFound'
+    GolemError_GolemErrorRuntimeError:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: RuntimeError
+      - $ref: '#/components/schemas/GolemErrorRuntimeError'
+    GolemError_GolemErrorTemplateDownloadFailed:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: TemplateDownloadFailed
+      - $ref: '#/components/schemas/GolemErrorTemplateDownloadFailed'
+    GolemError_GolemErrorTemplateParseFailed:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: TemplateParseFailed
+      - $ref: '#/components/schemas/GolemErrorTemplateParseFailed'
+    GolemError_GolemErrorUnexpectedOplogEntry:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: UnexpectedOplogEntry
+      - $ref: '#/components/schemas/GolemErrorUnexpectedOplogEntry'
+    GolemError_GolemErrorUnknown:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: Unknown
+      - $ref: '#/components/schemas/GolemErrorUnknown'
+    GolemError_GolemErrorValueMismatch:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: ValueMismatch
+      - $ref: '#/components/schemas/GolemErrorValueMismatch'
+    GolemError_GolemErrorWorkerAlreadyExists:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: WorkerAlreadyExists
+      - $ref: '#/components/schemas/GolemErrorWorkerAlreadyExists'
+    GolemError_GolemErrorWorkerCreationFailed:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: WorkerCreationFailed
+      - $ref: '#/components/schemas/GolemErrorWorkerCreationFailed'
+    GolemError_GolemErrorWorkerNotFound:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: WorkerNotFound
+      - $ref: '#/components/schemas/GolemErrorWorkerNotFound'
+    GolemWorkerBinding:
+      type: object
+      required:
+      - template
+      - workerId
+      - functionName
+      - functionParams
+      properties:
+        template:
+          type: string
+          format: uuid
+        workerId: {}
+        functionName:
+          type: string
+        functionParams:
+          type: array
+          items: {}
+        response:
+          $ref: '#/components/schemas/ResponseMapping'
+    HealthcheckResponse:
+      type: object
+    InterruptResponse:
+      type: object
+    InvocationKey:
+      type: object
+      required:
+      - value
+      properties:
+        value:
+          type: string
+    InvokeParameters:
+      type: object
+      required:
+      - params
+      properties:
+        params: {}
+    InvokeResponse:
+      type: object
+    InvokeResult:
+      type: object
+      required:
+      - result
+      properties:
+        result: {}
+    MessageBody:
+      type: object
+      required:
+      - message
+      properties:
+        message:
+          type: string
+    MessagesErrorsBody:
+      type: object
+      required:
+      - errors
+      properties:
+        errors:
+          type: array
+          items:
+            type: string
+    MethodPattern:
+      type: string
+      enum:
+      - Get
+      - Connect
+      - Post
+      - Delete
+      - Put
+      - Patch
+      - Options
+      - Trace
+      - Head
+    PromiseId:
+      type: object
+      required:
+      - workerId
+      - oplogIdx
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        oplogIdx:
+          type: integer
+          format: int32
+    ResponseMapping:
+      type: object
+      required:
+      - body
+      - status
+      - headers
+      properties:
+        body: {}
+        status: {}
+        headers:
+          type: object
+          additionalProperties: {}
+    ResumeResponse:
+      type: object
+    Route:
+      type: object
+      required:
+      - method
+      - path
+      - binding
+      properties:
+        method:
+          $ref: '#/components/schemas/MethodPattern'
+        path:
+          type: string
+        binding:
+          $ref: '#/components/schemas/GolemWorkerBinding'
+    RouteValidationError:
+      type: object
+      required:
+      - method
+      - path
+      - template
+      - detail
+      properties:
+        method:
+          $ref: '#/components/schemas/MethodPattern'
+        path:
+          type: string
+        template:
+          type: string
+          format: uuid
+        detail:
+          type: string
+    ShardId:
+      type: object
+      required:
+      - value
+      properties:
+        value:
+          type: integer
+          format: int64
+    ValidationErrorsBody:
+      type: object
+      required:
+      - errors
+      properties:
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteValidationError'
+    VersionInfo:
+      type: object
+      required:
+      - version
+      properties:
+        version:
+          type: string
+    VersionedTemplateId:
+      type: object
+      required:
+      - templateId
+      - version
+      properties:
+        templateId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int32
+    VersionedWorkerId:
+      type: object
+      required:
+      - workerId
+      - templateVersionUsed
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        templateVersionUsed:
+          type: integer
+          format: int32
+    WorkerCreationRequest:
+      type: object
+      required:
+      - name
+      - args
+      - env
+      properties:
+        name:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+    WorkerId:
+      type: object
+      required:
+      - templateId
+      - workerName
+      properties:
+        templateId:
+          type: string
+          format: uuid
+        workerName:
+          type: string
+    WorkerMetadata:
+      type: object
+      required:
+      - workerId
+      - args
+      - env
+      - status
+      - templateVersion
+      - retryCount
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        status:
+          $ref: '#/components/schemas/WorkerStatus'
+        templateVersion:
+          type: integer
+          format: int32
+        retryCount:
+          type: integer
+          format: int32
+    WorkerServiceErrorBody:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: string
+    WorkerServiceErrorsBody:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/WorkerServiceErrorsBody_MessagesErrorsBody'
+      - $ref: '#/components/schemas/WorkerServiceErrorsBody_ValidationErrorsBody'
+      discriminator:
+        propertyName: type
+        mapping:
+          Messages: '#/components/schemas/WorkerServiceErrorsBody_MessagesErrorsBody'
+          Validation: '#/components/schemas/WorkerServiceErrorsBody_ValidationErrorsBody'
+    WorkerServiceErrorsBody_MessagesErrorsBody:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: Messages
+      - $ref: '#/components/schemas/MessagesErrorsBody'
+    WorkerServiceErrorsBody_ValidationErrorsBody:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: Validation
+      - $ref: '#/components/schemas/ValidationErrorsBody'
+    WorkerStatus:
+      type: string
+      description: |-
+        Represents last known status of a worker
+
+        This is always recorded together with the current oplog index, and it can only be used
+        as a source of truth if there are no newer oplog entries since the record.
+      enum:
+      - Running
+      - Idle
+      - Suspended
+      - Interrupted
+      - Retrying
+      - Failed
+      - Exited
+
