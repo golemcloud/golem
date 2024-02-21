@@ -20,7 +20,8 @@ use quote::quote;
 use std::fs;
 use wit_bindgen_rust::to_rust_ident;
 use wit_parser::{
-    Enum, Flags, Record, Resolve, Result_, Tuple, Type, TypeDefKind, TypeOwner, Variant,
+    Enum, Flags, Handle, Record, Resolve, Result_, Tuple, Type, TypeDefKind, TypeId, TypeOwner,
+    Variant,
 };
 
 pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
@@ -34,10 +35,38 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     for interface in &def.interfaces {
         let interface_ident = to_rust_ident(&interface.name).to_upper_camel_case();
         let interface_name = Ident::new(&interface_ident, Span::call_site());
+
+        let additional_fields = if interface.is_resource() {
+            vec![quote! {
+                id: u64,
+                uri: golem_wasm_rpc::Uri
+            }]
+        } else {
+            vec![]
+        };
+        let struct_fns: Vec<TokenStream> = if interface.is_resource() {
+            vec![quote! {
+                pub fn from_remote_handle(uri: golem_wasm_rpc::Uri, id: u64) -> Self {
+                    Self {
+                        rpc: WasmRpc::new(&uri),
+                        id,
+                        uri,
+                    }
+                }
+            }]
+        } else {
+            vec![]
+        };
+
         struct_defs.push(quote! {
            pub struct #interface_name {
                 rpc: WasmRpc,
-            }
+                #(#additional_fields),*
+           }
+
+           impl #interface_name {
+             #(#struct_fns)*
+           }
         });
     }
 
@@ -58,6 +87,24 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                 } else {
                     Some(&interface.name)
                 },
+                if interface.is_resource() {
+                    FunctionMode::Method
+                } else {
+                    FunctionMode::Global
+                },
+            )?);
+        }
+
+        for function in &interface.static_functions {
+            fn_impls.push(generate_function_stub_source(
+                def,
+                function,
+                if interface.global {
+                    None
+                } else {
+                    Some(&interface.name)
+                },
+                FunctionMode::Static,
             )?);
         }
 
@@ -67,21 +114,57 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             Span::call_site(),
         );
 
-        interface_impls.push(quote! {
-            impl crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#guest_interface_name for #interface_name {
+        let constructor = if interface.is_resource() {
+            let constructor_stub = FunctionStub {
+                name: "new".to_string(),
+                params: interface.constructor_params.clone().unwrap_or_default(),
+                results: FunctionResultStub::SelfType,
+            };
+            generate_function_stub_source(
+                def,
+                &constructor_stub,
+                Some(&interface.name),
+                FunctionMode::Constructor,
+            )?
+        } else {
+            quote! {
                 fn new(location: crate::bindings::golem::rpc::types::Uri) -> Self {
-                    let location = Uri { value: location.value };
+                    let location = golem_wasm_rpc::Uri { value: location.value };
                     Self {
                         rpc: WasmRpc::new(&location)
                     }
                 }
+            }
+        };
+
+        interface_impls.push(quote! {
+            impl crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#guest_interface_name for #interface_name {
+                #constructor
 
                 #(#fn_impls)*
             }
         });
+
+        if interface.is_resource() {
+            let remote_function_name = get_remote_function_name(def, "drop", Some(&interface.name));
+            interface_impls.push(quote! {
+                impl Drop for #interface_name {
+                    fn drop(&mut self) {
+                        self.rpc.invoke_and_await(
+                            #remote_function_name,
+                            &[
+                                WitValue::builder().handle(self.uri.clone(), self.id)
+                            ]
+                        ).expect("Failed to invoke remote drop");
+                    }
+                }
+            });
+        }
     }
 
     let lib = quote! {
+        #![allow(warnings)]
+
         use golem_wasm_rpc::*;
 
         #[allow(dead_code)]
@@ -104,15 +187,38 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FunctionMode {
+    Global,
+    Static,
+    Method,
+    Constructor,
+}
+
 fn generate_function_stub_source(
     def: &StubDefinition,
     function: &FunctionStub,
     interface_name: Option<&String>,
+    mode: FunctionMode,
 ) -> anyhow::Result<TokenStream> {
     let function_name = Ident::new(&to_rust_ident(&function.name), Span::call_site());
     let mut params = Vec::new();
     let mut input_values = Vec::new();
     let mut output_values = Vec::new();
+
+    if mode != FunctionMode::Static && mode != FunctionMode::Constructor {
+        params.push(quote! {&self});
+    }
+
+    if mode == FunctionMode::Constructor {
+        params.push(quote! { location: crate::bindings::golem::rpc::types::Uri });
+    }
+
+    if mode == FunctionMode::Method {
+        input_values.push(quote! {
+            WitValue::builder().handle(self.uri.clone(), self.id)
+        });
+    }
 
     for param in &function.params {
         let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
@@ -156,6 +262,7 @@ fn generate_function_stub_source(
                 }
             }
         }
+        FunctionResultStub::SelfType => quote! { Self },
     };
 
     match &function.results {
@@ -175,25 +282,58 @@ fn generate_function_stub_source(
                 )?);
             }
         }
+        FunctionResultStub::SelfType if mode == FunctionMode::Constructor => {
+            output_values.push(quote! {
+                {
+                    let (uri, id) = result.handle().expect("handle not found");
+                    Self {
+                        rpc,
+                        id,
+                        uri
+                    }
+                }
+            });
+        }
+        FunctionResultStub::SelfType => {
+            return Err(anyhow!(
+                "SelfType result is only supported for constructors"
+            ));
+        }
     }
 
-    let remote_function_name = match interface_name {
-        Some(remote_interface) => format!(
-            "{}:{}/{}/{}",
-            def.root_package_name.namespace,
-            def.root_package_name.name,
-            remote_interface,
-            function.name
-        ),
-        None => format!(
-            "{}:{}/{}",
-            def.root_package_name.namespace, def.root_package_name.name, function.name
-        ),
+    let remote_function_name = get_remote_function_name(def, &function.name, interface_name);
+
+    let rpc = match mode {
+        FunctionMode::Static => {
+            let first_param = function
+                .params
+                .first()
+                .ok_or(anyhow!("static function has no params"))?;
+            let first_param_ident =
+                Ident::new(&to_rust_ident(&first_param.name), Span::call_site());
+            quote! { #first_param_ident.rpc }
+        }
+        FunctionMode::Constructor => {
+            quote! { rpc }
+        }
+        _ => {
+            quote! { self.rpc }
+        }
+    };
+
+    let init = if mode == FunctionMode::Constructor {
+        quote! {
+            let location = golem_wasm_rpc::Uri { value: location.value };
+            let rpc = WasmRpc::new(&location);
+        }
+    } else {
+        quote! {}
     };
 
     Ok(quote! {
-        fn #function_name(&self, #(#params),*) -> #result_type {
-            let result = self.rpc.invoke_and_await(
+        fn #function_name(#(#params),*) -> #result_type {
+            #init
+            let result = #rpc.invoke_and_await(
                 #remote_function_name,
                 &[
                     #(#input_values),*
@@ -202,6 +342,26 @@ fn generate_function_stub_source(
             (#(#output_values),*)
         }
     })
+}
+
+fn get_remote_function_name(
+    def: &StubDefinition,
+    function_name: &str,
+    interface_name: Option<&String>,
+) -> String {
+    match interface_name {
+        Some(remote_interface) => format!(
+            "{}:{}/{}/{}",
+            def.root_package_name.namespace,
+            def.root_package_name.name,
+            remote_interface,
+            function_name
+        ),
+        None => format!(
+            "{}:{}/{}",
+            def.root_package_name.namespace, def.root_package_name.name, function_name
+        ),
+    }
 }
 
 fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStream> {
@@ -252,6 +412,19 @@ fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStre
                         None => quote! { () },
                     };
                     Ok(quote! { Result<#ok, #err> })
+                }
+                TypeDefKind::Handle(handle) => {
+                    let (type_id, is_ref) = match handle {
+                        Handle::Own(type_id) => (type_id, false),
+                        Handle::Borrow(type_id) => (type_id, true),
+                    };
+
+                    let ident = resource_type_ident(type_id, resolve)?;
+                    if is_ref {
+                        Ok(quote! { &#ident })
+                    } else {
+                        Ok(quote! { wit_bindgen::rt::Resource<#ident> })
+                    }
                 }
                 _ => {
                     let typ = Ident::new(
@@ -321,6 +494,25 @@ fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStre
     }
 }
 
+fn resource_type_ident(type_id: &TypeId, resolve: &Resolve) -> anyhow::Result<Ident> {
+    let typedef = resolve
+        .types
+        .get(*type_id)
+        .ok_or(anyhow!("type not found"))?;
+
+    let ident = Ident::new(
+        &to_rust_ident(
+            typedef
+                .name
+                .as_ref()
+                .ok_or(anyhow!("Handle's inner type has no name"))?,
+        )
+        .to_upper_camel_case(),
+        Span::call_site(),
+    );
+    Ok(ident)
+}
+
 fn wit_value_builder(
     typ: &Type,
     name: &TokenStream,
@@ -376,8 +568,12 @@ fn wit_value_builder(
                 TypeDefKind::Record(record) => {
                     wit_record_value_builder(record, name, resolve, builder_expr)
                 }
-                TypeDefKind::Resource => Ok(quote!(todo!("resource support"))),
-                TypeDefKind::Handle(_) => Ok(quote!(todo!("resource support"))),
+                TypeDefKind::Resource => Err(anyhow!("Resource cannot directly appear in a function signature, just through a Handle")),
+                TypeDefKind::Handle(_) => {
+                    Ok(quote! {
+                        #builder_expr.handle(#name.uri.clone(), #name.id)
+                    })
+                }
                 TypeDefKind::Flags(flags) => {
                     wit_flags_value_builder(flags, typ, name, resolve, builder_expr)
                 }
@@ -693,8 +889,8 @@ fn extract_from_wit_value(
                 TypeDefKind::Record(record) => {
                     extract_from_record_value(record, typ, resolve, base_expr)
                 }
-                TypeDefKind::Resource => Ok(quote!(todo!("resource support"))),
-                TypeDefKind::Handle(_) => Ok(quote!(todo!("resource support"))),
+                TypeDefKind::Resource => Err(anyhow!("Resource cannot directly appear in a function signature, just through a Handle")),
+                TypeDefKind::Handle(handle) => extract_from_handle_value(handle, resolve, base_expr),
                 TypeDefKind::Flags(flags) => {
                     extract_from_flags_value(flags, typ, resolve, base_expr)
                 }
@@ -929,4 +1125,31 @@ fn extract_from_list_value(
     Ok(quote! {
         #base_expr.list_elements(|item| #inner_expr).expect("list not found")
     })
+}
+
+fn extract_from_handle_value(
+    handle: &Handle,
+    resolve: &Resolve,
+    base_expr: TokenStream,
+) -> anyhow::Result<TokenStream> {
+    match handle {
+        Handle::Own(type_id) => {
+            let ident = resource_type_ident(type_id, resolve)?;
+            Ok(quote! {
+                {
+                    let (uri, id) = #base_expr.handle().expect("handle not found");
+                    wit_bindgen::rt::Resource::new(#ident::from_remote_handle(uri, id))
+                }
+            })
+        }
+        Handle::Borrow(type_id) => {
+            let ident = resource_type_ident(type_id, resolve)?;
+            Ok(quote! {
+                {
+                    let (uri, id) = #base_expr.handle().expect("handle not found");
+                    #ident::from_remote_handle(uri, id)
+                }
+            })
+        }
+    }
 }

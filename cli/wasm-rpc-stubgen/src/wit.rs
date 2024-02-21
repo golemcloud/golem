@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::stub::{FunctionResultStub, StubDefinition};
+use crate::stub::{FunctionParamStub, FunctionResultStub, StubDefinition};
 use anyhow::{anyhow, bail};
 use indexmap::IndexSet;
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
-use wit_parser::{Resolve, Type, TypeDefKind};
+use wit_parser::{Handle, Resolve, Type, TypeDefKind};
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     let world = def.resolve.worlds.get(def.world_id).unwrap();
@@ -43,20 +43,22 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
 
     for interface in &def.interfaces {
         writeln!(out, "  resource {} {{", &interface.name)?;
-        writeln!(out, "    constructor(location: uri);")?;
-        for function in &interface.functions {
-            write!(out, "    {}: func(", function.name)?;
-            for (idx, param) in function.params.iter().enumerate() {
-                write!(
-                    out,
-                    "{}: {}",
-                    param.name,
-                    param.typ.wit_type_string(&def.resolve)?
-                )?;
-                if idx < function.params.len() - 1 {
+        match &interface.constructor_params {
+            None => {
+                writeln!(out, "    constructor(location: uri);")?;
+            }
+            Some(params) => {
+                write!(out, "    constructor(location: uri")?;
+                if !params.is_empty() {
                     write!(out, ", ")?;
                 }
+                write_param_list(&mut out, def, params)?;
+                writeln!(out, ");")?;
             }
+        }
+        for function in &interface.functions {
+            write!(out, "    {}: func(", function.name)?;
+            write_param_list(&mut out, def, &function.params)?;
             write!(out, ")")?;
             if !function.results.is_empty() {
                 write!(out, " -> ")?;
@@ -66,18 +68,33 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
                     }
                     FunctionResultStub::Multi(params) => {
                         write!(out, "(")?;
-                        for (idx, param) in params.iter().enumerate() {
-                            write!(
-                                out,
-                                "{}: {}",
-                                param.name,
-                                param.typ.wit_type_string(&def.resolve)?
-                            )?;
-                            if idx < params.len() - 1 {
-                                write!(out, ", ")?;
-                            }
-                        }
+                        write_param_list(&mut out, def, params)?;
                         write!(out, ")")?;
+                    }
+                    FunctionResultStub::SelfType => {
+                        return Err(anyhow!("Unexpected return type in wit generator"))
+                    }
+                }
+            }
+            writeln!(out, ";")?;
+        }
+        for function in &interface.static_functions {
+            write!(out, "    {}: static func(", function.name)?;
+            write_param_list(&mut out, def, &function.params)?;
+            write!(out, ")")?;
+            if !function.results.is_empty() {
+                write!(out, " -> ")?;
+                match &function.results {
+                    FunctionResultStub::Single(typ) => {
+                        write!(out, "{}", typ.wit_type_string(&def.resolve)?)?;
+                    }
+                    FunctionResultStub::Multi(params) => {
+                        write!(out, "(")?;
+                        write_param_list(&mut out, def, params)?;
+                        write!(out, ")")?;
+                    }
+                    FunctionResultStub::SelfType => {
+                        return Err(anyhow!("Unexpected return type in wit generator"))
                     }
                 }
             }
@@ -100,6 +117,25 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     );
     fs::create_dir_all(def.target_wit_root())?;
     fs::write(def.target_wit_path(), out)?;
+    Ok(())
+}
+
+fn write_param_list(
+    out: &mut String,
+    def: &StubDefinition,
+    params: &[FunctionParamStub],
+) -> anyhow::Result<()> {
+    for (idx, param) in params.iter().enumerate() {
+        write!(
+            out,
+            "{}: {}",
+            param.name,
+            param.typ.wit_type_string(&def.resolve)?
+        )?;
+        if idx < params.len() - 1 {
+            write!(out, ", ")?;
+        }
+    }
     Ok(())
 }
 
@@ -222,6 +258,13 @@ impl TypeExtensions for Type {
                         (None, None) => {
                             bail!("result type has no ok or err types")
                         }
+                    },
+                    TypeDefKind::Handle(handle) => match handle {
+                        Handle::Own(type_id) => Type::Id(*type_id).wit_type_string(resolve),
+                        Handle::Borrow(type_id) => Ok(format!(
+                            "borrow<{}>",
+                            Type::Id(*type_id).wit_type_string(resolve)?
+                        )),
                     },
                     _ => {
                         let name = typ
