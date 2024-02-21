@@ -129,7 +129,7 @@ curl --location --request POST 'http://localhost:8080/tyk/apis' \
                 "name": "Default",
                 "global_headers": {
                     "x-golem-api-definition-id":"shopping-cart-v1",
-                    "x-golem-api-definition-version": "0.0.2"
+                    "x-golem-api-definition-version": "0.0.3"
                 }
             }
         }
