@@ -823,10 +823,12 @@ mod tests {
 
             let resolved_route = api_request.resolve(&api_specification);
 
-
             let result = match resolved_route {
-                Some(resolved_route) => ResolvedRouteAsWorkerRequest::from_resolved_route(resolved_route),
-                None => Err("not found")
+                Some(resolved_route) => {
+                    ResolvedRouteAsWorkerRequest::from_resolved_route(resolved_route)
+                        .map_err(|err| err.to_string())
+                }
+                None => Err("not found".to_string()),
             };
 
             assert_eq!(result.is_ok(), ok);
