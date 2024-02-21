@@ -111,7 +111,11 @@ pub struct TemplateApi {
 
 #[OpenApi(prefix_path = "/v2/templates", tag = ApiTags::Template)]
 impl TemplateApi {
-    #[oai(path = "/:template_id", method = "get")]
+    #[oai(
+        path = "/:template_id",
+        method = "get",
+        operation_id = "get_template_by_id"
+    )]
     async fn get_template_by_id(
         &self,
         template_id: Path<TemplateId>,
@@ -120,7 +124,11 @@ impl TemplateApi {
         Ok(Json(response))
     }
 
-    #[oai(path = "/:template_id/upload", method = "put")]
+    #[oai(
+        path = "/:template_id/upload",
+        method = "put",
+        operation_id = "update_template"
+    )]
     async fn update_template(
         &self,
         template_id: Path<TemplateId>,
@@ -131,7 +139,7 @@ impl TemplateApi {
         Ok(Json(response))
     }
 
-    #[oai(path = "/", method = "post")]
+    #[oai(path = "/", method = "post", operation_id = "upload_template")]
     async fn upload_template(&self, payload: UploadPayload) -> Result<Json<Template>> {
         let data = payload.template.into_vec().await?;
         let template_name = payload.name;
@@ -139,7 +147,11 @@ impl TemplateApi {
         Ok(Json(response))
     }
 
-    #[oai(path = "/:template_id/download", method = "get")]
+    #[oai(
+        path = "/:template_id/download",
+        method = "get",
+        operation_id = "download_template"
+    )]
     async fn download_template(
         &self,
         template_id: Path<TemplateId>,
@@ -152,7 +164,11 @@ impl TemplateApi {
         Ok(Binary(Body::from(bytes)))
     }
 
-    #[oai(path = "/:template_id/latest", method = "get")]
+    #[oai(
+        path = "/:template_id/latest",
+        method = "get",
+        operation_id = "get_latest_version"
+    )]
     async fn get_latest_version(&self, template_id: Path<TemplateId>) -> Result<Json<i32>> {
         let response = self
             .template_service
@@ -167,7 +183,7 @@ impl TemplateApi {
         }
     }
 
-    #[oai(path = "/", method = "get")]
+    #[oai(path = "/", method = "get", operation_id = "get_all_templates")]
     async fn get_all_templates(
         &self,
         #[oai(name = "template-name")] template_name: Query<Option<TemplateName>>,

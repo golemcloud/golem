@@ -142,7 +142,11 @@ pub struct WorkerApi {
 
 #[OpenApi(prefix_path = "/v2/templates", tag = ApiTags::Worker)]
 impl WorkerApi {
-    #[oai(path = "/workers/:worker_id", method = "get")]
+    #[oai(
+        path = "/workers/:worker_id",
+        method = "get",
+        operation_id = "get_worker_by_id"
+    )]
     async fn get_worker_by_id(&self, worker_id: Path<String>) -> Result<Json<VersionedWorkerId>> {
         let worker_id: WorkerId = golem_common::model::WorkerId::from_str(&worker_id.0)?.into();
         let worker = self.worker_service.get_by_id(&worker_id).await?;
@@ -150,7 +154,11 @@ impl WorkerApi {
         Ok(Json(worker))
     }
 
-    #[oai(path = "/:template_id/workers", method = "post")]
+    #[oai(
+        path = "/:template_id/workers",
+        method = "post",
+        operation_id = "launch_new_worker"
+    )]
     async fn launch_new_worker(
         &self,
         template_id: Path<TemplateId>,
@@ -182,7 +190,11 @@ impl WorkerApi {
         Ok(Json(worker))
     }
 
-    #[oai(path = "/:template_id/workers/:worker_name", method = "delete")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name",
+        method = "delete",
+        operation_id = "delete_worker"
+    )]
     async fn delete_worker(
         &self,
         template_id: Path<TemplateId>,
@@ -195,7 +207,11 @@ impl WorkerApi {
         Ok(Json(DeleteWorkerResponse {}))
     }
 
-    #[oai(path = "/:template_id/workers/:worker_name/key", method = "post")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name/key",
+        method = "post",
+        operation_id = "get_invocation_key"
+    )]
     async fn get_invocation_key(
         &self,
         template_id: Path<TemplateId>,
@@ -210,7 +226,8 @@ impl WorkerApi {
 
     #[oai(
         path = "/:template_id/workers/:worker_name/invoke-and-await",
-        method = "post"
+        method = "post",
+        operation_id = "invoke_and_await_function"
     )]
     async fn invoke_and_await_function(
         &self,
@@ -241,7 +258,11 @@ impl WorkerApi {
         Ok(Json(InvokeResult { result }))
     }
 
-    #[oai(path = "/:template_id/workers/:worker_name/invoke", method = "post")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name/invoke",
+        method = "post",
+        operation_id = "invoke_function"
+    )]
     async fn invoke_function(
         &self,
         template_id: Path<TemplateId>,
@@ -258,7 +279,11 @@ impl WorkerApi {
         Ok(Json(InvokeResponse {}))
     }
 
-    #[oai(path = "/:template_id/workers/:worker_name/complete", method = "post")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name/complete",
+        method = "post",
+        operation_id = "complete_promise"
+    )]
     async fn complete_promise(
         &self,
         template_id: Path<TemplateId>,
@@ -276,7 +301,11 @@ impl WorkerApi {
         Ok(Json(result))
     }
 
-    #[oai(path = "/:template_id/workers/:worker_name/interrupt", method = "post")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name/interrupt",
+        method = "post",
+        operation_id = "interrupt_worker"
+    )]
     async fn interrupt_worker(
         &self,
         template_id: Path<TemplateId>,
@@ -292,7 +321,11 @@ impl WorkerApi {
         Ok(Json(InterruptResponse {}))
     }
 
-    #[oai(path = "/:template_id/workers/:worker_name", method = "get")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name",
+        method = "get",
+        operation_id = "get_worker_metadata"
+    )]
     async fn get_worker_metadata(
         &self,
         template_id: Path<TemplateId>,
@@ -304,7 +337,11 @@ impl WorkerApi {
         Ok(Json(result))
     }
 
-    #[oai(path = "/:template_id/workers/:worker_name/resume", method = "post")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name/resume",
+        method = "post",
+        operation_id = "resume_worker"
+    )]
     async fn resume_worker(
         &self,
         template_id: Path<TemplateId>,
