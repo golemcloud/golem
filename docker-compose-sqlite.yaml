@@ -15,7 +15,7 @@ services:
       - GOLEM_WORKER_SERVICE_PORT=${WORKER_SERVICE_HTTP_PORT}
       - GOLEM_TEMPLATE_SERVICE_HOST=golem-template-service
       - GOLEM_TEMPLATE_SERVICE_PORT=${TEMPLATE_SERVICE_HTTP_PORT}
-    command: /bin/bash -c "envsubst < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
+    command: /bin/bash -c "envsubst < /etc/nginx/golem-services.conf.template > /etc/nginx/golem-services.conf && nginx -g 'daemon off;'"
     depends_on:
       - golem-worker-service
       - golem-template-service
