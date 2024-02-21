@@ -2,7 +2,7 @@
 FROM nginx:latest
 
 # Copy custom NGINX configuration file to the container
-COPY /gateway/golem-services.conf.template /etc/nginx/golem-services.conf.template
+COPY /gateway/golem-services.conf.template /etc/nginx/nginx.conf.template
 
 # Expose port 80
 EXPOSE 80
