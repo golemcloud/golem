@@ -248,8 +248,6 @@ impl WorkerToHttpResponse for NoOpWorkerRequestExecutor {
         let worker_name = worker_request_params.worker_id;
         let template_id = worker_request_params.template;
 
-        let worker_id = WorkerId::new(template_id.clone(), worker_name.clone()).unwrap();
-
         info!(
             "Executing request for template: {}, worker: {}, function: {}",
             template_id, worker_name, worker_request_params.function

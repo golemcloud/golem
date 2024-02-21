@@ -12,7 +12,6 @@ use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use tokio::select;
-use tonic::codegen::Body;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {

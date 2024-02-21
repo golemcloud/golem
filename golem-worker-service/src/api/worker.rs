@@ -309,7 +309,7 @@ impl From<TemplateError> for WorkerError {
             },
             TemplateError::Transport(_) => {
                 WorkerError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Transport Error when connecting to template service") }),
+                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: "Transport Error when connecting to template service".to_string() }),
                 }))
             },
             TemplateError::Server(template_error) => {

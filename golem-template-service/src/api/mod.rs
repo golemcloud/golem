@@ -16,20 +16,12 @@ use crate::service::Services;
 use poem::endpoint::PrometheusExporter;
 use poem::Route;
 use poem_openapi::OpenApiService;
-use poem_openapi::Tags;
 use prometheus::Registry;
 use std::ops::Deref;
 use std::sync::Arc;
 
 mod healthcheck;
 mod template;
-
-#[derive(Tags)]
-enum ApiTags {
-    Template,
-    Worker,
-    HealthCheck,
-}
 
 pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {
     let api_service = make_open_api_service(services);

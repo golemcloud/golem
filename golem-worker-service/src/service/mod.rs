@@ -49,7 +49,7 @@ impl Services {
             Arc::new(RedisApiRegistry::new(&config.redis).await.map_err(|e| {
                 error!("RedisApiRegistry - init error: {}", e);
 
-                format!("RedisApiRegistry - init error: {}", e.to_string())
+                format!("RedisApiRegistry - init error: {}", e)
             })?);
 
         let worker_to_http_service: Arc<dyn WorkerToHttpResponse + Sync + Send> = Arc::new(

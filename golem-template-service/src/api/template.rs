@@ -14,9 +14,9 @@
 
 use std::sync::Arc;
 
-use crate::api::ApiTags;
 use crate::service::template::{TemplateError as TemplateServiceError, TemplateService};
 use golem_common::model::TemplateId;
+use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::*;
 use poem::error::ReadBodyError;
 use poem::Body;
