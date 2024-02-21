@@ -7,6 +7,10 @@ services:
       dockerfile: gateway/docker/Dockerfile
     ports:
       - "8080:80"
+    depends_on:
+      - golem-worker-service
+      - golem-template-service
+      - golem-shard-manager
 
   redis:
     image: redis:latest
