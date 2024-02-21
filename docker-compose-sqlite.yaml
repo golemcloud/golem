@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  nginx:
+  gateway:
     build:
       context: .
       dockerfile: gateway/docker/Dockerfile
