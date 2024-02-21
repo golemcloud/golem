@@ -5,7 +5,7 @@ use crate::UriBackConversion;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
 use golem_api_grpc::proto::golem::template::{
-    get_latest_template_version_response, get_versioned_template_response,
+    get_latest_template_version_response, get_template_metadata_response,
     GetLatestTemplateVersionRequest, GetVersionedTemplateRequest,
 };
 use golem_common::config::RetryConfig;
@@ -101,11 +101,11 @@ impl TemplateService for TemplateServiceDefault {
                         version,
                     };
 
-                    let response = client.get_versioned_template(request).await?.into_inner();
+                    let response = client.get_template_metadata(request).await?.into_inner();
 
                     match response.result {
                         None => Err("Empty response".to_string().into()),
-                        Some(get_versioned_template_response::Result::Success(response)) => {
+                        Some(get_template_metadata_response::Result::Success(response)) => {
                             let template_view: Result<
                                 Option<golem_service_base::model::Template>,
                                 TemplateError,
@@ -119,7 +119,7 @@ impl TemplateService for TemplateServiceDefault {
                             };
                             Ok(template_view?)
                         }
-                        Some(get_versioned_template_response::Result::Error(error)) => {
+                        Some(get_template_metadata_response::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }

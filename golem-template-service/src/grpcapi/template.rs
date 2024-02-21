@@ -20,14 +20,15 @@ use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::template::template_service_server::TemplateService;
 use golem_api_grpc::proto::golem::template::{
     create_template_request, create_template_response, download_template_response,
-    get_latest_template_version_response, get_template_response, get_templates_response,
-    get_versioned_template_response, update_template_request, update_template_response,
-    CreateTemplateRequest, CreateTemplateRequestHeader, CreateTemplateResponse,
-    DownloadTemplateRequest, DownloadTemplateResponse, GetLatestTemplateVersionRequest,
-    GetLatestTemplateVersionResponse, GetTemplateRequest, GetTemplateResponse,
-    GetTemplateSuccessResponse, GetTemplatesRequest, GetTemplatesResponse,
-    GetTemplatesSuccessResponse, GetVersionedTemplateRequest, GetVersionedTemplateResponse,
-    GetVersionedTemplateSuccessResponse, UpdateTemplateRequest, UpdateTemplateRequestHeader,
+    get_latest_template_version_response, get_template_metadata_all_versions_response,
+    get_template_metadata_response, get_templates_response, update_template_request,
+    update_template_response, CreateTemplateRequest, CreateTemplateRequestHeader,
+    CreateTemplateResponse, DownloadTemplateRequest, DownloadTemplateResponse,
+    GetLatestTemplateVersionRequest, GetLatestTemplateVersionResponse,
+    GetTemplateMetadataAllVersionsResponse, GetTemplateMetadataResponse,
+    GetTemplateMetadataSuccessResponse, GetTemplateRequest, GetTemplateSuccessResponse,
+    GetTemplatesRequest, GetTemplatesResponse, GetTemplatesSuccessResponse,
+    GetVersionedTemplateRequest, UpdateTemplateRequest, UpdateTemplateRequestHeader,
     UpdateTemplateResponse,
 };
 use golem_api_grpc::proto::golem::template::{template_error, Template, TemplateError};
@@ -255,36 +256,40 @@ impl TemplateService for TemplateGrpcApi {
         Ok(Response::new(stream))
     }
 
-    async fn get_template(
+    async fn get_template_metadata_all_versions(
         &self,
         request: Request<GetTemplateRequest>,
-    ) -> Result<Response<GetTemplateResponse>, Status> {
+    ) -> Result<Response<GetTemplateMetadataAllVersionsResponse>, Status> {
         match self.get(request.into_inner()).await {
-            Ok(templates) => Ok(Response::new(GetTemplateResponse {
-                result: Some(get_template_response::Result::Success(
-                    GetTemplateSuccessResponse { templates },
-                )),
+            Ok(templates) => Ok(Response::new(GetTemplateMetadataAllVersionsResponse {
+                result: Some(
+                    get_template_metadata_all_versions_response::Result::Success(
+                        GetTemplateSuccessResponse { templates },
+                    ),
+                ),
             })),
-            Err(err) => Ok(Response::new(GetTemplateResponse {
-                result: Some(get_template_response::Result::Error(err)),
+            Err(err) => Ok(Response::new(GetTemplateMetadataAllVersionsResponse {
+                result: Some(get_template_metadata_all_versions_response::Result::Error(
+                    err,
+                )),
             })),
         }
     }
 
-    async fn get_versioned_template(
+    async fn get_template_metadata(
         &self,
         request: Request<GetVersionedTemplateRequest>,
-    ) -> Result<Response<GetVersionedTemplateResponse>, Status> {
+    ) -> Result<Response<GetTemplateMetadataResponse>, Status> {
         match self.get_template_metadata(request.into_inner()).await {
-            Ok(optional_template) => Ok(Response::new(GetVersionedTemplateResponse {
-                result: Some(get_versioned_template_response::Result::Success(
-                    GetVersionedTemplateSuccessResponse {
+            Ok(optional_template) => Ok(Response::new(GetTemplateMetadataResponse {
+                result: Some(get_template_metadata_response::Result::Success(
+                    GetTemplateMetadataSuccessResponse {
                         template: optional_template,
                     },
                 )),
             })),
-            Err(err) => Ok(Response::new(GetVersionedTemplateResponse {
-                result: Some(get_versioned_template_response::Result::Error(err)),
+            Err(err) => Ok(Response::new(GetTemplateMetadataResponse {
+                result: Some(get_template_metadata_response::Result::Error(err)),
             })),
         }
     }
