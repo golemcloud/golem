@@ -5,8 +5,11 @@ services:
     build:
       context: .
       dockerfile: gateway/docker/Dockerfile
+    # Note that, golem_gateway_port should be changed carefully
+    # as it is currently set to match the default port in golem-cli:
+    # Golem base url. Default: GOLEM_BASE_URL environment variable or http://localhost:9881
     ports:
-      - "8080:80"
+      - "${GOLEM_GATEWAY_PORT}:80"
     depends_on:
       - golem-worker-service
       - golem-template-service
