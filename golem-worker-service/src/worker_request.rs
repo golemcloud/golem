@@ -15,7 +15,7 @@ pub struct ResolvedRouteAsWorkerRequest {
 }
 
 impl ResolvedRouteAsWorkerRequest {
-    // A worker-request can bef formed a route with resolved variables (through incoming http request)
+    // A worker-request can be formed from a route definition along with variables that were resolved using incoming http request
     pub fn from_resolved_route(
         resolved_route: ResolvedRoute,
     ) -> Result<ResolvedRouteAsWorkerRequest, String> {

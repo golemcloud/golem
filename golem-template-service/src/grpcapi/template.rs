@@ -92,7 +92,7 @@ impl TemplateGrpcApi {
         Ok(result.into_iter().map(|p| p.into()).collect())
     }
 
-    async fn get_template_info(
+    async fn get_template_metadata(
         &self,
         request: GetVersionedTemplateRequest,
     ) -> Result<Option<Template>, TemplateError> {
@@ -275,7 +275,7 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<GetVersionedTemplateRequest>,
     ) -> Result<Response<GetVersionedTemplateResponse>, Status> {
-        match self.get_template_info(request.into_inner()).await {
+        match self.get_template_metadata(request.into_inner()).await {
             Ok(optional_template) => Ok(Response::new(GetVersionedTemplateResponse {
                 result: Some(get_versioned_template_response::Result::Success(
                     GetVersionedTemplateSuccessResponse {
