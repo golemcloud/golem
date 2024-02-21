@@ -32,6 +32,40 @@ interface iface1 {
   new-point: func(x: s32, y: s32, metadata: metadata) -> point;
 
   get-metadata: func() -> option<metadata>;
+
+    record product-item {
+    product-id: string,
+    name: string,
+    price: float32,
+    quantity: u32,
+  }
+
+  record order {
+    order-id: string,
+    items: list<product-item>,
+    total: float32,
+    timestamp: u64,
+  }
+
+  record order-confirmation {
+    order-id: string,
+  }
+
+  variant checkout-result {
+    error(string),
+    success(order-confirmation),
+  }
+
+  resource cart {
+    constructor(user-id: string);
+    add-item: func(item: product-item) -> ();
+    remove-item: func(product-id: string) -> ();
+    update-item-quantity: func(product-id: string, quantity: u32) -> ();
+    checkout: func() -> checkout-result;
+    get-cart-contents: func() -> list<product-item>;
+    merge-with: func(other-cart: borrow<cart>) -> ();
+    merge: static func(cart1: borrow<cart>, cart2: borrow<cart>) -> cart;
+  }
 }
 
 world api {

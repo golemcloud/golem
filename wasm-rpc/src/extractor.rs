@@ -1,4 +1,4 @@
-use crate::{WitNode, WitValue};
+use crate::{Uri, WitNode, WitValue};
 
 pub trait WitValueExtractor<'a> {
     fn u8(&'a self) -> Option<u8>;
@@ -22,6 +22,8 @@ pub trait WitValueExtractor<'a> {
     fn list_elements<R>(&'a self, f: impl Fn(WitNodePointer<'a>) -> R) -> Option<Vec<R>>;
     fn option(&'a self) -> Option<Option<WitNodePointer<'a>>>;
     fn result(&'a self) -> Option<Result<Option<WitNodePointer<'a>>, Option<WitNodePointer<'a>>>>;
+
+    fn handle(&'a self) -> Option<(Uri, u64)>;
 }
 
 impl<'a> WitValueExtractor<'a> for WitValue {
@@ -107,6 +109,10 @@ impl<'a> WitValueExtractor<'a> for WitValue {
 
     fn result(&'a self) -> Option<Result<Option<WitNodePointer<'a>>, Option<WitNodePointer<'a>>>> {
         WitNodePointer::new(self, 0).result()
+    }
+
+    fn handle(&'a self) -> Option<(Uri, u64)> {
+        WitNodePointer::new(self, 0).handle()
     }
 }
 
@@ -305,6 +311,14 @@ impl<'a> WitNodePointer<'a> {
             None
         }
     }
+
+    pub fn handle(&self) -> Option<(Uri, u64)> {
+        if let WitNode::Handle((uri, idx)) = self.node() {
+            Some((uri.clone(), *idx))
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -455,5 +469,24 @@ mod tests {
     fn result4() {
         let value = WitValue::builder().result_err_unit();
         assert!(value.result().unwrap().err().unwrap().is_none());
+    }
+
+    #[test]
+    fn handle() {
+        let value = WitValue::builder().handle(
+            Uri {
+                value: "wit://test".to_string(),
+            },
+            42,
+        );
+        assert_eq!(
+            value.handle().unwrap(),
+            (
+                Uri {
+                    value: "wit://test".to_string()
+                },
+                42
+            )
+        );
     }
 }

@@ -45,6 +45,7 @@ pub use bindings::golem::rpc::types::{NodeIndex, RpcError, Uri, WasmRpc, WitNode
 
 #[cfg(feature = "host")]
 use ::wasmtime::component::bindgen;
+
 #[cfg(feature = "host")]
 bindgen!({
     path: "wit",
@@ -59,11 +60,25 @@ bindgen!({
 });
 
 #[cfg(feature = "host")]
-pub use golem::rpc::types::{Host, HostWasmRpc, NodeIndex, RpcError, WitNode, WitValue};
+pub use golem::rpc::types::{Host, HostWasmRpc, NodeIndex, RpcError, Uri, WitNode, WitValue};
 
 #[cfg(feature = "host")]
 pub struct WasmRpcEntry {
     pub payload: Box<dyn std::any::Any + Send + Sync>,
+}
+
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for Uri {
+    fn arbitrary(u: &mut arbitrary::Unstructured) -> arbitrary::Result<Self> {
+        let uri = u.arbitrary::<String>()?;
+        Ok(Uri { value: uri })
+    }
+}
+
+impl PartialEq for Uri {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
 }
 
 /// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
@@ -94,6 +109,10 @@ pub enum Value {
     Flags(Vec<bool>),
     Option(Option<Box<Value>>),
     Result(Result<Option<Box<Value>>, Option<Box<Value>>>),
+    Handle {
+        uri: Uri,
+        resource_id: u64,
+    },
 }
 
 impl From<Value> for WitValue {
@@ -190,6 +209,7 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
             }
             Err(None) => builder.add_result_err_unit(),
         },
+        Value::Handle { uri, resource_id } => builder.add_handle(uri, resource_id),
     }
 }
 
@@ -267,6 +287,10 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
         WitNode::PrimChar(value) => Value::Char(*value),
         WitNode::PrimBool(value) => Value::Bool(*value),
         WitNode::PrimString(value) => Value::String(value.clone()),
+        WitNode::Handle((uri, value)) => Value::Handle {
+            uri: uri.clone(),
+            resource_id: *value,
+        },
     }
 }
 

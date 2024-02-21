@@ -18,7 +18,7 @@ use serde_json::{Number, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::Value;
+use crate::{Uri, Value};
 
 pub fn function_parameters(
     value: &JsonValue,
@@ -148,6 +148,7 @@ fn validate_function_parameter(
             })
         }
         AnalysedType::Tuple(elems) => get_tuple(input_json, elems).map(Value::Tuple),
+        AnalysedType::Resource { .. } => get_handle(input_json),
     }
 }
 
@@ -557,6 +558,35 @@ fn get_variant(
     }
 }
 
+fn get_handle(value: &JsonValue) -> Result<Value, Vec<String>> {
+    match value.as_str() {
+        Some(str) => {
+            // not assuming much about the url format, just checking it ends with a /<resource-id-u64>
+            let parts: Vec<&str> = str.split('/').collect();
+            if parts.len() >= 2 {
+                match u64::from_str(parts[parts.len() - 1]) {
+                    Ok(resource_id) => {
+                        let uri = parts[0..(parts.len() - 1)].join("/");
+                        Ok(Value::Handle { uri: Uri { value: uri }, resource_id })
+                    }
+                    Err(err) => {
+                        Err(vec![format!("Failed to parse resource-id section of the handle value: {}", err)])
+                    }
+                }
+            } else {
+                Err(vec![format!(
+                    "Expected function parameter type is Handle, represented by a worker-url/resource-id string. But found {}",
+                    str
+                )])
+            }
+        }
+        None => Err(vec![format!(
+            "Expected function parameter type is Handle, represented by a worker-url/resource-id string. But found {}",
+            type_description(value)
+        )]),
+    }
+}
+
 fn validate_function_result(
     val: Value,
     expected_type: &AnalysedType,
@@ -789,6 +819,13 @@ fn validate_function_result(
             },
 
             _ => Err(vec!["Unexpected type; expected a Result type.".to_string()]),
+        },
+        Value::Handle { uri, resource_id } => match expected_type {
+            AnalysedType::Resource { .. } => Ok(serde_json::Value::String(format!(
+                "{}/{}",
+                uri.value, resource_id
+            ))),
+            _ => Err(vec!["Unexpected type; expected a Handle type.".to_string()]),
         },
     }
 }
@@ -1235,7 +1272,7 @@ mod tests {
             result,
             Ok(Value::Record(vec![
                 Value::String("a".to_string()),
-                Value::Option(None)
+                Value::Option(None),
             ]))
         );
     }

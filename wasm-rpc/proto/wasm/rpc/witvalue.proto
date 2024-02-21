@@ -29,6 +29,7 @@ message WitNode {
     WitPrimCharNode char = 19;
     WitPrimBoolNode bool = 20;
     WitPrimStringNode string = 21;
+    WitHandleNode handle = 22;
   }
 }
 
@@ -118,3 +119,7 @@ message WitPrimStringNode {
   string value = 1;
 }
 
+message WitHandleNode {
+  string uri = 1;
+  uint64 value = 2;
+}

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{NodeIndex, WitNode, WitValue};
+use crate::{NodeIndex, Uri, WitNode, WitValue};
 
 pub trait WitValueBuilderExtensions {
     fn builder() -> WitValueBuilder;
@@ -122,6 +122,8 @@ pub trait NodeBuilder: Sized {
             self.result_err_unit()
         }
     }
+
+    fn handle(self, uri: Uri, handle_value: u64) -> Self::Result;
 
     fn finish(self) -> Self::Result;
 }
@@ -242,6 +244,10 @@ impl WitValueBuilder {
 
     pub(crate) fn add_result_err_unit(&mut self) -> NodeIndex {
         self.add(WitNode::ResultValue(Err(None)))
+    }
+
+    pub(crate) fn add_handle(&mut self, uri: Uri, handle_value: u64) -> NodeIndex {
+        self.add(WitNode::Handle((uri, handle_value)))
     }
 
     pub(crate) fn finish_child(&mut self, child: NodeIndex, target_idx: NodeIndex) {
@@ -436,6 +442,11 @@ impl NodeBuilder for WitValueBuilder {
 
     fn result_err_unit(mut self) -> Self::Result {
         let _ = self.add_result_err_unit();
+        self.build()
+    }
+
+    fn handle(mut self, uri: Uri, handle_value: u64) -> Self::Result {
+        let _ = self.add_handle(uri, handle_value);
         self.build()
     }
 
@@ -659,6 +670,12 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueItemBuilder<ParentBuild
         self.child_items_builder
     }
 
+    fn handle(mut self, uri: Uri, handle_value: u64) -> Self::Result {
+        let item_type_index = self.parent_builder().add_handle(uri, handle_value);
+        self.child_items_builder.add_item(item_type_index);
+        self.child_items_builder
+    }
+
     fn finish(self) -> Self::Result {
         self.child_items_builder
     }
@@ -867,6 +884,13 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueChildBuilder<ParentBuil
         let result_idx = self.parent_builder().add_result_err_unit();
         let target_idx = self.target_idx;
         self.parent_builder().finish_child(result_idx, target_idx);
+        self.builder
+    }
+
+    fn handle(mut self, uri: Uri, handle_value: u64) -> Self::Result {
+        let child_index = self.parent_builder().add_handle(uri, handle_value);
+        let target_idx = self.target_idx;
+        self.parent_builder().finish_child(child_index, target_idx);
         self.builder
     }
 
