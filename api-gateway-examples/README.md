@@ -192,7 +192,7 @@ After creating a template and a worker with golem-services,
 cd api-gateway-examples
 
 # Refer to open_api.json. servers section is for Tyk and worker-bridge section is for worker-bridge
-curl -X PUT http://localhost:9005/v1/api/definitions/oas -H "Content-Type: application/json" --data-binary "@open_api.json"
+curl -X PUT http://localhost:9881/v1/api/definitions/oas -H "Content-Type: application/json" --data-binary "@open_api.json"
 
 ```
 
@@ -214,7 +214,7 @@ curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 
 # TODO; Note, with using OAS API Definition in Tyk - harder to add headers to the request without a management console, therefore explicitly passing it here for demo purpose 
 # In real world, the header is injected by Tyk
-curl -X GET http://localhost:8080/adam/get-cart-contents -H "x-golem-api-definition-id: shopping-cart-v2" -H "x-golem-api-definition-version: 0.0.1"
+curl -X GET http://localhost:8080/adam/get-cart-contents -H "x-golem-api-definition-id: shopping-cart-v2" -H "x-golem-api-definition-version: 0.0.3"
 
 ```
 
