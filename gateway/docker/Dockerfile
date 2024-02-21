@@ -2,7 +2,7 @@
 FROM nginx:latest
 
 # Copy custom NGINX configuration file to the container
-COPY /gateway/nginx.conf /etc/nginx/nginx.conf
+COPY /gateway/nginx.conf.template /etc/nginx/nginx.conf.template
 
 # Expose port 80
 EXPOSE 80
