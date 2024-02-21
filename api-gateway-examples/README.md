@@ -84,7 +84,7 @@ A typical worker bridge endpoint definition looks like this. Please refer to [en
 cd api-gateway-examples
 # register with worker bridge
 # Ensure to make change in template-id in endpoint_definition.json
-# Our golem service is accessible through localhost:9881
+# Our golem service is accessible through localhost:9881. (It will redirect to the right internal service)
 curl -X PUT http://localhost:9881/v1/api/definitions -H "Content-Type: application/json"  -d @endpoint_definition.json
 
 ```
@@ -92,6 +92,7 @@ curl -X PUT http://localhost:9881/v1/api/definitions -H "Content-Type: applicati
 Step 4: Install Tyk API gateway
 
 ```bash
+# In some other location
 git clone https://github.com/TykTechnologies/tyk-gateway-docker
 cd tyk-gateway-docker
 docker-compose up
