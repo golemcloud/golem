@@ -17,6 +17,10 @@ http {
             proxy_set_header Connection "upgrade";
         }
 
+        location /v1/api {
+            proxy_pass http://$GOLEM_WORKER_SERVICE_HOST:$GOLEM_WORKER_SERVICE_PORT;
+        }
+
         location ~ /v2/templates/[^/]+/workers(.*)$ {
             proxy_pass http://$GOLEM_WORKER_SERVICE_HOST:$GOLEM_WORKER_SERVICE_PORT;
         }
