@@ -47,12 +47,50 @@ use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::worker_executor_clients::WorkerExecutorClients;
 
 pub struct ConnectWorkerStream {
-    streaming: Streaming<LogEvent>,
+    stream: tokio_stream::wrappers::ReceiverStream<Result<LogEvent, Status>>,
+    cancel: tokio_util::sync::CancellationToken,
 }
 
 impl ConnectWorkerStream {
     pub fn new(streaming: Streaming<LogEvent>) -> Self {
-        Self { streaming }
+        // Create a channel which is Send and Sync.
+        // Streaming is not Sync.
+        let (sender, receiver) = tokio::sync::mpsc::channel(32);
+        let mut streaming = streaming;
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        tokio::spawn({
+            let cancel = cancel.clone();
+
+            let forward_loop = {
+                let sender = sender.clone();
+                async move {
+                    while let Some(message) = streaming.next().await {
+                        if let Err(error) = sender.send(message).await {
+                            tracing::info!("Failed to forward WorkerStream: {error}");
+                            break;
+                        }
+                    }
+                }
+            };
+
+            async move {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        tracing::info!("WorkerStream cancelled");
+                    }
+                    _ = forward_loop => {
+                        tracing::info!("WorkerStream forward loop finished");
+                    }
+                };
+                sender.closed().await;
+            }
+        });
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(receiver);
+
+        Self { stream, cancel }
     }
 }
 
@@ -63,7 +101,13 @@ impl Stream for ConnectWorkerStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<LogEvent, Status>>> {
-        self.streaming.poll_next_unpin(cx)
+        self.stream.poll_next_unpin(cx)
+    }
+}
+
+impl Drop for ConnectWorkerStream {
+    fn drop(&mut self) {
+        self.cancel.cancel();
     }
 }
 
