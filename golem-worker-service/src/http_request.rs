@@ -821,9 +821,13 @@ mod tests {
                 function_params,
             );
 
-            let resolved_route = api_request.resolve(&api_specification).unwrap();
+            let resolved_route = api_request.resolve(&api_specification);
 
-            let result = ResolvedRouteAsWorkerRequest::from_resolved_route(resolved_route);
+
+            let result = match resolved_route {
+                Some(resolved_route) => ResolvedRouteAsWorkerRequest::from_resolved_route(resolved_route),
+                None => Err("not found")
+            };
 
             assert_eq!(result.is_ok(), ok);
         }

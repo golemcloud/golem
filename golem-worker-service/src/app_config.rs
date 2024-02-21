@@ -86,6 +86,8 @@ mod tests {
             "GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN",
             "5C832D93-FF85-4A8F-9803-513950FDFDB1",
         );
+        std::env::set_var("GOLEM__ROUTING_TABLE__HOST", "golem-shard-manager");
+        std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
 
         // The rest can be loaded from the toml
         let config = super::WorkerServiceConfig::default();
