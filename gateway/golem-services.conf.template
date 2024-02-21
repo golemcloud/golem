@@ -10,11 +10,19 @@ http {
         listen 80;
         server_name localhost;
 
+        location ~ /v2/templates/[^/]+/workers/[^/]+/connect$ {
+            proxy_pass http://$GOLEM_WORKER_SERVICE_HOST:$GOLEM_WORKER_SERVICE_PORT;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade "websocket";
+            proxy_set_header Connection "upgrade";
+        }
+
         location ~ /v2/templates/[^/]+/workers(.*)$ {
             # The name of the service should match the service name in docker-compose files
             # Also refer to .env to ensure if the service is running in the right port
             proxy_pass http://$GOLEM_WORKER_SERVICE_HOST:$GOLEM_WORKER_SERVICE_PORT;
         }
+
         location /v2/templates {
             # The name of the service should match the service name in docker-compose files
             # Also refer to .env to ensure if the service is running in the right port
