@@ -5,15 +5,14 @@ It's worth reading this document before you wrap your worker functionalities as 
 to outside world, because you may get this for free.
 
 In order for this to work, we have incorporated a functionality into worker-service that can accept API definitions that can map endpoints to workers.
-Implementation detail: Internally, a mini (poor man's) gateway functionality is incorporated into worker-service. This is just a detail or the curious ones.
+Implementation detail if you are curious: Internally, a mini (poor man's) gateway functionality is incorporated into worker-service.
 
-We write an API definition and register with the worker service. 
-On a high level, this definition is merely a set of endpoints, and the actual function that needs to be executed by your particular worker instance to serve the endpoint
+Essentially, we write an API definition and register with the worker service. Now worker-service can act as your mini-gateway,
+which you can integrate with external API gateways if needed. This API definition (on a very high) is a set of endpoints, each specified with the name of the function that needs to be executed by your particular worker instance to serve each endpoint.
 
 Registration of this endpoint definition is pretty simple. The details of how much you can configure can be discussed later.
-Currently, we are just focusing on the basic registration of the endpoint definition.
 
-## An example, including integration with Tyk API Gateway
+## An example, including integration with an externa API Gateway
 
 Once we are able to deploy our Golem service, we can integrate it with external API Gateways. Here we took Tyk as an example.
 This is a common use case for Golem, as it allows us to leverage the existing infrastructure and security features of the API Gateway,
