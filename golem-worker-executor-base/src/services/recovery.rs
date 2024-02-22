@@ -523,10 +523,11 @@ mod tests {
         AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerId,
         WorkerMetadata, WorkerStatus,
     };
-    use golem_wasm_rpc::Value;
+    use golem_wasm_rpc::wasmtime::ResourceStore;
+    use golem_wasm_rpc::{Uri, Value};
     use tokio::runtime::Handle;
     use tokio::time::{timeout, Instant};
-    use wasmtime::component::Instance;
+    use wasmtime::component::{Instance, ResourceAny};
     use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
     use crate::services::oplog::{OplogService, OplogServiceMock};
@@ -798,6 +799,24 @@ mod tests {
             _maximum: Option<u32>,
         ) -> anyhow::Result<bool> {
             Ok(true)
+        }
+    }
+
+    impl ResourceStore for EmptyContext {
+        fn self_uri(&self) -> Uri {
+            todo!()
+        }
+
+        fn add(&mut self, _resource: ResourceAny) -> u64 {
+            todo!()
+        }
+
+        fn borrow(&self, _resource_id: u64) -> Option<ResourceAny> {
+            todo!()
+        }
+
+        fn remove(&mut self, _resource_id: u64) -> Option<ResourceAny> {
+            todo!()
         }
     }
 

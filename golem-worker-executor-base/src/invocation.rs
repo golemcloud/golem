@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use anyhow::anyhow;
-use golem_common::model::{CallingConvention, VersionedWorkerId, WorkerStatus};
+use golem_common::model::{
+    parse_function_name, CallingConvention, VersionedWorkerId, WorkerStatus,
+};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output};
 use golem_wasm_rpc::Value;
 use tracing::{debug, error, warn};
@@ -22,7 +24,6 @@ use wasmtime::AsContextMut;
 
 use crate::error::{is_interrupt, is_suspend, GolemError};
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
-use crate::model::parse_function_name;
 use crate::workerctx::{FuelManagement, WorkerCtx};
 
 /// Invokes a function on a worker.
@@ -142,26 +143,39 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 ) -> anyhow::Result<Option<Vec<Value>>> {
     let mut store = store.as_context_mut();
 
-    let (interface_name, function_name) = parse_function_name(&full_function_name);
+    let parsed = parse_function_name(&full_function_name);
 
-    let function = match interface_name {
-        Some(interface_name) => instance
-            .exports(&mut store)
-            .instance(interface_name)
-            .ok_or(anyhow!(
-                "could not load exports for interface {}",
-                interface_name
-            ))?
-            .func(function_name)
-            .ok_or(anyhow!(
-                "could not load function {} for interface {}",
-                function_name,
-                interface_name
-            )),
-        None => instance
-            .get_func(&mut store, function_name)
-            .ok_or(anyhow!("could not load function {}", function_name)),
-    }?;
+    let function =
+        match &parsed.interface {
+            Some(interface_name) => {
+                let mut exports = instance.exports(&mut store);
+                let mut exported_instance = exports.instance(interface_name).ok_or(anyhow!(
+                    "could not load exports for interface {}",
+                    interface_name
+                ))?;
+                match exported_instance.func(&parsed.function) {
+                    Some(func) => Ok(func),
+                    None => match parsed.method_as_static() {
+                        None => Err(anyhow!(
+                            "could not load function {} for interface {}",
+                            &parsed.function,
+                            interface_name
+                        )),
+                        Some(parsed_static) => exported_instance
+                            .func(&parsed_static.function)
+                            .ok_or(anyhow!(
+                                "could not load function {} or {} for interface {}",
+                                &parsed.function,
+                                &parsed_static.function,
+                                interface_name
+                            )),
+                    },
+                }
+            }
+            None => instance
+                .get_func(&mut store, &parsed.function)
+                .ok_or(anyhow!("could not load function {}", &parsed.function)),
+        }?;
 
     if was_live_before {
         store
@@ -185,7 +199,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
         function,
         &function_input,
         calling_convention.try_into().unwrap(),
-        &format!("{worker_id}/{function_name}"),
+        &format!("{worker_id}/{full_function_name}"),
     )
     .await;
 
@@ -256,7 +270,7 @@ async fn invoke<Ctx: WorkerCtx>(
                 .iter()
                 .zip(param_types.iter())
                 .map(|(param, param_type)| {
-                    decode_param(param, param_type).map_err(GolemError::from)
+                    decode_param(param, param_type, store.data_mut()).map_err(GolemError::from)
                 })
                 .collect::<Result<Vec<Val>, GolemError>>()?;
 
@@ -266,7 +280,8 @@ async fn invoke<Ctx: WorkerCtx>(
 
             let mut output: Vec<Value> = Vec::new();
             for result in results.iter() {
-                let result_value = encode_output(result).map_err(GolemError::from)?;
+                let result_value =
+                    encode_output(result, store.data_mut()).map_err(GolemError::from)?;
                 output.push(result_value);
             }
 

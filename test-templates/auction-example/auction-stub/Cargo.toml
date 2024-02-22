@@ -10,11 +10,11 @@ package = "auction:auction"
 world = "wasm-rpc-stub-auction"
 path = "wit"
 
-[package.metadata.component.target.dependencies."golem:rpc"]
-path = "wit/deps/wasm-rpc"
-
 [package.metadata.component.target.dependencies."auction:auction"]
 path = "wit/deps/auction_auction"
+
+[package.metadata.component.target.dependencies."golem:rpc"]
+path = "wit/deps/wasm-rpc"
 
 [dependencies.golem-wasm-rpc]
 path = "../../../wasm-rpc/wasm-rpc"

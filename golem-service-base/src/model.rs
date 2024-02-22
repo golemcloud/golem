@@ -15,9 +15,10 @@
 use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
-use golem_common::model::{ShardId, TemplateId, WorkerStatus};
+use golem_common::model::{parse_function_name, ShardId, TemplateId, WorkerStatus};
+use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use http::Uri;
-use poem_openapi::{NewType, Object, Union};
+use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 
@@ -816,6 +817,63 @@ impl Serialize for TypeBool {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Enum)]
+pub enum ResourceMode {
+    Borrowed,
+    Owned,
+}
+
+impl From<AnalysedResourceMode> for ResourceMode {
+    fn from(value: AnalysedResourceMode) -> Self {
+        match value {
+            AnalysedResourceMode::Borrowed => ResourceMode::Borrowed,
+            AnalysedResourceMode::Owned => ResourceMode::Owned,
+        }
+    }
+}
+
+impl From<ResourceMode> for AnalysedResourceMode {
+    fn from(value: ResourceMode) -> Self {
+        match value {
+            ResourceMode::Borrowed => AnalysedResourceMode::Borrowed,
+            ResourceMode::Owned => AnalysedResourceMode::Owned,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+pub struct TypeHandle {
+    resource_id: u64,
+    mode: ResourceMode,
+}
+
+impl TryFrom<golem_wasm_rpc::protobuf::TypeHandle> for TypeHandle {
+    type Error = String;
+
+    fn try_from(value: golem_wasm_rpc::protobuf::TypeHandle) -> Result<Self, Self::Error> {
+        Ok(Self {
+            resource_id: value.resource_id,
+            mode: match golem_wasm_rpc::protobuf::ResourceMode::try_from(value.mode) {
+                Ok(golem_wasm_rpc::protobuf::ResourceMode::Borrowed) => ResourceMode::Borrowed,
+                Ok(golem_wasm_rpc::protobuf::ResourceMode::Owned) => ResourceMode::Owned,
+                Err(_) => Err("Invalid mode".to_string())?,
+            },
+        })
+    }
+}
+
+impl From<TypeHandle> for golem_wasm_rpc::protobuf::TypeHandle {
+    fn from(value: TypeHandle) -> Self {
+        Self {
+            resource_id: value.resource_id,
+            mode: match value.mode {
+                ResourceMode::Borrowed => golem_wasm_rpc::protobuf::ResourceMode::Borrowed as i32,
+                ResourceMode::Owned => golem_wasm_rpc::protobuf::ResourceMode::Owned as i32,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 pub enum Type {
@@ -840,6 +898,7 @@ pub enum Type {
     U8(TypeU8),
     S8(TypeS8),
     Bool(TypeBool),
+    Handle(TypeHandle),
 }
 
 impl TryFrom<golem_wasm_rpc::protobuf::Type> for Type {
@@ -959,6 +1018,9 @@ impl TryFrom<golem_wasm_rpc::protobuf::Type> for Type {
             Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
                 golem_wasm_rpc::protobuf::TypePrimitive { primitive },
             )) => Err(format!("Invalid primitive: {}", primitive)),
+            Some(golem_wasm_rpc::protobuf::r#type::Type::Handle(handle)) => {
+                Ok(Self::Handle(handle.try_into()?))
+            }
         }
     }
 }
@@ -1098,6 +1160,11 @@ impl From<Type> for golem_wasm_rpc::protobuf::Type {
             Type::Bool(_) => Self {
                 r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(
                     golem_wasm_rpc::protobuf::TypePrimitive { primitive: 0 },
+                )),
+            },
+            Type::Handle(handle) => Self {
+                r#type: Some(golem_wasm_rpc::protobuf::r#type::Type::Handle(
+                    handle.into(),
                 )),
             },
         }
@@ -1579,6 +1646,12 @@ impl From<golem_wasm_ast::analysis::AnalysedType> for Type {
                         .collect(),
                 })
             }
+            golem_wasm_ast::analysis::AnalysedType::Resource { id, resource_mode } => {
+                Type::Handle(TypeHandle {
+                    resource_id: id.value,
+                    mode: resource_mode.into(),
+                })
+            }
         }
     }
 }
@@ -1629,6 +1702,12 @@ impl From<Type> for golem_wasm_ast::analysis::AnalysedType {
                     .map(|case| (case.name, case.typ.map(|t| (*t).into())))
                     .collect(),
             ),
+            Type::Handle(handle) => golem_wasm_ast::analysis::AnalysedType::Resource {
+                id: AnalysedResourceId {
+                    value: handle.resource_id,
+                },
+                resource_mode: handle.mode.into(),
+            },
         }
     }
 }
@@ -1660,25 +1739,41 @@ impl TemplateMetadata {
         functions
     }
 
-    pub fn function_by_name(&self, name: &String) -> Option<ExportFunction> {
-        let last_slash = name.rfind('/');
+    pub fn function_by_name(&self, name: &str) -> Option<ExportFunction> {
+        let parsed = parse_function_name(name);
 
-        match last_slash {
+        match &parsed.interface {
             None => self.functions().iter().find(|f| f.name == *name).cloned(),
-            Some(last_slash_index) => {
-                let (instance_name, function_name) = name.split_at(last_slash_index);
-                let function_name = &function_name[1..];
-
-                self.instances()
+            Some(instance_name) => {
+                let exported_function = self
+                    .instances()
                     .iter()
-                    .find(|instance| instance.name == instance_name)
+                    .find(|instance| instance.name == *instance_name)
                     .and_then(|instance| {
                         instance
                             .functions
                             .iter()
-                            .find(|f| f.name == function_name)
+                            .find(|f| f.name == parsed.function)
                             .cloned()
-                    })
+                    });
+                if exported_function.is_none() {
+                    match parsed.method_as_static() {
+                        Some(parsed_static) => self
+                            .instances()
+                            .iter()
+                            .find(|instance| instance.name == *instance_name)
+                            .and_then(|instance| {
+                                instance
+                                    .functions
+                                    .iter()
+                                    .find(|f| f.name == parsed_static.function)
+                                    .cloned()
+                            }),
+                        None => None,
+                    }
+                } else {
+                    exported_function
+                }
             }
         }
     }

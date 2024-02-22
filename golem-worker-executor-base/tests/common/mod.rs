@@ -7,7 +7,8 @@ use golem_wasm_ast::IgnoreAllButMetadata;
 use golem_wasm_rpc::protobuf::{
     val, Val, ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple,
 };
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::{Uri, Value};
 use prometheus::Registry;
 use std::collections::HashMap;
 use std::path::Path;
@@ -83,7 +84,7 @@ use golem_worker_executor_base::services::rpc::{
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use uuid::Uuid;
-use wasmtime::component::{Instance, Linker};
+use wasmtime::component::{Instance, Linker, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 
 pub struct TestWorkerExecutor {
@@ -1138,6 +1139,24 @@ impl InvocationHooks for TestWorkerCtx {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
+    }
+}
+
+impl ResourceStore for TestWorkerCtx {
+    fn self_uri(&self) -> Uri {
+        self.durable_ctx.self_uri()
+    }
+
+    fn add(&mut self, resource: ResourceAny) -> u64 {
+        self.durable_ctx.add(resource)
+    }
+
+    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+        self.durable_ctx.borrow(resource_id)
+    }
+
+    fn remove(&mut self, resource_id: u64) -> Option<ResourceAny> {
+        self.durable_ctx.remove(resource_id)
     }
 }
 

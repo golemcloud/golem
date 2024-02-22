@@ -30,6 +30,13 @@ interface api {
   bid: func(bidder-id: bidder-id, price: float32) -> bid-result;
 
   close-auction: func() -> option<bidder-id>;
+
+  // an alternative interface for hosting multiple auctions in a single worker
+  resource running-auction {
+    constructor(auction: auction);
+    bid: func(bidder-id: bidder-id, price: float32) -> bid-result;
+    close: func() -> option<bidder-id>;
+  }
 }
 
 world auction {
