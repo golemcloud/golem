@@ -1,10 +1,10 @@
 version: '3.8'
 
 services:
-  gateway:
+  router:
     build:
       context: .
-      dockerfile: gateway/docker/Dockerfile
+      dockerfile: golem-router/docker/Dockerfile
     # Note that, golem_gateway_port should be changed carefully
     # as it is currently set to match the default port in golem-cli:
     # Golem base url. Default: GOLEM_BASE_URL environment variable or http://localhost:9881
