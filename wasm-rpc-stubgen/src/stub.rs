@@ -129,6 +129,7 @@ pub struct InterfaceStub {
     pub static_functions: Vec<FunctionStub>,
     pub imports: Vec<InterfaceStubImport>,
     pub global: bool,
+    pub owner_interface: Option<String>,
 }
 
 impl InterfaceStub {
@@ -302,6 +303,7 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
                 global: false,
                 constructor_params: None,
                 static_functions: vec![],
+                owner_interface: None,
             });
 
             interfaces.extend(resource_interfaces);
@@ -320,6 +322,7 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
             global: true,
             constructor_params: None,
             static_functions: vec![],
+            owner_interface: None,
         });
     }
 
@@ -432,12 +435,13 @@ fn collect_stub_resources<'a>(
                         .clone();
 
                     interfaces.push(InterfaceStub {
-                        name: format!("{owner_interface}/{resource_name}"),
+                        name: resource_name,
                         functions,
                         imports,
                         global: false,
                         constructor_params,
                         static_functions,
+                        owner_interface: Some(owner_interface.to_string()),
                     });
                 }
                 TypeOwner::None => {}

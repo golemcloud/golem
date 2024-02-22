@@ -376,7 +376,7 @@ pub fn encode_output(
             Ok(Value::Flags(encoded_value))
         }
         Val::Resource(resource) => {
-            let id = resource_store.add(resource.clone());
+            let id = resource_store.add(*resource);
             Ok(Value::Handle {
                 uri: resource_store.self_uri(),
                 resource_id: id,
