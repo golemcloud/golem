@@ -288,7 +288,7 @@ fn generate_function_stub_source(
             output_values.push(extract_from_wit_value(
                 typ,
                 &def.resolve,
-                quote! { result },
+                quote! { result.tuple_element(0).expect("tuple not found") },
             )?);
         }
         FunctionResultStub::Multi(params) => {
@@ -303,7 +303,7 @@ fn generate_function_stub_source(
         FunctionResultStub::SelfType if mode == FunctionMode::Constructor => {
             output_values.push(quote! {
                 {
-                    let (uri, id) = result.handle().expect("handle not found");
+                    let (uri, id) = result.tuple_element(0).expect("tuple not found").handle().expect("handle not found");
                     Self {
                         rpc,
                         id,
