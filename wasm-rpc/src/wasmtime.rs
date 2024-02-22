@@ -25,16 +25,16 @@ pub enum EncodingError {
 
 pub trait ResourceStore {
     fn self_uri(&self) -> Uri;
-    fn add(&self, resource: ResourceAny) -> u64;
+    fn add(&mut self, resource: ResourceAny) -> u64;
     fn borrow(&self, resource_id: u64) -> Option<ResourceAny>;
-    fn remove(&self, resource_id: u64) -> Option<ResourceAny>;
+    fn remove(&mut self, resource_id: u64) -> Option<ResourceAny>;
 }
 
 /// Converts a Value to a wasmtime Val based on the available type information.
 pub fn decode_param(
     param: &Value,
     param_type: &Type,
-    resource_store: &impl ResourceStore,
+    resource_store: &mut impl ResourceStore,
 ) -> Result<Val, EncodingError> {
     match param_type {
         Type::Bool => match param {
@@ -274,7 +274,7 @@ pub fn decode_param(
 /// Converts a wasmtime Val to a Golem protobuf Val
 pub fn encode_output(
     value: &Val,
-    resource_store: &impl ResourceStore,
+    resource_store: &mut impl ResourceStore,
 ) -> Result<Value, EncodingError> {
     match value {
         Val::Bool(bool) => Ok(Value::Bool(*bool)),
@@ -319,7 +319,9 @@ pub fn encode_output(
                 discriminant,
                 value,
             } = wasm_variant;
-            let encoded_output = value.map(|v| encode_output(&v, resource_store)).transpose()?;
+            let encoded_output = value
+                .map(|v| encode_output(&v, resource_store))
+                .transpose()?;
             Ok(Value::Variant {
                 case_idx: discriminant,
                 case_value: encoded_output.map(Box::new),
@@ -342,11 +344,15 @@ pub fn encode_output(
         },
         Val::Result(result) => match result.value() {
             Ok(value) => {
-                let encoded_output = value.map(|v| encode_output(v, resource_store)).transpose()?;
+                let encoded_output = value
+                    .map(|v| encode_output(v, resource_store))
+                    .transpose()?;
                 Ok(Value::Result(Ok(encoded_output.map(Box::new))))
             }
             Err(value) => {
-                let encoded_output = value.map(|v| encode_output(v, resource_store)).transpose()?;
+                let encoded_output = value
+                    .map(|v| encode_output(v, resource_store))
+                    .transpose()?;
                 Ok(Value::Result(Err(encoded_output.map(Box::new))))
             }
         },
