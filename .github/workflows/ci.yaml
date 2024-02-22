@@ -317,33 +317,19 @@ jobs:
           path: ./target/debug/
       - name: Restore executable flag
         run: chmod a+x ./target/debug/*
-      - name: Generate golem-worker-service OpenAPI yaml
-        working-directory: golem-worker-service
-        run: ../target/debug/golem-worker-service-yaml > ../target/golem-service.yaml
-      - name: Check golem_worker_service OpenAPI yaml latest
+      - name: Generate Golem OpenAPI yaml
+        working-directory: golem-public-api
+        run: ../target/debug/golem-service-yaml > ../target/golem-service.yaml
+      - name: Check Golem OpenAPI yaml latest
         shell: bash
         run: |
-          if diff openapi/golem-worker-service.yaml target/golem-worker-service.yaml >/dev/null 2>&1
-          then
-            echo "Latest golem_worker_service OpenAPI spec version detected."
-          else
-            echo "openapi/golem-worker-service.yaml is not the same as produced by golem-worker-service-yaml." 1>&2
-            echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec for golem_worker_service." 1>&2
-            exit 1
-          fi
-      - name: Generate golem-template-service OpenAPI yaml
-        working-directory: golem-template-service
-        run: ../target/debug/golem-template-service-yaml > ../target/golem-template-service.yaml
-      - name: Check golem_template_service OpenAPI yaml latest
-        shell: bash
-        run: |
-          if diff openapi/golem-template-service.yaml target/golem-template-service.yaml >/dev/null 2>&1
-          then
-            echo "Latest golem_template_service OpenAPI spec version detected."
-          else
-            echo "openapi/golem-template-service.yaml is not the same as produced by golem-template-service-yaml." 1>&2
-            echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec for golem_template_service." 1>&2
-            exit 1
+          if diff openapi/golem-service.yaml target/golem-service.yaml  >/dev/null 2>&1
+            then
+              echo "Latest Golem OpenAPI spec version detected."
+            else
+              echo "openapi/golem-service.yaml is not the same as produced by golem-service-yaml." 1>&2
+              echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec." 1>&2
+              exit 1
           fi
       - name: Generate Golem client
         working-directory: golem-openapi-client-generator
