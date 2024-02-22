@@ -1,17 +1,21 @@
 pub mod db;
-pub mod golem_service;
+pub mod golem_worker_service;
 pub mod redis;
 pub mod shard_manager;
 pub mod worker;
+pub mod nginx;
+
+pub mod golem_template_service;
 
 use crate::context::db::{Db, DbInfo};
-use crate::context::golem_service::{GolemService, GolemServiceInfo};
 use crate::context::redis::{Redis, RedisInfo};
 use crate::context::shard_manager::{ShardManager, ShardManagerInfo};
 use crate::context::worker::{WorkerExecutors, WorkerExecutorsInfo};
 use libtest_mimic::Failed;
 use std::path::PathBuf;
 use testcontainers::clients;
+use crate::context::golem_template_service::{GolemTemplateService, GolemTemplateServiceInfo};
+use crate::context::golem_worker_service::{GolemWorkerService, GolemWorkerServiceInfo};
 
 const NETWORK: &str = "golem_test_network";
 const TAG: &str = "v0.0.60";
@@ -67,8 +71,10 @@ pub struct Context<'docker_client> {
     db: Db<'docker_client>,
     redis: Redis<'docker_client>,
     shard_manager: ShardManager<'docker_client>,
-    golem_service: GolemService<'docker_client>,
+    golem_template_service: GolemTemplateService<'docker_client>,
+    golem_worker_service: GolemWorkerService<'docker_client>,
     worker_executors: WorkerExecutors<'docker_client>,
+    nginx: Nginx<'docker_client>
 }
 
 impl Context<'_> {
@@ -80,13 +86,19 @@ impl Context<'_> {
         let db = Db::start(docker, &env_config)?;
         let redis = Redis::make(docker, &env_config)?;
         let shard_manager = ShardManager::start(docker, &env_config, &redis.info())?;
-        let golem_service =
-            GolemService::start(docker, &env_config, &shard_manager.info(), &db.info())?;
+
+        let golem_template_service =
+            GolemTemplateService::start(docker, &env_config, &db.info())?;
+
+        let golem_worker_service =
+            GolemWorkerService::start(docker, &env_config, &shard_manager.info(), &db.info(), &redis.info(), &golem_template_service.info())?;
+
         let worker_executors = WorkerExecutors::start(
             docker,
             &env_config,
             &redis.info(),
-            &golem_service.info(),
+            &golem_worker_service.info(),
+            &golem_template_service.info(),
             &shard_manager.info(),
         )?;
 
@@ -95,7 +107,8 @@ impl Context<'_> {
             db,
             redis,
             shard_manager,
-            golem_service,
+            golem_template_service,
+            golem_worker_service,
             worker_executors,
         })
     }
@@ -106,7 +119,8 @@ impl Context<'_> {
             db: self.db.info(),
             redis: self.redis.info(),
             shard_manager: self.shard_manager.info(),
-            golem_service: self.golem_service.info(),
+            golem_template_service: self.golem_template_service.info(),
+            golem_worker_service: self.golem_worker_service.info(),
             worker_executors: self.worker_executors.info(),
         }
     }
@@ -123,6 +137,7 @@ pub struct ContextInfo {
     pub db: DbInfo,
     pub redis: RedisInfo,
     pub shard_manager: ShardManagerInfo,
-    pub golem_service: GolemServiceInfo,
+    pub golem_template_service: GolemTemplateServiceInfo,
+    pub golem_worker_service: GolemWorkerServiceInfo,
     pub worker_executors: WorkerExecutorsInfo,
 }

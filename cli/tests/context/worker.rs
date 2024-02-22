@@ -1,5 +1,5 @@
 use crate::context::redis::RedisInfo;
-use crate::context::{EnvConfig, GolemServiceInfo, ShardManagerInfo, NETWORK, TAG};
+use crate::context::{EnvConfig, ShardManagerInfo, NETWORK, TAG};
 use libtest_mimic::Failed;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
@@ -13,6 +13,8 @@ use tonic::transport::Uri;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::HealthCheckRequest;
+use crate::context::golem_template_service::GolemTemplateServiceInfo;
+use crate::context::golem_worker_service::GolemWorkerServiceInfo;
 
 pub struct WorkerExecutor<'docker_client> {
     host: String,
@@ -76,13 +78,14 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         shard_id: u16,
         env_config: &EnvConfig,
         redis: &RedisInfo,
-        golem: &GolemServiceInfo,
+        worker: &GolemWorkerServiceInfo,
+        template: &GolemTemplateServiceInfo,
         shard_manager: &ShardManagerInfo,
     ) -> Result<WorkerExecutor<'docker_client>, Failed> {
         if env_config.local_golem {
-            WorkerExecutor::start_process(shard_id, env_config, redis, golem, shard_manager)
+            WorkerExecutor::start_process(shard_id, env_config, redis, worker, template, shard_manager)
         } else {
-            WorkerExecutor::start_docker(docker, shard_id, env_config, redis, golem, shard_manager)
+            WorkerExecutor::start_docker(docker, shard_id, env_config, redis, worker, template, shard_manager)
         }
     }
 
@@ -91,7 +94,8 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         shard_id: u16,
         env_config: &EnvConfig,
         redis: &RedisInfo,
-        golem: &GolemServiceInfo,
+        worker: &GolemWorkerServiceInfo,
+        template: &GolemTemplateServiceInfo,
         shard_manager: &ShardManagerInfo,
     ) -> Result<WorkerExecutor<'docker_client>, Failed> {
         println!("Starting Worker Executor {shard_id} docker");
@@ -100,7 +104,7 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         let http_port = 9100 + shard_id;
 
         let env_vars =
-            WorkerExecutor::env_vars(port, http_port, env_config, redis, golem, shard_manager);
+            WorkerExecutor::env_vars(port, http_port, env_config, redis, worker, template, shard_manager);
         let name = format!("golem_worker_executor{shard_id}");
 
         let image = RunnableImage::from(WorkerExecutorImage::new(port, http_port, env_vars))
@@ -120,7 +124,8 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         http_port: u16,
         env_config: &EnvConfig,
         redis: &RedisInfo,
-        golem: &GolemServiceInfo,
+        worker: &GolemWorkerServiceInfo,
+        template: &GolemTemplateServiceInfo,
         shard_manager: &ShardManagerInfo,
     ) -> HashMap<String, String> {
         let log_level = if env_config.verbose { "debug" } else { "info" };
@@ -133,11 +138,11 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
             ("GOLEM__REDIS__HOST"                            , &redis.host),
             ("GOLEM__REDIS__PORT"                            , &redis.port.to_string()),
             ("GOLEM__REDIS__KEY_PREFIX"                      , &env_config.redis_key_prefix),
-            ("GOLEM__PUBLIC_WORKER_API__HOST"                , &golem.host),
-            ("GOLEM__PUBLIC_WORKER_API__PORT"                , &golem.grpc_port.to_string()),
+            ("GOLEM__PUBLIC_WORKER_API__HOST"                , &worker.host),
+            ("GOLEM__PUBLIC_WORKER_API__PORT"                , &worker.grpc_port.to_string()),
             ("GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN"        , "2A354594-7A63-4091-A46B-CC58D379F677"),
-            ("GOLEM__TEMPLATE_SERVICE__CONFIG__HOST"         , &golem.host),
-            ("GOLEM__TEMPLATE_SERVICE__CONFIG__PORT"         , &golem.grpc_port.to_string()),
+            ("GOLEM__TEMPLATE_SERVICE__CONFIG__HOST"         , &template.host),
+            ("GOLEM__TEMPLATE_SERVICE__CONFIG__PORT"         , &template.grpc_port.to_string()),
             ("GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN" , "2A354594-7A63-4091-A46B-CC58D379F677"),
             ("GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE"        , "Disabled"),
             // ("GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE"        , "Local"),
@@ -163,7 +168,8 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         shard_id: u16,
         env_config: &EnvConfig,
         redis: &RedisInfo,
-        golem: &GolemServiceInfo,
+        worker: &GolemWorkerServiceInfo,
+        template: &GolemTemplateServiceInfo,
         shard_manager: &ShardManagerInfo,
     ) -> Result<WorkerExecutor<'docker_client>, Failed> {
         let port = 9000 + shard_id;
@@ -191,7 +197,8 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
                 http_port,
                 env_config,
                 redis,
-                golem,
+                worker,
+                template,
                 shard_manager,
             ))
             .stdin(Stdio::piped())
@@ -344,7 +351,8 @@ impl<'docker_client> WorkerExecutors<'docker_client> {
         docker: &'docker_client clients::Cli,
         env_config: &EnvConfig,
         redis: &RedisInfo,
-        golem: &GolemServiceInfo,
+        worker: &GolemWorkerServiceInfo,
+        template: &GolemTemplateServiceInfo,
         shard_manager: &ShardManagerInfo,
     ) -> Result<WorkerExecutors<'docker_client>, Failed> {
         let shards = 3;
@@ -357,7 +365,8 @@ impl<'docker_client> WorkerExecutors<'docker_client> {
                 shard_id.try_into().unwrap(),
                 env_config,
                 redis,
-                golem,
+                worker,
+                template,
                 shard_manager,
             )?)
         }

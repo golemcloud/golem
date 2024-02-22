@@ -1,4 +1,3 @@
-use crate::context::golem_service::GolemServiceInfo;
 use libtest_mimic::Failed;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -7,6 +6,7 @@ use std::fmt::Debug;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use crate::context::golem_template_service::GolemTemplateServiceInfo;
 
 #[derive(Debug, Clone)]
 pub struct CliConfig {
@@ -57,7 +57,8 @@ impl CliLive {
         }
     }
 
-    pub fn make(golem: &GolemServiceInfo) -> Result<CliLive, Failed> {
+    // TODO; Use NginxInfo
+    pub fn make(golem: &GolemTemplateServiceInfo) -> Result<CliLive, Failed> {
         let golem_cli_path = PathBuf::from("./target/debug/golem-cli");
 
         if golem_cli_path.exists() {

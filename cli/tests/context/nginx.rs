@@ -1,21 +1,57 @@
-use crate::context::{DbType, EnvConfig, NETWORK};
+use crate::context::{DbType, EnvConfig, NETWORK, TAG};
 use libtest_mimic::Failed;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use testcontainers::{clients, Container, RunnableImage};
+use std::process::Child;
+use testcontainers::{clients, Container, Image, RunnableImage};
+use testcontainers::core::WaitFor;
 
-pub struct Db<'docker_client> {
-    inner: DbInner<'docker_client>,
+#[derive(Debug)]
+struct NginxImage {
+    port: u16,
+    host: String
 }
 
-pub enum DbInner<'docker_client> {
-    Sqlite(PathBuf),
-    Postgres {
-        host: String,
+impl NginxImage {
+    pub fn new(
         port: u16,
-        local_port: u16,
-        _node: Container<'docker_client, testcontainers_modules::postgres::Postgres>,
-    },
+        host: &str,
+    ) -> NginxImage {
+        NginxImage {
+            port,
+            host: host.to_string(),
+        }
+    }
+}
+
+impl Image for NginxImage {
+    type Args = ();
+
+    fn name(&self) -> String {
+        "nginx".to_string()
+    }
+
+    fn tag(&self) -> String {
+        TAG.to_owned()
+    }
+
+    fn ready_conditions(&self) -> Vec<WaitFor> {
+        vec![WaitFor::message_on_stdout("server started")]
+    }
+
+    fn expose_ports(&self) -> Vec<u16> {
+        vec![self.port]
+    }
+}
+
+
+pub struct Nginx<'docker_client> {
+    inner: NginxInner<'docker_client>,
+}
+
+pub enum NginxInner<'docker_client> {
+    Process(Child),
+    Docker(Container<'docker_client, crate::context::golem_worker_service::GolemWorkerServiceImage>),
 }
 
 impl<'docker_client> Db<'docker_client> {
@@ -144,7 +180,7 @@ impl DbInfo {
                 ),
                 ("GOLEM__DB__CONFIG__MAX_CONNECTIONS".to_string(), "10".to_string())
             ]
-            .into(),
+                .into(),
         }
     }
 }
