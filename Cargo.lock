@@ -2027,6 +2027,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-public-api"
+version = "0.0.0"
+dependencies = [
+ "golem-template-service",
+ "golem-worker-service",
+ "poem-openapi",
+ "tokio",
+]
+
+[[package]]
 name = "golem-service-base"
 version = "0.1.0"
 dependencies = [

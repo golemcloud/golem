@@ -20,8 +20,8 @@ use prometheus::Registry;
 use std::ops::Deref;
 use std::sync::Arc;
 
-mod healthcheck;
-mod template;
+pub mod healthcheck;
+pub mod template;
 
 pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {
     let api_service = make_open_api_service(services);

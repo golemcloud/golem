@@ -228,3 +228,20 @@ impl std::error::Error for TemplateError {
     //     Some(&self.source)
     // }
 }
+
+pub struct TemplateServiceNoop{}
+
+#[async_trait]
+impl TemplateService for TemplateServiceNoop {
+    async fn get_by_version(
+        &self,
+        _template_id: &TemplateId,
+        _version: i32,
+    ) -> Result<Option<Template>, TemplateError> {
+        Ok(None)
+    }
+
+    async fn get_latest_version(&self, _template_id: &TemplateId) -> Result<i32, TemplateError> {
+        Ok(0)
+    }
+}

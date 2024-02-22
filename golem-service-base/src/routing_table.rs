@@ -117,3 +117,14 @@ impl RoutingTableService for RoutingTableServiceDefault {
         self.cache.remove(&());
     }
 }
+
+pub struct RoutingTableServiceNoop {}
+
+#[async_trait]
+impl RoutingTableService for RoutingTableServiceNoop {
+    async fn get_routing_table(&self) -> Result<RoutingTable, RoutingTableError> {
+        Err(RoutingTableError::unexpected("Routing table service is not configured"))
+    }
+
+    async fn invalidate_routing_table(&self) {}
+}

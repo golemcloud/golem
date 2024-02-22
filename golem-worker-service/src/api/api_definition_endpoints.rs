@@ -9,7 +9,8 @@ use poem_openapi::*;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
-use crate::api::common::{ApiEndpointError, ApiTags};
+use golem_service_base::api_tags::ApiTags;
+use crate::api::common::{ApiEndpointError};
 use crate::api_definition;
 use crate::api_definition::{ApiDefinitionId, MethodPattern, Version};
 use crate::expr::Expr;

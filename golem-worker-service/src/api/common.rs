@@ -2,19 +2,10 @@ use std::fmt::Display;
 
 use golem_common::model::TemplateId;
 use poem_openapi::payload::Json;
-use poem_openapi::{ApiResponse, Object, Tags, Union};
+use poem_openapi::{ApiResponse, Object, Union};
 use serde::{Deserialize, Serialize};
 
 use crate::api_definition::MethodPattern;
-
-#[derive(Tags)]
-pub enum ApiTags {
-    ApiDefinition,
-    ApiDeployment,
-    ApiDomain,
-    ApiCertificate,
-    Healthcheck,
-}
 
 #[derive(Union)]
 #[oai(discriminator_name = "type", one_of = true)]
