@@ -229,7 +229,7 @@ impl std::error::Error for TemplateError {
     // }
 }
 
-pub struct TemplateServiceNoop{}
+pub struct TemplateServiceNoop {}
 
 #[async_trait]
 impl TemplateService for TemplateServiceNoop {

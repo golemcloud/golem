@@ -21,17 +21,20 @@ type ApiServices = (
     golem_template_service::api::template::TemplateApi,
     golem_worker_service::api::worker::WorkerApi,
     golem_worker_service::api::api_definition_endpoints::RegisterApiDefinitionApi,
-    golem_worker_service::api::healthcheck::HealthcheckApi
+    golem_worker_service::api::healthcheck::HealthcheckApi,
 );
 #[tokio::main]
 async fn main() {
-    let worker_services =  golem_worker_service::service::Services::noop();
+    let worker_services = golem_worker_service::service::Services::noop();
     let template_services = golem_template_service::service::Services::noop();
     let api_service = make_open_api_service(&worker_services, &template_services);
     println!("{}", api_service.spec_yaml())
 }
 
-pub fn make_open_api_service(worker_services: &golem_worker_service::service::Services, template_services: &golem_template_service::service::Services) -> OpenApiService<ApiServices, ()> {
+pub fn make_open_api_service(
+    worker_services: &golem_worker_service::service::Services,
+    template_services: &golem_template_service::service::Services,
+) -> OpenApiService<ApiServices, ()> {
     OpenApiService::new(
         (
             golem_template_service::api::template::TemplateApi {

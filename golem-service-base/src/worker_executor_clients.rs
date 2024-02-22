@@ -60,7 +60,7 @@ impl WorkerExecutorClients for WorkerExecutorClientsDefault {
     }
 }
 
-pub struct WorkerExecutorClientsNoop{}
+pub struct WorkerExecutorClientsNoop {}
 
 #[async_trait]
 impl WorkerExecutorClients for WorkerExecutorClientsNoop {

@@ -69,24 +69,19 @@ impl Services {
     }
 
     pub fn noop() -> Services {
-        let template_service: Arc<dyn template::TemplateService + Sync + Send> = Arc::new(
-            template::TemplateServiceNoop{}
-        );
+        let template_service: Arc<dyn template::TemplateService + Sync + Send> =
+            Arc::new(template::TemplateServiceNoop {});
 
         let routing_table_service: Arc<
             dyn golem_service_base::routing_table::RoutingTableService + Send + Sync,
-        > = Arc::new(
-            golem_service_base::routing_table::RoutingTableServiceNoop{},
-        );
+        > = Arc::new(golem_service_base::routing_table::RoutingTableServiceNoop {});
 
         let worker_executor_grpc_clients: Arc<
             dyn golem_service_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
-        > = Arc::new(
-            golem_service_base::worker_executor_clients::WorkerExecutorClientsNoop{}
-        );
+        > = Arc::new(golem_service_base::worker_executor_clients::WorkerExecutorClientsNoop {});
 
         let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
-            Arc::new(worker::WorkerServiceNoOp{});
+            Arc::new(worker::WorkerServiceNoOp {});
 
         let definition_service: Arc<dyn RegisterApiDefinition + Sync + Send> =
             Arc::new(InMemoryRegistry::default());
