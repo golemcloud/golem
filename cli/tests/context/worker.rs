@@ -1,3 +1,5 @@
+use crate::context::golem_template_service::GolemTemplateServiceInfo;
+use crate::context::golem_worker_service::GolemWorkerServiceInfo;
 use crate::context::redis::RedisInfo;
 use crate::context::{EnvConfig, ShardManagerInfo, NETWORK, TAG};
 use libtest_mimic::Failed;
@@ -13,8 +15,6 @@ use tonic::transport::Uri;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::HealthCheckRequest;
-use crate::context::golem_template_service::GolemTemplateServiceInfo;
-use crate::context::golem_worker_service::GolemWorkerServiceInfo;
 
 pub struct WorkerExecutor<'docker_client> {
     host: String,
@@ -83,9 +83,24 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         shard_manager: &ShardManagerInfo,
     ) -> Result<WorkerExecutor<'docker_client>, Failed> {
         if env_config.local_golem {
-            WorkerExecutor::start_process(shard_id, env_config, redis, worker, template, shard_manager)
+            WorkerExecutor::start_process(
+                shard_id,
+                env_config,
+                redis,
+                worker,
+                template,
+                shard_manager,
+            )
         } else {
-            WorkerExecutor::start_docker(docker, shard_id, env_config, redis, worker, template, shard_manager)
+            WorkerExecutor::start_docker(
+                docker,
+                shard_id,
+                env_config,
+                redis,
+                worker,
+                template,
+                shard_manager,
+            )
         }
     }
 
@@ -103,8 +118,15 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         let port = 9000 + shard_id;
         let http_port = 9100 + shard_id;
 
-        let env_vars =
-            WorkerExecutor::env_vars(port, http_port, env_config, redis, worker, template, shard_manager);
+        let env_vars = WorkerExecutor::env_vars(
+            port,
+            http_port,
+            env_config,
+            redis,
+            worker,
+            template,
+            shard_manager,
+        );
         let name = format!("golem_worker_executor{shard_id}");
 
         let image = RunnableImage::from(WorkerExecutorImage::new(port, http_port, env_vars))

@@ -1,5 +1,5 @@
 use crate::context::db::DbInfo;
-use crate::context::{EnvConfig, ShardManagerInfo, NETWORK, TAG};
+use crate::context::{EnvConfig, NETWORK, TAG};
 use golem_cli::clients::template::{TemplateClient, TemplateClientLive};
 use libtest_mimic::Failed;
 use std::collections::HashMap;
@@ -125,9 +125,11 @@ impl<'docker_client> GolemTemplateService<'docker_client> {
         let env_vars = GolemTemplateService::env_vars(grpc_port, http_port, env_config, db);
         let name = "golem_template_service";
 
-        let image = RunnableImage::from(GolemTemplateServiceImage::new(grpc_port, http_port, env_vars))
-            .with_container_name(name)
-            .with_network(NETWORK);
+        let image = RunnableImage::from(GolemTemplateServiceImage::new(
+            grpc_port, http_port, env_vars,
+        ))
+        .with_container_name(name)
+        .with_network(NETWORK);
         let node = docker.run(image);
 
         Ok(GolemTemplateService {
@@ -187,7 +189,7 @@ impl<'docker_client> GolemTemplateService<'docker_client> {
                 "Expected to have precompiled Golem Template Service at {}",
                 service_run.to_str().unwrap_or("")
             )
-                .into());
+            .into());
         }
 
         println!("Starting {}", service_run.to_str().unwrap_or(""));
@@ -198,10 +200,7 @@ impl<'docker_client> GolemTemplateService<'docker_client> {
         let mut child = Command::new(service_run)
             .current_dir(service_dir)
             .envs(GolemTemplateService::env_vars(
-                grpc_port,
-                http_port,
-                env_config,
-                db,
+                grpc_port, http_port, env_config, db,
             ))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

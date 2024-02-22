@@ -1,21 +1,19 @@
 pub mod db;
+pub mod golem_template_service;
 pub mod golem_worker_service;
 pub mod redis;
 pub mod shard_manager;
 pub mod worker;
-pub mod nginx;
-
-pub mod golem_template_service;
 
 use crate::context::db::{Db, DbInfo};
+use crate::context::golem_template_service::{GolemTemplateService, GolemTemplateServiceInfo};
+use crate::context::golem_worker_service::{GolemWorkerService, GolemWorkerServiceInfo};
 use crate::context::redis::{Redis, RedisInfo};
 use crate::context::shard_manager::{ShardManager, ShardManagerInfo};
 use crate::context::worker::{WorkerExecutors, WorkerExecutorsInfo};
 use libtest_mimic::Failed;
 use std::path::PathBuf;
 use testcontainers::clients;
-use crate::context::golem_template_service::{GolemTemplateService, GolemTemplateServiceInfo};
-use crate::context::golem_worker_service::{GolemWorkerService, GolemWorkerServiceInfo};
 
 const NETWORK: &str = "golem_test_network";
 const TAG: &str = "v0.0.60";
@@ -74,7 +72,6 @@ pub struct Context<'docker_client> {
     golem_template_service: GolemTemplateService<'docker_client>,
     golem_worker_service: GolemWorkerService<'docker_client>,
     worker_executors: WorkerExecutors<'docker_client>,
-    nginx: Nginx<'docker_client>
 }
 
 impl Context<'_> {
@@ -87,11 +84,16 @@ impl Context<'_> {
         let redis = Redis::make(docker, &env_config)?;
         let shard_manager = ShardManager::start(docker, &env_config, &redis.info())?;
 
-        let golem_template_service =
-            GolemTemplateService::start(docker, &env_config, &db.info())?;
+        let golem_template_service = GolemTemplateService::start(docker, &env_config, &db.info())?;
 
-        let golem_worker_service =
-            GolemWorkerService::start(docker, &env_config, &shard_manager.info(), &db.info(), &redis.info(), &golem_template_service.info())?;
+        let golem_worker_service = GolemWorkerService::start(
+            docker,
+            &env_config,
+            &shard_manager.info(),
+            &db.info(),
+            &redis.info(),
+            &golem_template_service.info(),
+        )?;
 
         let worker_executors = WorkerExecutors::start(
             docker,

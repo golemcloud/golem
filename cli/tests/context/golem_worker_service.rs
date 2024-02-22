@@ -1,18 +1,14 @@
 use crate::context::db::DbInfo;
+use crate::context::golem_template_service::GolemTemplateServiceInfo;
+use crate::context::redis::RedisInfo;
 use crate::context::{EnvConfig, ShardManagerInfo, NETWORK, TAG};
-use golem_cli::clients::template::{TemplateClient, TemplateClientLive};
 use libtest_mimic::Failed;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::time::Duration;
 use testcontainers::core::WaitFor;
 use testcontainers::{clients, Container, Image, RunnableImage};
-use url::Url;
-use golem_cli::clients::worker::{WorkerClient, WorkerClientLive};
-use crate::context::golem_template_service::GolemTemplateServiceInfo;
-use crate::context::redis::{Redis, RedisInfo};
 
 #[derive(Debug)]
 struct GolemWorkerServiceImage {
@@ -106,12 +102,26 @@ impl<'docker_client> GolemWorkerService<'docker_client> {
         let grpc_port = 9092;
         let custom_request_port = 9093;
 
-        let env_vars = GolemWorkerService::env_vars(grpc_port, http_port, custom_request_port, env_config, shard_manager, db, redis, template);
+        let env_vars = GolemWorkerService::env_vars(
+            grpc_port,
+            http_port,
+            custom_request_port,
+            env_config,
+            shard_manager,
+            db,
+            redis,
+            template,
+        );
         let name = "golem_worker_service";
 
-        let image = RunnableImage::from(GolemWorkerServiceImage::new(grpc_port, http_port, custom_request_port, env_vars))
-            .with_container_name(name)
-            .with_network(NETWORK);
+        let image = RunnableImage::from(GolemWorkerServiceImage::new(
+            grpc_port,
+            http_port,
+            custom_request_port,
+            env_vars,
+        ))
+        .with_container_name(name)
+        .with_network(NETWORK);
         let node = docker.run(image);
 
         Ok(GolemWorkerService {
@@ -195,7 +205,6 @@ impl<'docker_client> GolemWorkerService<'docker_client> {
         let grpc_port = 9092;
         let custom_request_port = 9093;
 
-
         let mut child = Command::new(service_run)
             .current_dir(service_dir)
             .envs(GolemWorkerService::env_vars(
@@ -206,7 +215,7 @@ impl<'docker_client> GolemWorkerService<'docker_client> {
                 shard_manager,
                 db,
                 redis,
-                template
+                template,
             ))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -262,7 +271,7 @@ impl<'docker_client> GolemWorkerService<'docker_client> {
             local_http_port: self.local_http_port,
             http_port: self.http_port,
             grpc_port: self.grpc_port,
-            custom_request_port: self.custom_request_port
+            custom_request_port: self.custom_request_port,
         }
     }
 }
@@ -290,5 +299,5 @@ pub struct GolemWorkerServiceInfo {
     pub local_http_port: u16,
     pub http_port: u16,
     pub grpc_port: u16,
-    pub custom_request_port: u16
+    pub custom_request_port: u16,
 }
