@@ -292,7 +292,8 @@ jobs:
           name: golem-binaries
           retention-days: 1
           path: |
-            target/release/golem-service
+            target/release/golem-template-service
+            target/release/golem-worker-service
             target/release/golem-service-yaml
             target/release/golem-shard-manager
             target/release/worker-executor
