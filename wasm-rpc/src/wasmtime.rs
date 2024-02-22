@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Value;
+use crate::{Uri, Value};
 use wasmtime::component::{
-    types, Enum, Flags, List, OptionVal, Record, ResultVal, Tuple, Type, Val, Variant,
+    types, Enum, Flags, List, OptionVal, Record, ResourceAny, ResultVal, Tuple, Type, Val, Variant,
 };
 
 pub enum EncodingError {
@@ -23,8 +23,19 @@ pub enum EncodingError {
     Unknown { details: String },
 }
 
+pub trait ResourceStore {
+    fn self_uri(&self) -> Uri;
+    fn add(&self, resource: ResourceAny) -> u64;
+    fn borrow(&self, resource_id: u64) -> Option<ResourceAny>;
+    fn remove(&self, resource_id: u64) -> Option<ResourceAny>;
+}
+
 /// Converts a Value to a wasmtime Val based on the available type information.
-pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingError> {
+pub fn decode_param(
+    param: &Value,
+    param_type: &Type,
+    resource_store: &impl ResourceStore,
+) -> Result<Val, EncodingError> {
     match param_type {
         Type::Bool => match param {
             Value::Bool(bool) => Ok(Val::Bool(*bool)),
@@ -82,7 +93,7 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
             Value::List(values) => {
                 let decoded_values = values
                     .iter()
-                    .map(|v| decode_param(v, &ty.ty()))
+                    .map(|v| decode_param(v, &ty.ty(), resource_store))
                     .collect::<Result<Vec<Val>, EncodingError>>()?;
                 let list = List::new(ty, decoded_values.into_boxed_slice())
                     .expect("Type mismatch in decode_param");
@@ -96,7 +107,7 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
                     .iter()
                     .zip(ty.fields())
                     .map(|(value, field)| {
-                        let decoded_param = decode_param(value, &field.ty)?;
+                        let decoded_param = decode_param(value, &field.ty, resource_store)?;
                         Ok((field.name, decoded_param))
                     })
                     .collect::<Result<Vec<(&str, Val)>, EncodingError>>()?;
@@ -110,7 +121,7 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
                 let tuple_values: Vec<Val> = values
                     .iter()
                     .zip(ty.types())
-                    .map(|(value, ty)| decode_param(value, &ty))
+                    .map(|(value, ty)| decode_param(value, &ty, resource_store))
                     .collect::<Result<Vec<Val>, EncodingError>>()?;
                 let tuple = Tuple::new(ty, tuple_values.into_boxed_slice())
                     .expect("Type mismatch in decode_param");
@@ -138,7 +149,7 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
                 }?;
                 let decoded_value = case_value
                     .as_ref()
-                    .map(|v| decode_param(v, case_ty))
+                    .map(|v| decode_param(v, case_ty, resource_store))
                     .transpose()?;
                 let variant =
                     Variant::new(ty, name, decoded_value).expect("Type mismatch in decode_param");
@@ -166,7 +177,7 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
         Type::Option(ty) => match param {
             Value::Option(value) => match value {
                 Some(value) => {
-                    let decoded_value = decode_param(value, &ty.ty())?;
+                    let decoded_value = decode_param(value, &ty.ty(), resource_store)?;
                     let option = OptionVal::new(ty, Some(decoded_value))
                         .expect("Type mismatch in decode_param");
                     Ok(Val::Option(option))
@@ -186,7 +197,7 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
                     })?;
                     let decoded_value = value
                         .as_ref()
-                        .map(|v| decode_param(v, &ok_ty))
+                        .map(|v| decode_param(v, &ok_ty, resource_store))
                         .transpose()?;
                     let result = ResultVal::new(ty, Ok(decoded_value))
                         .expect("Type mismatch in decode_param");
@@ -198,7 +209,7 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
                     })?;
                     let decoded_value = value
                         .as_ref()
-                        .map(|v| decode_param(v, &err_ty))
+                        .map(|v| decode_param(v, &err_ty, resource_store))
                         .transpose()?;
                     let result = ResultVal::new(ty, Err(decoded_value))
                         .expect("Type mismatch in decode_param");
@@ -221,13 +232,50 @@ pub fn decode_param(param: &Value, param_type: &Type) -> Result<Val, EncodingErr
             }
             _ => Err(EncodingError::ParamTypeMismatch),
         },
-        Type::Own(_) => Err(EncodingError::ParamTypeMismatch),
-        Type::Borrow(_) => Err(EncodingError::ParamTypeMismatch),
+        Type::Own(_) => match param {
+            Value::Handle { uri, resource_id } => {
+                if resource_store.self_uri() == *uri {
+                    match resource_store.remove(*resource_id) {
+                        Some(resource) => Ok(Val::Resource(resource)),
+                        None => Err(EncodingError::ValueMismatch {
+                            details: "resource not found".to_string(),
+                        }),
+                    }
+                } else {
+                    Err(EncodingError::ValueMismatch {
+                        details: "cannot resolve handle belonging to a different worker"
+                            .to_string(),
+                    })
+                }
+            }
+            _ => Err(EncodingError::ParamTypeMismatch),
+        },
+        Type::Borrow(_) => match param {
+            Value::Handle { uri, resource_id } => {
+                if resource_store.self_uri() == *uri {
+                    match resource_store.borrow(*resource_id) {
+                        Some(resource) => Ok(Val::Resource(resource)),
+                        None => Err(EncodingError::ValueMismatch {
+                            details: "resource not found".to_string(),
+                        }),
+                    }
+                } else {
+                    Err(EncodingError::ValueMismatch {
+                        details: "cannot resolve handle belonging to a different worker"
+                            .to_string(),
+                    })
+                }
+            }
+            _ => Err(EncodingError::ParamTypeMismatch),
+        },
     }
 }
 
 /// Converts a wasmtime Val to a Golem protobuf Val
-pub fn encode_output(value: &Val) -> Result<Value, EncodingError> {
+pub fn encode_output(
+    value: &Val,
+    resource_store: &impl ResourceStore,
+) -> Result<Value, EncodingError> {
     match value {
         Val::Bool(bool) => Ok(Value::Bool(*bool)),
         Val::S8(i8) => Ok(Value::S8(*i8)),
@@ -245,14 +293,14 @@ pub fn encode_output(value: &Val) -> Result<Value, EncodingError> {
         Val::List(list) => {
             let mut encoded_values = Vec::new();
             for value in (*list).iter() {
-                encoded_values.push(encode_output(value)?);
+                encoded_values.push(encode_output(value, resource_store)?);
             }
             Ok(Value::List(encoded_values))
         }
         Val::Record(record) => {
             let encoded_values = record
                 .fields()
-                .map(|(_, value)| encode_output(value))
+                .map(|(_, value)| encode_output(value, resource_store))
                 .collect::<Result<Vec<Value>, EncodingError>>()?;
             Ok(Value::Record(encoded_values))
         }
@@ -260,7 +308,7 @@ pub fn encode_output(value: &Val) -> Result<Value, EncodingError> {
             let encoded_values = tuple
                 .values()
                 .iter()
-                .map(encode_output)
+                .map(|v| encode_output(v, resource_store))
                 .collect::<Result<Vec<Value>, EncodingError>>()?;
             Ok(Value::Tuple(encoded_values))
         }
@@ -271,7 +319,7 @@ pub fn encode_output(value: &Val) -> Result<Value, EncodingError> {
                 discriminant,
                 value,
             } = wasm_variant;
-            let encoded_output = value.map(|v| encode_output(&v)).transpose()?;
+            let encoded_output = value.map(|v| encode_output(&v, resource_store)).transpose()?;
             Ok(Value::Variant {
                 case_idx: discriminant,
                 case_value: encoded_output.map(Box::new),
@@ -287,18 +335,18 @@ pub fn encode_output(value: &Val) -> Result<Value, EncodingError> {
         }
         Val::Option(option) => match option.value() {
             Some(value) => {
-                let encoded_output = encode_output(value)?;
+                let encoded_output = encode_output(value, resource_store)?;
                 Ok(Value::Option(Some(Box::new(encoded_output))))
             }
             None => Ok(Value::Option(None)),
         },
         Val::Result(result) => match result.value() {
             Ok(value) => {
-                let encoded_output = value.map(encode_output).transpose()?;
+                let encoded_output = value.map(|v| encode_output(v, resource_store)).transpose()?;
                 Ok(Value::Result(Ok(encoded_output.map(Box::new))))
             }
             Err(value) => {
-                let encoded_output = value.map(encode_output).transpose()?;
+                let encoded_output = value.map(|v| encode_output(v, resource_store)).transpose()?;
                 Ok(Value::Result(Err(encoded_output.map(Box::new))))
             }
         },
@@ -321,9 +369,13 @@ pub fn encode_output(value: &Val) -> Result<Value, EncodingError> {
             }
             Ok(Value::Flags(encoded_value))
         }
-        Val::Resource(_) => Err(EncodingError::Unknown {
-            details: "resource values are not supported yet".to_string(),
-        }),
+        Val::Resource(resource) => {
+            let id = resource_store.add(resource.clone());
+            Ok(Value::Handle {
+                uri: resource_store.self_uri(),
+                resource_id: id,
+            })
+        }
     }
 }
 
