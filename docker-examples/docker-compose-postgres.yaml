@@ -21,7 +21,7 @@ services:
       - ${POSTGRES_PORT}:5432
 
   golem-shard-manager:
-    image: golemservices/golem-shard-manager:latest
+    image: golemservices/golem-shard-manager:v0.0.60
     pull_policy: always
     environment:
       - REDIS_HOST=redis
@@ -36,7 +36,7 @@ services:
       - redis
 
   golem-service:
-    image: golemservices/golem-service:latest
+    image: golemservices/golem-service:v0.0.60
     pull_policy: always
     restart: on-failure
     environment:
@@ -64,7 +64,7 @@ services:
       - "${GOLEM_SERVICE_GRPC_PORT}:${GOLEM_SERVICE_GRPC_PORT}"
 
   golem-worker-executor:
-    image: golemservices/golem-worker-executor:latest
+    image: golemservices/golem-worker-executor:v0.0.60
     pull_policy: always
     environment:
       - ENVIRONMENT=local
