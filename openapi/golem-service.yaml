@@ -1926,6 +1926,11 @@ components:
       properties:
         versionedTemplateId:
           $ref: '#/components/schemas/VersionedTemplateId'
+    ResourceMode:
+      type: string
+      enum:
+      - Borrowed
+      - Owned
     ResponseMapping:
       type: object
       required:
@@ -2039,6 +2044,7 @@ components:
       - $ref: '#/components/schemas/Type_TypeU8'
       - $ref: '#/components/schemas/Type_TypeS8'
       - $ref: '#/components/schemas/Type_TypeBool'
+      - $ref: '#/components/schemas/Type_TypeHandle'
       discriminator:
         propertyName: type
         mapping:
@@ -2063,6 +2069,7 @@ components:
           U8: '#/components/schemas/Type_TypeU8'
           S8: '#/components/schemas/Type_TypeS8'
           Bool: '#/components/schemas/Type_TypeBool'
+          Handle: '#/components/schemas/Type_TypeHandle'
     TypeBool:
       type: object
     TypeChr:
@@ -2089,6 +2096,17 @@ components:
           type: array
           items:
             type: string
+    TypeHandle:
+      type: object
+      required:
+      - resource_id
+      - mode
+      properties:
+        resource_id:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/ResourceMode'
     TypeList:
       type: object
       required:
@@ -2215,6 +2233,16 @@ components:
             type: string
             example: Flags
       - $ref: '#/components/schemas/TypeFlags'
+    Type_TypeHandle:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: Handle
+      - $ref: '#/components/schemas/TypeHandle'
     Type_TypeList:
       allOf:
       - type: object
