@@ -9,7 +9,7 @@ services:
     # as it is currently set to match the default port in golem-cli:
     # Golem base url. Default: GOLEM_BASE_URL environment variable or http://localhost:9881
     ports:
-      - "${GOLEM_GATEWAY_PORT}:80"
+      - "${GOLEM_ROUTER_PORT}:80"
     environment:
       - GOLEM_WORKER_SERVICE_HOST=golem-worker-service
       - GOLEM_WORKER_SERVICE_PORT=${WORKER_SERVICE_HTTP_PORT}
