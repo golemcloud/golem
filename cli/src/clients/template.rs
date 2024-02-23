@@ -17,7 +17,8 @@ use std::io::Read;
 use async_trait::async_trait;
 use golem_client::model::{
     Export, ExportFunction, ExportInstance, FunctionParameter, FunctionResult, NameOptionTypePair,
-    NameTypePair, Template, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
+    NameTypePair, ResourceMode, Template, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple,
+    TypeVariant,
 };
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
@@ -151,6 +152,10 @@ fn render_type(typ: &Type) -> String {
         Type::U8 { .. } => "u8".to_string(),
         Type::S8 { .. } => "s8".to_string(),
         Type::Bool { .. } => "bool".to_string(),
+        Type::Handle(handle) => match handle.mode {
+            ResourceMode::Borrowed => format!("&handle<{}>", handle.resource_id),
+            ResourceMode::Owned => format!("handle<{}>", handle.resource_id),
+        },
     }
 }
 
