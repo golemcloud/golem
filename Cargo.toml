@@ -62,7 +62,7 @@ fred = { version = "8.0.0", features = ["metrics", "serde-json", "partial-tracin
 futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
-golem-wasm-ast = "0.2.0"
+golem-wasm-ast = "0.2.1"
 http = "1.0.0" # keep in sync with wasmtime
 humantime-serde = "1.1.1"
 hyper = { version = "1.0.1", features = ["full"] } # keep in sync with wasmtime

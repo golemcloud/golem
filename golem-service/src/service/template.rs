@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_common::model::TemplateId;
-use golem_wasm_ast::analysis::{AnalysisContext, AnalysisFailure};
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysisContext, AnalysisFailure};
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use tap::TapFallible;
@@ -394,7 +394,7 @@ impl TemplateServiceDefault {
 
         let state = AnalysisContext::new(component);
 
-        let exports = state.get_top_level_exports().map_err(|e| {
+        let mut exports = state.get_top_level_exports().map_err(|e| {
             TemplateError::TemplateProcessingError(format!(
                 "Error getting top level exports: {}",
                 match e {
@@ -403,12 +403,51 @@ impl TemplateServiceDefault {
             ))
         })?;
 
+        self.add_resource_drops(&mut exports);
+
         let exports = exports
             .into_iter()
             .map(|export| export.into())
             .collect::<Vec<_>>();
 
         Ok(TemplateMetadata { exports, producers })
+    }
+
+    fn add_resource_drops(&self, exports: &mut Vec<AnalysedExport>) {
+        // Components are not exporting explicit drop functions for exported resources, but
+        // worker executor does. So we keep golem-wasm-ast as an universal library and extend
+        // its result with the explicit drops here, for each resource, identified by an exported
+        // constructor.
+
+        let mut to_add = Vec::new();
+        for export in exports.iter_mut() {
+            match export {
+                AnalysedExport::Function(fun) => {
+                    if fun.is_constructor() {
+                        let drop_name = fun.name.replace("[constructor]", "[drop]");
+                        to_add.push(AnalysedExport::Function(AnalysedFunction {
+                            name: drop_name,
+                            ..fun.clone()
+                        }));
+                    }
+                }
+                AnalysedExport::Instance(instance) => {
+                    let mut to_add = Vec::new();
+                    for fun in &instance.funcs {
+                        if fun.is_constructor() {
+                            let drop_name = fun.name.replace("[constructor]", "[drop]");
+                            to_add.push(AnalysedExport::Function(AnalysedFunction {
+                                name: drop_name,
+                                ..fun.clone()
+                            }));
+                        }
+                    }
+                    instance.funcs.extend(to_add);
+                }
+            }
+        }
+
+        exports.extend_from_slice(&to_add);
     }
 
     fn get_user_object_store_key(&self, id: &UserTemplateId) -> String {

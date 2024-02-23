@@ -1,5 +1,5 @@
 use crate::common;
-use crate::common::{val_float32, val_list, val_record, val_string, val_u64};
+use crate::common::{val_float32, val_list, val_pair, val_record, val_string, val_u64};
 use assert2::check;
 use golem_wasm_rpc::protobuf::Val;
 use std::collections::HashMap;
@@ -151,5 +151,41 @@ async fn auction_example_2() {
                 val_float32(100.0),
                 val_u64(expiration + 600)
             ]),])])
+    );
+}
+
+#[tokio::test]
+async fn counter_resource_test_1() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let counters_template_id =
+        executor.store_template(Path::new("../test-templates/counters.wasm"));
+    let caller_template_id =
+        executor.store_template(Path::new("../test-templates/caller_composed.wasm"));
+
+    let mut env = HashMap::new();
+    env.insert(
+        "COUNTERS_TEMPLATE_ID".to_string(),
+        counters_template_id.to_string(),
+    );
+    let caller_worker_id = executor
+        .try_start_worker_versioned(&caller_template_id, 0, "rpc-counters-1", vec![], env)
+        .await
+        .unwrap();
+
+    let result = executor
+        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .await;
+
+    drop(executor);
+
+    check!(
+        result
+            == Ok(vec![val_list(vec![
+                val_pair(val_string("counter3"), val_u64(3)),
+                val_pair(val_string("counter2"), val_u64(3)),
+                val_pair(val_string("counter1"), val_u64(3))
+            ])])
     );
 }

@@ -146,11 +146,11 @@ impl TypeCheckOut for Vec<Val> {
 
 #[cfg(test)]
 mod tests {
+    use crate::typechecker::TypeCheckOut;
     use golem_common::model::CallingConvention;
     use golem_wasm_ast::analysis::{AnalysedFunctionResult, AnalysedType};
     use golem_wasm_rpc::protobuf::{val, Val};
     use serde_json::Value;
-    use crate::typechecker::TypeCheckOut;
 
     #[test]
     fn test_validate_function_result_stdio() {
@@ -180,7 +180,10 @@ mod tests {
             CallingConvention::Stdio,
         );
 
-        assert_eq!(res, Ok(Value::Number(serde_json::Number::from_f64(12.3).unwrap())));
+        assert_eq!(
+            res,
+            Ok(Value::Number(serde_json::Number::from_f64(12.3).unwrap()))
+        );
 
         let bool_val = vec![Val {
             val: Some(val::Val::String("true".to_string())),

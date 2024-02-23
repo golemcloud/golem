@@ -811,6 +811,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 }
 
+#[async_trait]
 impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
     fn self_uri(&self) -> Uri {
         self.private_state.self_uri()
@@ -820,12 +821,12 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         self.private_state.add(resource)
     }
 
-    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+    fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
         self.private_state.borrow(resource_id)
     }
 
-    fn remove(&mut self, resource_id: u64) -> Option<ResourceAny> {
-        self.private_state.remove(resource_id)
+    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+        self.private_state.borrow(resource_id)
     }
 }
 
@@ -1279,6 +1280,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     }
 }
 
+#[async_trait]
 impl<Ctx: WorkerCtx> ResourceStore for PrivateDurableWorkerState<Ctx> {
     fn self_uri(&self) -> Uri {
         Uri::golem_uri(&self.worker_id, None)
@@ -1291,12 +1293,12 @@ impl<Ctx: WorkerCtx> ResourceStore for PrivateDurableWorkerState<Ctx> {
         id
     }
 
-    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
-        self.resources.get(&resource_id).cloned()
+    fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+        self.resources.remove(&resource_id)
     }
 
-    fn remove(&mut self, resource_id: u64) -> Option<ResourceAny> {
-        self.resources.remove(&resource_id)
+    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+        self.resources.get(&resource_id).cloned()
     }
 }
 
