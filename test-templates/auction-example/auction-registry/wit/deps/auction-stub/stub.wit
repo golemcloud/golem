@@ -15,6 +15,12 @@ interface stub-auction {
     close-auction: func() -> option<bidder-id>;
   }
 
+  resource running-auction {
+    constructor(location: uri, auction: auction);
+    bid: func(bidder-id: bidder-id, price: f32) -> bid-result;
+    close: func() -> option<bidder-id>;
+  }
+
 }
 
 world wasm-rpc-stub-auction {

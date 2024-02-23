@@ -1,0 +1,7 @@
+package rpc:caller;
+
+world caller {
+  import rpc:counters-stub/stub-counters;
+
+  export test1: func() -> list<tuple<string, u64>>;
+}

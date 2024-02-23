@@ -41,7 +41,7 @@ pub fn close_auction(state: &mut State) -> Option<BidderId> {
     None
 }
 
-fn now() -> Duration {
+pub fn now() -> Duration {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()

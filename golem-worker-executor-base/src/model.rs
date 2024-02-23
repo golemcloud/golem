@@ -40,17 +40,6 @@ impl ShardAssignmentCheck for ShardAssignment {
     }
 }
 
-pub fn parse_function_name(name: &str) -> (Option<&str>, &str) {
-    match name.rfind('/') {
-        Some(last_lash) => {
-            let interface_name = &name[..last_lash];
-            let function_name = &name[last_lash + 1..];
-            (Some(interface_name), function_name)
-        }
-        None => (None, name),
-    }
-}
-
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub enum InterruptKind {
     Interrupt,

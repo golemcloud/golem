@@ -17,6 +17,7 @@ use golem_common::model::{AccountId, InvocationKey, PromiseId, WorkerId, WorkerS
 use golem_worker_executor_base::error::GolemError;
 use serde_json::Value;
 
+use crate::common::val_pair;
 use tokio::time::sleep;
 use tonic::transport::Body;
 use tracing::debug;
@@ -193,7 +194,7 @@ async fn shopping_cart_example() {
                     common::val_string("Mud Golem"),
                     common::val_float32(11.0),
                     common::val_u32(20),
-                ])
+                ]),
             ])])
     )
 }
@@ -1170,10 +1171,14 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
     drop(executor);
     http_server.abort();
 
-    check!(status1.last_known_status.status == WorkerStatus::Running); // first running
-    check!(status2.last_known_status.status == WorkerStatus::Interrupted); // first interrupted
-    check!(status3.last_known_status.status == WorkerStatus::Running); // first resumed
-    check!(status4.last_known_status.status == WorkerStatus::Running); // second running
+    check!(status1.last_known_status.status == WorkerStatus::Running);
+    // first running
+    check!(status2.last_known_status.status == WorkerStatus::Interrupted);
+    // first interrupted
+    check!(status3.last_known_status.status == WorkerStatus::Running);
+    // first resumed
+    check!(status4.last_known_status.status == WorkerStatus::Running);
+    // second running
     check!(status5.last_known_status.status == WorkerStatus::Idle); // second finished
 }
 
@@ -1450,14 +1455,182 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
 }
 
 #[tokio::test]
-#[ignore] // TODO
 async fn shopping_cart_resource_example() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
 
     let template_id =
         executor.store_template(Path::new("../test-templates/shopping-cart-resource.wasm"));
-    let _worker_id = executor
+    let worker_id = executor
         .start_worker(&template_id, "shopping-cart-resource-1")
         .await;
+
+    let cart = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/[constructor]cart",
+            vec![common::val_string("test-user-1")],
+        )
+        .await
+        .unwrap();
+    println!("cart: {:?}", cart);
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/[method]cart.add-item",
+            vec![
+                cart[0].clone(),
+                common::val_record(vec![
+                    common::val_string("G1000"),
+                    common::val_string("Golem T-Shirt M"),
+                    common::val_float32(100.0),
+                    common::val_u32(5),
+                ]),
+            ],
+        )
+        .await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/[method]cart.add-item",
+            vec![
+                cart[0].clone(),
+                common::val_record(vec![
+                    common::val_string("G1001"),
+                    common::val_string("Golem Cloud Subscription 1y"),
+                    common::val_float32(999999.0),
+                    common::val_u32(1),
+                ]),
+            ],
+        )
+        .await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/[method]cart.add-item",
+            vec![
+                cart[0].clone(),
+                common::val_record(vec![
+                    common::val_string("G1002"),
+                    common::val_string("Mud Golem"),
+                    common::val_float32(11.0),
+                    common::val_u32(10),
+                ]),
+            ],
+        )
+        .await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/[method]cart.update-item-quantity",
+            vec![
+                cart[0].clone(),
+                common::val_string("G1002"),
+                common::val_u32(20),
+            ],
+        )
+        .await;
+
+    let contents = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/[method]cart.get-cart-contents",
+            vec![cart[0].clone()],
+        )
+        .await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/[method]cart.checkout",
+            vec![cart[0].clone()],
+        )
+        .await;
+
+    drop(executor);
+
+    assert!(
+        contents
+            == Ok(vec![common::val_list(vec![
+                common::val_record(vec![
+                    common::val_string("G1000"),
+                    common::val_string("Golem T-Shirt M"),
+                    common::val_float32(100.0),
+                    common::val_u32(5),
+                ]),
+                common::val_record(vec![
+                    common::val_string("G1001"),
+                    common::val_string("Golem Cloud Subscription 1y"),
+                    common::val_float32(999999.0),
+                    common::val_u32(1),
+                ]),
+                common::val_record(vec![
+                    common::val_string("G1002"),
+                    common::val_string("Mud Golem"),
+                    common::val_float32(11.0),
+                    common::val_u32(20),
+                ]),
+            ])])
+    )
+}
+
+#[tokio::test]
+async fn counter_resource_test_1() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/counters.wasm"));
+    let worker_id = executor.start_worker(&template_id, "counters-1").await;
+    executor.log_output(&worker_id).await;
+
+    let counter1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api/[constructor]counter",
+            vec![common::val_string("counter1")],
+        )
+        .await
+        .unwrap();
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api/[method]counter.inc-by",
+            vec![counter1[0].clone(), common::val_u64(5)],
+        )
+        .await;
+
+    let result1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api/[method]counter.get-value",
+            vec![counter1[0].clone()],
+        )
+        .await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api/[drop]counter",
+            vec![counter1[0].clone()],
+        )
+        .await;
+
+    let result2 = executor
+        .invoke_and_await(&worker_id, "rpc:counters/api/get-all-dropped", vec![])
+        .await;
+
+    drop(executor);
+
+    check!(result1 == Ok(vec![common::val_u64(5)]));
+    check!(
+        result2
+            == Ok(vec![common::val_list(vec![val_pair(
+                common::val_string("counter1"),
+                common::val_u64(5)
+            )])])
+    );
 }

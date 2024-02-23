@@ -2132,9 +2132,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-ast"
-version = "0.1.5"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd98959700ee261c0b4af61358df70830a29001a06afd1ccdfa5c0f3d2db0fa6"
+checksum = "d9ed9390768d544789a08504531c032f355d4a1ba70a41e984f1f5266c91224d"
 dependencies = [
  "leb128",
  "mappable-rc",

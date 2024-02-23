@@ -30,6 +30,28 @@ pub fn create_auction(
     auction_id
 }
 
+pub fn create_auction_res(
+    state: &mut State,
+    name: String,
+    description: String,
+    limit_price: f32,
+    expiration: Deadline,
+) -> AuctionId {
+    let auction_id = AuctionId::new();
+    let auction = Auction::new(
+        auction_id.clone(),
+        name,
+        description,
+        limit_price,
+        expiration,
+    );
+    state.items.insert(auction_id.clone(), auction.clone());
+    let actor = auction::create_res(auction.clone());
+    state.actors.insert(auction_id.clone(), actor);
+    auction_id
+}
+
+
 pub fn get_auctions(state: &State) -> Vec<Auction> {
     state
         .items

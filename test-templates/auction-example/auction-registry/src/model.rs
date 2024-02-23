@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 use uuid::Uuid;
+use crate::bindings::auction::auction_stub::stub_auction::RunningAuction;
 
 use crate::exports::auction::registry::api::{
     Auction as WitAuction, AuctionId as WitAuctionId, BidderId as WitBidderId,
@@ -155,6 +156,7 @@ impl Bidder {
 pub struct State {
     pub bidders: HashMap<BidderId, Bidder>,
     pub items: HashMap<AuctionId, Auction>,
+    pub actors: HashMap<AuctionId, RunningAuction>,
 }
 
 impl State {
@@ -162,6 +164,7 @@ impl State {
         State {
             bidders: HashMap::new(),
             items: HashMap::new(),
+            actors: HashMap::new(),
         }
     }
 }

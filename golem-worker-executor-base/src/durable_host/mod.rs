@@ -15,7 +15,7 @@
 // WASI Host implementation for Golem, delegating to the core WASI implementation (wasmtime_wasi)
 // implementing the Golem specific instrumentation on top of it.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -51,11 +51,12 @@ use golem_common::model::{
     WorkerMetadata, WorkerStatus,
 };
 use golem_common::model::{OplogEntry, WrappedFunctionType};
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::{Uri, Value};
 use serde::de::DeserializeOwned;
 use tempfile::TempDir;
 use tracing::{debug, info};
-use wasmtime::component::{Instance, Resource};
+use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::AsContextMut;
 use wasmtime_wasi::preview2::{I32Exit, ResourceTable, Stderr, Subscribe, WasiCtx, WasiView};
 use wasmtime_wasi_http::types::{
@@ -64,6 +65,7 @@ use wasmtime_wasi_http::types::{
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
+use crate::durable_host::wasm_rpc::UriExtensions;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::services::oplog::OplogService;
 use crate::services::recovery::{RecoveryDecision, RecoveryManagement};
@@ -259,6 +261,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         active_workers: active_workers.clone(),
                         recovery_management,
                         rpc,
+                        resources: HashMap::new(),
+                        last_resource_id: 0,
                     },
                     temp_dir,
                     execution_status,
@@ -807,6 +811,25 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 }
 
+#[async_trait]
+impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
+    fn self_uri(&self) -> Uri {
+        self.private_state.self_uri()
+    }
+
+    fn add(&mut self, resource: ResourceAny) -> u64 {
+        self.private_state.add(resource)
+    }
+
+    fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+        self.private_state.borrow(resource_id)
+    }
+
+    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+        self.private_state.borrow(resource_id)
+    }
+}
+
 pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
     fn durable_ctx(&self) -> &DurableWorkerCtx<Ctx>;
     fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Ctx>;
@@ -1015,6 +1038,8 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     pub active_workers: Arc<ActiveWorkers<Ctx>>,
     pub recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
     pub rpc: Arc<dyn Rpc + Send + Sync>,
+    resources: HashMap<u64, ResourceAny>,
+    last_resource_id: u64,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -1252,6 +1277,28 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     /// Counts the number of Error entries that are at the end of the oplog. This equals to the number of retries that have been attempted.
     pub async fn trailing_error_count(&self) -> u32 {
         trailing_error_count(self, &self.worker_id).await
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> ResourceStore for PrivateDurableWorkerState<Ctx> {
+    fn self_uri(&self) -> Uri {
+        Uri::golem_uri(&self.worker_id, None)
+    }
+
+    fn add(&mut self, resource: ResourceAny) -> u64 {
+        let id = self.last_resource_id;
+        self.last_resource_id += 1;
+        self.resources.insert(id, resource);
+        id
+    }
+
+    fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+        self.resources.remove(&resource_id)
+    }
+
+    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+        self.resources.get(&resource_id).cloned()
     }
 }
 

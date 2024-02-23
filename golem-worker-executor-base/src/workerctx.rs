@@ -21,6 +21,7 @@ use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus,
 };
+use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
@@ -51,6 +52,7 @@ pub trait WorkerCtx:
     + StatusManagement
     + InvocationHooks
     + ExternalOperations<Self>
+    + ResourceStore
     + Send
     + Sync
     + Sized
