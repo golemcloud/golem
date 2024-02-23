@@ -280,7 +280,7 @@ impl<'a> WitNodePointer<'a> {
         }
     }
 
-    fn list_elements<R>(&self, f: impl Fn(WitNodePointer<'a>) -> R) -> Option<Vec<R>> {
+    pub fn list_elements<R>(&self, f: impl Fn(WitNodePointer<'a>) -> R) -> Option<Vec<R>> {
         if let WitNode::ListValue(elements) = self.node() {
             Some(
                 elements
