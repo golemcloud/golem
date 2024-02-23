@@ -1,0 +1,21 @@
+package rpc:counters-stub;
+
+interface stub-counters {
+  use golem:rpc/types@0.1.0.{uri};
+
+  resource api {
+    constructor(location: uri);
+    get-all-dropped: func() -> list<tuple<string, u64>>;
+  }
+
+  resource counter {
+    constructor(location: uri, name: string);
+    inc-by: func(value: u64);
+    get-value: func() -> u64;
+  }
+
+}
+
+world wasm-rpc-stub-counters {
+  export stub-counters;
+}

@@ -1,0 +1,15 @@
+package rpc:counters;
+
+interface api {
+  resource counter {
+    constructor(name: string);
+    inc-by: func(value: u64);
+    get-value: func() -> u64;
+  }
+
+  get-all-dropped: func() -> list<tuple<string, u64>>;
+}
+
+world counters {
+  export api;
+}
