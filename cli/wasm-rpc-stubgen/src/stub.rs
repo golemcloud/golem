@@ -129,6 +129,7 @@ pub struct InterfaceStub {
     pub static_functions: Vec<FunctionStub>,
     pub imports: Vec<InterfaceStubImport>,
     pub global: bool,
+    pub owner_interface: Option<String>,
 }
 
 impl InterfaceStub {
@@ -292,6 +293,9 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
                     .filter(|f| f.kind == FunctionKind::Freestanding),
             )?;
             let imports = collect_stub_imports(interface.types.iter(), resolve)?;
+            let resource_interfaces =
+                collect_stub_resources(&name, interface.types.iter(), resolve)?;
+
             interfaces.push(InterfaceStub {
                 name,
                 functions,
@@ -299,9 +303,9 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
                 global: false,
                 constructor_params: None,
                 static_functions: vec![],
+                owner_interface: None,
             });
 
-            let resource_interfaces = collect_stub_resources(interface.types.iter(), resolve)?;
             interfaces.extend(resource_interfaces);
         }
     }
@@ -318,6 +322,7 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
             global: true,
             constructor_params: None,
             static_functions: vec![],
+            owner_interface: None,
         });
     }
 
@@ -361,6 +366,7 @@ fn collect_stub_functions<'a>(
 }
 
 fn collect_stub_resources<'a>(
+    owner_interface: &str,
     types: impl Iterator<Item = (&'a String, &'a TypeId)>,
     resolve: &'a Resolve,
 ) -> anyhow::Result<Vec<InterfaceStub>> {
@@ -422,17 +428,20 @@ fn collect_stub_resources<'a>(
                             .collect::<Vec<_>>()
                     });
 
+                    let resource_name = typ
+                        .name
+                        .as_ref()
+                        .ok_or(anyhow!("Resource type has no name"))?
+                        .clone();
+
                     interfaces.push(InterfaceStub {
-                        name: typ
-                            .name
-                            .as_ref()
-                            .ok_or(anyhow!("Resource type has no name"))?
-                            .clone(),
+                        name: resource_name,
                         functions,
                         imports,
                         global: false,
                         constructor_params,
                         static_functions,
+                        owner_interface: Some(owner_interface.to_string()),
                     });
                 }
                 TypeOwner::None => {}
