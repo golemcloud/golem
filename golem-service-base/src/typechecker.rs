@@ -146,61 +146,57 @@ impl TypeCheckOut for Vec<Val> {
 
 #[cfg(test)]
 mod tests {
-    //
-    // #[test]
-    // fn test_validate_function_result_stdio() {
-    //     let str_val = vec![VVal {
-    //         val: Some(Val::String("str".to_string())),
-    //     }];
-    //
-    //     let res = str_val.validate_function_result(
-    //         vec![FunctionResult {
-    //             name: Some("a".to_string()),
-    //             tpe: Some(golem_api_grpc::proto::golem::template::Type {
-    //                 r#type: Some(Type::Primitive(TypePrimitive {
-    //                     primitive: PrimitiveType::Str as i32,
-    //                 })),
-    //             }),
-    //         }],
-    //         CallingConvention::Stdio,
-    //     );
-    //
-    //     assert!(res.is_ok_and(|r| r == Value::String("str".to_string())));
-    //
-    //     let num_val = vec![VVal {
-    //         val: Some(Val::String("12.3".to_string())),
-    //     }];
-    //
-    //     let res = num_val.validate_function_result(
-    //         vec![FunctionResult {
-    //             name: Some("a".to_string()),
-    //             tpe: Some(golem_api_grpc::proto::golem::template::Type {
-    //                 r#type: Some(Type::Primitive(TypePrimitive {
-    //                     primitive: PrimitiveType::F64 as i32,
-    //                 })),
-    //             }),
-    //         }],
-    //         CallingConvention::Stdio,
-    //     );
-    //
-    //     assert!(res.is_ok_and(|r| r == Value::Number(serde_json::Number::from_f64(12.3).unwrap())));
-    //
-    //     let bool_val = vec![VVal {
-    //         val: Some(Val::String("true".to_string())),
-    //     }];
-    //
-    //     let res = bool_val.validate_function_result(
-    //         vec![FunctionResult {
-    //             name: Some("a".to_string()),
-    //             tpe: Some(golem_api_grpc::proto::golem::template::Type {
-    //                 r#type: Some(Type::Primitive(TypePrimitive {
-    //                     primitive: PrimitiveType::Bool as i32,
-    //                 })),
-    //             }),
-    //         }],
-    //         CallingConvention::Stdio,
-    //     );
-    //
-    //     assert!(res.is_ok_and(|r| r == Value::Bool(true)));
-    // }
+    use crate::typechecker::TypeCheckOut;
+    use golem_common::model::CallingConvention;
+    use golem_wasm_ast::analysis::{AnalysedFunctionResult, AnalysedType};
+    use golem_wasm_rpc::protobuf::{val, Val};
+    use serde_json::Value;
+
+    #[test]
+    fn test_validate_function_result_stdio() {
+        let str_val = vec![Val {
+            val: Some(val::Val::String("str".to_string())),
+        }];
+
+        let res = str_val.validate_function_result(
+            vec![AnalysedFunctionResult {
+                name: Some("a".to_string()),
+                typ: AnalysedType::Str,
+            }],
+            CallingConvention::Stdio,
+        );
+
+        assert_eq!(res, Ok(Value::String("str".to_string())));
+
+        let num_val = vec![Val {
+            val: Some(val::Val::String("12.3".to_string())),
+        }];
+
+        let res = num_val.validate_function_result(
+            vec![AnalysedFunctionResult {
+                name: Some("a".to_string()),
+                typ: AnalysedType::F64,
+            }],
+            CallingConvention::Stdio,
+        );
+
+        assert_eq!(
+            res,
+            Ok(Value::Number(serde_json::Number::from_f64(12.3).unwrap()))
+        );
+
+        let bool_val = vec![Val {
+            val: Some(val::Val::String("true".to_string())),
+        }];
+
+        let res = bool_val.validate_function_result(
+            vec![AnalysedFunctionResult {
+                name: Some("a".to_string()),
+                typ: AnalysedType::Bool,
+            }],
+            CallingConvention::Stdio,
+        );
+
+        assert_eq!(res, Ok(Value::Bool(true)));
+    }
 }

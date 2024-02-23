@@ -62,6 +62,70 @@ pub mod exports {
             }
           }
         }
+        /// an alternative interface for hosting multiple auctions in a single worker
+        
+        pub use super::super::super::super::super::RunningAuction as RunningAuction;
+        const _: () = {
+          #[doc(hidden)]
+          #[export_name = "auction:auction/api#[dtor]running-auction"]
+          #[allow(non_snake_case)]
+          unsafe extern "C" fn dtor(rep: usize) {
+            wit_bindgen::rt::Resource::<RunningAuction>::dtor(rep)
+          }
+        };
+        unsafe impl wit_bindgen::rt::RustResource for RunningAuction{
+          unsafe fn new(_rep: usize) -> u32 {
+            #[cfg(not(target_arch = "wasm32"))]
+            unreachable!();
+            
+            #[cfg(target_arch = "wasm32")]
+            {
+              #[link(wasm_import_module = "[export]auction:auction/api")]
+              extern "C" {
+                #[link_name = "[resource-new]running-auction"]
+                fn new(_: usize) -> u32;
+              }
+              new(_rep)
+            }
+          }
+          
+          unsafe fn rep(_handle: u32) -> usize {
+            #[cfg(not(target_arch = "wasm32"))]
+            unreachable!();
+            
+            #[cfg(target_arch = "wasm32")]
+            {
+              #[link(wasm_import_module = "[export]auction:auction/api")]
+              extern "C" {
+                #[link_name = "[resource-rep]running-auction"]
+                fn rep(_: u32) -> usize;
+              }
+              rep(_handle)
+            }
+          }
+        }
+        pub type OwnRunningAuction = wit_bindgen::rt::Resource<RunningAuction>;
+        
+        
+        unsafe impl wit_bindgen::rt::WasmResource for RunningAuction{
+          #[inline]
+          unsafe fn drop(_handle: u32) {
+            #[cfg(not(target_arch = "wasm32"))]
+            unreachable!();
+            
+            #[cfg(target_arch = "wasm32")]
+            {
+              #[link(wasm_import_module = "[export]auction:auction/api")]
+              extern "C" {
+                #[link_name = "[resource-drop]running-auction"]
+                fn drop(_: u32);
+              }
+              
+              drop(_handle);
+            }
+          }
+        }
+        
         const _: () = {
           
           #[doc(hidden)]
@@ -205,11 +269,161 @@ pub mod exports {
             }
           };
         };
+        const _: () = {
+          
+          #[doc(hidden)]
+          #[export_name = "auction:auction/api#[constructor]running-auction"]
+          #[allow(non_snake_case)]
+          unsafe extern "C" fn __export_constructor_running_auction(arg0: i32,arg1: i32,arg2: i32,arg3: i32,arg4: i32,arg5: i32,arg6: f32,arg7: i64,) -> i32 {
+            #[allow(unused_imports)]
+            use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+            
+            // Before executing any other code, use this function to run all static
+            // constructors, if they have not yet been run. This is a hack required
+            // to work around wasi-libc ctors calling import functions to initialize
+            // the environment.
+            //
+            // This functionality will be removed once rust 1.69.0 is stable, at which
+            // point wasi-libc will no longer have this behavior.
+            //
+            // See
+            // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+            // for more details.
+            #[cfg(target_arch="wasm32")]
+            wit_bindgen::rt::run_ctors_once();
+            
+            let len0 = arg1 as usize;
+            let bytes0 = Vec::from_raw_parts(arg0 as *mut _, len0, len0);
+            let len1 = arg3 as usize;
+            let bytes1 = Vec::from_raw_parts(arg2 as *mut _, len1, len1);
+            let len2 = arg5 as usize;
+            let bytes2 = Vec::from_raw_parts(arg4 as *mut _, len2, len2);
+            let result3 = OwnRunningAuction::new(<_RunningAuctionImpl as GuestRunningAuction>::new(Auction{
+              auction_id: AuctionId{
+                auction_id: wit_bindgen::rt::string_lift(bytes0),
+              },
+              name: wit_bindgen::rt::string_lift(bytes1),
+              description: wit_bindgen::rt::string_lift(bytes2),
+              limit_price: arg6,
+              expiration: arg7 as u64,
+            }));
+            wit_bindgen::rt::Resource::into_handle(result3) as i32
+          }
+        };
+        const _: () = {
+          
+          #[doc(hidden)]
+          #[export_name = "auction:auction/api#[method]running-auction.bid"]
+          #[allow(non_snake_case)]
+          unsafe extern "C" fn __export_method_running_auction_bid(arg0: i32,arg1: i32,arg2: i32,arg3: f32,) -> i32 {
+            #[allow(unused_imports)]
+            use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+            
+            // Before executing any other code, use this function to run all static
+            // constructors, if they have not yet been run. This is a hack required
+            // to work around wasi-libc ctors calling import functions to initialize
+            // the environment.
+            //
+            // This functionality will be removed once rust 1.69.0 is stable, at which
+            // point wasi-libc will no longer have this behavior.
+            //
+            // See
+            // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+            // for more details.
+            #[cfg(target_arch="wasm32")]
+            wit_bindgen::rt::run_ctors_once();
+            
+            let len0 = arg2 as usize;
+            let bytes0 = Vec::from_raw_parts(arg1 as *mut _, len0, len0);
+            let result1 = <_RunningAuctionImpl as GuestRunningAuction>::bid(wit_bindgen::rt::Resource::<RunningAuction>::lift_borrow(arg0 as u32 as usize), BidderId{
+              bidder_id: wit_bindgen::rt::string_lift(bytes0),
+            }, arg3);
+            let result2 = match result1 {
+              BidResult::AuctionExpired=> {
+                0i32
+              }
+              BidResult::PriceTooLow=> {
+                1i32
+              }
+              BidResult::Success=> {
+                2i32
+              }
+            };
+            result2
+          }
+        };
+        const _: () = {
+          
+          #[doc(hidden)]
+          #[export_name = "auction:auction/api#[method]running-auction.close"]
+          #[allow(non_snake_case)]
+          unsafe extern "C" fn __export_method_running_auction_close(arg0: i32,) -> i32 {
+            #[allow(unused_imports)]
+            use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+            
+            // Before executing any other code, use this function to run all static
+            // constructors, if they have not yet been run. This is a hack required
+            // to work around wasi-libc ctors calling import functions to initialize
+            // the environment.
+            //
+            // This functionality will be removed once rust 1.69.0 is stable, at which
+            // point wasi-libc will no longer have this behavior.
+            //
+            // See
+            // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+            // for more details.
+            #[cfg(target_arch="wasm32")]
+            wit_bindgen::rt::run_ctors_once();
+            
+            let result0 = <_RunningAuctionImpl as GuestRunningAuction>::close(wit_bindgen::rt::Resource::<RunningAuction>::lift_borrow(arg0 as u32 as usize));
+            let ptr1 = _RET_AREA.0.as_mut_ptr() as i32;
+            match result0 {
+              Some(e) => {
+                *((ptr1 + 0) as *mut u8) = (1i32) as u8;
+                let BidderId{ bidder_id:bidder_id2, } = e;
+                let vec3 = (bidder_id2.into_bytes()).into_boxed_slice();
+                let ptr3 = vec3.as_ptr() as i32;
+                let len3 = vec3.len() as i32;
+                ::core::mem::forget(vec3);
+                *((ptr1 + 8) as *mut i32) = len3;
+                *((ptr1 + 4) as *mut i32) = ptr3;
+              },
+              None => {
+                {
+                  *((ptr1 + 0) as *mut u8) = (0i32) as u8;
+                }
+              },
+            };ptr1
+          }
+          
+          const _: () = {
+            #[doc(hidden)]
+            #[export_name = "cabi_post_auction:auction/api#[method]running-auction.close"]
+            #[allow(non_snake_case)]
+            unsafe extern "C" fn __post_return_method_running_auction_close(arg0: i32,) {
+              let l0 = i32::from(*((arg0 + 0) as *const u8));
+              match l0 {
+                0 => (),
+                _ => {
+                  let l1 = *((arg0 + 4) as *const i32);
+                  let l2 = *((arg0 + 8) as *const i32);
+                  wit_bindgen::rt::dealloc(l1, (l2) as usize, 1);
+                },
+              }
+            }
+          };
+        };
         use super::super::super::super::super::Component as _GuestImpl;
         pub trait Guest {
           fn initialize(auction: Auction,);
           fn bid(bidder_id: BidderId,price: f32,) -> BidResult;
           fn close_auction() -> Option<BidderId>;
+        }
+        use super::super::super::super::super::RunningAuction as _RunningAuctionImpl;
+        pub trait GuestRunningAuction {
+          fn new(auction: Auction,) -> Self;
+          fn bid(&self,bidder_id: BidderId,price: f32,) -> BidResult;
+          fn close(&self,) -> Option<BidderId>;
         }
         
         #[allow(unused_imports)]
@@ -228,7 +442,7 @@ pub mod exports {
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:auction"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 825] = [3, 0, 7, 97, 117, 99, 116, 105, 111, 110, 0, 97, 115, 109, 13, 0, 1, 0, 7, 199, 2, 1, 65, 2, 1, 66, 17, 1, 114, 1, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 115, 4, 0, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 3, 0, 0, 1, 114, 1, 10, 97, 117, 99, 116, 105, 111, 110, 45, 105, 100, 115, 4, 0, 10, 97, 117, 99, 116, 105, 111, 110, 45, 105, 100, 3, 0, 2, 1, 119, 4, 0, 8, 100, 101, 97, 100, 108, 105, 110, 101, 3, 0, 4, 1, 114, 5, 10, 97, 117, 99, 116, 105, 111, 110, 45, 105, 100, 3, 4, 110, 97, 109, 101, 115, 11, 100, 101, 115, 99, 114, 105, 112, 116, 105, 111, 110, 115, 11, 108, 105, 109, 105, 116, 45, 112, 114, 105, 99, 101, 118, 10, 101, 120, 112, 105, 114, 97, 116, 105, 111, 110, 5, 4, 0, 7, 97, 117, 99, 116, 105, 111, 110, 3, 0, 6, 1, 113, 3, 15, 97, 117, 99, 116, 105, 111, 110, 45, 101, 120, 112, 105, 114, 101, 100, 0, 0, 13, 112, 114, 105, 99, 101, 45, 116, 111, 111, 45, 108, 111, 119, 0, 0, 7, 115, 117, 99, 99, 101, 115, 115, 0, 0, 4, 0, 10, 98, 105, 100, 45, 114, 101, 115, 117, 108, 116, 3, 0, 8, 1, 64, 1, 7, 97, 117, 99, 116, 105, 111, 110, 7, 1, 0, 4, 0, 10, 105, 110, 105, 116, 105, 97, 108, 105, 122, 101, 1, 10, 1, 64, 2, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 1, 5, 112, 114, 105, 99, 101, 118, 0, 9, 4, 0, 3, 98, 105, 100, 1, 11, 1, 107, 1, 1, 64, 0, 0, 12, 4, 0, 13, 99, 108, 111, 115, 101, 45, 97, 117, 99, 116, 105, 111, 110, 1, 13, 4, 1, 19, 97, 117, 99, 116, 105, 111, 110, 58, 97, 117, 99, 116, 105, 111, 110, 47, 97, 112, 105, 5, 0, 11, 9, 1, 0, 3, 97, 112, 105, 3, 0, 0, 7, 230, 2, 1, 65, 2, 1, 65, 2, 1, 66, 17, 1, 114, 1, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 115, 4, 0, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 3, 0, 0, 1, 114, 1, 10, 97, 117, 99, 116, 105, 111, 110, 45, 105, 100, 115, 4, 0, 10, 97, 117, 99, 116, 105, 111, 110, 45, 105, 100, 3, 0, 2, 1, 119, 4, 0, 8, 100, 101, 97, 100, 108, 105, 110, 101, 3, 0, 4, 1, 114, 5, 10, 97, 117, 99, 116, 105, 111, 110, 45, 105, 100, 3, 4, 110, 97, 109, 101, 115, 11, 100, 101, 115, 99, 114, 105, 112, 116, 105, 111, 110, 115, 11, 108, 105, 109, 105, 116, 45, 112, 114, 105, 99, 101, 118, 10, 101, 120, 112, 105, 114, 97, 116, 105, 111, 110, 5, 4, 0, 7, 97, 117, 99, 116, 105, 111, 110, 3, 0, 6, 1, 113, 3, 15, 97, 117, 99, 116, 105, 111, 110, 45, 101, 120, 112, 105, 114, 101, 100, 0, 0, 13, 112, 114, 105, 99, 101, 45, 116, 111, 111, 45, 108, 111, 119, 0, 0, 7, 115, 117, 99, 99, 101, 115, 115, 0, 0, 4, 0, 10, 98, 105, 100, 45, 114, 101, 115, 117, 108, 116, 3, 0, 8, 1, 64, 1, 7, 97, 117, 99, 116, 105, 111, 110, 7, 1, 0, 4, 0, 10, 105, 110, 105, 116, 105, 97, 108, 105, 122, 101, 1, 10, 1, 64, 2, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 1, 5, 112, 114, 105, 99, 101, 118, 0, 9, 4, 0, 3, 98, 105, 100, 1, 11, 1, 107, 1, 1, 64, 0, 0, 12, 4, 0, 13, 99, 108, 111, 115, 101, 45, 97, 117, 99, 116, 105, 111, 110, 1, 13, 4, 1, 19, 97, 117, 99, 116, 105, 111, 110, 58, 97, 117, 99, 116, 105, 111, 110, 47, 97, 112, 105, 5, 0, 4, 1, 23, 97, 117, 99, 116, 105, 111, 110, 58, 97, 117, 99, 116, 105, 111, 110, 47, 97, 117, 99, 116, 105, 111, 110, 4, 0, 11, 13, 1, 0, 7, 97, 117, 99, 116, 105, 111, 110, 3, 2, 0, 0, 16, 12, 112, 97, 99, 107, 97, 103, 101, 45, 100, 111, 99, 115, 0, 123, 125, 0, 70, 9, 112, 114, 111, 100, 117, 99, 101, 114, 115, 1, 12, 112, 114, 111, 99, 101, 115, 115, 101, 100, 45, 98, 121, 2, 13, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 6, 48, 46, 49, 56, 46, 50, 16, 119, 105, 116, 45, 98, 105, 110, 100, 103, 101, 110, 45, 114, 117, 115, 116, 6, 48, 46, 49, 54, 46, 48];
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1319] = [3, 0, 7, 97, 117, 99, 116, 105, 111, 110, 0, 97, 115, 109, 13, 0, 1, 0, 7, 250, 3, 1, 65, 2, 1, 66, 26, 1, 114, 1, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 115, 4, 0, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 3, 0, 0, 1, 114, 1, 10, 97, 117, 99, 116, 105, 111, 110, 45, 105, 100, 115, 4, 0, 10, 97, 117, 99, 116, 105, 111, 110, 45, 105, 100, 3, 0, 2, 1, 119, 4, 0, 8, 100, 101, 97, 100, 108, 105, 110, 101, 3, 0, 4, 1, 114, 5, 10, 97, 117, 99, 116, 105, 111, 110, 45, 105, 100, 3, 4, 110, 97, 109, 101, 115, 11, 100, 101, 115, 99, 114, 105, 112, 116, 105, 111, 110, 115, 11, 108, 105, 109, 105, 116, 45, 112, 114, 105, 99, 101, 118, 10, 101, 120, 112, 105, 114, 97, 116, 105, 111, 110, 5, 4, 0, 7, 97, 117, 99, 116, 105, 111, 110, 3, 0, 6, 1, 113, 3, 15, 97, 117, 99, 116, 105, 111, 110, 45, 101, 120, 112, 105, 114, 101, 100, 0, 0, 13, 112, 114, 105, 99, 101, 45, 116, 111, 111, 45, 108, 111, 119, 0, 0, 7, 115, 117, 99, 99, 101, 115, 115, 0, 0, 4, 0, 10, 98, 105, 100, 45, 114, 101, 115, 117, 108, 116, 3, 0, 8, 4, 0, 15, 114, 117, 110, 110, 105, 110, 103, 45, 97, 117, 99, 116, 105, 111, 110, 3, 1, 1, 105, 10, 1, 64, 1, 7, 97, 117, 99, 116, 105, 111, 110, 7, 0, 11, 4, 0, 28, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 114, 117, 110, 110, 105, 110, 103, 45, 97, 117, 99, 116, 105, 111, 110, 1, 12, 1, 104, 10, 1, 64, 3, 4, 115, 101, 108, 102, 13, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 1, 5, 112, 114, 105, 99, 101, 118, 0, 9, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 114, 117, 110, 110, 105, 110, 103, 45, 97, 117, 99, 116, 105, 111, 110, 46, 98, 105, 100, 1, 14, 1, 107, 1, 1, 64, 1, 4, 115, 101, 108, 102, 13, 0, 15, 4, 0, 29, 91, 109, 101, 116, 104, 111, 100, 93, 114, 117, 110, 110, 105, 110, 103, 45, 97, 117, 99, 116, 105, 111, 110, 46, 99, 108, 111, 115, 101, 1, 16, 1, 64, 1, 7, 97, 117, 99, 116, 105, 111, 110, 7, 1, 0, 4, 0, 10, 105, 110, 105, 116, 105, 97, 108, 105, 122, 101, 1, 17, 1, 64, 2, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 1, 5, 112, 114, 105, 99, 101, 118, 0, 9, 4, 0, 3, 98, 105, 100, 1, 18, 1, 64, 0, 0, 15, 4, 0, 13, 99, 108, 111, 115, 101, 45, 97, 117, 99, 116, 105, 111, 110, 1, 19, 4, 1, 19, 97, 117, 99, 116, 105, 111, 110, 58, 97, 117, 99, 116, 105, 111, 110, 47, 97, 112, 105, 5, 0, 11, 9, 1, 0, 3, 97, 112, 105, 3, 0, 0, 7, 153, 4, 1, 65, 2, 1, 65, 2, 1, 66, 26, 1, 114, 1, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 115, 4, 0, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 3, 0, 0, 1, 114, 1, 10, 97, 117, 99, 116, 105, 111, 110, 45, 105, 100, 115, 4, 0, 10, 97, 117, 99, 116, 105, 111, 110, 45, 105, 100, 3, 0, 2, 1, 119, 4, 0, 8, 100, 101, 97, 100, 108, 105, 110, 101, 3, 0, 4, 1, 114, 5, 10, 97, 117, 99, 116, 105, 111, 110, 45, 105, 100, 3, 4, 110, 97, 109, 101, 115, 11, 100, 101, 115, 99, 114, 105, 112, 116, 105, 111, 110, 115, 11, 108, 105, 109, 105, 116, 45, 112, 114, 105, 99, 101, 118, 10, 101, 120, 112, 105, 114, 97, 116, 105, 111, 110, 5, 4, 0, 7, 97, 117, 99, 116, 105, 111, 110, 3, 0, 6, 1, 113, 3, 15, 97, 117, 99, 116, 105, 111, 110, 45, 101, 120, 112, 105, 114, 101, 100, 0, 0, 13, 112, 114, 105, 99, 101, 45, 116, 111, 111, 45, 108, 111, 119, 0, 0, 7, 115, 117, 99, 99, 101, 115, 115, 0, 0, 4, 0, 10, 98, 105, 100, 45, 114, 101, 115, 117, 108, 116, 3, 0, 8, 4, 0, 15, 114, 117, 110, 110, 105, 110, 103, 45, 97, 117, 99, 116, 105, 111, 110, 3, 1, 1, 105, 10, 1, 64, 1, 7, 97, 117, 99, 116, 105, 111, 110, 7, 0, 11, 4, 0, 28, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 114, 117, 110, 110, 105, 110, 103, 45, 97, 117, 99, 116, 105, 111, 110, 1, 12, 1, 104, 10, 1, 64, 3, 4, 115, 101, 108, 102, 13, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 1, 5, 112, 114, 105, 99, 101, 118, 0, 9, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 114, 117, 110, 110, 105, 110, 103, 45, 97, 117, 99, 116, 105, 111, 110, 46, 98, 105, 100, 1, 14, 1, 107, 1, 1, 64, 1, 4, 115, 101, 108, 102, 13, 0, 15, 4, 0, 29, 91, 109, 101, 116, 104, 111, 100, 93, 114, 117, 110, 110, 105, 110, 103, 45, 97, 117, 99, 116, 105, 111, 110, 46, 99, 108, 111, 115, 101, 1, 16, 1, 64, 1, 7, 97, 117, 99, 116, 105, 111, 110, 7, 1, 0, 4, 0, 10, 105, 110, 105, 116, 105, 97, 108, 105, 122, 101, 1, 17, 1, 64, 2, 9, 98, 105, 100, 100, 101, 114, 45, 105, 100, 1, 5, 112, 114, 105, 99, 101, 118, 0, 9, 4, 0, 3, 98, 105, 100, 1, 18, 1, 64, 0, 0, 15, 4, 0, 13, 99, 108, 111, 115, 101, 45, 97, 117, 99, 116, 105, 111, 110, 1, 19, 4, 1, 19, 97, 117, 99, 116, 105, 111, 110, 58, 97, 117, 99, 116, 105, 111, 110, 47, 97, 112, 105, 5, 0, 4, 1, 23, 97, 117, 99, 116, 105, 111, 110, 58, 97, 117, 99, 116, 105, 111, 110, 47, 97, 117, 99, 116, 105, 111, 110, 4, 0, 11, 13, 1, 0, 7, 97, 117, 99, 116, 105, 111, 110, 3, 2, 0, 0, 151, 1, 12, 112, 97, 99, 107, 97, 103, 101, 45, 100, 111, 99, 115, 0, 123, 34, 105, 110, 116, 101, 114, 102, 97, 99, 101, 115, 34, 58, 123, 34, 97, 112, 105, 34, 58, 123, 34, 116, 121, 112, 101, 115, 34, 58, 123, 34, 114, 117, 110, 110, 105, 110, 103, 45, 97, 117, 99, 116, 105, 111, 110, 34, 58, 123, 34, 100, 111, 99, 115, 34, 58, 34, 97, 110, 32, 97, 108, 116, 101, 114, 110, 97, 116, 105, 118, 101, 32, 105, 110, 116, 101, 114, 102, 97, 99, 101, 32, 102, 111, 114, 32, 104, 111, 115, 116, 105, 110, 103, 32, 109, 117, 108, 116, 105, 112, 108, 101, 32, 97, 117, 99, 116, 105, 111, 110, 115, 32, 105, 110, 32, 97, 32, 115, 105, 110, 103, 108, 101, 32, 119, 111, 114, 107, 101, 114, 34, 125, 125, 125, 125, 125, 0, 70, 9, 112, 114, 111, 100, 117, 99, 101, 114, 115, 1, 12, 112, 114, 111, 99, 101, 115, 115, 101, 100, 45, 98, 121, 2, 13, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 6, 48, 46, 49, 56, 46, 50, 16, 119, 105, 116, 45, 98, 105, 110, 100, 103, 101, 110, 45, 114, 117, 115, 116, 6, 48, 46, 49, 54, 46, 48];
 
 #[inline(never)]
 #[doc(hidden)]

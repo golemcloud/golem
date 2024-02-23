@@ -11,6 +11,8 @@ interface api {
   create-auction: func(name: string, description: string, limit-price: float32, expiration: deadline) -> auction-id;
 
   get-auctions: func() -> list<auction>;
+
+  create-auction-res: func(name: string, description: string, limit-price: float32, expiration: deadline) -> auction-id;
 }
 
 world auction-registry {

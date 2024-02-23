@@ -3,6 +3,7 @@ mod model;
 
 mod bindings;
 
+use std::cell::RefCell;
 use bindings::*;
 use exports::auction::auction::api::{
     Guest, Auction as WitAuction, BidResult as WitBidResult, BidderId as WitBidderId,
@@ -10,6 +11,8 @@ use exports::auction::auction::api::{
 use once_cell::sync::Lazy;
 
 use model::*;
+use crate::auction_logic::now;
+use crate::bindings::exports::auction::auction::api::GuestRunningAuction;
 
 struct Component;
 
@@ -39,5 +42,46 @@ impl Guest for Component {
 
     fn close_auction() -> Option<WitBidderId> {
         with_state(|state| auction_logic::close_auction(state).map(|bidder_id| bidder_id.into()))
+    }
+}
+
+pub struct RunningAuction {
+    auction: Auction,
+    winning_bid: RefCell<Option<(BidderId, f32)>>,
+}
+
+impl GuestRunningAuction for RunningAuction {
+    fn new(auction: WitAuction) -> Self {
+        Self {
+            auction: auction.into(),
+            winning_bid: RefCell::new(None),
+        }
+    }
+
+    fn bid(&self, bidder_id: WitBidderId, price: f32) -> WitBidResult {
+        if auction_logic::now() >= self.auction.expiration.deadline {
+            return BidResult::AuctionExpired.into();
+        }
+
+        if price < self.auction.limit_price {
+            return BidResult::PriceTooLow.into();
+        }
+
+        if let Some((_, winning_price)) = self.winning_bid.borrow().as_ref() {
+            if price <= *winning_price {
+                return BidResult::PriceTooLow.into();
+            }
+        }
+
+        *self.winning_bid.borrow_mut() = Some((bidder_id.into(), price));
+        BidResult::Success.into()
+    }
+
+    fn close(&self) -> Option<WitBidderId> {
+        if now() >= self.auction.expiration.deadline {
+            self.winning_bid.borrow().clone().map(|(bidder_id, _)| bidder_id.into())
+        } else {
+            None
+        }
     }
 }

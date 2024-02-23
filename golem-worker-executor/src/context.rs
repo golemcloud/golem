@@ -22,7 +22,8 @@ use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus,
 };
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::{Uri, Value};
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -47,7 +48,7 @@ use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
     StatusManagement, WorkerCtx,
 };
-use wasmtime::component::Instance;
+use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 pub struct Context {
@@ -333,5 +334,23 @@ impl ResourceLimiterAsync for Context {
         _maximum: Option<u32>,
     ) -> anyhow::Result<bool> {
         Ok(true)
+    }
+}
+
+impl ResourceStore for Context {
+    fn self_uri(&self) -> Uri {
+        self.durable_ctx.self_uri()
+    }
+
+    fn add(&mut self, resource: ResourceAny) -> u64 {
+        self.durable_ctx.add(resource)
+    }
+
+    fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+        self.durable_ctx.get(resource_id)
+    }
+
+    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+        self.durable_ctx.borrow(resource_id)
     }
 }

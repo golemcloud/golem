@@ -13,16 +13,17 @@
 // limitations under the License.
 
 use anyhow::anyhow;
-use golem_common::model::{CallingConvention, VersionedWorkerId, WorkerStatus};
+use golem_common::model::{
+    parse_function_name, CallingConvention, VersionedWorkerId, WorkerStatus,
+};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output};
 use golem_wasm_rpc::Value;
 use tracing::{debug, error, warn};
 use wasmtime::component::{Func, Val};
-use wasmtime::AsContextMut;
+use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::error::{is_interrupt, is_suspend, GolemError};
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
-use crate::model::parse_function_name;
 use crate::workerctx::{FuelManagement, WorkerCtx};
 
 /// Invokes a function on a worker.
@@ -142,25 +143,45 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 ) -> anyhow::Result<Option<Vec<Value>>> {
     let mut store = store.as_context_mut();
 
-    let (interface_name, function_name) = parse_function_name(&full_function_name);
+    let parsed = parse_function_name(&full_function_name);
 
-    let function = match interface_name {
-        Some(interface_name) => instance
-            .exports(&mut store)
-            .instance(interface_name)
-            .ok_or(anyhow!(
+    let function = match &parsed.interface {
+        Some(interface_name) => {
+            let mut exports = instance.exports(&mut store);
+            let mut exported_instance = exports.instance(interface_name).ok_or(anyhow!(
                 "could not load exports for interface {}",
                 interface_name
-            ))?
-            .func(function_name)
-            .ok_or(anyhow!(
-                "could not load function {} for interface {}",
-                function_name,
-                interface_name
-            )),
+            ))?;
+            match exported_instance.func(&parsed.function) {
+                Some(func) => Ok(Some(func)),
+                None => {
+                    if parsed.function.starts_with("[drop]") {
+                        Ok(None)
+                    } else {
+                        match parsed.method_as_static() {
+                            None => Err(anyhow!(
+                                "could not load function {} for interface {}",
+                                &parsed.function,
+                                interface_name
+                            )),
+                            Some(parsed_static) => exported_instance
+                                .func(&parsed_static.function)
+                                .ok_or(anyhow!(
+                                    "could not load function {} or {} for interface {}",
+                                    &parsed.function,
+                                    &parsed_static.function,
+                                    interface_name
+                                ))
+                                .map(Some),
+                        }
+                    }
+                }
+            }
+        }
         None => instance
-            .get_func(&mut store, function_name)
-            .ok_or(anyhow!("could not load function {}", function_name)),
+            .get_func(&mut store, &parsed.function)
+            .ok_or(anyhow!("could not load function {}", &parsed.function))
+            .map(Some),
     }?;
 
     if was_live_before {
@@ -180,14 +201,27 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
         .store_worker_status(WorkerStatus::Running)
         .await;
 
-    let call_result = invoke(
-        &mut store,
-        function,
-        &function_input,
-        calling_convention.try_into().unwrap(),
-        &format!("{worker_id}/{function_name}"),
-    )
-    .await;
+    let call_result = match function {
+        Some(function) => {
+            invoke(
+                &mut store,
+                function,
+                &function_input,
+                calling_convention.try_into().unwrap(),
+                &format!("{worker_id}/{full_function_name}"),
+            )
+            .await
+        }
+        None => {
+            // Special function: drop
+            drop_resource(
+                &mut store,
+                &function_input,
+                &format!("{worker_id}/{full_function_name}"),
+            )
+            .await
+        }
+    };
 
     store.data().set_suspended();
 
@@ -248,41 +282,38 @@ async fn invoke<Ctx: WorkerCtx>(
     match calling_convention {
         InternalCallingConvention::Component => {
             let param_types = function.params(&store);
+
             if function_input.len() != param_types.len() {
                 return Err(GolemError::ParamTypeMismatch.into());
             }
 
-            let params = function_input
-                .iter()
-                .zip(param_types.iter())
-                .map(|(param, param_type)| {
-                    decode_param(param, param_type).map_err(GolemError::from)
-                })
-                .collect::<Result<Vec<Val>, GolemError>>()?;
+            let mut params = Vec::new();
+            let mut resources_to_drop = Vec::new();
+            for (param, param_type) in function_input.iter().zip(param_types.iter()) {
+                let result =
+                    decode_param(param, param_type, store.data_mut()).map_err(GolemError::from)?;
+                params.push(result.val);
+                resources_to_drop.extend(result.resources_to_drop);
+            }
 
             let (results, consumed_fuel) =
                 call_exported_function(&mut store, function, params, context).await?;
+
+            for resource in resources_to_drop {
+                debug!("Dropping passed owned resources {:?}", resource);
+                resource.resource_drop_async(&mut store).await?;
+            }
+
             let results = results?;
 
             let mut output: Vec<Value> = Vec::new();
             for result in results.iter() {
-                let result_value = encode_output(result).map_err(GolemError::from)?;
+                let result_value =
+                    encode_output(result, store.data_mut()).map_err(GolemError::from)?;
                 output.push(result_value);
             }
 
-            if let Some(invocation_key) = store.data().get_current_invocation_key().await {
-                debug!(
-                    "Storing successful results for invocation key {:?}",
-                    &invocation_key
-                );
-
-                store
-                    .data_mut()
-                    .confirm_invocation_key(&invocation_key, Ok(output.clone()))
-                    .await;
-            } else {
-                debug!("No invocation key");
-            }
+            store_results(&mut store, &output).await;
 
             Ok(InvokeResult {
                 exited: false,
@@ -318,19 +349,7 @@ async fn invoke<Ctx: WorkerCtx>(
             let stdout = store.data_mut().finish_capturing_stdout().await.ok();
             let output: Vec<Value> = vec![Value::String(stdout.unwrap_or("".to_string()))];
 
-            if let Some(invocation_key) = store.data().get_current_invocation_key().await {
-                debug!(
-                    "Storing successful results for invocation key {:?}",
-                    &invocation_key
-                );
-
-                store
-                    .data_mut()
-                    .confirm_invocation_key(&invocation_key, Ok(output.clone()))
-                    .await;
-            } else {
-                debug!("No invocation key");
-            }
+            store_results(&mut store, &output).await;
 
             Ok(InvokeResult {
                 exited,
@@ -339,6 +358,69 @@ async fn invoke<Ctx: WorkerCtx>(
             })
         }
     }
+}
+
+async fn store_results<'a, Ctx: WorkerCtx>(store: &mut StoreContextMut<'a, Ctx>, output: &[Value]) {
+    if let Some(invocation_key) = store.data().get_current_invocation_key().await {
+        debug!(
+            "Storing successful results for invocation key {:?}",
+            &invocation_key
+        );
+
+        store
+            .data_mut()
+            .confirm_invocation_key(&invocation_key, Ok(output.to_vec()))
+            .await;
+    } else {
+        debug!("No invocation key");
+    }
+}
+
+async fn drop_resource<Ctx: WorkerCtx>(
+    store: &mut impl AsContextMut<Data = Ctx>,
+    function_input: &[Value],
+    context: &str,
+) -> Result<crate::invocation::InvokeResult, anyhow::Error> {
+    let mut store = store.as_context_mut();
+    let self_uri = store.data().self_uri();
+    if function_input.len() != 1 {
+        return Err(GolemError::ValueMismatch {
+            details: format!("unexpected parameter count for drop {context}"),
+        }
+        .into());
+    }
+    let resource = match function_input.first().unwrap() {
+        Value::Handle { uri, resource_id } => {
+            if uri == &self_uri {
+                Ok(*resource_id)
+            } else {
+                Err(GolemError::ValueMismatch {
+                    details: format!(
+                        "trying to drop handle for on wrong worker ({} vs {}) {}",
+                        uri.value, self_uri.value, context
+                    ),
+                }
+                .into())
+            }
+        }
+        _ => Err(anyhow!(
+            "unexpected function input for drop calling convention for {context}"
+        )),
+    }?;
+
+    if let Some(resource) = store.data_mut().get(resource) {
+        debug!("Dropping resource {resource:?} in {context}");
+        resource.resource_drop_async(&mut store).await?;
+    }
+
+    let output = Vec::new();
+    store_results(&mut store, &output).await;
+
+    Ok(InvokeResult {
+        exited: false,
+        consumed_fuel: 0,
+        output,
+    })
 }
 
 async fn call_exported_function<Ctx: FuelManagement + Send>(

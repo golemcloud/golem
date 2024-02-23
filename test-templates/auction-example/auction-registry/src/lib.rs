@@ -49,7 +49,7 @@ impl Guest for Component {
                 limit_price,
                 expiration.into(),
             )
-            .into()
+                .into()
         })
     }
 
@@ -59,6 +59,19 @@ impl Guest for Component {
                 .into_iter()
                 .map(|item| item.into())
                 .collect()
+        })
+    }
+
+    fn create_auction_res(name: String, description: String, limit_price: f32, expiration: WitDeadline) -> WitAuctionId {
+        with_state(|state| {
+            auction_registry_logic::create_auction_res(
+                state,
+                name,
+                description,
+                limit_price,
+                expiration.into(),
+            )
+                .into()
         })
     }
 }
