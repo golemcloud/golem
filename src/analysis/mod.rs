@@ -33,6 +33,36 @@ pub struct AnalysedFunction {
     pub results: Vec<AnalysedFunctionResult>,
 }
 
+impl AnalysedFunction {
+    pub fn is_constructor(&self) -> bool {
+        self.name.starts_with("[constructor]")
+            && self.results.len() == 1
+            && matches!(
+                &self.results[0].typ,
+                AnalysedType::Resource {
+                    resource_mode: AnalysedResourceMode::Owned,
+                    ..
+                }
+            )
+    }
+
+    pub fn is_method(&self) -> bool {
+        self.name.starts_with("[method]")
+            && !self.params.is_empty()
+            && matches!(
+                &self.params[0].typ,
+                AnalysedType::Resource {
+                    resource_mode: AnalysedResourceMode::Borrowed,
+                    ..
+                }
+            )
+    }
+
+    pub fn is_static_method(&self) -> bool {
+        self.name.starts_with("[static]")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysedInstance {
     pub name: String,
@@ -670,5 +700,103 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                 Ok((export.map(Mrc::new), self.clone()))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analysis::{
+        AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId,
+        AnalysedResourceMode, AnalysedType,
+    };
+
+    #[test]
+    fn analysed_function_kind() {
+        let cons = AnalysedFunction {
+            name: "[constructor]cart".to_string(),
+            params: vec![AnalysedFunctionParameter {
+                name: "user-id".to_string(),
+                typ: AnalysedType::Str,
+            }],
+            results: vec![AnalysedFunctionResult {
+                name: None,
+                typ: AnalysedType::Resource {
+                    id: AnalysedResourceId { value: 0 },
+                    resource_mode: AnalysedResourceMode::Owned,
+                },
+            }],
+        };
+        let method = AnalysedFunction {
+            name: "[method]cart.add-item".to_string(),
+            params: vec![
+                AnalysedFunctionParameter {
+                    name: "self".to_string(),
+                    typ: AnalysedType::Resource {
+                        id: AnalysedResourceId { value: 0 },
+                        resource_mode: AnalysedResourceMode::Borrowed,
+                    },
+                },
+                AnalysedFunctionParameter {
+                    name: "item".to_string(),
+                    typ: AnalysedType::Record(vec![
+                        ("product-id".to_string(), AnalysedType::Str),
+                        ("name".to_string(), AnalysedType::Str),
+                        ("price".to_string(), AnalysedType::F32),
+                        ("quantity".to_string(), AnalysedType::U32),
+                    ]),
+                },
+            ],
+            results: vec![],
+        };
+        let static_method = AnalysedFunction {
+            name: "[static]cart.merge".to_string(),
+            params: vec![
+                AnalysedFunctionParameter {
+                    name: "self".to_string(),
+                    typ: AnalysedType::Resource {
+                        id: AnalysedResourceId { value: 0 },
+                        resource_mode: AnalysedResourceMode::Borrowed,
+                    },
+                },
+                AnalysedFunctionParameter {
+                    name: "that".to_string(),
+                    typ: AnalysedType::Resource {
+                        id: AnalysedResourceId { value: 0 },
+                        resource_mode: AnalysedResourceMode::Borrowed,
+                    },
+                },
+            ],
+            results: vec![AnalysedFunctionResult {
+                name: None,
+                typ: AnalysedType::Resource {
+                    id: AnalysedResourceId { value: 0 },
+                    resource_mode: AnalysedResourceMode::Owned,
+                },
+            }],
+        };
+        let fun = AnalysedFunction {
+            name: "hash".to_string(),
+            params: vec![AnalysedFunctionParameter {
+                name: "path".to_string(),
+                typ: AnalysedType::Str,
+            }],
+            results: vec![AnalysedFunctionResult {
+                name: None,
+                typ: AnalysedType::Result {
+                    ok: Some(Box::new(AnalysedType::Record(vec![
+                        ("lower".to_string(), AnalysedType::U64),
+                        ("upper".to_string(), AnalysedType::U64),
+                    ]))),
+                    error: Some(Box::new(AnalysedType::Str)),
+                },
+            }],
+        };
+
+        assert!(cons.is_constructor());
+        assert!(method.is_method());
+        assert!(static_method.is_static_method());
+        assert!(!fun.is_constructor());
+        assert!(!fun.is_method());
+        assert!(!fun.is_static_method());
     }
 }
