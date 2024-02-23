@@ -31,7 +31,7 @@ chrono = { workspace = true }
 console-subscriber = { workspace = true }
 figment = { workspace = true }
 futures-util = { workspace = true }
-golem-wasm-ast = "0.1.2"
+golem-wasm-ast = "0.2.1"
 http = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
