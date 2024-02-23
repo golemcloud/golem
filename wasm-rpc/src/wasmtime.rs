@@ -26,8 +26,22 @@ pub enum EncodingError {
 pub trait ResourceStore {
     fn self_uri(&self) -> Uri;
     fn add(&mut self, resource: ResourceAny) -> u64;
+    fn get(&mut self, resource_id: u64) -> Option<ResourceAny>;
     fn borrow(&self, resource_id: u64) -> Option<ResourceAny>;
-    fn remove(&mut self, resource_id: u64) -> Option<ResourceAny>;
+}
+
+pub struct DecodeParamResult {
+    pub val: Val,
+    pub resources_to_drop: Vec<ResourceAny>,
+}
+
+impl DecodeParamResult {
+    pub fn simple(val: Val) -> Self {
+        Self {
+            val,
+            resources_to_drop: Vec::new(),
+        }
+    }
 }
 
 /// Converts a Value to a wasmtime Val based on the available type information.
@@ -35,97 +49,116 @@ pub fn decode_param(
     param: &Value,
     param_type: &Type,
     resource_store: &mut impl ResourceStore,
-) -> Result<Val, EncodingError> {
+) -> Result<DecodeParamResult, EncodingError> {
     match param_type {
         Type::Bool => match param {
-            Value::Bool(bool) => Ok(Val::Bool(*bool)),
+            Value::Bool(bool) => Ok(DecodeParamResult::simple(Val::Bool(*bool))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::S8 => match param {
-            Value::S8(s8) => Ok(Val::S8(*s8)),
+            Value::S8(s8) => Ok(DecodeParamResult::simple(Val::S8(*s8))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::U8 => match param {
-            Value::U8(u8) => Ok(Val::U8(*u8)),
+            Value::U8(u8) => Ok(DecodeParamResult::simple(Val::U8(*u8))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::S16 => match param {
-            Value::S16(s16) => Ok(Val::S16(*s16)),
+            Value::S16(s16) => Ok(DecodeParamResult::simple(Val::S16(*s16))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::U16 => match param {
-            Value::U16(u16) => Ok(Val::U16(*u16)),
+            Value::U16(u16) => Ok(DecodeParamResult::simple(Val::U16(*u16))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::S32 => match param {
-            Value::S32(s32) => Ok(Val::S32(*s32)),
+            Value::S32(s32) => Ok(DecodeParamResult::simple(Val::S32(*s32))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::U32 => match param {
-            Value::U32(u32) => Ok(Val::U32(*u32)),
+            Value::U32(u32) => Ok(DecodeParamResult::simple(Val::U32(*u32))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::S64 => match param {
-            Value::S64(s64) => Ok(Val::S64(*s64)),
+            Value::S64(s64) => Ok(DecodeParamResult::simple(Val::S64(*s64))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::U64 => match param {
-            Value::U64(u64) => Ok(Val::U64(*u64)),
+            Value::U64(u64) => Ok(DecodeParamResult::simple(Val::U64(*u64))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::Float32 => match param {
-            Value::F32(f32) => Ok(Val::Float32(*f32)),
+            Value::F32(f32) => Ok(DecodeParamResult::simple(Val::Float32(*f32))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::Float64 => match param {
-            Value::F64(f64) => Ok(Val::Float64(*f64)),
+            Value::F64(f64) => Ok(DecodeParamResult::simple(Val::Float64(*f64))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::Char => match param {
-            Value::Char(char) => Ok(Val::Char(*char)),
+            Value::Char(char) => Ok(DecodeParamResult::simple(Val::Char(*char))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::String => match param {
-            Value::String(string) => Ok(Val::String(string.clone().into_boxed_str())),
+            Value::String(string) => Ok(DecodeParamResult::simple(Val::String(
+                string.clone().into_boxed_str(),
+            ))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::List(ty) => match param {
             Value::List(values) => {
-                let decoded_values = values
-                    .iter()
-                    .map(|v| decode_param(v, &ty.ty(), resource_store))
-                    .collect::<Result<Vec<Val>, EncodingError>>()?;
+                let mut decoded_values = Vec::new();
+                let mut resource_ids_to_drop = Vec::new();
+                for value in values {
+                    let decoded_param = decode_param(value, &ty.ty(), resource_store)?;
+                    decoded_values.push(decoded_param.val);
+                    resource_ids_to_drop.extend(decoded_param.resources_to_drop);
+                }
                 let list = List::new(ty, decoded_values.into_boxed_slice())
                     .expect("Type mismatch in decode_param");
-                Ok(Val::List(list))
+                Ok(DecodeParamResult {
+                    val: Val::List(list),
+                    resources_to_drop: resource_ids_to_drop,
+                })
             }
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::Record(ty) => match param {
             Value::Record(values) => {
-                let record_values = values
-                    .iter()
-                    .zip(ty.fields())
-                    .map(|(value, field)| {
-                        let decoded_param = decode_param(value, &field.ty, resource_store)?;
-                        Ok((field.name, decoded_param))
-                    })
-                    .collect::<Result<Vec<(&str, Val)>, EncodingError>>()?;
+                let mut record_values = Vec::new();
+                let mut resource_ids_to_drop = Vec::new();
+
+                for (value, field) in values.iter().zip(ty.fields()) {
+                    let decoded_param = decode_param(value, &field.ty, resource_store)?;
+                    record_values.push((field.name, decoded_param.val));
+                    resource_ids_to_drop.extend(decoded_param.resources_to_drop);
+                }
+
                 let record = Record::new(ty, record_values).expect("Type mismatch in decode_param");
-                Ok(Val::Record(record))
+                Ok(DecodeParamResult {
+                    val: Val::Record(record),
+                    resources_to_drop: resource_ids_to_drop,
+                })
             }
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::Tuple(ty) => match param {
             Value::Tuple(values) => {
-                let tuple_values: Vec<Val> = values
-                    .iter()
-                    .zip(ty.types())
-                    .map(|(value, ty)| decode_param(value, &ty, resource_store))
-                    .collect::<Result<Vec<Val>, EncodingError>>()?;
+                let mut tuple_values = Vec::new();
+                let mut resource_ids_to_drop = Vec::new();
+
+                for (value, ty) in values.iter().zip(ty.types()) {
+                    let decoded_param = decode_param(value, &ty, resource_store)?;
+                    tuple_values.push(decoded_param.val);
+                    resource_ids_to_drop.extend(decoded_param.resources_to_drop);
+                }
+
                 let tuple = Tuple::new(ty, tuple_values.into_boxed_slice())
                     .expect("Type mismatch in decode_param");
-                Ok(Val::Tuple(tuple))
+                Ok(DecodeParamResult {
+                    val: Val::Tuple(tuple),
+                    resources_to_drop: resource_ids_to_drop,
+                })
             }
             _ => Err(EncodingError::ParamTypeMismatch),
         },
@@ -151,9 +184,21 @@ pub fn decode_param(
                     .as_ref()
                     .map(|v| decode_param(v, case_ty, resource_store))
                     .transpose()?;
-                let variant =
-                    Variant::new(ty, name, decoded_value).expect("Type mismatch in decode_param");
-                Ok(Val::Variant(variant))
+                match decoded_value {
+                    Some(decoded_value) => {
+                        let variant = Variant::new(ty, name, Some(decoded_value.val))
+                            .expect("Type mismatch in decode_param");
+                        Ok(DecodeParamResult {
+                            val: Val::Variant(variant),
+                            resources_to_drop: decoded_value.resources_to_drop,
+                        })
+                    }
+                    None => {
+                        let variant =
+                            Variant::new(ty, name, None).expect("Type mismatch in decode_param");
+                        Ok(DecodeParamResult::simple(Val::Variant(variant)))
+                    }
+                }
             }
             _ => Err(EncodingError::ParamTypeMismatch),
         },
@@ -170,7 +215,7 @@ pub fn decode_param(
                             ),
                         })?;
                 let enum0 = Enum::new(ty, name).expect("Type mismatch in decode_param");
-                Ok(Val::Enum(enum0))
+                Ok(DecodeParamResult::simple(Val::Enum(enum0)))
             }
             _ => Err(EncodingError::ParamTypeMismatch),
         },
@@ -178,13 +223,16 @@ pub fn decode_param(
             Value::Option(value) => match value {
                 Some(value) => {
                     let decoded_value = decode_param(value, &ty.ty(), resource_store)?;
-                    let option = OptionVal::new(ty, Some(decoded_value))
+                    let option = OptionVal::new(ty, Some(decoded_value.val))
                         .expect("Type mismatch in decode_param");
-                    Ok(Val::Option(option))
+                    Ok(DecodeParamResult {
+                        val: Val::Option(option),
+                        resources_to_drop: decoded_value.resources_to_drop,
+                    })
                 }
                 None => {
                     let option = OptionVal::new(ty, None).expect("Type mismatch in decode_param");
-                    Ok(Val::Option(option))
+                    Ok(DecodeParamResult::simple(Val::Option(option)))
                 }
             },
             _ => Err(EncodingError::ParamTypeMismatch),
@@ -199,9 +247,21 @@ pub fn decode_param(
                         .as_ref()
                         .map(|v| decode_param(v, &ok_ty, resource_store))
                         .transpose()?;
-                    let result = ResultVal::new(ty, Ok(decoded_value))
-                        .expect("Type mismatch in decode_param");
-                    Ok(Val::Result(result))
+                    match decoded_value {
+                        Some(decoded_value) => {
+                            let result = ResultVal::new(ty, Ok(Some(decoded_value.val)))
+                                .expect("Type mismatch in decode_param");
+                            Ok(DecodeParamResult {
+                                val: Val::Result(result),
+                                resources_to_drop: decoded_value.resources_to_drop,
+                            })
+                        }
+                        None => {
+                            let result = ResultVal::new(ty, Ok(None))
+                                .expect("Type mismatch in decode_param");
+                            Ok(DecodeParamResult::simple(Val::Result(result)))
+                        }
+                    }
                 }
                 Err(value) => {
                     let err_ty = ty.err().ok_or(EncodingError::ValueMismatch {
@@ -211,9 +271,21 @@ pub fn decode_param(
                         .as_ref()
                         .map(|v| decode_param(v, &err_ty, resource_store))
                         .transpose()?;
-                    let result = ResultVal::new(ty, Err(decoded_value))
-                        .expect("Type mismatch in decode_param");
-                    Ok(Val::Result(result))
+                    match decoded_value {
+                        Some(decoded_value) => {
+                            let result = ResultVal::new(ty, Err(Some(decoded_value.val)))
+                                .expect("Type mismatch in decode_param");
+                            Ok(DecodeParamResult {
+                                val: Val::Result(result),
+                                resources_to_drop: decoded_value.resources_to_drop,
+                            })
+                        }
+                        None => {
+                            let result = ResultVal::new(ty, Err(None))
+                                .expect("Type mismatch in decode_param");
+                            Ok(DecodeParamResult::simple(Val::Result(result)))
+                        }
+                    }
                 }
             },
             _ => Err(EncodingError::ParamTypeMismatch),
@@ -228,15 +300,18 @@ pub fn decode_param(
                     .collect();
                 let flags =
                     Flags::new(ty, active_flags.as_slice()).expect("Type mismatch in decode_param");
-                Ok(Val::Flags(flags))
+                Ok(DecodeParamResult::simple(Val::Flags(flags)))
             }
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::Own(_) => match param {
             Value::Handle { uri, resource_id } => {
                 if resource_store.self_uri() == *uri {
-                    match resource_store.remove(*resource_id) {
-                        Some(resource) => Ok(Val::Resource(resource)),
+                    match resource_store.get(*resource_id) {
+                        Some(resource) => Ok(DecodeParamResult {
+                            val: Val::Resource(resource),
+                            resources_to_drop: vec![resource],
+                        }),
                         None => Err(EncodingError::ValueMismatch {
                             details: "resource not found".to_string(),
                         }),
@@ -254,7 +329,7 @@ pub fn decode_param(
             Value::Handle { uri, resource_id } => {
                 if resource_store.self_uri() == *uri {
                     match resource_store.borrow(*resource_id) {
-                        Some(resource) => Ok(Val::Resource(resource)),
+                        Some(resource) => Ok(DecodeParamResult::simple(Val::Resource(resource))),
                         None => Err(EncodingError::ValueMismatch {
                             details: "resource not found".to_string(),
                         }),
