@@ -811,11 +811,11 @@ mod tests {
             todo!()
         }
 
-        fn borrow(&self, _resource_id: u64) -> Option<ResourceAny> {
+        fn get(&mut self, _resource_id: u64) -> Option<ResourceAny> {
             todo!()
         }
 
-        fn remove(&mut self, _resource_id: u64) -> Option<ResourceAny> {
+        fn borrow(&self, _resource_id: u64) -> Option<ResourceAny> {
             todo!()
         }
     }

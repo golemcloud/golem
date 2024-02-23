@@ -17,7 +17,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_common::model::TemplateId;
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysisContext, AnalysisFailure};
+use golem_wasm_ast::analysis::{
+    AnalysedExport, AnalysedFunction, AnalysisContext, AnalysisFailure,
+};
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use tap::TapFallible;
@@ -436,18 +438,18 @@ impl TemplateServiceDefault {
                     for fun in &instance.funcs {
                         if fun.is_constructor() {
                             let drop_name = fun.name.replace("[constructor]", "[drop]");
-                            to_add.push(AnalysedExport::Function(AnalysedFunction {
+                            to_add.push(AnalysedFunction {
                                 name: drop_name,
                                 ..fun.clone()
-                            }));
+                            });
                         }
                     }
-                    instance.funcs.extend(to_add);
+                    instance.funcs.extend(to_add.into_iter());
                 }
             }
         }
 
-        exports.extend_from_slice(&to_add);
+        exports.extend(to_add);
     }
 
     fn get_user_object_store_key(&self, id: &UserTemplateId) -> String {

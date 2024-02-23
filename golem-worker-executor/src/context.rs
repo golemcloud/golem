@@ -346,11 +346,11 @@ impl ResourceStore for Context {
         self.durable_ctx.add(resource)
     }
 
-    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
-        self.durable_ctx.borrow(resource_id)
+    fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+        self.durable_ctx.get(resource_id)
     }
 
-    fn remove(&mut self, resource_id: u64) -> Option<ResourceAny> {
-        self.durable_ctx.remove(resource_id)
+    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+        self.durable_ctx.borrow(resource_id)
     }
 }

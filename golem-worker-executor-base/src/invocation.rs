@@ -360,16 +360,16 @@ async fn invoke<Ctx: WorkerCtx>(
     }
 }
 
-async fn store_results<'a, Ctx: WorkerCtx>(store: &mut StoreContextMut<'a, Ctx>, output: &Vec<Value>) {
+async fn store_results<'a, Ctx: WorkerCtx>(store: &mut StoreContextMut<'a, Ctx>, output: &[Value]) {
     if let Some(invocation_key) = store.data().get_current_invocation_key().await {
         debug!(
-                    "Storing successful results for invocation key {:?}",
-                    &invocation_key
-                );
+            "Storing successful results for invocation key {:?}",
+            &invocation_key
+        );
 
         store
             .data_mut()
-            .confirm_invocation_key(&invocation_key, Ok(output.clone()))
+            .confirm_invocation_key(&invocation_key, Ok(output.to_vec()))
             .await;
     } else {
         debug!("No invocation key");
@@ -419,7 +419,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
     Ok(InvokeResult {
         exited: false,
         consumed_fuel: 0,
-        output
+        output,
     })
 }
 
