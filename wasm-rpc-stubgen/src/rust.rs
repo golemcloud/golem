@@ -85,7 +85,10 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                 if interface.global {
                     None
                 } else {
-                    Some(&interface.name)
+                    match &interface.owner_interface {
+                        Some(owner) => Some(format!("{owner}/{}", &interface.name)),
+                        None => Some(interface.name.clone()),
+                    }
                 },
                 if interface.is_resource() {
                     FunctionMode::Method
@@ -102,7 +105,10 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                 if interface.global {
                     None
                 } else {
-                    Some(&interface.name)
+                    match &interface.owner_interface {
+                        Some(owner) => Some(format!("{owner}/{}", &interface.name)),
+                        None => Some(interface.name.clone()),
+                    }
                 },
                 FunctionMode::Static,
             )?);
@@ -123,7 +129,11 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             generate_function_stub_source(
                 def,
                 &constructor_stub,
-                Some(&interface.name),
+                Some(format!(
+                    "{}/{}",
+                    interface.owner_interface.clone().unwrap_or_default(),
+                    &interface.name
+                )),
                 FunctionMode::Constructor,
             )?
         } else {
@@ -146,7 +156,15 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         });
 
         if interface.is_resource() {
-            let remote_function_name = get_remote_function_name(def, "drop", Some(&interface.name));
+            let remote_function_name = get_remote_function_name(
+                def,
+                "drop",
+                Some(&format!(
+                    "{}/{}",
+                    interface.owner_interface.clone().unwrap_or_default(),
+                    &interface.name
+                )),
+            );
             interface_impls.push(quote! {
                 impl Drop for #interface_name {
                     fn drop(&mut self) {
@@ -198,7 +216,7 @@ enum FunctionMode {
 fn generate_function_stub_source(
     def: &StubDefinition,
     function: &FunctionStub,
-    interface_name: Option<&String>,
+    interface_name: Option<String>,
     mode: FunctionMode,
 ) -> anyhow::Result<TokenStream> {
     let function_name = Ident::new(&to_rust_ident(&function.name), Span::call_site());
@@ -270,7 +288,7 @@ fn generate_function_stub_source(
             output_values.push(extract_from_wit_value(
                 typ,
                 &def.resolve,
-                quote! { result },
+                quote! { result.tuple_element(0).expect("tuple not found") },
             )?);
         }
         FunctionResultStub::Multi(params) => {
@@ -285,7 +303,7 @@ fn generate_function_stub_source(
         FunctionResultStub::SelfType if mode == FunctionMode::Constructor => {
             output_values.push(quote! {
                 {
-                    let (uri, id) = result.handle().expect("handle not found");
+                    let (uri, id) = result.tuple_element(0).expect("tuple not found").handle().expect("handle not found");
                     Self {
                         rpc,
                         id,
@@ -301,7 +319,8 @@ fn generate_function_stub_source(
         }
     }
 
-    let remote_function_name = get_remote_function_name(def, &function.name, interface_name);
+    let remote_function_name =
+        get_remote_function_name(def, &function.name, interface_name.as_ref());
 
     let rpc = match mode {
         FunctionMode::Static => {
