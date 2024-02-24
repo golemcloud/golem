@@ -54,10 +54,8 @@ jobs:
       - name: Install gcc-aarch64-linux-gnu
         if: matrix.platform.platform == 'linux/arm64'
         run: |
-          sudo dpkg --add-architecture arm64
           sudo apt-get update
-          sudo apt-get install gcc-aarch64-linux-gnu      
-          sudo apt-get update && apt-get install --assume-yes libssl-dev:arm64
+          sudo apt-get install gcc-aarch64-linux-gnu
       - uses: actions/cache@v3
         with:
           path: |
