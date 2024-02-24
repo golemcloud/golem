@@ -19,23 +19,24 @@ workerExecutor:
     type: ClusterIP
 #  nodeSelector:
 
-workerBridge:
+workerService:
   image: golemservices/golem-worker-bridge:latest
   imagePullPolicy: Always
   replica: 1
   ports:
-    mgmtHttp: 8080
-    requestHttp: 9000
+    http: 9005
+    requestHttp: 9006
+    grpc: 9007
   service:
     type: LoadBalancer
 #  nodeSelector:
 
-golemService:
+templateService:
   image: golemservices/golem-service:latest
   imagePullPolicy: Always
   replica: 1
   ports:
-    http: 9881
+    http: 8083
     grpc: 9090
   service:
     type: LoadBalancer

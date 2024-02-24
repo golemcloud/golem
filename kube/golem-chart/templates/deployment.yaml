@@ -111,7 +111,7 @@ spec:
             - name: GOLEM__TEMPLATE_SERVICE__CONFIG__HOST
               value: service-golem-service-{{.Values.env}}
             - name: GOLEM__TEMPLATE_SERVICE__CONFIG__PORT
-              value: "{{ .Values.golemService.ports.grpc }}"
+              value: "{{ .Values.templateService.ports.grpc }}"
             - name: GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN
               value: "2A354594-7A63-4091-A46B-CC58D379F677"
             - name: GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST
@@ -235,39 +235,43 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: deployment-worker-bridge-{{.Values.env}}
+  name: deployment-worker-service-{{.Values.env}}
   labels:
     env: {{.Values.env}}
 spec:
-  replicas: {{ .Values.workerBridge.replica }}
+  replicas: {{ .Values.workerService.replica }}
   selector:
     matchLabels:
-      app: worker-bridge-app-{{.Values.env}}
+      app: worker-service-app-{{.Values.env}}
   template:
     metadata:
       labels:
-        app: worker-bridge-app-{{.Values.env}}
+        app: worker-service-app-{{.Values.env}}
         env: {{.Values.env}}
     spec:
 {{- if .Values.serviceAccountName }}
       serviceAccountName: {{ .Values.serviceAccountName }}
 {{- end }}
-{{- if .Values.workerBridge.nodeSelector }}
-      nodeSelector: {{- .Values.workerBridge.nodeSelector | toYaml | nindent 8 }}
+{{- if .Values.workerService.nodeSelector }}
+      nodeSelector: {{- .Values.workerService.nodeSelector | toYaml | nindent 8 }}
 {{- end }}
       containers:
-        - name: worker-bridge-app-{{.Values.env}}
-          image: "{{ .Values.workerBridge.image }}"
-          imagePullPolicy: {{.Values.workerBridge.imagePullPolicy}}
+        - name: worker-service-app-{{.Values.env}}
+          image: "{{ .Values.workerService.image }}"
+          imagePullPolicy: {{.Values.workerService.imagePullPolicy}}
           env:
             - name: ENVIRONMENT
               value: {{.Values.env}}
             - name: REDIS_HOST
               value: {{ .Values.redis.host }}
+            - name: GOLEM__ROUTING_TABLE__HOST
+              value: service-shard-manager-{{.Values.env}}
+            - name: GOLEM__ROUTING_TABLE__PORT
+              value: "{{ .Values.shardManager.ports.grpc }}"
             - name: GOLEM__TEMPLATE_SERVICE__CONFIG__HOST
-              value: service-golem-service-{{.Values.env}}
+              value: service-template-service-{{.Values.env}}
             - name: GOLEM__TEMPLATE_SERVICE__CONFIG__PORT
-              value: "{{ .Values.golemService.ports.grpc }}"
+              value: "{{ .Values.templateService.ports.grpc }}"
             - name: GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN
               value: "2A354594-7A63-4091-A46B-CC58D379F677"
             - name: GOLEM__REDIS__KEY_PREFIX
@@ -298,18 +302,22 @@ spec:
             - name: GOLEM__ENABLE_JSON_LOG
               value: "{{ .Values.logging.json }}"
             - name: GOLEM__HTTP_PORT
-              value: "{{ .Values.workerBridge.ports.requestHttp }}"
+              value: "{{ .Values.workerService.ports.requestHttp }}"
             - name: GOLEM__MANAGEMENT_PORT
-              value: "{{ .Values.workerBridge.ports.mgmtHttp }}"
+              value: "{{ .Values.workerService.ports.http }}"
+            - name: GOLEM__WORKER_GRPC_PORT
+              value: "{{ .Values.workerService.ports.grpc }}"
           ports:
-            - name: mhttp
-              containerPort: {{ .Values.workerBridge.ports.mgmtHttp }}
+            - name: http
+              containerPort: {{ .Values.workerService.ports.http }}
             - name: rhttp
-              containerPort: {{ .Values.workerBridge.ports.requestHttp }}
+              containerPort: {{ .Values.workerService.ports.requestHttp }}
+            - name: grpc
+              containerPort: {{ .Values.workerService.ports.grpc }}
 {{/*          livenessProbe:*/}}
 {{/*            httpGet:*/}}
 {{/*              path: "/healthcheck"*/}}
-{{/*              port: mhttp*/}}
+{{/*              port: http*/}}
 {{/*            periodSeconds: 10*/}}
 {{/*            failureThreshold: 5*/}}
 {{/*            initialDelaySeconds: 45*/}}
@@ -317,7 +325,7 @@ spec:
 {{/*          readinessProbe:*/}}
 {{/*            httpGet:*/}}
 {{/*              path: "/healthcheck"*/}}
-{{/*              port: mhttp*/}}
+{{/*              port: http*/}}
 {{/*            periodSeconds: 10*/}}
 {{/*            failureThreshold: 5*/}}
 {{/*            initialDelaySeconds: 20*/}}
@@ -326,37 +334,33 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: deployment-golem-service-{{.Values.env}}
+  name: deployment-template-service-{{.Values.env}}
   labels:
     env: {{.Values.env}}
 spec:
-  replicas: {{ .Values.golemService.replica }}
+  replicas: {{ .Values.templateService.replica }}
   selector:
     matchLabels:
-      app: golem-service-app-{{.Values.env}}
+      app: template-service-app-{{.Values.env}}
   template:
     metadata:
       labels:
-        app: golem-service-app-{{.Values.env}}
+        app: template-service-app-{{.Values.env}}
         env: {{.Values.env}}
     spec:
 {{- if .Values.serviceAccountName }}
       serviceAccountName: {{ .Values.serviceAccountName }}
 {{- end }}
-{{- if .Values.golemService.nodeSelector }}
-      nodeSelector: {{- .Values.golemService.nodeSelector | toYaml | nindent 8 }}
+{{- if .Values.templateService.nodeSelector }}
+      nodeSelector: {{- .Values.templateService.nodeSelector | toYaml | nindent 8 }}
 {{- end }}
       containers:
-        - name: golem-service-app-{{.Values.env}}
-          image: "{{ .Values.golemService.image }}"
-          imagePullPolicy: {{.Values.golemService.imagePullPolicy}}
+        - name: template-service-app-{{.Values.env}}
+          image: "{{ .Values.templateService.image }}"
+          imagePullPolicy: {{.Values.templateService.imagePullPolicy}}
           env:
             - name: ENVIRONMENT
               value: {{.Values.env}}
-            - name: GOLEM__ROUTING_TABLE__HOST
-              value: service-shard-manager-{{.Values.env}}
-            - name: GOLEM__ROUTING_TABLE__PORT
-              value: "{{ .Values.shardManager.ports.grpc }}"
             - name: RUST_BACKTRACE
               value: "1"
             - name: RUST_LOG
@@ -387,9 +391,9 @@ spec:
                   key: {{ .Values.postgres.password.fromSecret.key }}
 {{- end }}
             - name: GOLEM__HTTP_PORT
-              value: "{{ .Values.golemService.ports.http }}"
+              value: "{{ .Values.templateService.ports.http }}"
             - name: GOLEM__GRPC_PORT
-              value: "{{ .Values.golemService.ports.grpc }}"
+              value: "{{ .Values.templateService.ports.grpc }}"
 {{- if eq .Values.templateStore.type "pvc" }}
             - name: GOLEM__TEMPLATES__STORE__TYPE
               value: "Local"
@@ -410,9 +414,9 @@ spec:
 {{- end }}
           ports:
             - name: http
-              containerPort: {{ .Values.golemService.ports.http }}
+              containerPort: {{ .Values.templateService.ports.http }}
             - name: grpc
-              containerPort: {{ .Values.golemService.ports.grpc }}
+              containerPort: {{ .Values.templateService.ports.grpc }}
 {{/*          livenessProbe:*/}}
 {{/*            httpGet:*/}}
 {{/*              path: "/healthcheck"*/}}

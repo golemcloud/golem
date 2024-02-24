@@ -45,42 +45,46 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: service-worker-bridge-{{.Values.env}}
+  name: service-worker-service-{{.Values.env}}
   labels:
-    app: worker-bridge-app-{{.Values.env}}
+    app: worker-service-app-{{.Values.env}}
     env: {{.Values.env}}
 spec:
-  type: {{ .Values.workerBridge.service.type }}
+  type: {{ .Values.workerService.service.type }}
   selector:
-    app: worker-bridge-app-{{.Values.env}}
+    app: worker-service-app-{{.Values.env}}
   ports:
     - protocol: TCP
-      name: mhttp
-      port: {{ .Values.workerBridge.ports.mgmtHttp }}
-      targetPort: {{ .Values.workerBridge.ports.mgmtHttp }}
+      name: http
+      port: {{ .Values.workerService.ports.http }}
+      targetPort: {{ .Values.workerService.ports.http }}
     - protocol: TCP
       name: rhttp
-      port: {{ .Values.workerBridge.ports.requestHttp }}
-      targetPort: {{ .Values.workerBridge.ports.requestHttp }}
+      port: {{ .Values.workerService.ports.requestHttp }}
+      targetPort: {{ .Values.workerService.ports.requestHttp }}
+    - protocol: TCP
+      name: grpc
+      port: {{ .Values.workerService.ports.grpc }}
+      targetPort: {{ .Values.workerService.ports.grpc }}
 ---
 
 apiVersion: v1
 kind: Service
 metadata:
-  name: service-golem-service-{{.Values.env}}
+  name: service-template-service-{{.Values.env}}
   labels:
-    app: golem-service-app-{{.Values.env}}
+    app: template-service-app-{{.Values.env}}
     env: {{.Values.env}}
 spec:
-  type: {{ .Values.golemService.service.type }}
+  type: {{ .Values.templateService.service.type }}
   selector:
-    app: golem-service-app-{{.Values.env}}
+    app: template-service-app-{{.Values.env}}
   ports:
     - protocol: TCP
       name: http
-      port: {{ .Values.golemService.ports.http }}
-      targetPort: {{ .Values.golemService.ports.http }}
+      port: {{ .Values.templateService.ports.http }}
+      targetPort: {{ .Values.templateService.ports.http }}
     - protocol: TCP
       name: grpc
-      port: {{ .Values.golemService.ports.grpc }}
-      targetPort: {{ .Values.golemService.ports.grpc }}
+      port: {{ .Values.templateService.ports.grpc }}
+      targetPort: {{ .Values.templateService.ports.grpc }}
