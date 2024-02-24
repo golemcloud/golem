@@ -1,42 +1,44 @@
 use crate::context::db::DbInfo;
+use crate::context::golem_template_service::GolemTemplateServiceInfo;
+use crate::context::redis::RedisInfo;
 use crate::context::{EnvConfig, ShardManagerInfo, NETWORK, TAG};
-use golem_cli::clients::template::{TemplateClient, TemplateClientLive};
 use libtest_mimic::Failed;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::time::Duration;
 use testcontainers::core::WaitFor;
 use testcontainers::{clients, Container, Image, RunnableImage};
-use url::Url;
 
 #[derive(Debug)]
-struct GolemServiceImage {
+struct GolemWorkerServiceImage {
     grpc_port: u16,
     http_port: u16,
+    custom_request_port: u16,
     env_vars: HashMap<String, String>,
 }
 
-impl GolemServiceImage {
+impl GolemWorkerServiceImage {
     pub fn new(
         grpc_port: u16,
         http_port: u16,
+        custom_request_port: u16,
         env_vars: HashMap<String, String>,
-    ) -> GolemServiceImage {
-        GolemServiceImage {
+    ) -> GolemWorkerServiceImage {
+        GolemWorkerServiceImage {
             grpc_port,
             http_port,
+            custom_request_port,
             env_vars,
         }
     }
 }
 
-impl Image for GolemServiceImage {
+impl Image for GolemWorkerServiceImage {
     type Args = ();
 
     fn name(&self) -> String {
-        "golemservices/golem-service".to_string()
+        "golemservices/golem-worker-service".to_string()
     }
 
     fn tag(&self) -> String {
@@ -52,64 +54,37 @@ impl Image for GolemServiceImage {
     }
 
     fn expose_ports(&self) -> Vec<u16> {
-        vec![self.grpc_port, self.http_port]
+        vec![self.grpc_port, self.http_port, self.custom_request_port]
     }
 }
 
-pub struct GolemService<'docker_client> {
+pub struct GolemWorkerService<'docker_client> {
     host: String,
     local_http_port: u16,
     http_port: u16,
     grpc_port: u16,
-    inner: GolemServiceInner<'docker_client>,
+    custom_request_port: u16,
+    inner: GolemWorkerServiceInner<'docker_client>,
 }
 
-enum GolemServiceInner<'docker_client> {
+enum GolemWorkerServiceInner<'docker_client> {
     Process(Child),
-    Docker(Container<'docker_client, GolemServiceImage>),
+    Docker(Container<'docker_client, GolemWorkerServiceImage>),
 }
 
-impl<'docker_client> GolemService<'docker_client> {
-    fn wait_for_health_check(http_port: u16) {
-        let client = TemplateClientLive {
-            client: golem_client::api::TemplateClientLive {
-                context: golem_client::Context {
-                    client: reqwest::Client::default(),
-                    base_url: Url::parse(&format!("http://localhost:{http_port}")).unwrap(),
-                },
-            },
-        };
-
-        let wait_loop = async {
-            loop {
-                match client.find(None).await {
-                    Ok(_) => break,
-                    Err(e) => {
-                        println!("Cloud Service healthcheck failed: ${e:?}");
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                    }
-                }
-            }
-        };
-
-        // TODO: async start
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed building the Runtime")
-            .block_on(wait_loop)
-    }
-
+impl<'docker_client> GolemWorkerService<'docker_client> {
     pub fn start(
         docker: &'docker_client clients::Cli,
         env_config: &EnvConfig,
         shard_manager: &ShardManagerInfo,
         db: &DbInfo,
-    ) -> Result<GolemService<'docker_client>, Failed> {
+        redis: &RedisInfo,
+        template: &GolemTemplateServiceInfo,
+    ) -> Result<GolemWorkerService<'docker_client>, Failed> {
         if env_config.local_golem {
-            GolemService::start_process(env_config, shard_manager, db)
+            GolemWorkerService::start_process(env_config, shard_manager, db, redis, template)
         } else {
-            GolemService::start_docker(docker, env_config, shard_manager, db)
+            GolemWorkerService::start_docker(docker, env_config, shard_manager, db, redis, template)
         }
     }
 
@@ -118,35 +93,56 @@ impl<'docker_client> GolemService<'docker_client> {
         env_config: &EnvConfig,
         shard_manager: &ShardManagerInfo,
         db: &DbInfo,
-    ) -> Result<GolemService<'docker_client>, Failed> {
-        println!("Starting Golem Service docker with shard manager: {shard_manager:?}");
+        redis: &RedisInfo,
+        template: &GolemTemplateServiceInfo,
+    ) -> Result<GolemWorkerService<'docker_client>, Failed> {
+        println!("Starting Golem Worker Service docker with shard manager: {shard_manager:?}");
 
-        let http_port = 8081;
-        let grpc_port = 9091;
+        let http_port = 8082;
+        let grpc_port = 9092;
+        let custom_request_port = 9093;
 
-        let env_vars = GolemService::env_vars(grpc_port, http_port, env_config, shard_manager, db);
-        let name = "golem_service";
+        let env_vars = GolemWorkerService::env_vars(
+            grpc_port,
+            http_port,
+            custom_request_port,
+            env_config,
+            shard_manager,
+            db,
+            redis,
+            template,
+        );
+        let name = "golem_worker_service";
 
-        let image = RunnableImage::from(GolemServiceImage::new(grpc_port, http_port, env_vars))
-            .with_container_name(name)
-            .with_network(NETWORK);
+        let image = RunnableImage::from(GolemWorkerServiceImage::new(
+            grpc_port,
+            http_port,
+            custom_request_port,
+            env_vars,
+        ))
+        .with_container_name(name)
+        .with_network(NETWORK);
         let node = docker.run(image);
 
-        Ok(GolemService {
+        Ok(GolemWorkerService {
             host: name.to_string(),
             local_http_port: node.get_host_port_ipv4(http_port),
             http_port,
             grpc_port,
-            inner: GolemServiceInner::Docker(node),
+            custom_request_port,
+            inner: GolemWorkerServiceInner::Docker(node),
         })
     }
 
     fn env_vars(
         grpc_port: u16,
         http_port: u16,
+        custom_request_port: u16,
         env_config: &EnvConfig,
         shard_manager: &ShardManagerInfo,
         db: &DbInfo,
+        redis: &RedisInfo,
+        template: &GolemTemplateServiceInfo,
     ) -> HashMap<String, String> {
         let log_level = if env_config.verbose { "debug" } else { "info" };
 
@@ -155,21 +151,19 @@ impl<'docker_client> GolemService<'docker_client> {
             ("WASMTIME_BACKTRACE_DETAILS"                             , "1"),
             ("RUST_BACKTRACE"                             , "1"),
             ("GOLEM__WORKSPACE"                           , "ittest"),
-            ("ENVIRONMENT"                         , "local"),
+            ("GOLEM__REDIS__HOST"                         , &redis.host),
+            ("GOLEM__REDIS__PORT"                        , &redis.port.to_string()),
+            ("GOLEM__REDIS__DATABASE"                     , "1"),
+            ("GOLEM__TEMPLATE_SERVICE__HOST"              , &template.host),
+            ("GOLEM__TEMPLATE_SERVICE__PORT"              , &template.grpc_port.to_string()),
+            ("GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN"      , "5C832D93-FF85-4A8F-9803-513950FDFDB1"),
+            ("ENVIRONMENT"                                , "local"),
             ("GOLEM__ENVIRONMENT"                         , "ittest"),
             ("GOLEM__ROUTING_TABLE__HOST"                 , &shard_manager.host),
             ("GOLEM__ROUTING_TABLE__PORT"                 , &shard_manager.grpc_port.to_string()),
-            ("GOLEM__ACCOUNTS__ROOT__TOKEN"               , "0868571c-b6cc-4817-bae8-048cbcef91a0"),
-            ("GOLEM__ACCOUNTS__ROOT__ID"                  , "test-account"),
-            ("GOLEM__ACCOUNTS__MARKETING__TOKEN"          , "7868571c-b6cc-4817-bae8-048cbcef91a0"),
-            ("GOLEM__ED_DSA__PRIVATE_KEY"                 , "MC4CAQAwBQYDK2VwBCIEIDSMbnKaWIjXt+LQaA8pVudt6KBwVBaBecRPWZRvmwUW"),
-            ("GOLEM__ED_DSA__PUBLIC_KEY"                  , "MCowBQYDK2VwAyEAVLrTJ1Q5Cl438J8/bQ1Ib+zfvb9VrOQjwzxKgVRoY7w="),
-            ("GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH" , "/tmp/ittest-local-object-store/golem"),
-            ("GOLEM__TEMPLATES__STORE__TYPE", "Local"),
-            ("GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX", ""),
-            ("GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH", "../target/template_store"),
-            ("GOLEM__GRPC_PORT", &grpc_port.to_string()),
-            ("GOLEM__HTTP_PORT", &http_port.to_string()),
+            ("GOLEM__CUSTOM_REQUEST_PORT"                 , &custom_request_port.to_string()),
+            ("GOLEM__WORKER_GRPC_PORT", &grpc_port.to_string()),
+            ("GOLEM__PORT", &http_port.to_string()),
 
         ];
 
@@ -189,15 +183,17 @@ impl<'docker_client> GolemService<'docker_client> {
         env_config: &EnvConfig,
         shard_manager: &ShardManagerInfo,
         db: &DbInfo,
-    ) -> Result<GolemService<'docker_client>, Failed> {
-        println!("Starting Golem Service");
+        redis: &RedisInfo,
+        template: &GolemTemplateServiceInfo,
+    ) -> Result<GolemWorkerService<'docker_client>, Failed> {
+        println!("Starting Golem Worker Service");
 
-        let service_dir = Path::new("../golem-service/");
-        let service_run = Path::new("../target/debug/golem-service");
+        let service_dir = Path::new("../golem-worker-service/");
+        let service_run = Path::new("../target/debug/golem-worker-service");
 
         if !service_run.exists() {
             return Err(format!(
-                "Expected to have precompiled Cloud Service at {}",
+                "Expected to have precompiled Golem Worker Service at {}",
                 service_run.to_str().unwrap_or("")
             )
             .into());
@@ -205,17 +201,21 @@ impl<'docker_client> GolemService<'docker_client> {
 
         println!("Starting {}", service_run.to_str().unwrap_or(""));
 
-        let http_port = 8081;
-        let grpc_port = 9091;
+        let http_port = 8082;
+        let grpc_port = 9092;
+        let custom_request_port = 9093;
 
         let mut child = Command::new(service_run)
             .current_dir(service_dir)
-            .envs(GolemService::env_vars(
+            .envs(GolemWorkerService::env_vars(
                 grpc_port,
                 http_port,
+                custom_request_port,
                 env_config,
                 shard_manager,
                 db,
+                redis,
+                template,
             ))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -227,14 +227,14 @@ impl<'docker_client> GolemService<'docker_client> {
         let stdout = child
             .stdout
             .take()
-            .ok_or::<Failed>("Can't get golem service stdout".into())?;
+            .ok_or::<Failed>("Can't get golem worker service stdout".into())?;
 
         // TODO: use tokio
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines() {
                 if !quiet {
-                    println!("[golemsvc]   {}", line.unwrap())
+                    println!("[golemworker]   {}", line.unwrap())
                 }
             }
         });
@@ -242,59 +242,62 @@ impl<'docker_client> GolemService<'docker_client> {
         let stderr = child
             .stderr
             .take()
-            .ok_or::<Failed>("Can't get golem service stderr".into())?;
+            .ok_or::<Failed>("Can't get golem worker service stderr".into())?;
 
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
                 if !quiet {
-                    eprintln!("[golemsvc]   {}", line.unwrap())
+                    eprintln!("[golemworker]   {}", line.unwrap())
                 }
             }
         });
 
-        GolemService::wait_for_health_check(http_port);
+        // TODO; Wait for healthcheck
 
-        Ok(GolemService {
+        Ok(GolemWorkerService {
             host: "localhost".to_string(),
             local_http_port: http_port,
             http_port,
             grpc_port,
-            inner: GolemServiceInner::Process(child),
+            custom_request_port,
+            inner: GolemWorkerServiceInner::Process(child),
         })
     }
 
-    pub fn info(&self) -> GolemServiceInfo {
-        GolemServiceInfo {
+    pub fn info(&self) -> GolemWorkerServiceInfo {
+        GolemWorkerServiceInfo {
             host: self.host.clone(),
             local_http_port: self.local_http_port,
             http_port: self.http_port,
             grpc_port: self.grpc_port,
+            custom_request_port: self.custom_request_port,
         }
     }
 }
 
-impl Drop for GolemService<'_> {
+impl Drop for GolemWorkerService<'_> {
     fn drop(&mut self) {
         match &mut self.inner {
-            GolemServiceInner::Process(child) => {
+            GolemWorkerServiceInner::Process(child) => {
                 // TODO: SIGTERM, maybe with nix crate.
                 match child.kill() {
-                    Ok(_) => println!("Killed Golem Service process"),
-                    Err(e) => eprintln!("Failed to kill Golem Service process: {e:? }"),
+                    Ok(_) => println!("Killed Golem Worker Service process"),
+                    Err(e) => eprintln!("Failed to kill Golem Worker Service process: {e:? }"),
                 }
             }
-            GolemServiceInner::Docker(_) => {}
+            GolemWorkerServiceInner::Docker(_) => {}
         }
 
-        println!("Stopped Golem Service")
+        println!("Stopped Golem Worker Service")
     }
 }
 
 #[derive(Debug)]
-pub struct GolemServiceInfo {
+pub struct GolemWorkerServiceInfo {
     pub host: String,
     pub local_http_port: u16,
     pub http_port: u16,
     pub grpc_port: u16,
+    pub custom_request_port: u16,
 }

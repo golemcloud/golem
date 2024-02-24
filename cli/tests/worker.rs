@@ -52,17 +52,13 @@ fn make(suffix: &str, name: &str, cli: CliLive, context: Arc<ContextInfo>) -> Ve
 }
 
 pub fn all(context: Arc<ContextInfo>) -> Vec<Trial> {
-    let short_cli = CliLive::make(&context.golem_service)
-        .unwrap()
-        .with_short_args();
+    let short_cli = CliLive::make(&context).unwrap().with_short_args();
     let mut short_args = make("_short", "CLI_short", short_cli.clone(), context.clone());
 
     let mut long_args = make(
         "_long",
         "CLI_long",
-        CliLive::make(&context.golem_service)
-            .unwrap()
-            .with_long_args(),
+        CliLive::make(&context).unwrap().with_long_args(),
         context.clone(),
     );
 

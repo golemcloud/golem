@@ -17,7 +17,8 @@ use std::io::Read;
 use async_trait::async_trait;
 use golem_client::model::{
     Export, ExportFunction, ExportInstance, FunctionParameter, FunctionResult, NameOptionTypePair,
-    NameTypePair, Template, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
+    NameTypePair, ResourceMode, Template, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple,
+    TypeVariant,
 };
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
@@ -151,6 +152,10 @@ fn render_type(typ: &Type) -> String {
         Type::U8 { .. } => "u8".to_string(),
         Type::S8 { .. } => "s8".to_string(),
         Type::Bool { .. } => "bool".to_string(),
+        Type::Handle(handle) => match handle.mode {
+            ResourceMode::Borrowed => format!("&handle<{}>", handle.resource_id),
+            ResourceMode::Owned => format!("handle<{}>", handle.resource_id),
+        },
     }
 }
 
@@ -187,7 +192,7 @@ impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for Temp
 
         let name = name.map(|n| n.0);
 
-        let templates: Vec<Template> = self.client.get(name.as_deref()).await?;
+        let templates: Vec<Template> = self.client.get_all_templates(name.as_deref()).await?;
         let views = templates.iter().map(|c| c.into()).collect();
         Ok(views)
     }
@@ -205,7 +210,7 @@ impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for Temp
                     .await
                     .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
 
-                self.client.post(&name.0, file).await?
+                self.client.upload_template(&name.0, file).await?
             }
             PathBufOrStdin::Stdin => {
                 let mut bytes = Vec::new();
@@ -214,7 +219,7 @@ impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for Temp
                     .read_to_end(&mut bytes) // TODO: steaming request from stdin
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
-                self.client.post(&name.0, bytes).await?
+                self.client.upload_template(&name.0, bytes).await?
             }
         };
 
@@ -234,7 +239,7 @@ impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for Temp
                     .await
                     .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
 
-                self.client.template_id_upload_put(&id.0, file).await?
+                self.client.update_template(&id.0, file).await?
             }
             PathBufOrStdin::Stdin => {
                 let mut bytes = Vec::new();
@@ -243,7 +248,7 @@ impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for Temp
                     .read_to_end(&mut bytes) // TODO: steaming request from stdin
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
-                self.client.template_id_upload_put(&id.0, bytes).await?
+                self.client.update_template(&id.0, bytes).await?
             }
         };
 

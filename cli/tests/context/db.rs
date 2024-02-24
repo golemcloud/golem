@@ -142,6 +142,10 @@ impl DbInfo {
                         .expect("Invalid Sqlite database path")
                         .to_string(),
                 ),
+                (
+                    "GOLEM__DB__CONFIG__MAX_CONNECTIONS".to_string(),
+                    "10".to_string(),
+                ),
             ]
             .into(),
         }

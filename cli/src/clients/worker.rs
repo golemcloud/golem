@@ -104,7 +104,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         Ok(self
             .client
-            .template_id_workers_post(
+            .launch_new_worker(
                 &template_id.0,
                 &WorkerCreationRequest {
                     name: name.0,
@@ -124,7 +124,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         let key = self
             .client
-            .template_id_workers_worker_name_key_post(&template_id.0, &name.0)
+            .get_invocation_key(&template_id.0, &name.0)
             .await?;
 
         Ok(key_api_to_cli(key))
@@ -152,7 +152,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         Ok(self
             .client
-            .template_id_workers_worker_name_invoke_and_await_post(
+            .invoke_and_await_function(
                 &template_id.0,
                 &name.0,
                 &invocation_key.0,
@@ -174,12 +174,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         let _ = self
             .client
-            .template_id_workers_worker_name_invoke_post(
-                &template_id.0,
-                &name.0,
-                &function,
-                &parameters,
-            )
+            .invoke_function(&template_id.0, &name.0, &function, &parameters)
             .await?;
         Ok(())
     }
@@ -193,7 +188,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         let _ = self
             .client
-            .template_id_workers_worker_name_interrupt_post(&template_id.0, &name.0, Some(false))
+            .interrupt_worker(&template_id.0, &name.0, Some(false))
             .await?;
         Ok(())
     }
@@ -207,7 +202,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         let _ = self
             .client
-            .template_id_workers_worker_name_interrupt_post(&template_id.0, &name.0, Some(true))
+            .interrupt_worker(&template_id.0, &name.0, Some(true))
             .await?;
         Ok(())
     }
@@ -215,10 +210,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
     async fn delete(&self, name: WorkerName, template_id: RawTemplateId) -> Result<(), GolemError> {
         info!("Deleting worker {}/{}", template_id.0, name.0);
 
-        let _ = self
-            .client
-            .template_id_workers_worker_name_delete(&template_id.0, &name.0)
-            .await?;
+        let _ = self.client.delete_worker(&template_id.0, &name.0).await?;
         Ok(())
     }
 
@@ -231,7 +223,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         Ok(self
             .client
-            .template_id_workers_worker_name_get(&template_id.0, &name.0)
+            .get_worker_metadata(&template_id.0, &name.0)
             .await?)
     }
 

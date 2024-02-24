@@ -78,6 +78,10 @@ struct GolemCommand {
 
     #[arg(short = 'u', long)]
     /// Golem base url. Default: GOLEM_BASE_URL environment variable or http://localhost:9881.
+    ///
+    /// You can also specify different URLs for different services
+    /// via GOLEM_TEMPLATE_BASE_URL and GOLEM_WORKER_BASE_URL
+    /// environment variables.
     golem_url: Option<String>,
 
     #[command(subcommand)]
@@ -117,7 +121,14 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         .golem_url
         .or_else(|| std::env::var("GOLEM_BASE_URL").ok())
         .unwrap_or("http://localhost:9881".to_string());
-    let url = Url::parse(&url_str).unwrap();
+    let template_url_str = std::env::var("GOLEM_TEMPLATE_BASE_URL")
+        .ok()
+        .unwrap_or(url_str.to_string());
+    let worker_url_str = std::env::var("GOLEM_WORKER_BASE_URL")
+        .ok()
+        .unwrap_or(url_str);
+    let template_url = Url::parse(&template_url_str).unwrap();
+    let worker_url = Url::parse(&worker_url_str).unwrap();
     let allow_insecure_str = std::env::var("GOLEM_ALLOW_INSECURE").unwrap_or("false".to_string());
     let allow_insecure = allow_insecure_str != "false";
 
@@ -127,14 +138,19 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     }
     let client = builder.connection_verbose(true).build()?;
 
-    let context = Context {
-        base_url: url.clone(),
+    let template_context = Context {
+        base_url: template_url.clone(),
+        client: client.clone(),
+    };
+
+    let worker_context = Context {
+        base_url: worker_url.clone(),
         client: client.clone(),
     };
 
     let template_client = TemplateClientLive {
         client: golem_client::api::TemplateClientLive {
-            context: context.clone(),
+            context: template_context,
         },
     };
     let template_srv = TemplateHandlerLive {
@@ -142,9 +158,9 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     };
     let worker_client = WorkerClientLive {
         client: golem_client::api::WorkerClientLive {
-            context: context.clone(),
+            context: worker_context.clone(),
         },
-        context: context.clone(),
+        context: worker_context.clone(),
         allow_insecure,
     };
     let worker_srv = WorkerHandlerLive {

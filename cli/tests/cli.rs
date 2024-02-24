@@ -1,4 +1,4 @@
-use crate::context::golem_service::GolemServiceInfo;
+use crate::context::ContextInfo;
 use libtest_mimic::Failed;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -36,7 +36,8 @@ pub trait Cli {
 #[derive(Debug, Clone)]
 pub struct CliLive {
     pub config: CliConfig,
-    golem_port: u16,
+    golem_template_port: u16,
+    golem_worker_port: u16,
     golem_cli_path: PathBuf,
 }
 
@@ -44,7 +45,8 @@ impl CliLive {
     pub fn with_short_args(&self) -> Self {
         CliLive {
             config: CliConfig { short_args: true },
-            golem_port: self.golem_port,
+            golem_template_port: self.golem_template_port,
+            golem_worker_port: self.golem_worker_port,
             golem_cli_path: self.golem_cli_path.clone(),
         }
     }
@@ -52,18 +54,27 @@ impl CliLive {
     pub fn with_long_args(&self) -> Self {
         CliLive {
             config: CliConfig { short_args: false },
-            golem_port: self.golem_port,
+            golem_template_port: self.golem_template_port,
+            golem_worker_port: self.golem_worker_port,
             golem_cli_path: self.golem_cli_path.clone(),
         }
     }
 
-    pub fn make(golem: &GolemServiceInfo) -> Result<CliLive, Failed> {
+    // TODO; Use NginxInfo
+    pub fn make(context: &ContextInfo) -> Result<CliLive, Failed> {
         let golem_cli_path = PathBuf::from("./target/debug/golem-cli");
+
+        println!(
+            "CLI with template port {} and worker port {}",
+            context.golem_template_service.local_http_port,
+            context.golem_worker_service.local_http_port
+        );
 
         if golem_cli_path.exists() {
             Ok(CliLive {
                 config: CliConfig { short_args: false },
-                golem_port: golem.local_http_port,
+                golem_template_port: context.golem_template_service.local_http_port,
+                golem_worker_port: context.golem_worker_service.local_http_port,
                 golem_cli_path,
             })
         } else {
@@ -75,8 +86,12 @@ impl CliLive {
         }
     }
 
-    fn base_url(&self) -> String {
-        format!("http://localhost:{}", self.golem_port)
+    fn template_base_url(&self) -> String {
+        format!("http://localhost:{}", self.golem_template_port)
+    }
+
+    fn worker_base_url(&self) -> String {
+        format!("http://localhost:{}", self.golem_worker_port)
     }
 
     fn run_inner<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<String, Failed> {
@@ -86,9 +101,11 @@ impl CliLive {
         );
 
         let output = Command::new(&self.golem_cli_path)
-            .env("GOLEM_BASE_URL", self.base_url())
+            .env("GOLEM_TEMPLATE_BASE_URL", self.template_base_url())
+            .env("GOLEM_WORKER_BASE_URL", self.worker_base_url())
             .arg(self.config.arg('F', "format"))
             .arg("json")
+            .arg("-v")
             .args(args)
             .output()?;
 
@@ -138,7 +155,8 @@ impl Cli for CliLive {
         );
 
         let mut child = Command::new(&self.golem_cli_path)
-            .env("GOLEM_BASE_URL", self.base_url())
+            .env("GOLEM_TEMPLATE_BASE_URL", self.template_base_url())
+            .env("GOLEM_WORKER_BASE_URL", self.worker_base_url())
             .arg(self.config.arg('F', "format"))
             .arg("json")
             .args(args)

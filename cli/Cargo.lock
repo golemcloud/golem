@@ -781,7 +781,9 @@ dependencies = [
  "futures-util",
  "golem-client",
  "golem-examples",
+ "h2",
  "http 1.0.0",
+ "hyper",
  "indoc",
  "itertools",
  "libtest-mimic",
@@ -803,6 +805,7 @@ dependencies = [
  "tokio-tungstenite",
  "tonic",
  "tonic-health",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "tungstenite",
@@ -812,9 +815,9 @@ dependencies = [
 
 [[package]]
 name = "golem-client"
-version = "0.0.60"
+version = "0.0.62"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53724dee78bac0a83d83e0eac7aca899b011950ba9fc76bcb109a845ff792b89"
+checksum = "a4065eef9f11a5de373bbccda58c585123a745242a628e3cfba122094079cc34"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2403,6 +2406,7 @@ version = "0.1.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3523ab5a71916ccf420eebdf5521fcef02141234bbc0b8a49f2fdc4544364ef"
 dependencies = [
+ "log",
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",

@@ -29,18 +29,14 @@ pub fn all(context: Arc<ContextInfo>) -> Vec<Trial> {
     let mut short_args = make(
         "_short",
         "CLI short",
-        CliLive::make(&context.golem_service)
-            .unwrap()
-            .with_short_args(),
+        CliLive::make(&context).unwrap().with_short_args(),
         context.clone(),
     );
 
     let mut long_args = make(
         "_long",
         "CLI long",
-        CliLive::make(&context.golem_service)
-            .unwrap()
-            .with_long_args(),
+        CliLive::make(&context).unwrap().with_long_args(),
         context.clone(),
     );
 
