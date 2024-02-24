@@ -64,6 +64,12 @@ impl CliLive {
     pub fn make(context: &ContextInfo) -> Result<CliLive, Failed> {
         let golem_cli_path = PathBuf::from("./target/debug/golem-cli");
 
+        println!(
+            "CLI with template port {} and worker port {}",
+            context.golem_template_service.local_http_port,
+            context.golem_worker_service.local_http_port
+        );
+
         if golem_cli_path.exists() {
             Ok(CliLive {
                 config: CliConfig { short_args: false },
@@ -99,6 +105,7 @@ impl CliLive {
             .env("GOLEM_WORKER_BASE_URL", self.worker_base_url())
             .arg(self.config.arg('F', "format"))
             .arg("json")
+            .arg("-v")
             .args(args)
             .output()?;
 
