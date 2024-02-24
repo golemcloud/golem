@@ -13,18 +13,32 @@ spec:
   rules:
     - http:
         paths:
-          - path: /v1/api
-            pathType: Prefix
+          - path: "/v1/api"
+            pathType: ImplementationSpecific
             backend:
               service:
-                name: service-worker-bridge-{{.Values.env}}
+                name: service-worker-service-{{.Values.env}}
                 port:
-                  number: {{ .Values.workerBridge.ports.mgmtHttp }}
+                  number: {{ .Values.workerService.ports.http }}
+          - path: "/v2/templates/[^/]+/workers/[^/]+/connect$"
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: service-worker-service-{{.Values.env}}
+                port:
+                  number: {{ .Values.workerService.ports.http }}
+          - path: "/v2/templates/[^/]+/workers(.*)"
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: service-worker-service-{{.Values.env}}
+                port:
+                  number: {{ .Values.workerService.ports.http }}
           - path: /
-            pathType: Prefix
+            pathType: ImplementationSpecific
             backend:
               service:
-                name: service-golem-service-{{.Values.env}}
+                name: service-template-service-{{.Values.env}}
                 port:
-                  number: {{ .Values.golemService.ports.http }}
+                  number: {{ .Values.templateService.ports.http }}
 {{- end }}
