@@ -73,8 +73,8 @@ jobs:
           tar -cvf ${{ matrix.platform.target }}.tar \
             ${{ matrix.platform.target }}/release/golem-shard-manager \
             ${{ matrix.platform.target }}/release/worker-executor \
-            ${{ matrix.platform.target }}/release/golem-service  \
-            ${{ matrix.platform.target }}/release/golem-worker-bridge  \
+            ${{ matrix.platform.target }}/release/golem-template-service  \
+            ${{ matrix.platform.target }}/release/golem-worker-service  \
       - uses: actions/upload-artifact@v4
         name: Upload Targets
         with:
