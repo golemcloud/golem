@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod api_tags;
 pub mod config;
 pub mod model;
 pub mod routing_table;

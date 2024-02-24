@@ -59,3 +59,12 @@ impl WorkerExecutorClients for WorkerExecutorClientsDefault {
             .await
     }
 }
+
+pub struct WorkerExecutorClientsNoop {}
+
+#[async_trait]
+impl WorkerExecutorClients for WorkerExecutorClientsNoop {
+    async fn lookup(&self, _pod: Pod) -> Result<WorkerExecutorClient<Channel>, String> {
+        Err("Noop".to_string())
+    }
+}

@@ -4,6 +4,7 @@ info:
   version: '2.0'
 servers: []
 tags:
+- name: ApiDefinition
 - name: HealthCheck
 - name: Template
 - name: Worker
@@ -938,6 +939,279 @@ paths:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
       operationId: resume_worker
+  /v1/api/definitions/oas:
+    put:
+      tags:
+      - ApiDefinition
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+  /v1/api/definitions:
+    put:
+      tags:
+      - ApiDefinition
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ApiDefinition'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+    get:
+      tags:
+      - ApiDefinition
+      parameters:
+      - name: api-definition-id
+        schema:
+          type: string
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+    delete:
+      tags:
+      - ApiDefinition
+      parameters:
+      - name: api-definition-id
+        schema:
+          type: string
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+  /v1/api/definitions/all:
+    get:
+      tags:
+      - ApiDefinition
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
   /healthcheck:
     get:
       tags:
@@ -964,6 +1238,21 @@ paths:
       operationId: version
 components:
   schemas:
+    ApiDefinition:
+      type: object
+      required:
+      - id
+      - version
+      - routes
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Route'
     CallingConvention:
       type: string
       enum:
@@ -1507,6 +1796,25 @@ components:
             type: string
             example: WorkerNotFound
       - $ref: '#/components/schemas/GolemErrorWorkerNotFound'
+    GolemWorkerBinding:
+      type: object
+      required:
+      - template
+      - workerId
+      - functionName
+      - functionParams
+      properties:
+        template:
+          type: string
+          format: uuid
+        workerId: {}
+        functionName:
+          type: string
+        functionParams:
+          type: array
+          items: {}
+        response:
+          $ref: '#/components/schemas/ResponseMapping'
     HealthcheckResponse:
       type: object
     InterruptResponse:
@@ -1532,6 +1840,34 @@ components:
       - result
       properties:
         result: {}
+    MessageBody:
+      type: object
+      required:
+      - message
+      properties:
+        message:
+          type: string
+    MessagesErrorsBody:
+      type: object
+      required:
+      - errors
+      properties:
+        errors:
+          type: array
+          items:
+            type: string
+    MethodPattern:
+      type: string
+      enum:
+      - Get
+      - Connect
+      - Post
+      - Delete
+      - Put
+      - Patch
+      - Options
+      - Trace
+      - Head
     NameOptionTypePair:
       type: object
       required:
@@ -1595,8 +1931,50 @@ components:
       enum:
       - Borrowed
       - Owned
+    ResponseMapping:
+      type: object
+      required:
+      - body
+      - status
+      - headers
+      properties:
+        body: {}
+        status: {}
+        headers:
+          type: object
+          additionalProperties: {}
     ResumeResponse:
       type: object
+    Route:
+      type: object
+      required:
+      - method
+      - path
+      - binding
+      properties:
+        method:
+          $ref: '#/components/schemas/MethodPattern'
+        path:
+          type: string
+        binding:
+          $ref: '#/components/schemas/GolemWorkerBinding'
+    RouteValidationError:
+      type: object
+      required:
+      - method
+      - path
+      - template
+      - detail
+      properties:
+        method:
+          $ref: '#/components/schemas/MethodPattern'
+        path:
+          type: string
+        template:
+          type: string
+          format: uuid
+        detail:
+          type: string
     ShardId:
       type: object
       required:
@@ -2022,6 +2400,15 @@ components:
       properties:
         versionedTemplateId:
           $ref: '#/components/schemas/VersionedTemplateId'
+    ValidationErrorsBody:
+      type: object
+      required:
+      - errors
+      properties:
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteValidationError'
     VersionInfo:
       type: object
       required:
@@ -2118,6 +2505,43 @@ components:
         retryCount:
           type: integer
           format: int32
+    WorkerServiceErrorBody:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: string
+    WorkerServiceErrorsBody:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/WorkerServiceErrorsBody_MessagesErrorsBody'
+      - $ref: '#/components/schemas/WorkerServiceErrorsBody_ValidationErrorsBody'
+      discriminator:
+        propertyName: type
+        mapping:
+          Messages: '#/components/schemas/WorkerServiceErrorsBody_MessagesErrorsBody'
+          Validation: '#/components/schemas/WorkerServiceErrorsBody_ValidationErrorsBody'
+    WorkerServiceErrorsBody_MessagesErrorsBody:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: Messages
+      - $ref: '#/components/schemas/MessagesErrorsBody'
+    WorkerServiceErrorsBody_ValidationErrorsBody:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: Validation
+      - $ref: '#/components/schemas/ValidationErrorsBody'
     WorkerStatus:
       type: string
       description: |-

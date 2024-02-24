@@ -153,34 +153,48 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-shard-manager.outputs.tags }}
           labels: ${{ steps.meta-shard-manager.outputs.labels }}
-      - name: Extract metadata (tags, labels) for golem server
-        id: meta-golem-service
+      - name: Extract metadata (tags, labels) for golem template service
+        id: meta-golem-template-service
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-service
-      - name: Build and push cloud server image
+          images: golemservices/golem-template-service
+      - name: Build and push golem template service image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./golem-service/docker/Dockerfile
+          file: ./golem-template-service/docker/Dockerfile
           push: true
           platforms: ${{ env.PLATFORMS }}
-          tags: ${{ steps.meta-golem-service.outputs.tags }}
-          labels: ${{ steps.meta-golem-service.outputs.labels }}
-      - name: Extract metadata (tags, labels) for golem worker bridge
-        id: meta-golem-worker-bridge
+          tags: ${{ steps.meta-golem-template-service.outputs.tags }}
+          labels: ${{ steps.meta-golem-template-service.outputs.labels }}
+      - name: Extract metadata (tags, labels) for golem worker service
+        id: meta-golem-worker-service
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-worker-bridge
-      - name: Build and push worker bridge image
+          images: golemservices/golem-worker-service
+      - name: Build and push golem worker service image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./golem-worker-bridge/docker/Dockerfile
+          file: ./golem-worker-service/docker/Dockerfile
           push: true
           platforms: ${{ env.PLATFORMS }}
-          tags: ${{ steps.meta-golem-worker-bridge.outputs.tags }}
-          labels: ${{ steps.meta-golem-worker-bridge.outputs.labels }}
+          tags: ${{ steps.meta-golem-worker-service.outputs.tags }}
+          labels: ${{ steps.meta-golem-worker-service.outputs.labels }}
+      - name: Extract metadata (tags, labels) for golem router
+        id: meta-golem-router
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-router
+      - name: Build and push golem router
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-router/docker/Dockerfile
+          push: true
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ steps.meta-golem-router.outputs.tags }}
+          labels: ${{ steps.meta-golem-router.outputs.labels }}
   unit-tests:
     runs-on: ubuntu-latest
     steps:
@@ -278,7 +292,8 @@ jobs:
           name: golem-binaries
           retention-days: 1
           path: |
-            target/release/golem-service
+            target/release/golem-template-service
+            target/release/golem-worker-service
             target/release/golem-service-yaml
             target/release/golem-shard-manager
             target/release/worker-executor
@@ -318,7 +333,7 @@ jobs:
       - name: Restore executable flag
         run: chmod a+x ./target/debug/*
       - name: Generate Golem OpenAPI yaml
-        working-directory: golem-service
+        working-directory: golem-public-api
         run: ../target/debug/golem-service-yaml > ../target/golem-service.yaml
       - name: Check Golem OpenAPI yaml latest
         shell: bash
@@ -387,4 +402,3 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         working-directory: golem-client
         run: cargo publish --all-features --allow-dirty
-

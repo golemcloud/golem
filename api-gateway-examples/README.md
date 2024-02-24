@@ -1,18 +1,22 @@
 ## Integrating Golem with existing API Gateways (Document in progress)
 
-Once we are able to deploy our Golem service, we can integrate it with existing API Gateways. This is a common use case for Golem, as it allows us to leverage the existing infrastructure and security features of the API Gateway, while still being able to use Golem for the actual processing of the requests.
+This document covers how to expose your Golem service to the outside world using API endpoints (including integration with external API Gateways)
+It's worth reading this document before you wrap your worker functionalities as a backend service exposing API endpoints
+to outside world, because you may get this for free.
 
-In order for this to work, we introduce a worker-bridge, that act as a bridge between your preferred API Gateway and the actual
-worker instance that's running in Golem. 
+In order for this to work, we have incorporated a functionality into worker-service that can accept API definitions that can map endpoints to workers.
+Implementation detail if you are curious: Internally, a mini (poor man's) gateway functionality is incorporated into worker-service.
 
-We define the endpoint definitions and send it to worker bridge. This definition is merely the set of endpoints,
-and the actual function that needs to be executed by the particular worker instance to serve the endpoint
-
+Essentially, we write an API definition and register with the worker service. Now worker-service can act as your mini-gateway,
+which you can integrate with external API gateways if needed. This API definition (on a very high) is a set of endpoints, each specified with the name of the function that needs to be executed by your particular worker instance to serve each endpoint.
 
 Registration of this endpoint definition is pretty simple. The details of how much you can configure can be discussed later.
-Currently, we are just focusing on the basic registration of the endpoint definition.
 
-## Integration with Tyk API Gateway
+## An example, including integration with an externa API Gateway
+
+Once we are able to deploy our Golem service, we can integrate it with external API Gateways. Here we took Tyk as an example.
+This is a common use case for Golem, as it allows us to leverage the existing infrastructure and security features of the API Gateway,
+while still being able to use Golem for the actual processing of the requests.
 
 Once you register this Endpoint definitions that relates to a specific worker and function, you can now use API Gateway
 to forward request to the worker bridge. Let's say we choose Tyk as the API Gateway. A typical API definition required by Tyk is
@@ -31,6 +35,7 @@ docker-compose -f docker-compose-sqlite.yaml up --build
 ### Step 2: Deploy shopping cart example
 
 ```bash
+cd golem-services
 # Note down the template id, say "c467b83d-cb27-4296-b48a-ee85114cdb7"
 golem-cli template add --template-name mytemplate test-templates/shopping-cart.wasm
 
@@ -75,16 +80,18 @@ A typical worker bridge endpoint definition looks like this. Please refer to [en
 ```
 
 ```bash
-
+cd api-gateway-examples
 # register with worker bridge
 # Ensure to make change in template-id in endpoint_definition.json
-curl -X PUT http://localhost:9005/v1/api/definitions -H "Content-Type: application/json"  -d @endpoint_definition.json
+# Our golem service is accessible through localhost:9881. (It will redirect to the right internal service)
+curl -X PUT http://localhost:9881/v1/api/definitions -H "Content-Type: application/json"  -d @endpoint_definition.json
 
 ```
 
 Step 4: Install Tyk API gateway
 
 ```bash
+# In some other location
 git clone https://github.com/TykTechnologies/tyk-gateway-docker
 cd tyk-gateway-docker
 docker-compose up
@@ -121,7 +128,7 @@ curl --location --request POST 'http://localhost:8080/tyk/apis' \
                 "name": "Default",
                 "global_headers": {
                     "x-golem-api-definition-id":"shopping-cart-v1",
-                    "x-golem-api-definition-version": "0.0.2"
+                    "x-golem-api-definition-version": "0.0.3"
                 }
             }
         }
@@ -184,7 +191,7 @@ After creating a template and a worker with golem-services,
 cd api-gateway-examples
 
 # Refer to open_api.json. servers section is for Tyk and worker-bridge section is for worker-bridge
-curl -X PUT http://localhost:9005/v1/api/definitions/oas -H "Content-Type: application/json" --data-binary "@open_api.json"
+curl -X PUT http://localhost:9881/v1/api/definitions/oas -H "Content-Type: application/json" --data-binary "@open_api.json"
 
 ```
 
@@ -206,7 +213,7 @@ curl -H "x-tyk-authorization: foo" -s http://localhost:8080/tyk/reload/group
 
 # TODO; Note, with using OAS API Definition in Tyk - harder to add headers to the request without a management console, therefore explicitly passing it here for demo purpose 
 # In real world, the header is injected by Tyk
-curl -X GET http://localhost:8080/adam/get-cart-contents -H "x-golem-api-definition-id: shopping-cart-v2" -H "x-golem-api-definition-version: 0.0.1"
+curl -X GET http://localhost:8080/adam/get-cart-contents -H "x-golem-api-definition-id: shopping-cart-v2" -H "x-golem-api-definition-version: 0.0.3"
 
 ```
 

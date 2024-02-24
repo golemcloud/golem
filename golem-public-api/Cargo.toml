@@ -1,0 +1,18 @@
+[package]
+name = "golem-public-api"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+description = "Worker Bridge acts as a bridge between external API gateways and the worker's environment"
+
+[[bin]]
+name = "golem-service-yaml"
+path = "src/main.rs"
+
+[dependencies]
+golem-worker-service = { path = "../golem-worker-service" }
+golem-template-service = { path = "../golem-template-service" }
+
+tokio = { workspace = true }
+poem-openapi = { workspace = true }
