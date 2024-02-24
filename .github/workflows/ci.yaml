@@ -17,7 +17,7 @@ env:
 jobs:
   docker-targets-build:
     runs-on: ubuntu-latest
-#    if: github.event_name == 'push' && github.ref_type == 'tag'
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     strategy:
       fail-fast: false
       matrix:
@@ -83,7 +83,7 @@ jobs:
   docker-publish:
     runs-on: ubuntu-latest
     needs: [docker-targets-build]
-#    if: github.event_name == 'push' && github.ref_type == 'tag'
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -135,7 +135,7 @@ jobs:
         with:
           context: .
           file: ./golem-worker-executor/docker/Dockerfile
-          push: false
+          push: true
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-worker-executor.outputs.tags }}
           labels: ${{ steps.meta-worker-executor.outputs.labels }}
@@ -149,7 +149,7 @@ jobs:
         with:
           context: .
           file: ./golem-shard-manager/docker/Dockerfile
-          push: false
+          push: true
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-shard-manager.outputs.tags }}
           labels: ${{ steps.meta-shard-manager.outputs.labels }}
@@ -163,7 +163,7 @@ jobs:
         with:
           context: .
           file: ./golem-template-service/docker/Dockerfile
-          push: false
+          push: true
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-template-service.outputs.tags }}
           labels: ${{ steps.meta-golem-template-service.outputs.labels }}
@@ -177,7 +177,7 @@ jobs:
         with:
           context: .
           file: ./golem-worker-service/docker/Dockerfile
-          push: false
+          push: true
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-worker-service.outputs.tags }}
           labels: ${{ steps.meta-golem-worker-service.outputs.labels }}
@@ -191,7 +191,7 @@ jobs:
         with:
           context: .
           file: ./golem-router/docker/Dockerfile
-          push: false
+          push: true
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-router.outputs.tags }}
           labels: ${{ steps.meta-golem-router.outputs.labels }}
