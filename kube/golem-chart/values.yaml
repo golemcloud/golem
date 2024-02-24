@@ -20,7 +20,7 @@ workerExecutor:
 #  nodeSelector:
 
 workerService:
-  image: golemservices/golem-worker-bridge:latest
+  image: golemservices/golem-worker-service:latest
   imagePullPolicy: Always
   replica: 1
   ports:
@@ -32,7 +32,7 @@ workerService:
 #  nodeSelector:
 
 templateService:
-  image: golemservices/golem-service:latest
+  image: golemservices/golem-template-service:latest
   imagePullPolicy: Always
   replica: 1
   ports:
