@@ -16,7 +16,7 @@ use std::error::Error;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{Connection, PgConnection, Pool, Postgres, Sqlite, SqliteConnection};
+use sqlx::{Connection, Executor, PgConnection, Pool, Postgres, Sqlite, SqliteConnection};
 use tracing::info;
 
 use crate::config::{DbPostgresConfig, DbSqliteConfig};
@@ -43,26 +43,50 @@ impl From<&DbSqliteConfig> for SqliteConnectOptions {
 pub async fn create_postgres_pool(
     config: &DbPostgresConfig,
 ) -> Result<Pool<Postgres>, Box<dyn Error>> {
+    let schema = config.schema.clone().unwrap_or("public".to_string());
     info!(
-        "DB Pool: postgresql://{}:{}/{}",
-        config.host, config.port, config.database
+        "DB Pool: postgresql://{}:{}/{}?currentSchema={}",
+        config.host, config.port, config.database, schema
     );
     let conn_options = PgConnectOptions::from(config);
 
     PgPoolOptions::new()
         .max_connections(config.max_connections)
+        .after_connect(move |conn, _meta| {
+            let s = schema.clone();
+            Box::pin(async move {
+                let sql = format!("SET SCHEMA '{}';", s);
+                conn.execute(sqlx::query(&sql)).await?;
+                Ok(())
+            })
+        })
         .connect_with(conn_options)
         .await
         .map_err(|e| e.into())
 }
 
 pub async fn postgres_migrate(config: &DbPostgresConfig) -> Result<(), Box<dyn Error>> {
+    let schema = config.schema.clone().unwrap_or("public".to_string());
     info!(
-        "DB migration: postgresql://{}:{}/{}",
-        config.host, config.port, config.database
+        "DB migration: postgresql://{}:{}/{}?currentSchema={}",
+        config.host, config.port, config.database, schema
     );
     let conn_options = PgConnectOptions::from(config);
     let mut conn = PgConnection::connect_with(&conn_options).await?;
+    let sql = format!("CREATE SCHEMA IF NOT EXISTS {};", schema);
+    conn.execute(sqlx::query(&sql)).await?;
+    let sql = format!("SET SCHEMA '{}';", schema);
+    conn.execute(sqlx::query(&sql)).await?;
+    // check if schema exists
+    let sql = format!(
+        "SELECT schema_name FROM information_schema.schemata WHERE schema_name = '{}';",
+        schema
+    );
+    let result = conn.execute(sqlx::query(&sql)).await?;
+    if result.rows_affected() == 0 {
+        let _ = conn.close().await;
+        return Err(format!("DB schema {} do not exists/was not created", schema).into());
+    }
 
     sqlx::migrate!("./db/migration/postgres")
         .run(&mut conn)
