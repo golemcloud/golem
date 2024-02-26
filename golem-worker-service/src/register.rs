@@ -26,12 +26,38 @@ pub trait RegisterApiDefinition {
     ) -> Result<bool, ApiRegistrationError>;
 
     async fn get_all(&self) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
+
+    async fn get_all_versions(
+        &self,
+        api_id: &ApiDefinitionId,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct ApiDefinitionKey {
     pub id: ApiDefinitionId,
     pub version: Version,
+}
+
+impl ApiDefinitionKey {
+    /// Specific Api Definition Key.
+    fn get_api_definition_redis_key(&self) -> String {
+        format!(
+            "{API_DEFINITION_REDIS_NAMESPACE}:definition:{}:{}",
+            self.id, self.version
+        )
+    }
+
+    /// Value for the [`Self::get_all_apis_set_redis_key`] set.
+    fn make_all_apis_redis_value(&self) -> String {
+        format!("{}:{}", self.id.0, self.version.0)
+    }
+
+    /// Set containing all Api Definition Keys.
+    /// Values should only be added by [`Self::make_all_apis_redis_value`].
+    fn get_all_apis_set_redis_key() -> String {
+        format!("{API_DEFINITION_REDIS_NAMESPACE}:definition:all_api_definitions")
+    }
 }
 
 impl Display for ApiDefinitionKey {
@@ -45,6 +71,22 @@ impl From<&ApiDefinition> for ApiDefinitionKey {
         ApiDefinitionKey {
             id: api_definition.id.clone(),
             version: api_definition.version.clone(),
+        }
+    }
+}
+
+impl TryFrom<&str> for ApiDefinitionKey {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let parts: Vec<&str> = value.split(':').collect();
+        if parts.len() != 2 {
+            Err(format!("Invalid ApiDefinitionKey string: {}", value))
+        } else {
+            Ok(ApiDefinitionKey {
+                id: ApiDefinitionId(parts[0].to_string()),
+                version: Version(parts[1].to_string()),
+            })
         }
     }
 }
@@ -117,6 +159,21 @@ impl RegisterApiDefinition for InMemoryRegistry {
 
         Ok(result)
     }
+
+    async fn get_all_versions(
+        &self,
+        api_id: &ApiDefinitionId,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+        let registry = self.registry.lock().unwrap();
+
+        let result: Vec<ApiDefinition> = registry
+            .values()
+            .filter(|api| api.id == *api_id)
+            .cloned()
+            .collect();
+
+        Ok(result)
+    }
 }
 
 pub struct RedisApiRegistry {
@@ -138,31 +195,47 @@ impl RegisterApiDefinition for RedisApiRegistry {
     async fn register(&self, definition: &ApiDefinition) -> Result<(), ApiRegistrationError> {
         debug!("Register definition: id: {}", definition.id);
         let key: ApiDefinitionKey = ApiDefinitionKey::from(definition);
-        let redis_key = get_api_definition_redis_key(&key);
+        let redis_key = key.get_api_definition_redis_key();
 
-        // if key already exists return conflict error
-        let value: Option<Bytes> = self
+        let value: u32 = self
             .pool
             .with("persistence", "get_definition")
-            .get(redis_key.clone())
+            .exists(redis_key.clone())
             .await
             .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
-        match value {
-            Some(_) => Err(ApiRegistrationError::AlreadyExists(key)),
-            None => {
-                let definition_value = self
-                    .pool
-                    .serialize(definition)
-                    .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+        // if key already exists return conflict error
+        if value > 0 {
+            Err(ApiRegistrationError::AlreadyExists(key))
+        } else {
+            let definition_value = self
+                .pool
+                .serialize(definition)
+                .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
-                self.pool
-                    .with("persistence", "register_definition")
-                    .set(redis_key, definition_value, None, None, false)
-                    .await
-                    .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
-                Ok(())
-            }
+            self.pool
+                .with("persistence", "register_definition")
+                .transaction({
+                    move |transaction| async move {
+                        let all_apis_value = key.make_all_apis_redis_value();
+
+                        transaction
+                            .set(redis_key, definition_value, None, None, false)
+                            .await?;
+                        transaction
+                            .sadd(
+                                ApiDefinitionKey::get_all_apis_set_redis_key(),
+                                vec![all_apis_value],
+                            )
+                            .await?;
+
+                        Ok(transaction)
+                    }
+                })
+                .await
+                .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+
+            Ok(())
         }
     }
 
@@ -171,7 +244,7 @@ impl RegisterApiDefinition for RedisApiRegistry {
         api_id: &ApiDefinitionKey,
     ) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
         info!("Get definition: id: {}", api_id);
-        let key = get_api_definition_redis_key(api_id);
+        let key = api_id.get_api_definition_redis_key();
         let value: Option<Bytes> = self
             .pool
             .with("persistence", "get_definition")
@@ -193,36 +266,112 @@ impl RegisterApiDefinition for RedisApiRegistry {
 
     async fn delete(&self, api_id: &ApiDefinitionKey) -> Result<bool, ApiRegistrationError> {
         debug!("Delete definition: id: {}", api_id);
-        let definition_key = get_api_definition_redis_key(api_id);
-        let definition_delete: u32 = self
+        let definition_key = api_id.get_api_definition_redis_key();
+        let all_definitions_key = ApiDefinitionKey::get_all_apis_set_redis_key();
+
+        let definition_value = api_id.make_all_apis_redis_value();
+
+        let (definition_delete, _): (u32, ()) = self
             .pool
             .with("persistence", "delete_definition")
-            .del(definition_key)
+            .transaction({
+                move |transaction| async move {
+                    transaction.del(definition_key).await?;
+                    transaction
+                        .srem(all_definitions_key, vec![definition_value])
+                        .await?;
+
+                    Ok(transaction)
+                }
+            })
             .await
             .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+
         Ok(definition_delete > 0)
     }
 
     async fn get_all(&self) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
-        unimplemented!("get_all")
+        let all_apis: Vec<ApiDefinitionKey> = self.get_all_keys().await?;
+
+        let api_definitions = self.get_all_api_definitions(all_apis).await?;
+
+        Ok(api_definitions)
+    }
+
+    async fn get_all_versions(
+        &self,
+        api_id: &ApiDefinitionId,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+        let api_versions: Vec<ApiDefinitionKey> = self
+            .get_all_keys()
+            .await?
+            .into_iter()
+            .filter(|api| api.id == *api_id)
+            .collect();
+
+        let api_definitions = self.get_all_api_definitions(api_versions).await?;
+
+        Ok(api_definitions)
     }
 }
 
-fn get_api_definition_redis_key(api_id: &ApiDefinitionKey) -> String {
-    format!(
-        "{}:definition:{}:{}",
-        API_DEFINITION_REDIS_NAMESPACE, api_id.id, api_id.version
-    )
+impl RedisApiRegistry {
+    async fn get_all_api_definitions(
+        &self,
+        keys: Vec<ApiDefinitionKey>,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+        let keys = keys
+            .into_iter()
+            .map(|api_id| api_id.get_api_definition_redis_key())
+            .collect::<Vec<_>>();
+
+        let result: Vec<Option<Bytes>> = self
+            .pool
+            .with("persistence", "mget_all_definitions")
+            .mget(keys)
+            .await
+            .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+
+        let definitions = result
+            .into_iter()
+            .flatten()
+            .map(|value| {
+                self.pool
+                    .deserialize(&value)
+                    .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))
+            })
+            .collect::<Result<Vec<ApiDefinition>, ApiRegistrationError>>()?;
+
+        Ok(definitions)
+    }
+
+    async fn get_all_keys(&self) -> Result<Vec<ApiDefinitionKey>, ApiRegistrationError> {
+        let all_apis_set_key = ApiDefinitionKey::get_all_apis_set_redis_key();
+        let result: Vec<String> = self
+            .pool
+            .with("persistence", "get_all_definitions")
+            .smembers(all_apis_set_key)
+            .await
+            .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+
+        let keys = result
+            .into_iter()
+            .filter_map(|definition_string| {
+                ApiDefinitionKey::try_from(definition_string.as_str()).ok()
+            })
+            .collect();
+
+        Ok(keys)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
+    use super::*;
     use golem_common::config::RedisConfig;
 
     use crate::register::{
-        get_api_definition_redis_key, ApiDefinitionKey, InMemoryRegistry, RedisApiRegistry,
-        RegisterApiDefinition,
+        ApiDefinitionKey, InMemoryRegistry, RedisApiRegistry, RegisterApiDefinition,
     };
 
     fn get_simple_api_definition_example(
@@ -383,7 +532,7 @@ mod tests {
         let api_id = ApiDefinitionKey { id, version };
 
         assert_eq!(
-            get_api_definition_redis_key(&api_id),
+            api_id.get_api_definition_redis_key(),
             "apidefinition:definition:api1:0.0.1"
         );
     }
