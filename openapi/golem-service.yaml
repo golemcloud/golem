@@ -67,71 +67,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: get_template_metadata_all_versions
-    get:
-      tags:
-      - Template
-      parameters:
-      - name: template_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: version
-        schema:
-          type: integer
-          format: int32
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Template'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: get_template_metadata
+      operationId: get_template_by_id
   /v2/templates/{template_id}/upload:
     put:
       tags:
@@ -196,6 +132,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
       operationId: update_template
+  /v2/templates:
     post:
       tags:
       - Template
@@ -257,7 +194,64 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: create_template
+      operationId: upload_template
+    get:
+      tags:
+      - Template
+      parameters:
+      - name: template-name
+        schema:
+          type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Template'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: get_all_templates
   /v2/templates/{template_id}/download:
     get:
       tags:
@@ -381,65 +375,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: get_latest_template_version
-  /v2/templates:
-    get:
-      tags:
-      - Template
-      parameters:
-      - name: template-name
-        schema:
-          type: string
-        in: query
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Template'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: get_templates
+      operationId: get_latest_version
   /v2/templates/workers/{worker_id}:
     get:
       tags:
