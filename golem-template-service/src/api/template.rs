@@ -139,11 +139,7 @@ impl TemplateApi {
         Ok(Json(response))
     }
 
-    #[oai(
-        path = "/:template_id/upload",
-        method = "post",
-        operation_id = "create_template"
-    )]
+    #[oai(path = "/", method = "post", operation_id = "create_template")]
     async fn create_template(&self, payload: UploadPayload) -> Result<Json<Template>> {
         let data = payload.template.into_vec().await?;
         let template_name = payload.name;
