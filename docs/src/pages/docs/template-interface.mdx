@@ -12,7 +12,7 @@ This page will use [Golem CLI](/docs/golem-cli) parameter names when talking abo
 
 For each tier 2 language there is a **binding generator** tool that takes the WIT definition and generates the appropriate binding code in the given guest language. Read [Building Templates](/docs/building-templates) for more information about how these tools work.
 
-The WIT definition is also embeded in the compiled WASM that you upload to **Golem**. This is how Golem knows what the exported functions are, and it can validate the provided parameters to make sure they have the correct type.
+The WIT definition is also embedded in the compiled WASM that you upload to **Golem**. This is how Golem knows what the exported functions are, and it can validate the provided parameters to make sure they have the correct type.
 
 ### Function names
 
@@ -28,7 +28,7 @@ package golem:component
 
 You can have any other pair of names following the above syntax.
 
-The WIT definition should contain a **single world** (otherwise the world to be used have to be specified for the tools used during compilation). The name of this world does not matter for **Golem -** it won't be part of the function's fully qualified name.
+The WIT definition should contain a **single world** (otherwise the world to be used have to be specified for the tools used during compilation). The name of this world does not matter for **Golem** - it won't be part of the function's fully qualified name.
 
 For example it can be:
 
@@ -74,6 +74,38 @@ In the above example we have **3 exported functions** and we can refer to them i
 - `golem:component/api/remove-item`
 - `golem:component/dump`
 
+#### Resources
+
+WIT specifications also allow the definition of **resources**. These are constructed via special _constructors_, have methods, and can also have associated static functions. Golem supports exporting resources, enabling an alternative of having a separate **worker** for each entity. When exporting resources, a single worker may own an arbitrary number of instances of the exported resource, and the method invocations's first parameter must be the **resource handle** returned by the invoked constructor.
+
+There is a special naming syntax provided by **Golem** that makes it more convenient to invoke resource constructors and methods. Take the following example:
+
+```rust
+package golem:component;
+
+interface api {
+  resource counter {
+    constructor(name: string);
+    inc-by: func(value: u64);
+    get-value: func() -> u64;
+
+    merge-counters: static func(counter1: counter, counter2: counter, name: string) -> counter;
+  }
+}
+
+world my-world {
+  export api;
+}
+```
+
+For this WIT specification, the following **function names** are valid when using Golem's invocation API or CLI:
+
+- `golem:component/api/counter/new` - refers to the above defined **constructor**
+- `golem:component/api/counter/inc-by`
+- `golem:component/api/counter/get-value`
+- `golem:component/api/counter/merge-counters`
+- `golem:component/api/counter/drop` - special function that drops the instance while the worker continues running
+
 ### Parameters and results
 
 This section defines the mapping from the different types you can use or define in your WIT definition and the JSON you pass to the `--parameters` parameter of the invocation and see as your invocation's result.
@@ -107,6 +139,7 @@ The following table maps types you can use in WIT to their JSON encoding:
 | variant         | JSON object with a single field that has the name of one of the variants. For example: `{ "child": 10 }`                                                         | Variant that can be one of the specified types, discriminated by a case name. |
 | enum            | JSON string holding the name of the enum, for example "low"                                                                                                      | Enum is a set of possible named values                                        |
 | flags           | A JSON array of strings                                                                                                                                          | Set of possible name values, where you can select more than one of them.      |
+| handle          | a JSON string that starts with the resource owner's worker uri, followed by a slash and a numeric resource id: `"worker://template-id/worker-name/resource-id"`  | Points to a resource created on a given worker                                |
 
 ## Tier 3 languages
 
@@ -116,7 +149,7 @@ For **Tier 3 languages** you cannot define more than one function to be exported
 
 The function name for **tier 3** languages that you need to pass to the `--function` parameter of [Golem CLI](/docs/golem-cli) is always:
 
-- `wasi:cli/run@0.2.0-rc-2023-11-10`
+- `wasi:cli/run@0.2.0/run`
 
 ### Parameters and results
 

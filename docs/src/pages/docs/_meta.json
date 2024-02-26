@@ -15,6 +15,7 @@
     "title": "Management Console"
   },
   "promises": "Promises",
+  "rpc": "Worker to Worker communication",
   "template-interface": "Template Interface",
   "faq": "FAQ",
   "technical-details": "Technical details",
