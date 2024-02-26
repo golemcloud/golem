@@ -49,7 +49,7 @@ A typical worker bridge endpoint definition looks like this. Please refer to thi
 ```bash
 cd api-gateway-examples
 # register with worker bridge
-# Ensure to make change in template-id in endpoint_definition.json
+# Ensure to make change in template-id in worker_service_api_definition.json
 # Our golem service is accessible through localhost:9881. (It will redirect to the right internal service)
 curl -X PUT http://localhost:9881/v1/api/definitions -H "Content-Type: application/json"  -d @worker_service_api_definition.json
 
@@ -160,7 +160,6 @@ After creating a template and a worker with golem-services,
 
 cd api-gateway-examples
 
-# Refer to open_api.json. servers section is for Tyk and worker-service section is for worker-service
 curl -X PUT http://localhost:9881/v1/api/definitions/oas -H "Content-Type: application/json" --data-binary "@reusable_open_api_definition.json"
 
 ```
