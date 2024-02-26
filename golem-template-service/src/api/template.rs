@@ -198,7 +198,7 @@ impl TemplateApi {
         &self,
         #[oai(name = "template-id")] template_id: Query<TemplateId>,
     ) -> Result<Json<Vec<Template>>> {
-        let response = self.template_service.get(template_id.0).await?;
+        let response = self.template_service.get(&template_id.0).await?;
 
         Ok(Json(response))
     }
