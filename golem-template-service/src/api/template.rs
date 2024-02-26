@@ -174,12 +174,13 @@ impl TemplateApi {
         #[oai(name = "template_id")] template_id: Path<TemplateId>,
         #[oai(name = "version")] version: Path<String>,
     ) -> Result<Json<Template>> {
-
         let version_int = match version.0.parse::<i32>() {
             Ok(v) => v,
-            Err(_) => return Err(TemplateError::BadRequest(Json(ErrorsBody {
-                errors: vec!["Invalid version".to_string()],
-            })))
+            Err(_) => {
+                return Err(TemplateError::BadRequest(Json(ErrorsBody {
+                    errors: vec!["Invalid version".to_string()],
+                })))
+            }
         };
 
         let versioned_template_id = VersionedTemplateId {
