@@ -165,18 +165,26 @@ impl TemplateApi {
     }
 
     #[oai(
-        path = "/:template_id",
+        path = "/:template_id/versions/:version",
         method = "get",
         operation_id = "get_template_metadata"
     )]
     async fn get_template_metadata(
         &self,
         #[oai(name = "template_id")] template_id: Path<TemplateId>,
-        #[oai(name = "version")] version: Query<i32>,
+        #[oai(name = "version")] version: Path<String>,
     ) -> Result<Json<Template>> {
+
+        let version_int = match version.0.parse::<i32>() {
+            Ok(v) => v,
+            Err(_) => return Err(TemplateError::BadRequest(Json(ErrorsBody {
+                errors: vec!["Invalid version".to_string()],
+            })))
+        };
+
         let versioned_template_id = VersionedTemplateId {
             template_id: template_id.0,
-            version: version.0,
+            version: version_int,
         };
 
         let response = self

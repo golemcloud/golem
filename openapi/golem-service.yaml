@@ -318,6 +318,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
       operationId: get_template_metadata_all_versions
+  /v2/templates/{template_id}/versions/{version}:
     get:
       tags:
       - Template
@@ -332,9 +333,8 @@ paths:
         explode: true
       - name: version
         schema:
-          type: integer
-          format: int32
-        in: query
+          type: string
+        in: path
         required: true
         deprecated: false
         explode: true
