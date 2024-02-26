@@ -111,16 +111,11 @@ pub struct TemplateApi {
 
 #[OpenApi(prefix_path = "/v2/templates", tag = ApiTags::Template)]
 impl TemplateApi {
-    #[oai(
-        path = "/:template_id",
-        method = "get",
-        operation_id = "get_template_metadata_all_versions"
-    )]
-    async fn get_template_metadata_all_versions(
-        &self,
-        template_id: Path<TemplateId>,
-    ) -> Result<Json<Vec<Template>>> {
-        let response = self.template_service.get(&template_id.0).await?;
+    #[oai(path = "/", method = "post", operation_id = "create_template")]
+    async fn create_template(&self, payload: UploadPayload) -> Result<Json<Template>> {
+        let data = payload.template.into_vec().await?;
+        let template_name = payload.name;
+        let response = self.template_service.create(&template_name, data).await?;
         Ok(Json(response))
     }
 
@@ -139,14 +134,6 @@ impl TemplateApi {
         Ok(Json(response))
     }
 
-    #[oai(path = "/", method = "post", operation_id = "create_template")]
-    async fn create_template(&self, payload: UploadPayload) -> Result<Json<Template>> {
-        let data = payload.template.into_vec().await?;
-        let template_name = payload.name;
-        let response = self.template_service.create(&template_name, data).await?;
-        Ok(Json(response))
-    }
-
     #[oai(
         path = "/:template_id/download",
         method = "get",
@@ -162,6 +149,47 @@ impl TemplateApi {
             .download(&template_id.0, version.0)
             .await?;
         Ok(Binary(Body::from(bytes)))
+    }
+
+    #[oai(
+        path = "/:template_id",
+        method = "get",
+        operation_id = "get_template_metadata_all_versions"
+    )]
+    async fn get_template_metadata_all_versions(
+        &self,
+        template_id: Path<TemplateId>,
+    ) -> Result<Json<Vec<Template>>> {
+        let response = self.template_service.get(&template_id.0).await?;
+        Ok(Json(response))
+    }
+
+    #[oai(
+        path = "/:template_id",
+        method = "get",
+        operation_id = "get_template_metadata"
+    )]
+    async fn get_template_metadata(
+        &self,
+        #[oai(name = "template_id")] template_id: Path<TemplateId>,
+        #[oai(name = "version")] version: Query<i32>,
+    ) -> Result<Json<Template>> {
+        let versioned_template_id = VersionedTemplateId {
+            template_id: template_id.0,
+            version: version.0,
+        };
+
+        let response = self
+            .template_service
+            .get_by_version(&versioned_template_id)
+            .await?;
+
+        match response {
+            Some(template) => Ok(Json(template)),
+            None => Err(TemplateError::NotFound(Json(ErrorBody {
+                error: "Template not found".to_string(),
+            }))),
+        }
     }
 
     #[oai(
@@ -194,33 +222,5 @@ impl TemplateApi {
         let response = self.template_service.find_by_name(template_name.0).await?;
 
         Ok(Json(response))
-    }
-
-    #[oai(
-        path = "/:template_id",
-        method = "get",
-        operation_id = "get_template_metadata"
-    )]
-    async fn get_template_metadata(
-        &self,
-        #[oai(name = "template_id")] template_id: Path<TemplateId>,
-        #[oai(name = "version")] version: Query<i32>,
-    ) -> Result<Json<Template>> {
-        let versioned_template_id = VersionedTemplateId {
-            template_id: template_id.0,
-            version: version.0,
-        };
-
-        let response = self
-            .template_service
-            .get_by_version(&versioned_template_id)
-            .await?;
-
-        match response {
-            Some(template) => Ok(Json(template)),
-            None => Err(TemplateError::NotFound(Json(ErrorBody {
-                error: "Template not found".to_string(),
-            }))),
-        }
     }
 }
