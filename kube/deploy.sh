@@ -19,7 +19,7 @@ echo "Installing postgres to namespace $NAMESPACE"
 helm upgrade --install -n $NAMESPACE golem-postgres oci://registry-1.docker.io/bitnamicharts/postgresql --set auth.database=golem_db --set auth.username=golem_user
 
 echo ""
-echo "Installing postgres to namespace $NAMESPACE"
+echo "Installing redis to namespace $NAMESPACE"
 
 helm upgrade --install -n $NAMESPACE golem-redis oci://registry-1.docker.io/bitnamicharts/redis --set auth.enabled=false
 
