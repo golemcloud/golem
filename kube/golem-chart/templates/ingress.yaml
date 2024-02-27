@@ -1,15 +1,15 @@
-{{- if .Values.ingress.enabled }}
+{{- if eq .Values.ingress.type "nginx" }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: golem-services-{{.Values.env}}
   labels:
     env: {{.Values.env}}
-{{- if .Values.ingress.annotations }}
-  annotations: {{- .Values.ingress.annotations | toYaml | nindent 4 }}
+{{- if .Values.ingress.nginx.annotations }}
+  annotations: {{- .Values.ingress.nginx.annotations | toYaml | nindent 4 }}
 {{- end }}
 spec:
-  ingressClassName: {{ .Values.ingress.ingressClassName }}
+  ingressClassName: nginx
   rules:
     - http:
         paths:
@@ -35,6 +35,58 @@ spec:
                 port:
                   number: {{ .Values.workerService.ports.http }}
           - path: /
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: service-template-service-{{.Values.env}}
+                port:
+                  number: {{ .Values.templateService.ports.http }}
+{{- end }}
+
+{{- if eq .Values.ingress.type "alb" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: golem-services-{{.Values.env}}
+  labels:
+    env: {{.Values.env}}
+{{- if .Values.ingress.alb.annotations }}
+  annotations: {{- .Values.ingress.alb.annotations | toYaml | nindent 4 }}
+{{- end }}
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: "/v1/api"
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: service-worker-service-{{.Values.env}}
+                port:
+                  number: {{ .Values.workerService.ports.http }}
+          - path: "/v2/templates/*/workers/*/connect"
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: service-worker-service-{{.Values.env}}
+                port:
+                  number: {{ .Values.workerService.ports.http }}
+          - path: "/v2/templates/*/workers/*"
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: service-worker-service-{{.Values.env}}
+                port:
+                  number: {{ .Values.workerService.ports.http }}
+          - path: "/v2/templates/*/workers"
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: service-worker-service-{{.Values.env}}
+                port:
+                  number: {{ .Values.workerService.ports.http }}
+          - path: "/*"
             pathType: ImplementationSpecific
             backend:
               service:

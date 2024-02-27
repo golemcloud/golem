@@ -10,7 +10,7 @@ https://artifacthub.io/packages/helm/bitnami/postgresql
 
 install
 ```shell
-helm install -n golem golem-postgres oci://registry-1.docker.io/bitnamicharts/postgresql --set auth.database=golem_db --set auth.username=golem_user
+helm upgrade --install -n golem golem-postgres oci://registry-1.docker.io/bitnamicharts/postgresql --set auth.database=golem_db --set auth.username=golem_user
 ```
 
 delete
@@ -29,7 +29,7 @@ https://artifacthub.io/packages/helm/bitnami/redis
 
 install
 ```shell
-helm install -n golem golem-redis oci://registry-1.docker.io/bitnamicharts/redis --set auth.enabled=false
+helm upgrade --install -n golem golem-redis oci://registry-1.docker.io/bitnamicharts/redis --set auth.enabled=false
 ```
 
 delete
