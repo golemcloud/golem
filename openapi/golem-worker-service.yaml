@@ -4,12 +4,8 @@ info:
   version: '2.0'
 servers: []
 tags:
-- name: ApiCertificate
 - name: ApiDefinition
-- name: ApiDeployment
-- name: ApiDomain
 - name: HealthCheck
-- name: Healthcheck
 - name: Template
 - name: Worker
 paths:
@@ -56,6 +52,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+      operationId: get_worker_by_id
   /v2/templates/{template_id}/workers:
     post:
       tags:
@@ -106,6 +103,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+      operationId: launch_new_worker
   /v2/templates/{template_id}/workers/{worker_name}:
     delete:
       tags:
@@ -157,6 +155,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+      operationId: delete_worker
     get:
       tags:
       - Worker
@@ -207,6 +206,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+      operationId: get_worker_metadata
   /v2/templates/{template_id}/workers/{worker_name}/key:
     post:
       tags:
@@ -258,6 +258,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+      operationId: get_invocation_key
   /v2/templates/{template_id}/workers/{worker_name}/invoke-and-await:
     post:
       tags:
@@ -336,6 +337,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+      operationId: invoke_and_await_function
   /v2/templates/{template_id}/workers/{worker_name}/invoke:
     post:
       tags:
@@ -400,6 +402,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+      operationId: invoke_function
   /v2/templates/{template_id}/workers/{worker_name}/complete:
     post:
       tags:
@@ -457,6 +460,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+      operationId: complete_promise
   /v2/templates/{template_id}/workers/{worker_name}/interrupt:
     post:
       tags:
@@ -515,6 +519,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+      operationId: interrupt_worker
   /v2/templates/{template_id}/workers/{worker_name}/resume:
     post:
       tags:
@@ -566,6 +571,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+      operationId: resume_worker
   /v1/api/definitions/oas:
     put:
       tags:
@@ -850,6 +856,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/HealthcheckResponse'
+      operationId: healthcheck
   /version:
     get:
       tags:
@@ -861,6 +868,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/VersionInfo'
+      operationId: version
 components:
   schemas:
     ApiDefinition:

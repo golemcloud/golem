@@ -4,21 +4,83 @@ info:
   version: '2.0'
 servers: []
 tags:
+- name: ApiDefinition
 - name: HealthCheck
 - name: Template
 - name: Worker
 paths:
-  /v2/templates/{template_id}:
+  /v2/templates:
+    post:
+      tags:
+      - Template
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - name
+              - template
+              properties:
+                name:
+                  type: string
+                template:
+                  type: string
+                  format: binary
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: create_template
     get:
       tags:
       - Template
       parameters:
-      - name: template_id
+      - name: template-name
         schema:
           type: string
-          format: uuid
-        in: path
-        required: true
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -66,6 +128,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+      operationId: get_templates
   /v2/templates/{template_id}/upload:
     put:
       tags:
@@ -129,124 +192,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/templates:
-    post:
-      tags:
-      - Template
-      requestBody:
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required:
-              - name
-              - template
-              properties:
-                name:
-                  type: string
-                template:
-                  type: string
-                  format: binary
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Template'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-    get:
-      tags:
-      - Template
-      parameters:
-      - name: template-name
-        schema:
-          type: string
-        in: query
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Template'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
+      operationId: update_template
   /v2/templates/{template_id}/download:
     get:
       tags:
@@ -312,6 +258,130 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+      operationId: download_template
+  /v2/templates/{template_id}:
+    get:
+      tags:
+      - Template
+      parameters:
+      - name: template_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Template'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: get_template_metadata_all_versions
+  /v2/templates/{template_id}/versions/{version}:
+    get:
+      tags:
+      - Template
+      parameters:
+      - name: template_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: get_template_metadata
   /v2/templates/{template_id}/latest:
     get:
       tags:
@@ -369,6 +439,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+      operationId: get_latest_template_version
   /healthcheck:
     get:
       tags:
@@ -380,6 +451,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/HealthcheckResponse'
+      operationId: healthcheck
   /version:
     get:
       tags:
@@ -391,6 +463,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/VersionInfo'
+      operationId: version
 components:
   schemas:
     ErrorBody:
@@ -536,6 +609,11 @@ components:
       properties:
         versionedTemplateId:
           $ref: '#/components/schemas/VersionedTemplateId'
+    ResourceMode:
+      type: string
+      enum:
+      - Borrowed
+      - Owned
     Template:
       type: object
       required:
@@ -597,6 +675,7 @@ components:
       - $ref: '#/components/schemas/Type_TypeU8'
       - $ref: '#/components/schemas/Type_TypeS8'
       - $ref: '#/components/schemas/Type_TypeBool'
+      - $ref: '#/components/schemas/Type_TypeHandle'
       discriminator:
         propertyName: type
         mapping:
@@ -621,6 +700,7 @@ components:
           U8: '#/components/schemas/Type_TypeU8'
           S8: '#/components/schemas/Type_TypeS8'
           Bool: '#/components/schemas/Type_TypeBool'
+          Handle: '#/components/schemas/Type_TypeHandle'
     TypeBool:
       type: object
     TypeChr:
@@ -647,6 +727,17 @@ components:
           type: array
           items:
             type: string
+    TypeHandle:
+      type: object
+      required:
+      - resource_id
+      - mode
+      properties:
+        resource_id:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/ResourceMode'
     TypeList:
       type: object
       required:
@@ -773,6 +864,16 @@ components:
             type: string
             example: Flags
       - $ref: '#/components/schemas/TypeFlags'
+    Type_TypeHandle:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            example: Handle
+      - $ref: '#/components/schemas/TypeHandle'
     Type_TypeList:
       allOf:
       - type: object
