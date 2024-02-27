@@ -57,7 +57,8 @@ services:
   golem-template-service:
     build:
       context: .
-      dockerfile: golem-service/docker/Dockerfile
+      dockerfile: golem-template-service/docker/Dockerfile
+    restart: on-failure
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1

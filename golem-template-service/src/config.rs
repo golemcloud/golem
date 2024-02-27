@@ -57,6 +57,7 @@ pub struct DbPostgresConfig {
     pub password: String,
     pub port: u16,
     pub max_connections: u32,
+    pub schema: Option<String>,
 }
 
 impl TemplateServiceConfig {
