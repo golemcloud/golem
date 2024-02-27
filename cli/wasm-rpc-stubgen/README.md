@@ -2,6 +2,7 @@
 
 The `golem-wasm-rpc-stubgen` is a CLI tool to generate the RPC stubs from a component's WIT definition.
 
+## Generate
 ```shell
 Usage: wasm-rpc-stubgen generate [OPTIONS] --source-wit-root <SOURCE_WIT_ROOT> --dest-crate-root <DEST_CRATE_ROOT>
 
@@ -33,3 +34,29 @@ The resulting WASM component implements the **stub interface** corresponding to 
 target directory's
 `wit/_stub.wit` file. This WASM component is to be composed together with another component that calls the original
 interface via WASM RPC.
+
+## Build
+```
+Usage: wasm-rpc-stubgen build [OPTIONS] --source-wit-root <SOURCE_WIT_ROOT> --dest-wasm <DEST_WASM> --dest-wit-root <DEST_WIT_ROOT>
+
+Options:
+  -s, --source-wit-root <SOURCE_WIT_ROOT>                
+      --dest-wasm <DEST_WASM>                            
+      --dest-wit-root <DEST_WIT_ROOT>                    
+  -w, --world <WORLD>                                    
+      --stub-crate-version <STUB_CRATE_VERSION>          [default: 0.0.1]
+      --wasm-rpc-path-override <WASM_RPC_PATH_OVERRIDE>  
+  -h, --help                                             Print help
+  -V, --version                                          Print version
+```
+
+- `source-wit-root`: The root directory of the component's WIT definition to be called via RPC
+- `dest-wasm`: The name of the stub WASM file to be generated 
+- `dest-wit-root`: The directory name where the generated WIT files should be placed
+- `world`: The world name to be used in the generated stub crate. If there is only a single world in the source root
+  package, no need to specify.
+- `stub-crate-version`: The crate version of the generated stub crate
+- `wasm-rpc-path-override`: The path to the `wasm-rpc` crate to be used in the generated stub crate. If not specified,
+  the latest version of `wasm-rpc` will be used. It needs to be an **absolute path**.
+
+
