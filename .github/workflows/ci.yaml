@@ -27,14 +27,14 @@ jobs:
             build-config: ""
           - platform: linux/arm64
             target: aarch64-unknown-linux-gnu
-            build-config: "--config \"target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'\""
+            build-config: '--config "target.aarch64-unknown-linux-gnu.linker = ''aarch64-linux-gnu-gcc''"'
     name: docker-targets-build (${{ matrix.platform.platform }})
     steps:
       - name: Checkout
         uses: actions/checkout@v3
         with:
           submodules: recursive
-          fetch-depth: '0'
+          fetch-depth: "0"
       - name: Prepare
         run: |
           platform=${{ matrix.platform.platform }}
@@ -89,7 +89,7 @@ jobs:
         uses: actions/checkout@v3
         with:
           submodules: recursive
-          fetch-depth: '0'
+          fetch-depth: "0"
       - name: Prepare
         run: |
           echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
@@ -333,11 +333,9 @@ jobs:
       - name: Restore executable flag
         run: chmod a+x ./target/debug/*
       - name: Generate golem-worker-service OpenAPI yaml
-        working-directory: golem-worker-service
-        run: ../target/debug/golem-worker-service-yaml > ../target/golem-worker-service.yaml
+        run: ./target/debug/golem-worker-service-yaml > ./target/golem-worker-service.yaml
       - name: Generate golem-template-service OpenAPI yaml
-        working-directory: golem-template-service
-        run: ../target/debug/golem-template-service-yaml > ../target/golem-template-service.yaml
+        run: ./target/debug/golem-template-service-yaml > ./target/golem-template-service.yaml
       - name: Merge openapi specs
         working-directory: golem-openapi-client-generator
         run: |
