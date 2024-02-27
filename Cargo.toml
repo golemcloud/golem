@@ -10,7 +10,6 @@ members = [
     "golem-template-service",
     "golem-shard-manager",
     "golem-worker-service",
-    "golem-public-api"
 ]
 
 exclude = [
@@ -45,7 +44,7 @@ exclude = [
     "golem-client",
     "golem-cli",
     "libtest-mimic",
-    "wasm-rpc"
+    "wasm-rpc",
 ]
 
 [workspace.dependencies]
@@ -59,7 +58,11 @@ chrono = { version = "0.4.32", features = ["serde"] }
 console-subscriber = "0.2.0"
 dashmap = "5.5.3"
 figment = { version = "0.10.14", features = ["toml", "env"] }
-fred = { version = "8.0.0", features = ["metrics", "serde-json", "partial-tracing"] }
+fred = { version = "8.0.0", features = [
+    "metrics",
+    "serde-json",
+    "partial-tracing",
+] }
 futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
@@ -73,7 +76,15 @@ poem = "2.0.0"
 opentelemetry = "0.21.0"
 opentelemetry-prometheus = "0.14.1"
 opentelemetry_sdk = "0.21.2"
-poem-openapi = { version = "4.0.0", features = ["swagger-ui", "chrono", "time", "humantime", "uuid", "url", "websocket"] }
+poem-openapi = { version = "4.0.0", features = [
+    "swagger-ui",
+    "chrono",
+    "time",
+    "humantime",
+    "uuid",
+    "url",
+    "websocket",
+] }
 prometheus = { version = "0.13.3", features = ["process"] }
 proptest = "1.4.0"
 prost = "0.12.3"
@@ -82,7 +93,14 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 tempfile = "3.9.0"
 thiserror = "1.0.56"
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "sync", "io-std", "net", "tracing"] }
+tokio = { version = "1.0", features = [
+    "macros",
+    "rt-multi-thread",
+    "sync",
+    "io-std",
+    "net",
+    "tracing",
+] }
 tokio-rustls = { version = "0.25.0" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tonic = "0.10.2"
@@ -90,7 +108,12 @@ tonic-reflection = "0.10.2"
 tonic-health = "0.10.2"
 tracing = { version = "0.1.40", features = ["log"] }
 tracing-opentelemetry = "0.22.0"
-tracing-subscriber = { version = "0.3.17", features = ["env-filter", "fmt", "std", "json"] }
+tracing-subscriber = { version = "0.3.17", features = [
+    "env-filter",
+    "fmt",
+    "std",
+    "json",
+] }
 url = "2.5.0"
 uuid = { version = "1.7.0", features = ["serde", "v4"] }
 warp = "0.3.6"

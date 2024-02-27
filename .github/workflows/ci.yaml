@@ -332,9 +332,17 @@ jobs:
           path: ./target/debug/
       - name: Restore executable flag
         run: chmod a+x ./target/debug/*
-      - name: Generate Golem OpenAPI yaml
-        working-directory: golem-public-api
-        run: ../target/debug/golem-service-yaml > ../target/golem-service.yaml
+      - name: Generate golem-worker-service OpenAPI yaml
+        working-directory: golem-worker-service
+        run: ../target/debug/golem-worker-service-yaml > ../target/golem-worker-service.yaml
+      - name: Generate golem-template-service OpenAPI yaml
+        working-directory: golem-template-service
+        run: ../target/debug/golem-template-service-yaml > ../target/golem-template-service.yaml
+      - name: Merge openapi specs
+        working-directory: golem-openapi-client-generator
+        run: |
+          cargo build
+          ./target/debug/golem-openapi-client-generator merge --spec-yaml ../target/golem-worker-service.yaml ../target/golem-template-service.yaml --output ../target/golem-service.yaml
       - name: Check Golem OpenAPI yaml latest
         shell: bash
         run: |
@@ -351,7 +359,7 @@ jobs:
         run: |
           expected_version=$( ../scripts/expected-client-version.sh )
           cargo build
-          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-service.yaml --output-directory ../golem-client --name "golem-client" --client-version "${expected_version}"
+          ./target/debug/golem-openapi-client-generator generate --spec-yaml ../openapi/golem-service.yaml --output-directory ../golem-client --name "golem-client" --client-version "${expected_version}"
       - name: Integration tests
         working-directory: golem-cli
         env:
