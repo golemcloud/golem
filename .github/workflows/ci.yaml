@@ -341,7 +341,7 @@ jobs:
         working-directory: golem-openapi-client-generator
         run: |
           cargo build
-          ./target/debug/golem-openapi-client-generator merge --spec-yaml ../target/golem-worker-service.yaml ../target/golem-template-service.yaml --output ../target/golem-service.yaml
+          ./target/debug/golem-openapi-client-generator merge --spec-yaml ../target/golem-worker-service.yaml ../target/golem-template-service.yaml --output-yaml ../target/golem-service.yaml
       - name: Check Golem OpenAPI yaml latest
         shell: bash
         run: |
