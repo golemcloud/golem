@@ -22,7 +22,7 @@ use crate::cargo::generate_cargo_toml;
 use crate::compilation::compile;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
-use crate::wit::{copy_wit_files, generate_stub_wit};
+use crate::wit::{copy_wit_files, generate_stub_wit, verify_action, WitAction};
 use anyhow::Context;
 use clap::Parser;
 use fs_extra::dir::CopyOptions;
@@ -37,6 +37,7 @@ use tempdir::TempDir;
 enum Command {
     Generate(GenerateArgs),
     Build(BuildArgs),
+    AddStubDependency(AddStubDependencyArgs),
 }
 
 #[derive(clap::Args)]
@@ -71,6 +72,17 @@ struct BuildArgs {
     wasm_rpc_path_override: Option<String>,
 }
 
+#[derive(clap::Args)]
+#[command(version, about, long_about = None)]
+struct AddStubDependencyArgs {
+    #[clap(short, long)]
+    stub_wit_root: PathBuf,
+    #[clap(short, long)]
+    dest_wit_root: PathBuf,
+    #[clap(short, long)]
+    overwrite: bool,
+}
+
 #[tokio::main]
 async fn main() {
     match Command::parse() {
@@ -79,6 +91,9 @@ async fn main() {
         }
         Command::Build(build_args) => {
             let _ = render_error(build(build_args).await);
+        }
+        Command::AddStubDependency(add_stub_dependency_args) => {
+            let _ = render_error(add_stub_dependency(add_stub_dependency_args));
         }
     }
 }
@@ -162,6 +177,41 @@ async fn build(args: BuildArgs) -> anyhow::Result<()> {
         &CopyOptions::new().content_only(true).overwrite(true),
     )
     .context("Failed to copy the generated WIT files to the destination")?;
+
+    Ok(())
+}
+
+fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
+    let source_deps = wit::get_dep_dirs(&args.stub_wit_root)?;
+
+    let main_wit = args.stub_wit_root.join("_stub.wit");
+    let main_wit_package_name = wit::get_package_name(&main_wit)?;
+
+    let mut actions = Vec::new();
+    for source_dir in source_deps {
+        actions.push(WitAction::CopyDepDir { source_dir })
+    }
+    actions.push(WitAction::CopyDepWit {
+        source_wit: main_wit,
+        dir_name: format!(
+            "{}_{}",
+            main_wit_package_name.namespace, main_wit_package_name.name
+        ),
+    });
+
+    let mut proceed = true;
+    for action in &actions {
+        if !verify_action(action, &args.dest_wit_root, args.overwrite)? {
+            eprintln!("Cannot {action} because the destination already exists with a different content. Use --overwrite to force.");
+            proceed = false;
+        }
+    }
+
+    if proceed {
+        for action in actions {
+            action.perform(&args.dest_wit_root)?;
+        }
+    }
 
     Ok(())
 }

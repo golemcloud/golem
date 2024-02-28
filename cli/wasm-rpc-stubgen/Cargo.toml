@@ -16,6 +16,7 @@ cargo_toml = "0.19.1"
 clap = { version = "4.5.0", features = ["derive"] }
 cargo-component-core = "=0.7.0"
 cargo-component = "=0.7.0"
+dir-diff = "0.3.3"
 fs_extra = "1.3.0"
 golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0" }
 heck = "0.4.1"
