@@ -13,36 +13,38 @@
 // limitations under the License.
 
 use crate::stub::StubDefinition;
-use anyhow::{anyhow, bail};
+use crate::wit;
+use anyhow::{anyhow, bail, Context};
 use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,
     Profiles, StripSetting,
 };
 use golem_wasm_rpc::WASM_RPC_VERSION;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::path::Path;
 use toml::Value;
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Deserialize, Default)]
 struct MetadataRoot {
     component: Option<ComponentMetadata>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct ComponentMetadata {
-    package: String,
+    package: Option<String>,
     target: ComponentTarget,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct ComponentTarget {
-    world: String,
+    world: Option<String>,
     path: String,
     dependencies: HashMap<String, WitDependency>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct WitDependency {
     path: String,
 }
@@ -91,12 +93,12 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
 
     let metadata = MetadataRoot {
         component: Some(ComponentMetadata {
-            package: format!(
+            package: Some(format!(
                 "{}:{}",
                 def.root_package_name.namespace, def.root_package_name.name
-            ),
+            )),
             target: ComponentTarget {
-                world: def.target_world_name()?,
+                world: Some(def.target_world_name()?),
                 path: "wit".to_string(),
                 dependencies: wit_dependencies,
             },
@@ -166,5 +168,54 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         def.target_cargo_path().to_string_lossy()
     );
     fs::write(def.target_cargo_path(), cargo_toml)?;
+    Ok(())
+}
+
+pub fn is_cargo_component_toml(path: &Path) -> anyhow::Result<bool> {
+    let manifest: Manifest<MetadataRoot> = Manifest::from_path_with_metadata(path)?;
+
+    if let Some(package) = manifest.package {
+        if let Some(metadata) = package.metadata {
+            if metadata.component.is_some() {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> anyhow::Result<()> {
+    let mut manifest: Manifest<MetadataRoot> = Manifest::from_path_with_metadata(cargo_path)?;
+    if let Some(ref mut package) = manifest.package {
+        if let Some(ref mut metadata) = package.metadata {
+            if let Some(ref mut component) = metadata.component {
+                let existing: HashSet<_> = component.target.dependencies.keys().cloned().collect();
+                for name in names {
+                    if !existing.contains(name) {
+                        let relative_path = format!("wit/deps/{}", name);
+                        let path = cargo_path
+                            .parent()
+                            .context("Parent directory of Cargo.toml")?
+                            .join(&relative_path);
+                        let package_name = wit::get_package_name(&path)?;
+
+                        component.target.dependencies.insert(
+                            format!("{}:{}", package_name.namespace, package_name.name),
+                            WitDependency {
+                                path: relative_path,
+                            },
+                        );
+                    }
+                }
+
+                let cargo_toml = toml::to_string(&manifest)?;
+
+                println!("Writing updated Cargo.toml to {:?}", cargo_path);
+                fs::write(cargo_path, cargo_toml)?;
+            }
+        }
+    }
+
     Ok(())
 }
