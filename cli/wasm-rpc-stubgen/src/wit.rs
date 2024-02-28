@@ -294,7 +294,7 @@ pub fn get_dep_dirs(wit_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 pub fn get_package_name(wit: &Path) -> anyhow::Result<PackageName> {
-    let pkg = UnresolvedPackage::parse_file(wit)?;
+    let pkg = UnresolvedPackage::parse_path(wit)?;
     Ok(pkg.name)
 }
 
@@ -368,6 +368,17 @@ impl WitAction {
         }
 
         Ok(())
+    }
+
+    pub fn get_dep_dir_name(&self) -> anyhow::Result<String> {
+        match self {
+            WitAction::CopyDepDir { source_dir } => Ok(source_dir
+                .file_name()
+                .context("Get wit dependency directory name")?
+                .to_string_lossy()
+                .to_string()),
+            WitAction::CopyDepWit { dir_name, .. } => Ok(dir_name.clone()),
+        }
     }
 }
 
