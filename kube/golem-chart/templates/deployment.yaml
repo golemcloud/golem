@@ -42,7 +42,7 @@ spec:
               value: "{{ .Values.redis.username }}"
 {{- if .Values.redis.password.plain }}
             - name: GOLEM__REDIS__PASSWORD
-              value: {{ .Values.redis.password.plain }}
+              value: "{{ .Values.redis.password.plain }}"
 {{- end }}
 {{- if .Values.redis.password.fromSecret.name }}
             - name: GOLEM__REDIS__PASSWORD
@@ -138,7 +138,7 @@ spec:
               value: "{{ .Values.redis.username }}"
 {{- if .Values.redis.password.plain }}
             - name: GOLEM__REDIS__PASSWORD
-              value: {{ .Values.redis.password.plain }}
+              value: "{{ .Values.redis.password.plain }}"
 {{- end }}
 {{- if .Values.redis.password.fromSecret.name }}
             - name: GOLEM__REDIS__PASSWORD
@@ -292,7 +292,7 @@ spec:
               value: "{{ .Values.redis.username }}"
 {{- if .Values.redis.password.plain }}
             - name: GOLEM__REDIS__PASSWORD
-              value: {{ .Values.redis.password.plain }}
+              value: "{{ .Values.redis.password.plain }}"
 {{- end }}
 {{- if .Values.redis.password.fromSecret.name }}
             - name: GOLEM__REDIS__PASSWORD
@@ -389,7 +389,7 @@ spec:
               value: {{ .Values.postgres.username }}
 {{- if .Values.postgres.password.plain }}
             - name: GOLEM__DB__CONFIG__PASSWORD
-              value: {{ .Values.postgres.password.plain }}
+              value: "{{ .Values.postgres.password.plain }}"
 {{- end }}
 {{- if .Values.postgres.password.fromSecret.name }}
             - name: GOLEM__DB__CONFIG__PASSWORD
