@@ -70,6 +70,7 @@ Options:
   -s, --stub-wit-root <STUB_WIT_ROOT>  
   -d, --dest-wit-root <DEST_WIT_ROOT>  
   -o, --overwrite                      
+  -u, --update-cargo-toml                
   -h, --help                           Print help
   -V, --version                        Print version
 ```
@@ -80,3 +81,4 @@ The command merges a generated RPC stub as a WIT dependency into an other compon
 - `dest-wit-root`: The WIT root of the component where the stub should be added as a dependency
 - `overwrite`: This command would not do anything if it detects that it would change an existing WIT file's contents at
   the destination. With this flag, it can be forced to overwrite those files.
+- `update-cargo-toml`: Enables updating the Cargo.toml file in the parent directory of `dest-wit-root` with the copied dependencies.
