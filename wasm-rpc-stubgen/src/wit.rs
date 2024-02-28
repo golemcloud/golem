@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::stub::{FunctionParamStub, FunctionResultStub, StubDefinition};
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use indexmap::IndexSet;
-use std::fmt::Write;
+use std::fmt::{Display, Formatter, Write};
 use std::fs;
-use std::path::Path;
-use wit_parser::{Handle, Resolve, Type, TypeDefKind};
+use std::path::{Path, PathBuf};
+use wit_parser::{Handle, PackageName, Resolve, Type, TypeDefKind, UnresolvedPackage};
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     let world = def.resolve.worlds.get(def.world_id).unwrap();
@@ -72,7 +72,7 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
                         write!(out, ")")?;
                     }
                     FunctionResultStub::SelfType => {
-                        return Err(anyhow!("Unexpected return type in wit generator"))
+                        return Err(anyhow!("Unexpected return type in wit generator"));
                     }
                 }
             }
@@ -94,7 +94,7 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
                         write!(out, ")")?;
                     }
                     FunctionResultStub::SelfType => {
-                        return Err(anyhow!("Unexpected return type in wit generator"))
+                        return Err(anyhow!("Unexpected return type in wit generator"));
                     }
                 }
             }
@@ -274,6 +274,162 @@ impl TypeExtensions for Type {
                         Ok(name)
                     }
                 }
+            }
+        }
+    }
+}
+
+pub fn get_dep_dirs(wit_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut result = Vec::new();
+    let deps = wit_root.join("deps");
+    if deps.exists() && deps.is_dir() {
+        for entry in fs::read_dir(deps)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                result.push(entry.path());
+            }
+        }
+    }
+    Ok(result)
+}
+
+pub fn get_package_name(wit: &Path) -> anyhow::Result<PackageName> {
+    let pkg = UnresolvedPackage::parse_file(wit)?;
+    Ok(pkg.name)
+}
+
+pub enum WitAction {
+    CopyDepDir {
+        source_dir: PathBuf,
+    },
+    CopyDepWit {
+        source_wit: PathBuf,
+        dir_name: String,
+    },
+}
+
+impl Display for WitAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WitAction::CopyDepDir { source_dir } => {
+                write!(
+                    f,
+                    "copy WIT dependency from {}",
+                    source_dir.to_string_lossy()
+                )
+            }
+            WitAction::CopyDepWit {
+                source_wit,
+                dir_name,
+            } => {
+                write!(
+                    f,
+                    "copy stub WIT from {} as dependency {}",
+                    source_wit.to_string_lossy(),
+                    dir_name
+                )
+            }
+        }
+    }
+}
+
+impl WitAction {
+    pub fn perform(&self, target_wit_root: &Path) -> anyhow::Result<()> {
+        match self {
+            WitAction::CopyDepDir { source_dir } => {
+                let dep_name = source_dir
+                    .file_name()
+                    .context("Get wit dependency directory name")?;
+                let target_path = target_wit_root.join("deps").join(dep_name);
+                if !target_path.exists() {
+                    fs::create_dir_all(&target_path).context("Create target directory")?;
+                }
+                println!("Copying {source_dir:?} to {target_path:?}");
+                fs_extra::dir::copy(
+                    source_dir,
+                    &target_path,
+                    &fs_extra::dir::CopyOptions::new()
+                        .content_only(true)
+                        .overwrite(true),
+                )
+                .context("Failed to copy the dependency directory")?;
+            }
+            WitAction::CopyDepWit {
+                source_wit,
+                dir_name,
+            } => {
+                let target_dir = target_wit_root.join("deps").join(dir_name);
+                if !target_dir.exists() {
+                    fs::create_dir_all(&target_dir).context("Create target directory")?;
+                }
+                fs::copy(source_wit, target_dir.join(source_wit.file_name().unwrap()))
+                    .context("Copy the WIT file")?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub fn verify_action(
+    action: &WitAction,
+    target_wit_root: &Path,
+    overwrite: bool,
+) -> anyhow::Result<bool> {
+    match action {
+        WitAction::CopyDepDir { source_dir } => {
+            let dep_name = source_dir
+                .file_name()
+                .context("Get wit dependency directory name")?;
+            let target_path = target_wit_root.join("deps").join(dep_name);
+            if target_path.exists() && target_path.is_dir() {
+                if !dir_diff::is_different(source_dir, &target_path)? {
+                    Ok(true)
+                } else if overwrite {
+                    println!("Overwriting {}", target_path.to_string_lossy());
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            } else {
+                Ok(true)
+            }
+        }
+        WitAction::CopyDepWit {
+            source_wit,
+            dir_name,
+        } => {
+            let target_dir = target_wit_root.join("deps").join(dir_name);
+            let source_file_name = source_wit.file_name().context("Get source wit file name")?;
+            let target_wit = target_dir.join(source_file_name);
+            if target_dir.exists() && target_dir.is_dir() {
+                let mut existing_entries = Vec::new();
+                for entry in fs::read_dir(&target_dir)? {
+                    let entry = entry?;
+                    let name = entry
+                        .path()
+                        .file_name()
+                        .context("Get existing wit directory's name")?
+                        .to_string_lossy()
+                        .to_string();
+                    existing_entries.push(name);
+                }
+                if existing_entries.contains(&source_file_name.to_string_lossy().to_string()) {
+                    let source_contents = fs::read_to_string(source_wit)?;
+                    let target_contents = fs::read_to_string(&target_wit)?;
+                    if source_contents == target_contents {
+                        Ok(true)
+                    } else if overwrite {
+                        println!("Overwriting {}", target_wit.to_string_lossy());
+                        Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                } else {
+                    Ok(true)
+                }
+            } else {
+                Ok(true)
             }
         }
     }
