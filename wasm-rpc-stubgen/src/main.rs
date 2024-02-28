@@ -23,7 +23,7 @@ use crate::compilation::compile;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
 use crate::wit::{copy_wit_files, generate_stub_wit, verify_action, WitAction};
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use clap::Parser;
 use fs_extra::dir::CopyOptions;
 use heck::ToSnakeCase;
@@ -81,6 +81,8 @@ struct AddStubDependencyArgs {
     dest_wit_root: PathBuf,
     #[clap(short, long)]
     overwrite: bool,
+    #[clap(short, long)]
+    update_cargo_toml: bool,
 }
 
 #[tokio::main]
@@ -208,9 +210,34 @@ fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     }
 
     if proceed {
-        for action in actions {
+        for action in &actions {
             action.perform(&args.dest_wit_root)?;
         }
+    }
+
+    if let Some(target_parent) = args.dest_wit_root.parent() {
+        let target_cargo_toml = target_parent.join("Cargo.toml");
+        if target_cargo_toml.exists()
+            && target_cargo_toml.is_file()
+            && cargo::is_cargo_component_toml(&target_cargo_toml).is_ok()
+        {
+            if !args.update_cargo_toml {
+                eprintln!("Warning: the newly copied dependencies have to be added to {}. Use the --update-cargo-toml flag to update it automatically.", target_cargo_toml.to_string_lossy());
+            } else {
+                let mut names = Vec::new();
+                for action in actions {
+                    names.push(action.get_dep_dir_name()?);
+                }
+                cargo::add_dependencies_to_cargo_toml(&target_cargo_toml, &names)?;
+            }
+        } else if args.update_cargo_toml {
+            return Err(anyhow!(
+                "Cannot update {:?} file because it does not exist or is not a file",
+                target_cargo_toml
+            ));
+        }
+    } else if args.update_cargo_toml {
+        return Err(anyhow!("Cannot update the Cargo.toml file because parent directory of the destination WIT root does not exist."));
     }
 
     Ok(())
