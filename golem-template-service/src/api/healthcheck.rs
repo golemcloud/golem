@@ -21,12 +21,12 @@ pub struct VersionInfo {
 
 #[OpenApi(prefix_path = "/", tag = ApiTags::HealthCheck)]
 impl HealthcheckApi {
-    #[oai(path = "/healthcheck", method = "get")]
+    #[oai(path = "/healthcheck", method = "get", operation_id = "healthcheck")]
     async fn healthcheck(&self) -> Json<HealthcheckResponse> {
         Json(HealthcheckResponse {})
     }
 
-    #[oai(path = "/version", method = "get")]
+    #[oai(path = "/version", method = "get", operation_id = "version")]
     async fn version(&self) -> Json<VersionInfo> {
         Json(VersionInfo {
             version: VERSION.to_string(),

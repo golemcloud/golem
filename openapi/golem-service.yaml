@@ -2,456 +2,21 @@ openapi: 3.0.0
 info:
   title: Golem API
   version: '2.0'
-servers: []
-tags:
-- name: ApiDefinition
-- name: HealthCheck
-- name: Template
-- name: Worker
 paths:
-  /v2/templates:
-    post:
-      tags:
-      - Template
-      requestBody:
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required:
-              - name
-              - template
-              properties:
-                name:
-                  type: string
-                template:
-                  type: string
-                  format: binary
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Template'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: create_template
-    get:
-      tags:
-      - Template
-      parameters:
-      - name: template-name
-        schema:
-          type: string
-        in: query
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Template'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: get_templates
-  /v2/templates/{template_id}/upload:
-    put:
-      tags:
-      - Template
-      parameters:
-      - name: template_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/octet-stream:
-            schema:
-              type: string
-              format: binary
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Template'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: update_template
-  /v2/templates/{template_id}/download:
-    get:
-      tags:
-      - Template
-      parameters:
-      - name: template_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: version
-        schema:
-          type: integer
-          format: int32
-        in: query
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: download_template
-  /v2/templates/{template_id}:
-    get:
-      tags:
-      - Template
-      parameters:
-      - name: template_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Template'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: get_template_metadata_all_versions
-  /v2/templates/{template_id}/versions/{version}:
-    get:
-      tags:
-      - Template
-      parameters:
-      - name: template_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: version
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Template'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: get_template_metadata
-  /v2/templates/{template_id}/latest:
-    get:
-      tags:
-      - Template
-      parameters:
-      - name: template_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: integer
-                format: int32
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: get_latest_template_version
   /v2/templates/workers/{worker_id}:
     get:
       tags:
       - Worker
+      operationId: get_worker_by_id
       parameters:
-      - name: worker_id
-        schema:
-          type: string
-        in: path
+      - in: path
+        name: worker_id
         required: true
         deprecated: false
+        schema:
+          type: string
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -483,20 +48,21 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-      operationId: get_worker_by_id
   /v2/templates/{template_id}/workers:
     post:
       tags:
       - Worker
+      operationId: launch_new_worker
       parameters:
-      - name: template_id
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -534,78 +100,29 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-      operationId: launch_new_worker
   /v2/templates/{template_id}/workers/{worker_name}:
-    delete:
-      tags:
-      - Worker
-      parameters:
-      - name: template_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: worker_name
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/DeleteWorkerResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/GolemErrorBody'
-      operationId: delete_worker
     get:
       tags:
       - Worker
+      operationId: get_worker_metadata
       parameters:
-      - name: template_id
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -637,27 +154,82 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-      operationId: get_worker_metadata
+    delete:
+      tags:
+      - Worker
+      operationId: delete_worker
+      parameters:
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeleteWorkerResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v2/templates/{template_id}/workers/{worker_name}/key:
     post:
       tags:
       - Worker
+      operationId: get_invocation_key
       parameters:
-      - name: template_id
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -689,48 +261,52 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-      operationId: get_invocation_key
   /v2/templates/{template_id}/workers/{worker_name}/invoke-and-await:
     post:
       tags:
       - Worker
+      operationId: invoke_and_await_function
       parameters:
-      - name: template_id
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
+        explode: true
+        style: simple
+      - in: query
+        name: invocation-key
         required: true
         deprecated: false
-        explode: true
-      - name: invocation-key
         schema:
           type: string
-        in: query
+        explode: true
+        style: form
+      - in: query
+        name: function
         required: true
         deprecated: false
-        explode: true
-      - name: function
         schema:
           type: string
-        in: query
-        required: true
-        deprecated: false
         explode: true
-      - name: calling-convention
+        style: form
+      - in: query
+        name: calling-convention
+        deprecated: false
         schema:
           $ref: '#/components/schemas/CallingConvention'
-        in: query
-        required: false
-        deprecated: false
         explode: true
+        style: form
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -768,34 +344,37 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-      operationId: invoke_and_await_function
   /v2/templates/{template_id}/workers/{worker_name}/invoke:
     post:
       tags:
       - Worker
+      operationId: invoke_function
       parameters:
-      - name: template_id
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
+        explode: true
+        style: simple
+      - in: query
+        name: function
         required: true
         deprecated: false
-        explode: true
-      - name: function
         schema:
           type: string
-        in: query
-        required: true
-        deprecated: false
         explode: true
+        style: form
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -833,27 +412,29 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-      operationId: invoke_function
   /v2/templates/{template_id}/workers/{worker_name}/complete:
     post:
       tags:
       - Worker
+      operationId: complete_promise
       parameters:
-      - name: template_id
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -891,34 +472,36 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-      operationId: complete_promise
   /v2/templates/{template_id}/workers/{worker_name}/interrupt:
     post:
       tags:
       - Worker
+      operationId: interrupt_worker
       parameters:
-      - name: template_id
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
-        required: true
-        deprecated: false
         explode: true
-      - name: recovery-immediately
+        style: simple
+      - in: query
+        name: recovery-immediately
+        deprecated: false
         schema:
           type: boolean
-        in: query
-        required: false
-        deprecated: false
         explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -950,27 +533,29 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-      operationId: interrupt_worker
   /v2/templates/{template_id}/workers/{worker_name}/resume:
     post:
       tags:
       - Worker
+      operationId: resume_worker
       parameters:
-      - name: template_id
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -1002,7 +587,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-      operationId: resume_worker
   /v1/api/definitions/oas:
     put:
       tags:
@@ -1051,6 +635,71 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkerServiceErrorBody'
   /v1/api/definitions:
+    get:
+      tags:
+      - ApiDefinition
+      parameters:
+      - in: query
+        name: api-definition-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      - in: query
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorBody'
     put:
       tags:
       - ApiDefinition
@@ -1103,87 +752,26 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/WorkerServiceErrorBody'
-    get:
-      tags:
-      - ApiDefinition
-      parameters:
-      - name: api-definition-id
-        schema:
-          type: string
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      - name: version
-        schema:
-          type: string
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ApiDefinition'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/MessageBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: string
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
     delete:
       tags:
       - ApiDefinition
       parameters:
-      - name: api-definition-id
-        schema:
-          type: string
-        in: query
+      - in: query
+        name: api-definition-id
         required: true
         deprecated: false
-        explode: true
-      - name: version
         schema:
           type: string
-        in: query
+        explode: true
+        style: form
+      - in: query
+        name: version
         required: true
         deprecated: false
+        schema:
+          type: string
         explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -1280,6 +868,7 @@ paths:
     get:
       tags:
       - HealthCheck
+      operationId: healthcheck
       responses:
         '200':
           description: ''
@@ -1287,11 +876,11 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/HealthcheckResponse'
-      operationId: healthcheck
   /version:
     get:
       tags:
       - HealthCheck
+      operationId: version
       responses:
         '200':
           description: ''
@@ -1299,15 +888,447 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/VersionInfo'
-      operationId: version
+  /v2/templates:
+    get:
+      tags:
+      - Template
+      operationId: get_templates
+      parameters:
+      - in: query
+        name: template-name
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Template'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    post:
+      tags:
+      - Template
+      operationId: create_template
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                template:
+                  type: string
+                  format: binary
+              required:
+              - name
+              - template
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v2/templates/{template_id}/upload:
+    put:
+      tags:
+      - Template
+      operationId: update_template
+      parameters:
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v2/templates/{template_id}/download:
+    get:
+      tags:
+      - Template
+      operationId: download_template
+      parameters:
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: query
+        name: version
+        deprecated: false
+        schema:
+          type: integer
+          format: int32
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v2/templates/{template_id}:
+    get:
+      tags:
+      - Template
+      operationId: get_template_metadata_all_versions
+      parameters:
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Template'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v2/templates/{template_id}/versions/{version}:
+    get:
+      tags:
+      - Template
+      operationId: get_template_metadata
+      parameters:
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v2/templates/{template_id}/latest:
+    get:
+      tags:
+      - Template
+      operationId: get_latest_template_version
+      parameters:
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: integer
+                format: int32
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
 components:
   schemas:
     ApiDefinition:
       type: object
-      required:
-      - id
-      - version
-      - routes
       properties:
         id:
           type: string
@@ -1317,6 +1338,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Route'
+      required:
+      - id
+      - version
+      - routes
     CallingConvention:
       type: string
       enum:
@@ -1325,9 +1350,6 @@ components:
       - StdioEventloop
     CompleteParameters:
       type: object
-      required:
-      - oplogIdx
-      - data
       properties:
         oplogIdx:
           type: integer
@@ -1337,127 +1359,28 @@ components:
           items:
             type: integer
             format: uint8
+      required:
+      - oplogIdx
+      - data
     DeleteWorkerResponse:
       type: object
     ErrorBody:
       type: object
-      required:
-      - error
       properties:
         error:
           type: string
+      required:
+      - error
     ErrorsBody:
       type: object
-      required:
-      - errors
       properties:
         errors:
           type: array
           items:
             type: string
-    Export:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/Export_ExportInstance'
-      - $ref: '#/components/schemas/Export_ExportFunction'
-      discriminator:
-        propertyName: type
-        mapping:
-          Instance: '#/components/schemas/Export_ExportInstance'
-          Function: '#/components/schemas/Export_ExportFunction'
-    ExportFunction:
-      type: object
       required:
-      - name
-      - parameters
-      - results
-      properties:
-        name:
-          type: string
-        parameters:
-          type: array
-          items:
-            $ref: '#/components/schemas/FunctionParameter'
-        results:
-          type: array
-          items:
-            $ref: '#/components/schemas/FunctionResult'
-    ExportInstance:
-      type: object
-      required:
-      - name
-      - functions
-      properties:
-        name:
-          type: string
-        functions:
-          type: array
-          items:
-            $ref: '#/components/schemas/ExportFunction'
-    Export_ExportFunction:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Function
-      - $ref: '#/components/schemas/ExportFunction'
-    Export_ExportInstance:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Instance
-      - $ref: '#/components/schemas/ExportInstance'
-    FunctionParameter:
-      type: object
-      required:
-      - name
-      - typ
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/Type'
-    FunctionResult:
-      type: object
-      required:
-      - typ
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/Type'
+      - errors
     GolemError:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
-      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerAlreadyExists'
-      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerNotFound'
-      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerCreationFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorFailedToResumeWorker'
-      - $ref: '#/components/schemas/GolemError_GolemErrorTemplateDownloadFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorTemplateParseFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorGetLatestVersionOfTemplateFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseNotFound'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseDropped'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseAlreadyCompleted'
-      - $ref: '#/components/schemas/GolemError_GolemErrorInterrupted'
-      - $ref: '#/components/schemas/GolemError_GolemErrorParamTypeMismatch'
-      - $ref: '#/components/schemas/GolemError_GolemErrorNoValueInMessage'
-      - $ref: '#/components/schemas/GolemError_GolemErrorValueMismatch'
-      - $ref: '#/components/schemas/GolemError_GolemErrorUnexpectedOplogEntry'
-      - $ref: '#/components/schemas/GolemError_GolemErrorRuntimeError'
-      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidShardId'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationExited'
-      - $ref: '#/components/schemas/GolemError_GolemErrorUnknown'
-      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
       discriminator:
         propertyName: type
         mapping:
@@ -1483,52 +1406,73 @@ components:
           PreviousInvocationExited: '#/components/schemas/GolemError_GolemErrorPreviousInvocationExited'
           Unknown: '#/components/schemas/GolemError_GolemErrorUnknown'
           InvalidAccount: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
+      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerAlreadyExists'
+      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerNotFound'
+      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerCreationFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorFailedToResumeWorker'
+      - $ref: '#/components/schemas/GolemError_GolemErrorTemplateDownloadFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorTemplateParseFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorGetLatestVersionOfTemplateFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseNotFound'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseDropped'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseAlreadyCompleted'
+      - $ref: '#/components/schemas/GolemError_GolemErrorInterrupted'
+      - $ref: '#/components/schemas/GolemError_GolemErrorParamTypeMismatch'
+      - $ref: '#/components/schemas/GolemError_GolemErrorNoValueInMessage'
+      - $ref: '#/components/schemas/GolemError_GolemErrorValueMismatch'
+      - $ref: '#/components/schemas/GolemError_GolemErrorUnexpectedOplogEntry'
+      - $ref: '#/components/schemas/GolemError_GolemErrorRuntimeError'
+      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidShardId'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationExited'
+      - $ref: '#/components/schemas/GolemError_GolemErrorUnknown'
+      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
     GolemErrorBody:
       type: object
-      required:
-      - golemError
       properties:
         golemError:
           $ref: '#/components/schemas/GolemError'
+      required:
+      - golemError
     GolemErrorFailedToResumeWorker:
       type: object
-      required:
-      - workerId
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
+      required:
+      - workerId
     GolemErrorGetLatestVersionOfTemplateFailed:
       type: object
-      required:
-      - templateId
-      - reason
       properties:
         templateId:
           type: string
           format: uuid
         reason:
           type: string
+      required:
+      - templateId
+      - reason
     GolemErrorInterrupted:
       type: object
-      required:
-      - recoverImmediately
       properties:
         recoverImmediately:
           type: boolean
+      required:
+      - recoverImmediately
     GolemErrorInvalidAccount:
       type: object
     GolemErrorInvalidRequest:
       type: object
-      required:
-      - details
       properties:
         details:
           type: string
+      required:
+      - details
     GolemErrorInvalidShardId:
       type: object
-      required:
-      - shardId
-      - shardIds
       properties:
         shardId:
           $ref: '#/components/schemas/ShardId'
@@ -1536,6 +1480,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ShardId'
+      required:
+      - shardId
+      - shardIds
     GolemErrorNoValueInMessage:
       type: object
     GolemErrorParamTypeMismatch:
@@ -1546,327 +1493,322 @@ components:
       type: object
     GolemErrorPromiseAlreadyCompleted:
       type: object
-      required:
-      - promiseId
       properties:
         promiseId:
           $ref: '#/components/schemas/PromiseId'
+      required:
+      - promiseId
     GolemErrorPromiseDropped:
       type: object
-      required:
-      - promiseId
       properties:
         promiseId:
           $ref: '#/components/schemas/PromiseId'
+      required:
+      - promiseId
     GolemErrorPromiseNotFound:
       type: object
-      required:
-      - promiseId
       properties:
         promiseId:
           $ref: '#/components/schemas/PromiseId'
+      required:
+      - promiseId
     GolemErrorRuntimeError:
       type: object
-      required:
-      - details
       properties:
         details:
           type: string
+      required:
+      - details
     GolemErrorTemplateDownloadFailed:
       type: object
-      required:
-      - templateId
-      - reason
       properties:
         templateId:
           $ref: '#/components/schemas/VersionedTemplateId'
         reason:
           type: string
+      required:
+      - templateId
+      - reason
     GolemErrorTemplateParseFailed:
       type: object
-      required:
-      - templateId
-      - reason
       properties:
         templateId:
           $ref: '#/components/schemas/VersionedTemplateId'
         reason:
           type: string
+      required:
+      - templateId
+      - reason
     GolemErrorUnexpectedOplogEntry:
       type: object
-      required:
-      - expected
-      - got
       properties:
         expected:
           type: string
         got:
           type: string
+      required:
+      - expected
+      - got
     GolemErrorUnknown:
       type: object
-      required:
-      - details
       properties:
         details:
           type: string
+      required:
+      - details
     GolemErrorValueMismatch:
       type: object
-      required:
-      - details
       properties:
         details:
           type: string
+      required:
+      - details
     GolemErrorWorkerAlreadyExists:
       type: object
-      required:
-      - workerId
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
-    GolemErrorWorkerCreationFailed:
-      type: object
       required:
       - workerId
-      - details
+    GolemErrorWorkerCreationFailed:
+      type: object
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
         details:
           type: string
-    GolemErrorWorkerNotFound:
-      type: object
       required:
       - workerId
+      - details
+    GolemErrorWorkerNotFound:
+      type: object
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
+      required:
+      - workerId
     GolemError_GolemErrorFailedToResumeWorker:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: FailedToResumeWorker
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorFailedToResumeWorker'
     GolemError_GolemErrorGetLatestVersionOfTemplateFailed:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: GetLatestVersionOfTemplateFailed
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorGetLatestVersionOfTemplateFailed'
     GolemError_GolemErrorInterrupted:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Interrupted
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorInterrupted'
     GolemError_GolemErrorInvalidAccount:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: InvalidAccount
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorInvalidAccount'
     GolemError_GolemErrorInvalidRequest:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: InvalidRequest
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorInvalidRequest'
     GolemError_GolemErrorInvalidShardId:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: InvalidShardId
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorInvalidShardId'
     GolemError_GolemErrorNoValueInMessage:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: NoValueInMessage
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorNoValueInMessage'
     GolemError_GolemErrorParamTypeMismatch:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: ParamTypeMismatch
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorParamTypeMismatch'
     GolemError_GolemErrorPreviousInvocationExited:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: PreviousInvocationExited
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorPreviousInvocationExited'
     GolemError_GolemErrorPreviousInvocationFailed:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: PreviousInvocationFailed
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorPreviousInvocationFailed'
     GolemError_GolemErrorPromiseAlreadyCompleted:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: PromiseAlreadyCompleted
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorPromiseAlreadyCompleted'
     GolemError_GolemErrorPromiseDropped:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: PromiseDropped
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorPromiseDropped'
     GolemError_GolemErrorPromiseNotFound:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: PromiseNotFound
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorPromiseNotFound'
     GolemError_GolemErrorRuntimeError:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: RuntimeError
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorRuntimeError'
     GolemError_GolemErrorTemplateDownloadFailed:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: TemplateDownloadFailed
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorTemplateDownloadFailed'
     GolemError_GolemErrorTemplateParseFailed:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: TemplateParseFailed
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorTemplateParseFailed'
     GolemError_GolemErrorUnexpectedOplogEntry:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: UnexpectedOplogEntry
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorUnexpectedOplogEntry'
     GolemError_GolemErrorUnknown:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Unknown
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorUnknown'
     GolemError_GolemErrorValueMismatch:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: ValueMismatch
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorValueMismatch'
     GolemError_GolemErrorWorkerAlreadyExists:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: WorkerAlreadyExists
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorWorkerAlreadyExists'
     GolemError_GolemErrorWorkerCreationFailed:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: WorkerCreationFailed
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorWorkerCreationFailed'
     GolemError_GolemErrorWorkerNotFound:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: WorkerNotFound
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorWorkerNotFound'
     GolemWorkerBinding:
       type: object
-      required:
-      - template
-      - workerId
-      - functionName
-      - functionParams
       properties:
         template:
           type: string
@@ -1879,47 +1821,52 @@ components:
           items: {}
         response:
           $ref: '#/components/schemas/ResponseMapping'
+      required:
+      - template
+      - workerId
+      - functionName
+      - functionParams
     HealthcheckResponse:
       type: object
     InterruptResponse:
       type: object
     InvocationKey:
       type: object
-      required:
-      - value
       properties:
         value:
           type: string
+      required:
+      - value
     InvokeParameters:
       type: object
-      required:
-      - params
       properties:
         params: {}
+      required:
+      - params
     InvokeResponse:
       type: object
     InvokeResult:
       type: object
-      required:
-      - result
       properties:
         result: {}
+      required:
+      - result
     MessageBody:
       type: object
-      required:
-      - message
       properties:
         message:
           type: string
+      required:
+      - message
     MessagesErrorsBody:
       type: object
-      required:
-      - errors
       properties:
         errors:
           type: array
           items:
             type: string
+      required:
+      - errors
     MethodPattern:
       type: string
       enum:
@@ -1932,89 +1879,33 @@ components:
       - Options
       - Trace
       - Head
-    NameOptionTypePair:
-      type: object
-      required:
-      - name
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/Type'
-    NameTypePair:
-      type: object
-      required:
-      - name
-      - typ
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/Type'
-    ProducerField:
-      type: object
-      required:
-      - name
-      - values
-      properties:
-        name:
-          type: string
-        values:
-          type: array
-          items:
-            $ref: '#/components/schemas/VersionedName'
-    Producers:
-      type: object
-      required:
-      - fields
-      properties:
-        fields:
-          type: array
-          items:
-            $ref: '#/components/schemas/ProducerField'
     PromiseId:
       type: object
-      required:
-      - workerId
-      - oplogIdx
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
         oplogIdx:
           type: integer
           format: int32
-    ProtectedTemplateId:
-      type: object
       required:
-      - versionedTemplateId
-      properties:
-        versionedTemplateId:
-          $ref: '#/components/schemas/VersionedTemplateId'
-    ResourceMode:
-      type: string
-      enum:
-      - Borrowed
-      - Owned
+      - workerId
+      - oplogIdx
     ResponseMapping:
       type: object
-      required:
-      - body
-      - status
-      - headers
       properties:
         body: {}
         status: {}
         headers:
           type: object
           additionalProperties: {}
+      required:
+      - body
+      - status
+      - headers
     ResumeResponse:
       type: object
     Route:
       type: object
-      required:
-      - method
-      - path
-      - binding
       properties:
         method:
           $ref: '#/components/schemas/MethodPattern'
@@ -2022,13 +1913,12 @@ components:
           type: string
         binding:
           $ref: '#/components/schemas/GolemWorkerBinding'
-    RouteValidationError:
-      type: object
       required:
       - method
       - path
-      - template
-      - detail
+      - binding
+    RouteValidationError:
+      type: object
       properties:
         method:
           $ref: '#/components/schemas/MethodPattern'
@@ -2039,23 +1929,298 @@ components:
           format: uuid
         detail:
           type: string
+      required:
+      - method
+      - path
+      - template
+      - detail
     ShardId:
       type: object
-      required:
-      - value
       properties:
         value:
           type: integer
           format: int64
-    Template:
+      required:
+      - value
+    ValidationErrorsBody:
       type: object
+      properties:
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteValidationError'
+      required:
+      - errors
+    VersionInfo:
+      type: object
+      properties:
+        version:
+          type: string
+      required:
+      - version
+    VersionedTemplateId:
+      type: object
+      properties:
+        templateId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int32
+      required:
+      - templateId
+      - version
+    VersionedWorkerId:
+      type: object
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        templateVersionUsed:
+          type: integer
+          format: int32
+      required:
+      - workerId
+      - templateVersionUsed
+    WorkerCreationRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - name
+      - args
+      - env
+    WorkerId:
+      type: object
+      properties:
+        templateId:
+          type: string
+          format: uuid
+        workerName:
+          type: string
+      required:
+      - templateId
+      - workerName
+    WorkerMetadata:
+      type: object
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        status:
+          $ref: '#/components/schemas/WorkerStatus'
+        templateVersion:
+          type: integer
+          format: int32
+        retryCount:
+          type: integer
+          format: int32
+      required:
+      - workerId
+      - args
+      - env
+      - status
+      - templateVersion
+      - retryCount
+    WorkerServiceErrorBody:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+      - error
+    WorkerServiceErrorsBody:
+      discriminator:
+        propertyName: type
+        mapping:
+          Messages: '#/components/schemas/WorkerServiceErrorsBody_MessagesErrorsBody'
+          Validation: '#/components/schemas/WorkerServiceErrorsBody_ValidationErrorsBody'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/WorkerServiceErrorsBody_MessagesErrorsBody'
+      - $ref: '#/components/schemas/WorkerServiceErrorsBody_ValidationErrorsBody'
+    WorkerServiceErrorsBody_MessagesErrorsBody:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Messages
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/MessagesErrorsBody'
+    WorkerServiceErrorsBody_ValidationErrorsBody:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Validation
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/ValidationErrorsBody'
+    WorkerStatus:
+      description: |-
+        Represents last known status of a worker
+
+        This is always recorded together with the current oplog index, and it can only be used
+        as a source of truth if there are no newer oplog entries since the record.
+      type: string
+      enum:
+      - Running
+      - Idle
+      - Suspended
+      - Interrupted
+      - Retrying
+      - Failed
+      - Exited
+    Export:
+      discriminator:
+        propertyName: type
+        mapping:
+          Instance: '#/components/schemas/Export_ExportInstance'
+          Function: '#/components/schemas/Export_ExportFunction'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/Export_ExportInstance'
+      - $ref: '#/components/schemas/Export_ExportFunction'
+    ExportFunction:
+      type: object
+      properties:
+        name:
+          type: string
+        parameters:
+          type: array
+          items:
+            $ref: '#/components/schemas/FunctionParameter'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/FunctionResult'
+      required:
+      - name
+      - parameters
+      - results
+    ExportInstance:
+      type: object
+      properties:
+        name:
+          type: string
+        functions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExportFunction'
+      required:
+      - name
+      - functions
+    Export_ExportFunction:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Function
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/ExportFunction'
+    Export_ExportInstance:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Instance
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/ExportInstance'
+    FunctionParameter:
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/Type'
+      required:
+      - name
+      - typ
+    FunctionResult:
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/Type'
+      required:
+      - typ
+    NameOptionTypePair:
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/Type'
+      required:
+      - name
+    NameTypePair:
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/Type'
+      required:
+      - name
+      - typ
+    ProducerField:
+      type: object
+      properties:
+        name:
+          type: string
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/VersionedName'
+      required:
+      - name
+      - values
+    Producers:
+      type: object
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProducerField'
+      required:
+      - fields
+    ProtectedTemplateId:
+      type: object
+      properties:
+        versionedTemplateId:
+          $ref: '#/components/schemas/VersionedTemplateId'
       required:
       - versionedTemplateId
-      - userTemplateId
-      - protectedTemplateId
-      - templateName
-      - templateSize
-      - metadata
+    ResourceMode:
+      type: string
+      enum:
+      - Borrowed
+      - Owned
+    Template:
+      type: object
       properties:
         versionedTemplateId:
           $ref: '#/components/schemas/VersionedTemplateId'
@@ -2070,11 +2235,15 @@ components:
           format: int32
         metadata:
           $ref: '#/components/schemas/TemplateMetadata'
+      required:
+      - versionedTemplateId
+      - userTemplateId
+      - protectedTemplateId
+      - templateName
+      - templateSize
+      - metadata
     TemplateMetadata:
       type: object
-      required:
-      - exports
-      - producers
       properties:
         exports:
           type: array
@@ -2084,31 +2253,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Producers'
+      required:
+      - exports
+      - producers
     Type:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/Type_TypeVariant'
-      - $ref: '#/components/schemas/Type_TypeResult'
-      - $ref: '#/components/schemas/Type_TypeOption'
-      - $ref: '#/components/schemas/Type_TypeEnum'
-      - $ref: '#/components/schemas/Type_TypeFlags'
-      - $ref: '#/components/schemas/Type_TypeRecord'
-      - $ref: '#/components/schemas/Type_TypeTuple'
-      - $ref: '#/components/schemas/Type_TypeList'
-      - $ref: '#/components/schemas/Type_TypeStr'
-      - $ref: '#/components/schemas/Type_TypeChr'
-      - $ref: '#/components/schemas/Type_TypeF64'
-      - $ref: '#/components/schemas/Type_TypeF32'
-      - $ref: '#/components/schemas/Type_TypeU64'
-      - $ref: '#/components/schemas/Type_TypeS64'
-      - $ref: '#/components/schemas/Type_TypeU32'
-      - $ref: '#/components/schemas/Type_TypeS32'
-      - $ref: '#/components/schemas/Type_TypeU16'
-      - $ref: '#/components/schemas/Type_TypeS16'
-      - $ref: '#/components/schemas/Type_TypeU8'
-      - $ref: '#/components/schemas/Type_TypeS8'
-      - $ref: '#/components/schemas/Type_TypeBool'
-      - $ref: '#/components/schemas/Type_TypeHandle'
       discriminator:
         propertyName: type
         mapping:
@@ -2134,66 +2282,90 @@ components:
           S8: '#/components/schemas/Type_TypeS8'
           Bool: '#/components/schemas/Type_TypeBool'
           Handle: '#/components/schemas/Type_TypeHandle'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/Type_TypeVariant'
+      - $ref: '#/components/schemas/Type_TypeResult'
+      - $ref: '#/components/schemas/Type_TypeOption'
+      - $ref: '#/components/schemas/Type_TypeEnum'
+      - $ref: '#/components/schemas/Type_TypeFlags'
+      - $ref: '#/components/schemas/Type_TypeRecord'
+      - $ref: '#/components/schemas/Type_TypeTuple'
+      - $ref: '#/components/schemas/Type_TypeList'
+      - $ref: '#/components/schemas/Type_TypeStr'
+      - $ref: '#/components/schemas/Type_TypeChr'
+      - $ref: '#/components/schemas/Type_TypeF64'
+      - $ref: '#/components/schemas/Type_TypeF32'
+      - $ref: '#/components/schemas/Type_TypeU64'
+      - $ref: '#/components/schemas/Type_TypeS64'
+      - $ref: '#/components/schemas/Type_TypeU32'
+      - $ref: '#/components/schemas/Type_TypeS32'
+      - $ref: '#/components/schemas/Type_TypeU16'
+      - $ref: '#/components/schemas/Type_TypeS16'
+      - $ref: '#/components/schemas/Type_TypeU8'
+      - $ref: '#/components/schemas/Type_TypeS8'
+      - $ref: '#/components/schemas/Type_TypeBool'
+      - $ref: '#/components/schemas/Type_TypeHandle'
     TypeBool:
       type: object
     TypeChr:
       type: object
     TypeEnum:
       type: object
-      required:
-      - cases
       properties:
         cases:
           type: array
           items:
             type: string
+      required:
+      - cases
     TypeF32:
       type: object
     TypeF64:
       type: object
     TypeFlags:
       type: object
-      required:
-      - cases
       properties:
         cases:
           type: array
           items:
             type: string
+      required:
+      - cases
     TypeHandle:
       type: object
-      required:
-      - resource_id
-      - mode
       properties:
         resource_id:
           type: integer
           format: uint64
         mode:
           $ref: '#/components/schemas/ResourceMode'
+      required:
+      - resource_id
+      - mode
     TypeList:
       type: object
-      required:
-      - inner
       properties:
         inner:
           $ref: '#/components/schemas/Type'
+      required:
+      - inner
     TypeOption:
       type: object
-      required:
-      - inner
       properties:
         inner:
           $ref: '#/components/schemas/Type'
+      required:
+      - inner
     TypeRecord:
       type: object
-      required:
-      - cases
       properties:
         cases:
           type: array
           items:
             $ref: '#/components/schemas/NameTypePair'
+      required:
+      - cases
     TypeResult:
       type: object
       properties:
@@ -2213,13 +2385,13 @@ components:
       type: object
     TypeTuple:
       type: object
-      required:
-      - items
       properties:
         items:
           type: array
           items:
             $ref: '#/components/schemas/Type'
+      required:
+      - items
     TypeU16:
       type: object
     TypeU32:
@@ -2230,395 +2402,252 @@ components:
       type: object
     TypeVariant:
       type: object
-      required:
-      - cases
       properties:
         cases:
           type: array
           items:
             $ref: '#/components/schemas/NameOptionTypePair'
+      required:
+      - cases
     Type_TypeBool:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Bool
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeBool'
     Type_TypeChr:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Chr
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeChr'
     Type_TypeEnum:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Enum
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeEnum'
     Type_TypeF32:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: F32
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeF32'
     Type_TypeF64:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: F64
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeF64'
     Type_TypeFlags:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Flags
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeFlags'
     Type_TypeHandle:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Handle
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeHandle'
     Type_TypeList:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: List
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeList'
     Type_TypeOption:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Option
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeOption'
     Type_TypeRecord:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Record
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeRecord'
     Type_TypeResult:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Result
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeResult'
     Type_TypeS16:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: S16
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeS16'
     Type_TypeS32:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: S32
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeS32'
     Type_TypeS64:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: S64
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeS64'
     Type_TypeS8:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: S8
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeS8'
     Type_TypeStr:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Str
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeStr'
     Type_TypeTuple:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Tuple
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeTuple'
     Type_TypeU16:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: U16
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeU16'
     Type_TypeU32:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: U32
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeU32'
     Type_TypeU64:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: U64
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeU64'
     Type_TypeU8:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: U8
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeU8'
     Type_TypeVariant:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Variant
+            type: string
+        required:
+        - type
       - $ref: '#/components/schemas/TypeVariant'
     UserTemplateId:
       type: object
-      required:
-      - versionedTemplateId
       properties:
         versionedTemplateId:
           $ref: '#/components/schemas/VersionedTemplateId'
-    ValidationErrorsBody:
-      type: object
       required:
-      - errors
-      properties:
-        errors:
-          type: array
-          items:
-            $ref: '#/components/schemas/RouteValidationError'
-    VersionInfo:
-      type: object
-      required:
-      - version
-      properties:
-        version:
-          type: string
+      - versionedTemplateId
     VersionedName:
       type: object
-      required:
-      - name
-      - version
       properties:
         name:
           type: string
         version:
           type: string
-    VersionedTemplateId:
-      type: object
-      required:
-      - templateId
-      - version
-      properties:
-        templateId:
-          type: string
-          format: uuid
-        version:
-          type: integer
-          format: int32
-    VersionedWorkerId:
-      type: object
-      required:
-      - workerId
-      - templateVersionUsed
-      properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-        templateVersionUsed:
-          type: integer
-          format: int32
-    WorkerCreationRequest:
-      type: object
       required:
       - name
-      - args
-      - env
-      properties:
-        name:
-          type: string
-        args:
-          type: array
-          items:
-            type: string
-        env:
-          type: object
-          additionalProperties:
-            type: string
-    WorkerId:
-      type: object
-      required:
-      - templateId
-      - workerName
-      properties:
-        templateId:
-          type: string
-          format: uuid
-        workerName:
-          type: string
-    WorkerMetadata:
-      type: object
-      required:
-      - workerId
-      - args
-      - env
-      - status
-      - templateVersion
-      - retryCount
-      properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-        args:
-          type: array
-          items:
-            type: string
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        status:
-          $ref: '#/components/schemas/WorkerStatus'
-        templateVersion:
-          type: integer
-          format: int32
-        retryCount:
-          type: integer
-          format: int32
-    WorkerServiceErrorBody:
-      type: object
-      required:
-      - error
-      properties:
-        error:
-          type: string
-    WorkerServiceErrorsBody:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/WorkerServiceErrorsBody_MessagesErrorsBody'
-      - $ref: '#/components/schemas/WorkerServiceErrorsBody_ValidationErrorsBody'
-      discriminator:
-        propertyName: type
-        mapping:
-          Messages: '#/components/schemas/WorkerServiceErrorsBody_MessagesErrorsBody'
-          Validation: '#/components/schemas/WorkerServiceErrorsBody_ValidationErrorsBody'
-    WorkerServiceErrorsBody_MessagesErrorsBody:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Messages
-      - $ref: '#/components/schemas/MessagesErrorsBody'
-    WorkerServiceErrorsBody_ValidationErrorsBody:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Validation
-      - $ref: '#/components/schemas/ValidationErrorsBody'
-    WorkerStatus:
-      type: string
-      description: |-
-        Represents last known status of a worker
-
-        This is always recorded together with the current oplog index, and it can only be used
-        as a source of truth if there are no newer oplog entries since the record.
-      enum:
-      - Running
-      - Idle
-      - Suspended
-      - Interrupted
-      - Retrying
-      - Failed
-      - Exited
-
+      - version
+tags:
+- name: ApiDefinition
+- name: HealthCheck
+- name: Template
+- name: Worker
