@@ -26,10 +26,14 @@ use crate::wit::{copy_wit_files, generate_stub_wit, verify_action, WitAction};
 use anyhow::{anyhow, Context};
 use clap::Parser;
 use fs_extra::dir::CopyOptions;
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysisContext, AnalysisFailure};
+use golem_wasm_ast::component::Component;
+use golem_wasm_ast::IgnoreAllButMetadata;
 use heck::ToSnakeCase;
 use std::fs;
 use std::path::PathBuf;
 use tempdir::TempDir;
+use wasm_compose::config::Dependency;
 
 #[derive(Parser)]
 #[command(name = "wasm-rpc-stubgen")]
@@ -38,6 +42,7 @@ enum Command {
     Generate(GenerateArgs),
     Build(BuildArgs),
     AddStubDependency(AddStubDependencyArgs),
+    Compose(ComposeArgs),
 }
 
 #[derive(clap::Args)]
@@ -85,8 +90,21 @@ struct AddStubDependencyArgs {
     update_cargo_toml: bool,
 }
 
+#[derive(clap::Args)]
+#[command(version, about, long_about = None)]
+struct ComposeArgs {
+    #[clap(long)]
+    source_wasm: PathBuf,
+    #[clap(long)]
+    stub_wasm: PathBuf,
+    #[clap(long)]
+    dest_wasm: PathBuf,
+}
+
 #[tokio::main]
 async fn main() {
+    pretty_env_logger::init();
+
     match Command::parse() {
         Command::Generate(generate_args) => {
             let _ = render_error(generate(generate_args));
@@ -96,6 +114,9 @@ async fn main() {
         }
         Command::AddStubDependency(add_stub_dependency_args) => {
             let _ = render_error(add_stub_dependency(add_stub_dependency_args));
+        }
+        Command::Compose(compose_args) => {
+            let _ = render_error(compose(compose_args));
         }
     }
 }
@@ -240,5 +261,35 @@ fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
         return Err(anyhow!("Cannot update the Cargo.toml file because parent directory of the destination WIT root does not exist."));
     }
 
+    Ok(())
+}
+
+fn compose(args: ComposeArgs) -> anyhow::Result<()> {
+    let mut config = wasm_compose::config::Config::default();
+
+    let stub_bytes = fs::read(&args.stub_wasm)?;
+    let stub_component =
+        Component::<IgnoreAllButMetadata>::from_bytes(&stub_bytes).map_err(|err| anyhow!(err))?;
+
+    let state = AnalysisContext::new(stub_component);
+    let stub_exports = state.get_top_level_exports().map_err(|err| match err {
+        AnalysisFailure::Failed(msg) => anyhow!(msg),
+    })?;
+
+    for export in stub_exports {
+        if let AnalysedExport::Instance(instance) = export {
+            config.dependencies.insert(
+                instance.name.clone(),
+                Dependency {
+                    path: args.stub_wasm.clone(),
+                },
+            );
+        }
+    }
+
+    let composer = wasm_compose::composer::ComponentComposer::new(&args.source_wasm, &config);
+    let result = composer.compose()?;
+    println!("Writing composed component to {:?}", args.dest_wasm);
+    fs::write(&args.dest_wasm, result).context("Failed to write the composed component")?;
     Ok(())
 }
