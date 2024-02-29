@@ -82,3 +82,23 @@ The command merges a generated RPC stub as a WIT dependency into an other compon
 - `overwrite`: This command would not do anything if it detects that it would change an existing WIT file's contents at
   the destination. With this flag, it can be forced to overwrite those files.
 - `update-cargo-toml`: Enables updating the Cargo.toml file in the parent directory of `dest-wit-root` with the copied dependencies.
+-
+## Compose the stub with the caller component
+
+```shell
+Usage: wasm-rpc-stubgen compose --source-wasm <SOURCE_WASM> --stub-wasm <STUB_WASM> --dest-wasm <DEST_WASM>
+
+Options:
+      --source-wasm <SOURCE_WASM>  
+      --stub-wasm <STUB_WASM>      
+      --dest-wasm <DEST_WASM>      
+  -h, --help                       Print help
+  -V, --version                    Print version
+```
+
+The command composes a caller component's WASM (which uses the generated stub to call a remote worker) with the
+generated stub WASM, writing out a composed WASM which no longer depends on the stub interface, ready to use.
+
+- `source-wasm`: The WASM file of the caller component
+- `stub-wasm`: The WASM file of the generated stub
+- `dest-wasm`: The name of the composed WASM file to be generated
