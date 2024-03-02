@@ -185,6 +185,19 @@ pub fn is_cargo_component_toml(path: &Path) -> anyhow::Result<bool> {
     Ok(false)
 }
 
+pub fn is_cargo_workspace_toml(path: &Path) -> anyhow::Result<bool> {
+    let manifest = Manifest::from_path(path)?;
+    if let Some(workspace) = manifest.workspace {
+        if !workspace.members.is_empty() {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    } else {
+        Ok(false)
+    }
+}
+
 pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> anyhow::Result<()> {
     let mut manifest: Manifest<MetadataRoot> = Manifest::from_path_with_metadata(cargo_path)?;
     if let Some(ref mut package) = manifest.package {
