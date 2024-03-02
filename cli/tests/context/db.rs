@@ -113,8 +113,8 @@ impl<'docker_client> Db<'docker_client> {
                 _node: _,
             } => DbInfo::Postgres(PostgresInfo {
                 host: host.clone(),
-                port: port.clone(),
-                local_port: local_port.clone(),
+                port: *port,
+                local_port: *local_port,
                 database_name: "postgres".to_owned(),
                 username: "postgres".to_owned(),
                 password: "postgres".to_owned(),
