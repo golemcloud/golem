@@ -14,6 +14,7 @@
 
 mod cargo;
 mod compilation;
+mod make;
 mod rust;
 mod stub;
 mod wit;
@@ -43,62 +44,83 @@ enum Command {
     Build(BuildArgs),
     AddStubDependency(AddStubDependencyArgs),
     Compose(ComposeArgs),
+    InitializeWorkspace(InitializeWorkspaceArgs),
 }
 
+/// Generate a Rust RPC stub crate for a WASM component
 #[derive(clap::Args)]
 #[command(version, about, long_about = None)]
-struct GenerateArgs {
+pub struct GenerateArgs {
     #[clap(short, long)]
-    source_wit_root: PathBuf,
+    pub source_wit_root: PathBuf,
     #[clap(short, long)]
-    dest_crate_root: PathBuf,
+    pub dest_crate_root: PathBuf,
     #[clap(short, long)]
-    world: Option<String>,
+    pub world: Option<String>,
     #[clap(long, default_value = "0.0.1")]
-    stub_crate_version: String,
+    pub stub_crate_version: String,
     #[clap(long)]
-    wasm_rpc_path_override: Option<String>,
+    pub wasm_rpc_path_override: Option<String>,
 }
 
+/// Build an RPC stub for a WASM component
 #[derive(clap::Args)]
 #[command(version, about, long_about = None)]
-struct BuildArgs {
+pub struct BuildArgs {
     #[clap(short, long)]
-    source_wit_root: PathBuf,
+    pub source_wit_root: PathBuf,
     #[clap(long)]
-    dest_wasm: PathBuf,
+    pub dest_wasm: PathBuf,
     #[clap(long)]
-    dest_wit_root: PathBuf,
+    pub dest_wit_root: PathBuf,
     #[clap(short, long)]
-    world: Option<String>,
+    pub world: Option<String>,
     #[clap(long, default_value = "0.0.1")]
-    stub_crate_version: String,
+    pub stub_crate_version: String,
     #[clap(long)]
-    wasm_rpc_path_override: Option<String>,
+    pub wasm_rpc_path_override: Option<String>,
 }
 
+/// Adds a generated stub as a dependency to another WASM component
 #[derive(clap::Args)]
 #[command(version, about, long_about = None)]
-struct AddStubDependencyArgs {
+pub struct AddStubDependencyArgs {
     #[clap(short, long)]
-    stub_wit_root: PathBuf,
+    pub stub_wit_root: PathBuf,
     #[clap(short, long)]
-    dest_wit_root: PathBuf,
+    pub dest_wit_root: PathBuf,
     #[clap(short, long)]
-    overwrite: bool,
+    pub overwrite: bool,
     #[clap(short, long)]
-    update_cargo_toml: bool,
+    pub update_cargo_toml: bool,
 }
 
+/// Compose a WASM component with a generated stub WASM
 #[derive(clap::Args)]
 #[command(version, about, long_about = None)]
-struct ComposeArgs {
+pub struct ComposeArgs {
     #[clap(long)]
-    source_wasm: PathBuf,
+    pub source_wasm: PathBuf,
+    #[clap(long, required = true)]
+    pub stub_wasm: Vec<PathBuf>,
     #[clap(long)]
-    stub_wasm: PathBuf,
+    pub dest_wasm: PathBuf,
+}
+
+/// Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically
+/// generating stubs and composing results.
+#[derive(clap::Args)]
+#[command(version, about, long_about = None)]
+pub struct InitializeWorkspaceArgs {
+    /// List of subprojects to be called via RPC
+    #[clap(long, required = true)]
+    pub targets: Vec<String>,
+    /// List of subprojects using the generated stubs for calling remote workers
+    #[clap(long, required = true)]
+    pub callers: Vec<String>,
+
     #[clap(long)]
-    dest_wasm: PathBuf,
+    pub wasm_rpc_path_override: Option<String>,
 }
 
 #[tokio::main]
@@ -118,6 +140,9 @@ async fn main() {
         Command::Compose(compose_args) => {
             let _ = render_error(compose(compose_args));
         }
+        Command::InitializeWorkspace(init_workspace_args) => {
+            let _ = render_error(initialize_workspace(init_workspace_args));
+        }
     }
 }
 
@@ -131,7 +156,7 @@ fn render_error<T>(result: anyhow::Result<T>) -> Option<T> {
     }
 }
 
-fn generate(args: GenerateArgs) -> anyhow::Result<()> {
+pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
     let stub_def = StubDefinition::new(
         &args.source_wit_root,
         &args.dest_crate_root,
@@ -151,7 +176,7 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn build(args: BuildArgs) -> anyhow::Result<()> {
+pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     let target_root = TempDir::new("wasm-rpc-stubgen")?;
 
     let stub_def = StubDefinition::new(
@@ -204,7 +229,7 @@ async fn build(args: BuildArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
+pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     let source_deps = wit::get_dep_dirs(&args.stub_wit_root)?;
 
     let main_wit = args.stub_wit_root.join("_stub.wit");
@@ -264,26 +289,28 @@ fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn compose(args: ComposeArgs) -> anyhow::Result<()> {
+pub fn compose(args: ComposeArgs) -> anyhow::Result<()> {
     let mut config = wasm_compose::config::Config::default();
 
-    let stub_bytes = fs::read(&args.stub_wasm)?;
-    let stub_component =
-        Component::<IgnoreAllButMetadata>::from_bytes(&stub_bytes).map_err(|err| anyhow!(err))?;
+    for stub_wasm in &args.stub_wasm {
+        let stub_bytes = fs::read(stub_wasm)?;
+        let stub_component = Component::<IgnoreAllButMetadata>::from_bytes(&stub_bytes)
+            .map_err(|err| anyhow!(err))?;
 
-    let state = AnalysisContext::new(stub_component);
-    let stub_exports = state.get_top_level_exports().map_err(|err| match err {
-        AnalysisFailure::Failed(msg) => anyhow!(msg),
-    })?;
+        let state = AnalysisContext::new(stub_component);
+        let stub_exports = state.get_top_level_exports().map_err(|err| match err {
+            AnalysisFailure::Failed(msg) => anyhow!(msg),
+        })?;
 
-    for export in stub_exports {
-        if let AnalysedExport::Instance(instance) = export {
-            config.dependencies.insert(
-                instance.name.clone(),
-                Dependency {
-                    path: args.stub_wasm.clone(),
-                },
-            );
+        for export in stub_exports {
+            if let AnalysedExport::Instance(instance) = export {
+                config.dependencies.insert(
+                    instance.name.clone(),
+                    Dependency {
+                        path: stub_wasm.clone(),
+                    },
+                );
+            }
         }
     }
 
@@ -292,4 +319,14 @@ fn compose(args: ComposeArgs) -> anyhow::Result<()> {
     println!("Writing composed component to {:?}", args.dest_wasm);
     fs::write(&args.dest_wasm, result).context("Failed to write the composed component")?;
     Ok(())
+}
+
+pub fn initialize_workspace(args: InitializeWorkspaceArgs) -> anyhow::Result<()> {
+    make::initialize_workspace(
+        &args.targets,
+        &args.callers,
+        args.wasm_rpc_path_override,
+        "golem-wasm-rpc-stubgen",
+        &[],
+    )
 }
