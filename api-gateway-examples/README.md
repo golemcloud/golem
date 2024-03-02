@@ -186,6 +186,19 @@ curl -X GET http://localhost:8080/adam/get-cart-contents -H "x-golem-api-definit
 
 ```
 
+
+## Avoiding Tyk or other API gateway
+
+If you want to directly hit the worker service, all you need to do is hit the worker-service that runs in port ${WORKER_SERVICE_CUSTOM_REQUEST_PORT} (refer .env file used docker-compose) dir
+
+If WORKER_SERVICE_CUSTOM_REQUEST_PORT is 9006, that means you can directly hit the worker service at http://localhost:9006
+
+```bash
+
+curl -X GET http://localhost:9006/adam/get-cart-contents -H "x-golem-api-definition-id: shopping-cart-v2" -H "x-golem-api-definition-version: 0.0.3"
+
+```
+
 ## Why do we need to upload definition to both worker-service and API Gateway?
 
 This is a normal scenario backend service (in our case, worker service) can have its own API definition or documentation. 
