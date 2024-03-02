@@ -15,16 +15,12 @@
     "/{user-id}/get-cart-contents": {
       "x-golem-worker-bridge": {
         "worker-id": "worker-${request.path.user-id}",
-        "function-name": "golem:it/api/get-cart-contents",
+        "function-name": "golem:template/api/get-cart-contents-failed",
         "function-params": [],
-        "template-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
+        "template-id": "bbe464e2-c559-497f-b46c-b4f052fcdf33",
         "response" : {
           "status": "200",
-          "body": {
-            "name" : "${worker.response[0][0].name}",
-            "price" : "${worker.response[0][0].price}",
-            "quantity" : "${worker.response[0][0].quantity}"
-          },
+          "body": "${worker.response}",
           "headers": {}
         }
       },
