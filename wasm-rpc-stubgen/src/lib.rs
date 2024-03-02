@@ -36,7 +36,7 @@ use std::path::PathBuf;
 use tempdir::TempDir;
 use wasm_compose::config::Dependency;
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(name = "wasm-rpc-stubgen")]
 #[command(bin_name = "wasm-rpc-stubgen")]
 pub enum Command {
@@ -48,7 +48,7 @@ pub enum Command {
 }
 
 /// Generate a Rust RPC stub crate for a WASM component
-#[derive(clap::Args)]
+#[derive(clap::Args, Debug)]
 #[command(version, about, long_about = None)]
 pub struct GenerateArgs {
     #[clap(short, long)]
@@ -64,7 +64,7 @@ pub struct GenerateArgs {
 }
 
 /// Build an RPC stub for a WASM component
-#[derive(clap::Args)]
+#[derive(clap::Args, Debug)]
 #[command(version, about, long_about = None)]
 pub struct BuildArgs {
     #[clap(short, long)]
@@ -82,7 +82,7 @@ pub struct BuildArgs {
 }
 
 /// Adds a generated stub as a dependency to another WASM component
-#[derive(clap::Args)]
+#[derive(clap::Args, Debug)]
 #[command(version, about, long_about = None)]
 pub struct AddStubDependencyArgs {
     #[clap(short, long)]
@@ -96,7 +96,7 @@ pub struct AddStubDependencyArgs {
 }
 
 /// Compose a WASM component with a generated stub WASM
-#[derive(clap::Args)]
+#[derive(clap::Args, Debug)]
 #[command(version, about, long_about = None)]
 pub struct ComposeArgs {
     #[clap(long)]
@@ -109,7 +109,7 @@ pub struct ComposeArgs {
 
 /// Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically
 /// generating stubs and composing results.
-#[derive(clap::Args)]
+#[derive(clap::Args, Debug)]
 #[command(version, about, long_about = None)]
 pub struct InitializeWorkspaceArgs {
     /// List of subprojects to be called via RPC
