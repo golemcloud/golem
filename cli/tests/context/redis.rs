@@ -136,10 +136,10 @@ impl<'docker_client> Redis<'docker_client> {
 
         Ok(Redis {
             host: "localhost".to_string(),
-            port: port,
+            port,
             inner: RedisInner::Process {
-                child: child,
-                monitor_child: monitor_child,
+                child,
+                monitor_child,
             },
         })
     }
@@ -181,7 +181,7 @@ impl<'docker_client> Redis<'docker_client> {
 
     fn start_docker(docker: &'docker_client clients::Cli) -> Result<Redis<'docker_client>, Failed> {
         let name = "golem_redis";
-        let image = RunnableImage::from(testcontainers_modules::redis::Redis::default())
+        let image = RunnableImage::from(testcontainers_modules::redis::Redis)
             .with_tag("7.2")
             .with_container_name(name)
             .with_network(NETWORK);

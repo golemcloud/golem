@@ -80,13 +80,13 @@ fn make_template(
 ) -> Result<TemplateView, Failed> {
     let env_service = context.env.wasm_root.join("environment-service.wasm");
     let cfg = &cli.config;
-    Ok(cli.run(&[
+    cli.run(&[
         "template",
         "add",
         &cfg.arg('t', "template-name"),
         &template_name,
         env_service.to_str().unwrap(),
-    ])?)
+    ])
 }
 
 fn worker_new_instance(
