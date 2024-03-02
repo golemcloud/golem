@@ -100,5 +100,29 @@ The command composes a caller component's WASM (which uses the generated stub to
 generated stub WASM, writing out a composed WASM which no longer depends on the stub interface, ready to use.
 
 - `source-wasm`: The WASM file of the caller component
-- `stub-wasm`: The WASM file of the generated stub
+- `stub-wasm`: The WASM file of the generated stub. Multiple stubs can be listed.
 - `dest-wasm`: The name of the composed WASM file to be generated
+
+
+## Initialize cargo make tasks for a workspace
+
+```shell
+Usage: wasm-rpc-stubgen initialize-workspace [OPTIONS] --targets <TARGETS> --callers <CALLERS>
+
+Options:
+      --targets <TARGETS>
+          List of subprojects to be called via RPC
+      --callers <CALLERS>
+          List of subprojects using the generated stubs for calling remote workers
+      --wasm-rpc-path-override <WASM_RPC_PATH_OVERRIDE>
+```
+
+When both the target and the caller components are in the same Cargo workspace, this command can initialize a `cargo-make` file with dependent tasks 
+performing the stub generation, WIT merging and WASM composition.
+
+Once the workspace is initialized, the following two commands become available:
+
+```shell
+cargo make build-flow
+cargo make release-build-flow
+```
