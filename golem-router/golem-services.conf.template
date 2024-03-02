@@ -3,6 +3,8 @@ events {
 }
 
 http {
+    client_max_body_size 4m; # Increase this especially if your template size is higher than this
+
     # For docker we need this for service discovery in docker network
     resolver 127.0.0.11;
 
