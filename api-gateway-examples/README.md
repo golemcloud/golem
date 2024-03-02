@@ -199,6 +199,8 @@ curl -X GET http://localhost:9006/adam/get-cart-contents -H "x-golem-api-definit
 
 ```
 
+However, in this case, you need to explicitly pass the headers unlike the workflow with Tyk where it was configured to be automatically injected.
+
 ## Why do we need to upload definition to both worker-service and API Gateway?
 
 This is a normal scenario backend service (in our case, worker service) can have its own API definition or documentation. 
