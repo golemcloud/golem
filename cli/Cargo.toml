@@ -9,8 +9,6 @@ readme = "README.md"
 description = "Command line interface for OSS version of Golem. See also golem-cloud-cli."
 autotests = false
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [[test]]
 name = "integration"
 path = "tests/main.rs"
@@ -25,6 +23,7 @@ derive_more = "0.99.17"
 futures-util = "0.3.30"
 golem-client = "0.0.63"
 golem-examples = "0.1.11"
+golem-wasm-rpc-stubgen = { version = "0.0.9", optional = true }
 http = "1.0.0"
 indoc = "2.0.4"
 itertools = "0.11.0"
@@ -60,3 +59,7 @@ testcontainers-modules = { version = "0.3.2", features = ["postgres", "redis"] }
 tokio-postgres = "0.7.10"
 tonic = "0.10.2"
 tonic-health = "0.10.2"
+
+[features]
+default = ["stubgen"]
+stubgen = ["dep:golem-wasm-rpc-stubgen"]
