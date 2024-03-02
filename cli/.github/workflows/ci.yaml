@@ -33,13 +33,11 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          override: true
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: false
           components: rustfmt, clippy
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check formatting
         run: cargo fmt -- --check
       - name: Clippy
