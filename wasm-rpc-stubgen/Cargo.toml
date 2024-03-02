@@ -6,8 +6,12 @@ license = "Apache-2.0"
 homepage = "https://golem.cloud"
 description = "Golem WASM RPC stub generator"
 
+[lib]
+name = "golem_wasm_rpc_stubgen"
+path = "src/lib.rs"
+
 [[bin]]
-name = "golem-wasm-rpc-stubgen"
+name = "wasm-rpc-stubgen"
 path = "src/main.rs"
 
 [dependencies]
