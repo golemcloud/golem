@@ -27,8 +27,20 @@ pub enum Expr {
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
     Option0(Option<Box<Expr>>),
     Result0(Result<Box<Expr>, Box<Expr>>),
+    PatternMatch(Box<Expr>, Box<Expr>),
+    ConstructorPattern
 }
 
+
+// A constructor pattern by itself is an expr,
+// as it may not be always associated with match expr
+// or a simple if statement. if ok(res) == foo then res else bar
+enum ConstructorPattern {
+    WildCard,
+    As(String, Box<ConstructorPattern>),
+    Constructor(String, Vec<ConstructorPattern>),
+    Literal(Box<Expr>)
+}
 
 impl Expr {
     pub fn is_literal(&self) -> bool {

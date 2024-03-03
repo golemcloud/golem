@@ -93,6 +93,8 @@ enum ExpressionContext {
     EqualTo,
     GreaterThanOrEqualTo,
     LessThanOrEqualTo,
+    PatternMatch,
+    MatchCases
 }
 
 fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
@@ -113,8 +115,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                     let new_expr = Expr::Literal(raw_string);
 
                     go(cursor, context, prev_expression.continue_build(new_expr))
-                }
-
+                },
 
                 Token::Request => go(
                     cursor,
@@ -363,7 +364,48 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                         capture_expr_between(cursor, &Token::If, Some(&Token::Then), new_expr, go)?;
 
                     go(cursor, context, captured_predicate)
-                }
+                },
+
+                Token::Match => {
+
+                    // A constructor pattern can be formed only if
+                    // there is a constructor
+                    let constructor_pattern  = InternalExprResult::incomplete(
+                        ExpressionContext::PatternMatch,
+                        move |first_result| {
+                            let first_result: Rc<Expr> = Rc::new(first_result);
+                            InternalExprResult::incomplete(
+                                ExpressionContext::MatchCases,
+                                move |second_result| {
+                                    let first_result: Rc<Expr> = Rc::clone(&first_result);
+                                    let first_result: Expr =
+                                        (*Rc::clone(&first_result)).clone();
+
+                                    match second_result {
+                                        Expr::ConstructorPattern =>
+                                            InternalExprResult::complete(Expr::PatternMatch(
+                                                Box::new(first_result),
+                                                Box::new(second_result.clone()),
+                                            )),
+
+                                        _ => panic!("Cannot find a constructor pattern") //TODO
+                                    }
+                                },
+                            )
+                        },
+                    );
+                    
+                    let expr_under_evaluation = capture_expr_between(
+                        cursor,
+                        &Token::Match,
+                        Some(&Token::OpenCurlyBrace),
+                        prev_expression,
+                        go,
+                    )?;
+
+
+                    go(cursor, context, expr_under_evaluation)
+                },
 
                 Token::Then => match prev_expression {
                     InternalExprResult::InComplete(ExpressionContext::Condition, _) => {
