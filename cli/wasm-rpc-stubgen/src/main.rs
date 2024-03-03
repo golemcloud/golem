@@ -33,7 +33,11 @@ async fn main() {
             let _ = render_error(compose(compose_args));
         }
         Command::InitializeWorkspace(init_workspace_args) => {
-            let _ = render_error(initialize_workspace(init_workspace_args));
+            let _ = render_error(initialize_workspace(
+                init_workspace_args,
+                "golem-wasm-rpc-stubgen",
+                &[],
+            ));
         }
     }
 }

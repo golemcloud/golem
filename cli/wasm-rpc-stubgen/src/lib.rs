@@ -288,12 +288,16 @@ pub fn compose(args: ComposeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn initialize_workspace(args: InitializeWorkspaceArgs) -> anyhow::Result<()> {
+pub fn initialize_workspace(
+    args: InitializeWorkspaceArgs,
+    stubgen_command: &str,
+    stubgen_prefix: &[&str],
+) -> anyhow::Result<()> {
     make::initialize_workspace(
         &args.targets,
         &args.callers,
         args.wasm_rpc_path_override,
-        "golem-wasm-rpc-stubgen",
-        &[],
+        stubgen_command,
+        stubgen_prefix,
     )
 }
