@@ -1,10 +1,23 @@
+## Deployment
+
+provided script:
+
+```shell
+./deploy.sh -n golem
+```
+
+will deploy golem with redis, postgres and nginx ingress to kubernetes namespace golem
+
+
+## Deployment in steps
+
 create namespace
 
 ```shell
 kubectl create namespace golem
 ```
 
-## postgres
+### postgres
 
 https://artifacthub.io/packages/helm/bitnami/postgresql
 
@@ -23,7 +36,7 @@ get password (if you need it)
 export GOLEM_POSTGRES_PASSWORD=$(kubectl get secret --namespace golem golem-postgres-postgresql -o jsonpath="{.data.password}" | base64 -d)
 ```
 
-## redis
+### redis
 
 https://artifacthub.io/packages/helm/bitnami/redis
 
@@ -44,7 +57,7 @@ service/golem-postgres-postgresql
 service/golem-redis-master
 ```
 
-## ngnix ingress
+### ngnix ingress
 
 install
 ```shell
@@ -64,8 +77,7 @@ and try to run commands with `golem-cli`, default url may be changed by:
 export GOLEM_BASE_URL=http://localhost:80
 ```
 
-
-## golem services
+### golem services
 
 install
 ```shell
