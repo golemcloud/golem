@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::{cargo, GenerateArgs};
+use heck::ToSnakeCase;
 use std::fs;
 use std::process::Command;
 use toml::map::Map;
@@ -26,7 +27,8 @@ pub fn initialize_workspace(
     stubgen_prefix: &[&str],
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
-    if cargo::is_cargo_workspace_toml(&cwd.join("Cargo.toml"))? {
+    let workspace_cargo = cwd.join("Cargo.toml");
+    if cargo::is_cargo_workspace_toml(&workspace_cargo)? {
         let makefile_path = cwd.join("Makefile.toml");
         if makefile_path.exists() && makefile_path.is_file() {
             Err(anyhow::anyhow!("Makefile.toml already exists. Modifying existing cargo-make projects is currently not supported."))
@@ -41,17 +43,23 @@ pub fn initialize_workspace(
             println!("Writing cargo-make Makefile to {:?}", makefile_path);
             fs::write(makefile_path, makefile)?;
 
+            let mut new_members = Vec::new();
             for target in targets {
                 println!("Generating initial stub for {target}");
 
+                let stub_name = format!("{target}-stub");
                 crate::generate(GenerateArgs {
                     source_wit_root: cwd.join(format!("{target}/wit")),
-                    dest_crate_root: cwd.join(format!("{target}-stub")),
+                    dest_crate_root: cwd.join(stub_name.clone()),
                     world: None,
                     stub_crate_version: "0.0.1".to_string(),
                     wasm_rpc_path_override: wasm_rpc_path_override.clone(),
                 })?;
+
+                new_members.push(stub_name);
             }
+
+            cargo::add_workspace_members(&workspace_cargo, &new_members)?;
 
             Ok(())
         } else {
@@ -237,19 +245,19 @@ fn generate_makefile(
         args.push(Value::String("--source-wasm".to_string()));
         args.push(Value::String(format!(
             "target/wasm32-wasi/debug/{}.wasm",
-            caller
+            caller.to_snake_case()
         )));
         for target in targets {
             args.push(Value::String("--stub-wasm".to_string()));
             args.push(Value::String(format!(
                 "target/wasm32-wasi/debug/{}_stub.wasm",
-                target
+                target.to_snake_case()
             )));
         }
         args.push(Value::String("--dest-wasm".to_string()));
         args.push(Value::String(format!(
-            "target/wasm32-wasi/debug/{}-composed.wasm",
-            caller
+            "target/wasm32-wasi/debug/{}_composed.wasm",
+            caller.to_snake_case()
         )));
 
         compose.insert("args".to_string(), Value::Array(args));
@@ -270,19 +278,19 @@ fn generate_makefile(
         args.push(Value::String("--source-wasm".to_string()));
         args.push(Value::String(format!(
             "target/wasm32-wasi/release/{}.wasm",
-            caller
+            caller.to_snake_case()
         )));
         for target in targets {
             args.push(Value::String("--stub-wasm".to_string()));
             args.push(Value::String(format!(
                 "target/wasm32-wasi/release/{}_stub.wasm",
-                target
+                target.to_snake_case()
             )));
         }
         args.push(Value::String("--dest-wasm".to_string()));
         args.push(Value::String(format!(
-            "target/wasm32-wasi/release/{}-composed.wasm",
-            caller
+            "target/wasm32-wasi/release/{}_composed.wasm",
+            caller.to_snake_case()
         )));
 
         compose_release.insert("args".to_string(), Value::Array(args));

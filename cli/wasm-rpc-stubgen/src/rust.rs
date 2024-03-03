@@ -25,9 +25,12 @@ use wit_parser::{
 };
 
 pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
-    let root_ns = Ident::new(&def.root_package_name.namespace, Span::call_site());
+    let root_ns = Ident::new(
+        &def.root_package_name.namespace.to_snake_case(),
+        Span::call_site(),
+    );
     let root_name = Ident::new(
-        &format!("{}_stub", def.root_package_name.name),
+        &format!("{}_stub", def.root_package_name.name.to_snake_case()),
         Span::call_site(),
     );
 
