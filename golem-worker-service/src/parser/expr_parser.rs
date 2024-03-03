@@ -405,19 +405,30 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                             InternalExprResult::incomplete(
                                 ExpressionContext::MatchCases,
                                 move |second_result| {
+                                    let second_result: Rc<Expr> = Rc::new(second_result);
                                     let first_result: Rc<Expr> = Rc::clone(&first_result);
-                                    let first_result: Expr =
-                                        (*Rc::clone(&first_result)).clone();
+                                    InternalExprResult::incomplete(
+                                        ExpressionContext::Condition,
+                                        move |else_result| {
+                                            let first_result: Expr =
+                                                (*Rc::clone(&first_result)).clone();
 
-                                    match second_result {
-                                        Expr::ConstructorPattern0(constructor) =>
-                                            InternalExprResult::complete(Expr::PatternMatch(
-                                                Box::new(first_result),
-                                                vec![(constructor.clone(), Box::new(Expr::Literal("".to_string())))],
-                                            )),
+                                            let second_result: Expr =
+                                                (*Rc::clone(&second_result)).clone();
 
-                                        _ => panic!("Cannot find a constructor pattern") //TODO
-                                    }
+                                            match second_result {
+                                                Expr::ConstructorPattern0(constructor) =>{
+                                                    let constructor_ = constructor.clone();
+                                                    InternalExprResult::complete(Expr::PatternMatch(
+                                                        Box::new(first_result),
+                                                        vec![(constructor_, Box::new(else_result))],
+                                                    ))},
+
+                                                _ => panic!("Cannot find a constructor pattern") //TODO
+                                            }
+
+                                        },
+                                    )
                                 },
                             )
                         },
@@ -473,6 +484,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                 Token::Space => go(cursor, context, prev_expression),
                 Token::NewLine => go(cursor, context, prev_expression),
                 Token::OpenCurlyBrace => go(cursor, context, prev_expression),
+                Token::Arrow => go(cursor, context, prev_expression),
                 _ => todo!("Token not implemented {:?}", token),
             }
         } else {
@@ -1102,7 +1114,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker.response { some(value) } }")
+            .parse("${match worker.response { some(value) => value } }")
             .unwrap();
 
         // TODOl Use our own predicate combinators
