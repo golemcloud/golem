@@ -14,9 +14,15 @@ use super::cursor::TokenCursor;
 pub enum Token {
     WorkerResponse,
     Request,
+    Ok,
+    Err,
+    Some,
+    None,
+    Match,
     RawString(String),
     InterpolationStart,
     ClosedCurlyBrace,
+    OpenCurlyBrace,
     OpenSquareBracket,
     ClosedSquareBracket,
     GreaterThan,
@@ -57,6 +63,12 @@ impl Token {
             Token::Dot => false,
             Token::WorkerResponse => false,
             Token::Request => false,
+            Token::Ok => false,
+            Token::Err => false,
+            Token::Some => false,
+            Token::None => false,
+            Token::OpenCurlyBrace => false,
+            Token::Match => false,
         }
     }
 
@@ -104,6 +116,12 @@ impl Display for Token {
                 Token::Dot => ".",
                 Token::WorkerResponse => "worker.response",
                 Token::Request => "request",
+                Token::Ok => "ok",
+                Token::Err => "err",
+                Token::Some => "some",
+                Token::None => "none",
+                Token::Match => "match",
+                Token::OpenCurlyBrace => "{"
             }
         )
     }
@@ -273,6 +291,31 @@ impl<'t> Tokenizer {
                 self.text =
                     self.text[character_index + Token::Request.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::Request);
+                break;
+            } else if c == "ok" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + Token::Ok.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Ok);
+                break;
+            } else if c == "err" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + Token::Err.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Err);
+                break;
+            } else if c == "some" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + Token::Some.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Some);
+                break;
+            } else if c == "none" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + Token::None.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::None);
+                break;
+            } else if c == "null" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + "null".to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::None);
                 break;
             }
         }

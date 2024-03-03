@@ -25,7 +25,10 @@ pub enum Expr {
     EqualTo(Box<Expr>, Box<Expr>),
     LessThan(Box<Expr>, Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
+    Option0(Option<Box<Expr>>),
+    Result0(Result<Box<Expr>, Box<Expr>>),
 }
+
 
 impl Expr {
     pub fn is_literal(&self) -> bool {

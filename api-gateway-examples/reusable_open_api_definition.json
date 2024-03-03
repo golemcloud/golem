@@ -1,7 +1,7 @@
 {
   "openapi": "3.0.0",
-  "x-golem-api-definition-id": "shopping-cart-v2",
-  "x-golem-api-definition-version": "0.0.3",
+  "x-golem-api-definition-id": "shopping-cart-v4",
+  "x-golem-api-definition-version": "0.0.5",
   "info": {
     "title": "Sample API",
     "version": "1.0.1"
@@ -12,12 +12,98 @@
         }
     ],
   "paths": {
+    "/{user-id}/get-item-option-none": {
+      "x-golem-worker-bridge": {
+        "worker-id": "worker-${request.path.user-id}",
+        "function-name": "golem:template/api/get-cart-contents-option-none",
+        "function-params": [],
+        "template-id": "4f2cb4e7-aaf3-45f6-9315-aa845a450adb",
+        "response" : {
+          "status": "200",
+          "body": "${worker.response}",
+          "headers": {}
+        }
+      },
+      "get": {
+        "summary": "Get Cart Contents None",
+        "description": "Get the contents of a user's cart",
+        "parameters": [
+          {
+            "name": "user-id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content":{
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartItem"
+                }
+              }
+
+            }
+          },
+          "404": {
+            "description": "Contents not found"
+          }
+        }
+      }
+    },
+    "/{user-id}/get-item-option-some": {
+      "x-golem-worker-bridge": {
+        "worker-id": "worker-${request.path.user-id}",
+        "function-name": "golem:template/api/get-cart-contents-option-some",
+        "function-params": [],
+        "template-id": "4f2cb4e7-aaf3-45f6-9315-aa845a450adb",
+        "response" : {
+          "status": "200",
+          "body": "${worker.response}",
+          "headers": {}
+        }
+      },
+      "get": {
+        "summary": "Get Cart Contents Option",
+        "description": "Get the contents of a user's cart",
+        "parameters": [
+          {
+            "name": "user-id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content":{
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartItem"
+                }
+              }
+
+            }
+          },
+          "404": {
+            "description": "Contents not found"
+          }
+        }
+      }
+    },
     "/{user-id}/get-cart-contents": {
       "x-golem-worker-bridge": {
         "worker-id": "worker-${request.path.user-id}",
         "function-name": "golem:template/api/get-cart-contents-failed",
         "function-params": [],
-        "template-id": "bbe464e2-c559-497f-b46c-b4f052fcdf33",
+        "template-id": "4f2cb4e7-aaf3-45f6-9315-aa845a450adb",
         "response" : {
           "status": "200",
           "body": "${worker.response}",
