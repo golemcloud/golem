@@ -33,35 +33,49 @@ use golem_cli::worker::{WorkerHandler, WorkerHandlerLive, WorkerSubcommand};
 #[derive(Subcommand, Debug)]
 #[command()]
 enum Command {
+    /// Upload and manage Golem templates
     #[command()]
     Template {
         #[command(subcommand)]
         subcommand: TemplateSubcommand,
     },
+
+    /// Manage Golem workers
     #[command()]
     Worker {
         #[command(subcommand)]
         subcommand: WorkerSubcommand,
     },
+
+    /// Create a new Golem template from built-in examples
     #[command()]
     New {
+        /// Name of the example to use
         #[arg(short, long)]
         example: ExampleName,
 
+        /// The new template's name
         #[arg(short, long)]
         template_name: golem_examples::model::TemplateName,
 
+        /// The package name of the generated template (in namespace:name format)
         #[arg(short, long)]
         package_name: Option<PackageName>,
     },
+
+    /// Lists the built-in examples available for creating new templates
     #[command()]
     ListExamples {
+        /// The minimum language tier to include in the list
         #[arg(short, long)]
         min_tier: Option<GuestLanguageTier>,
 
+        /// Filter examples by a given guest language
         #[arg(short, long)]
         language: Option<GuestLanguage>,
     },
+
+    /// WASM RPC stub generator
     #[cfg(feature = "stubgen")]
     Stubgen {
         #[command(subcommand)]
