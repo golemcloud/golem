@@ -28,14 +28,14 @@ pub enum Expr {
     Option0(Option<Box<Expr>>),
     Result0(Result<Box<Expr>, Box<Expr>>),
     PatternMatch(Box<Expr>, Box<Expr>),
-    ConstructorPattern
+    ConstructorPattern0(ConstructorPattern)
 }
 
 
 // A constructor pattern by itself is an expr,
 // as it may not be always associated with match expr
 // or a simple if statement. if ok(res) == foo then res else bar
-enum ConstructorPattern {
+pub enum ConstructorPattern {
     WildCard,
     As(String, Box<ConstructorPattern>),
     Constructor(String, Vec<ConstructorPattern>),

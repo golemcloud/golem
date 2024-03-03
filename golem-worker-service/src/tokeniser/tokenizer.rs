@@ -38,6 +38,7 @@ pub enum Token {
     Then,
     Else,
     Dot,
+    Arrow,
 }
 
 impl Token {
@@ -69,6 +70,7 @@ impl Token {
             Token::None => false,
             Token::OpenCurlyBrace => false,
             Token::Match => false,
+            Token::Arrow => false
         }
     }
 
@@ -121,7 +123,8 @@ impl Display for Token {
                 Token::Some => "some",
                 Token::None => "none",
                 Token::Match => "match",
-                Token::OpenCurlyBrace => "{"
+                Token::OpenCurlyBrace => "{",
+                Token::Arrow => "=>"
             }
         )
     }
@@ -260,6 +263,16 @@ impl<'t> Tokenizer {
                 self.text = self.text[character_index + 2..].to_string();
                 self.state = TokenizerState::Static(Token::InterpolationStart);
                 break;
+            } else if c == "=>" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + 2..].to_string();
+                self.state = TokenizerState::Static(Token::Arrow);
+                break;
+            } else if c == "{" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + 1..].to_string();
+                self.state = TokenizerState::Static(Token::OpenCurlyBrace);
+                break;
             } else if c == "}" {
                 token = Some(Token::RawString(self.text[..character_index].to_string()));
                 self.text = self.text[character_index + 1..].to_string();
@@ -358,7 +371,7 @@ fn tokenise_string_with_index(input_string: &str) -> Vec<(usize, &str)> {
     let mut result: Vec<(usize, &str)> = Vec::new();
     let mut current_index = 0;
     let token_regex_pattern = Regex::new(
-        r"(worker\.response|request|\.|<=|\$\{|\}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
+        r"(worker\.response|request|\.|<=|\$\{|\}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
     )
         .unwrap();
 
@@ -806,6 +819,26 @@ else${z}
     #[test]
     fn test_token_processing_with_dollar() {
         let tokens: Vec<Token> = Tokenizer::new("${foo} raw${hi} bar").run().value;
+        assert_eq!(
+            tokens,
+            vec![
+                Token::InterpolationStart,
+                Token::raw_string("foo"),
+                Token::ClosedCurlyBrace,
+                Token::Space,
+                Token::raw_string("raw"),
+                Token::InterpolationStart,
+                Token::raw_string("hi"),
+                Token::ClosedCurlyBrace,
+                Token::Space,
+                Token::raw_string("bar"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_token_processing_with_dollar() {
+        let tokens: Vec<Token> = Tokenizer::new("${match worker.response { some(value) } }").run().value;
         assert_eq!(
             tokens,
             vec![

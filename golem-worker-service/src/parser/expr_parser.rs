@@ -59,7 +59,7 @@ impl InternalExprResult {
         }
     }
 
-    fn continue_build(&self, expr: Expr) -> InternalExprResult {
+    fn apply_with(&self, expr: Expr) -> InternalExprResult {
         match self {
             InternalExprResult::Complete(complete_expr) => {
                 InternalExprResult::complete(Expr::Concat(vec![complete_expr.clone(), expr]))
@@ -114,19 +114,48 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                 Token::RawString(raw_string) => {
                     let new_expr = Expr::Literal(raw_string);
 
-                    go(cursor, context, prev_expression.continue_build(new_expr))
+                    go(cursor, context, prev_expression.apply_with(new_expr))
                 },
 
                 Token::Request => go(
                     cursor,
                     context,
-                    prev_expression.continue_build(Expr::Request()),
+                    prev_expression.apply_with(Expr::Request()),
                 ),
+
+                Token::Some => {
+
+                    let next_non_empty_open_braces = cursor.next_non_empty_token();
+
+                    match next_non_empty_open_braces {
+                        Some(Token::OpenParen) => {
+                            let value_of_some = cursor.next_non_empty_token();
+                            match value_of_some {
+                                Some(Token::RawString(value)) => {
+                                    let new_expr = Expr::ConstructorPattern0(
+                                        ConstructorPattern::Constructor(
+                                            "some".to_string(),
+                                            vec![ConstructorPattern::Literal(Box::new(Expr::Literal(value)))]
+                                        )
+                                    );
+                                    let skip_next_closed_paren = cursor.next_non_empty_token();
+                                    match skip_next_closed_paren {
+                                        Some(Token::CloseParen) => go(cursor, context, prev_expression.apply_with(new_expr)),
+                                        _ => Err(ParseError::Message("Expecting a close parenthesis after some".to_string()))
+                                    }
+                                }
+                                _ => Err(ParseError::Message("Expecting a value after some".to_string()))
+                            }
+                        }
+
+                        _ => Err(ParseError::Message("Expecting an open parenthesis after some".to_string()))
+                    }
+                }
 
                 Token::WorkerResponse => go(
                     cursor,
                     context,
-                    prev_expression.continue_build(Expr::WorkerResponse()),
+                    prev_expression.apply_with(Expr::WorkerResponse()),
                 ),
 
                 Token::InterpolationStart => {
@@ -335,7 +364,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
 
                 Token::If => {
                     // We expect to form Expr::Cond given three unknown variables
-                    let new_expr = InternalExprResult::incomplete(
+                    let future_expr = InternalExprResult::incomplete(
                         ExpressionContext::Condition,
                         move |first_result| {
                             let first_result: Rc<Expr> = Rc::new(first_result);
@@ -361,13 +390,12 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                     );
 
                     let captured_predicate =
-                        capture_expr_between(cursor, &Token::If, Some(&Token::Then), new_expr, go)?;
+                        capture_expr_between(cursor, &Token::If, Some(&Token::Then), future_expr, go)?;
 
                     go(cursor, context, captured_predicate)
                 },
 
                 Token::Match => {
-
                     // A constructor pattern can be formed only if
                     // there is a constructor
                     let constructor_pattern  = InternalExprResult::incomplete(
@@ -382,7 +410,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                                         (*Rc::clone(&first_result)).clone();
 
                                     match second_result {
-                                        Expr::ConstructorPattern =>
+                                        Expr::ConstructorPattern0(_) =>
                                             InternalExprResult::complete(Expr::PatternMatch(
                                                 Box::new(first_result),
                                                 Box::new(second_result.clone()),
@@ -394,7 +422,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                             )
                         },
                     );
-                    
+
                     let expr_under_evaluation = capture_expr_between(
                         cursor,
                         &Token::Match,
@@ -444,6 +472,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                 Token::CloseParen => go(cursor, context, prev_expression),
                 Token::Space => go(cursor, context, prev_expression),
                 Token::NewLine => go(cursor, context, prev_expression),
+                _ => panic!("Not yet implemented")
             }
         } else {
             match prev_expression {
@@ -468,7 +497,7 @@ fn capture_expr_between<F>(
     cursor: &mut TokenCursor,
     capture_from: &Token,
     capture_until: Option<&Token>,
-    prev_expression: InternalExprResult,
+    future_expression: InternalExprResult,
     get_expr: F,
 ) -> Result<InternalExprResult, ParseError>
 where
@@ -485,7 +514,7 @@ where
 
             let inner_expr = get_expr(&mut new_cursor, Context::Code, InternalExprResult::Empty)?;
 
-            Ok(prev_expression.continue_build(inner_expr))
+            Ok(future_expression.apply_with(inner_expr))
         }
         None => Err(ParseError::Message(format!(
             "Unable to find a matching closing symbol {:?} corresponding to {}",
