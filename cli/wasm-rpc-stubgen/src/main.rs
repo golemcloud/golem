@@ -35,7 +35,7 @@ async fn main() {
         Command::InitializeWorkspace(init_workspace_args) => {
             let _ = render_error(initialize_workspace(
                 init_workspace_args,
-                "golem-wasm-rpc-stubgen",
+                "wasm-rpc-stubgen",
                 &[],
             ));
         }

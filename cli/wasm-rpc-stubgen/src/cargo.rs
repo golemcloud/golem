@@ -198,6 +198,19 @@ pub fn is_cargo_workspace_toml(path: &Path) -> anyhow::Result<bool> {
     }
 }
 
+pub fn add_workspace_members(path: &Path, members: &[String]) -> anyhow::Result<()> {
+    let mut manifest = Manifest::from_path(path)?;
+    if let Some(workspace) = manifest.workspace.as_mut() {
+        workspace.members.extend(members.iter().cloned());
+    }
+
+    let cargo_toml = toml::to_string(&manifest)?;
+
+    println!("Writing updated Cargo.toml to {:?}", path);
+    fs::write(path, cargo_toml)?;
+    Ok(())
+}
+
 pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> anyhow::Result<()> {
     let mut manifest: Manifest<MetadataRoot> = Manifest::from_path_with_metadata(cargo_path)?;
     if let Some(ref mut package) = manifest.package {
