@@ -27,7 +27,7 @@ pub enum Expr {
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
     Option0(Option<Box<Expr>>),
     Result0(Result<Box<Expr>, Box<Expr>>),
-    PatternMatch(Box<Expr>, Box<Expr>),
+    PatternMatch(Box<Expr>, Vec<(ConstructorPattern, Box<Expr>)>),
     ConstructorPattern0(ConstructorPattern)
 }
 

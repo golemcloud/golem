@@ -410,10 +410,10 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                                         (*Rc::clone(&first_result)).clone();
 
                                     match second_result {
-                                        Expr::ConstructorPattern0(_) =>
+                                        Expr::ConstructorPattern0(constructor) =>
                                             InternalExprResult::complete(Expr::PatternMatch(
                                                 Box::new(first_result),
-                                                Box::new(second_result.clone()),
+                                                vec![(constructor.clone(), Box::new(Expr::Literal("".to_string())))],
                                             )),
 
                                         _ => panic!("Cannot find a constructor pattern") //TODO
@@ -427,7 +427,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                         cursor,
                         &Token::Match,
                         Some(&Token::OpenCurlyBrace),
-                        prev_expression,
+                        constructor_pattern,
                         go,
                     )?;
 
@@ -472,7 +472,8 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                 Token::CloseParen => go(cursor, context, prev_expression),
                 Token::Space => go(cursor, context, prev_expression),
                 Token::NewLine => go(cursor, context, prev_expression),
-                _ => panic!("Not yet implemented")
+                Token::OpenCurlyBrace => go(cursor, context, prev_expression),
+                _ => todo!("Token not implemented {:?}", token),
             }
         } else {
             match prev_expression {
@@ -1060,6 +1061,48 @@ mod tests {
 
         let result = expression_parser
             .parse("foo-${if (if request.path.hello then 1 else 0) > 0 then request.path.user_id else 0}")
+            .unwrap();
+
+        // TODOl Use our own predicate combinators
+        let predicate_expressions = Expr::GreaterThan(
+            Box::new(Expr::Cond(
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::SelectField(
+                        Box::new(Expr::Request()),
+                        "path".to_string(),
+                    )),
+                    "hello".to_string(),
+                )),
+                Box::new(Expr::Literal("1".to_string())),
+                Box::new(Expr::Literal("0".to_string())),
+            )),
+            Box::new(Expr::Literal("0".to_string())),
+        );
+
+        let expected = Expr::Concat(vec![
+            Expr::Literal("foo-".to_string()),
+            Expr::Cond(
+                Box::new(predicate_expressions),
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::SelectField(
+                        Box::new(Expr::Request()),
+                        "path".to_string(),
+                    )),
+                    "user_id".to_string(),
+                )),
+                Box::new(Expr::Literal("0".to_string())),
+            ),
+        ]);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_if_expr_with_match() {
+        let expression_parser = ExprParser {};
+
+        let result = expression_parser
+            .parse("${match worker.response { some(value) } }")
             .unwrap();
 
         // TODOl Use our own predicate combinators
