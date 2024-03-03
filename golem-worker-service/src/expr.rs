@@ -35,6 +35,7 @@ pub enum Expr {
 // A constructor pattern by itself is an expr,
 // as it may not be always associated with match expr
 // or a simple if statement. if ok(res) == foo then res else bar
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum ConstructorPattern {
     WildCard,
     As(String, Box<ConstructorPattern>),
@@ -263,7 +264,8 @@ impl Expr {
                         ))),
                         _ => Err("Not supported type".into()),
                     }
-                }
+                },
+                _ => todo!("bhoom")
             }
         }
 
@@ -500,7 +502,8 @@ impl Expr {
                         ))),
                         _ => Err("Not supported type".into()),
                     }
-                }
+                },
+                _ => todo!("bh0oom")
             }
         }
 
@@ -523,6 +526,7 @@ impl Expr {
         }
     }
 
+    // TODO! Why?
     pub fn get_vars(&self) -> HashSet<String> {
         let mut vars: HashSet<String> = HashSet::new();
         match self {
@@ -624,6 +628,7 @@ impl Expr {
                 vars.extend(value1.get_vars());
                 vars.extend(value2.get_vars());
             }
+            _ => todo!("Don't know why these thingsss!@!@!!!!!!!!!!")
         }
 
         vars

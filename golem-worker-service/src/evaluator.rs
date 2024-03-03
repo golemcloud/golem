@@ -289,6 +289,8 @@ impl Evaluator<Value> for Expr {
                         "The result doesn't contain the field {}",
                         path_var
                     ))),
+
+                _ => panic!("bhoom")
             }
         }
 

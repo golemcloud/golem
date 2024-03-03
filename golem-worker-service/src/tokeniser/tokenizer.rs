@@ -330,6 +330,11 @@ impl<'t> Tokenizer {
                 self.text = self.text[character_index + "null".to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::None);
                 break;
+            } else if c == "match" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + Token::Match.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Match);
+                break;
             }
         }
 
@@ -371,7 +376,7 @@ fn tokenise_string_with_index(input_string: &str) -> Vec<(usize, &str)> {
     let mut result: Vec<(usize, &str)> = Vec::new();
     let mut current_index = 0;
     let token_regex_pattern = Regex::new(
-        r"(worker\.response|request|\.|<=|\$\{|\}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
+        r"(worker\.response|request|\.|<=|\$\{|\}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|\bmatch\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
     )
         .unwrap();
 
@@ -817,7 +822,7 @@ else${z}
     }
 
     #[test]
-    fn test_token_processing_with_dollar() {
+    fn test_token_processing_with_dol() {
         let tokens: Vec<Token> = Tokenizer::new("${foo} raw${hi} bar").run().value;
         assert_eq!(
             tokens,
@@ -843,15 +848,20 @@ else${z}
             tokens,
             vec![
                 Token::InterpolationStart,
-                Token::raw_string("foo"),
+                Token::Match,
+                Token::Space,
+                Token::WorkerResponse,
+                Token::Space,
+                Token::OpenCurlyBrace,
+                Token::Space,
+                Token::Some,
+                Token::OpenParen,
+                Token::raw_string("value"),
+                Token::CloseParen,
+                Token::Space,
                 Token::ClosedCurlyBrace,
                 Token::Space,
-                Token::raw_string("raw"),
-                Token::InterpolationStart,
-                Token::raw_string("hi"),
                 Token::ClosedCurlyBrace,
-                Token::Space,
-                Token::raw_string("bar"),
             ]
         );
     }
