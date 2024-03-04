@@ -27,10 +27,14 @@ impl Context {
 
 impl GolemParser<Expr> for ExprParser {
     fn parse(&self, input: &str) -> Result<Expr, ParseError> {
-        let tokeniser_result: TokeniserResult = tokenise(input);
-
-        parse_tokens(tokeniser_result)
+        parse_with_context(input, Context::Literal)
     }
+}
+
+fn parse_with_context(input: &str, context: Context) -> Result<Expr, ParseError> {
+    let tokeniser_result: TokeniserResult = tokenise(input);
+
+    parse_tokens(tokeniser_result, context)
 }
 
 fn tokenise(input: &str) -> TokeniserResult {
@@ -97,7 +101,7 @@ enum ExpressionContext {
     MatchCases,
 }
 
-fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
+fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<Expr, ParseError> {
     fn go(
         cursor: &mut TokenCursor,
         context: Context,
@@ -119,7 +123,8 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
 
                 Token::Request => go(cursor, context, prev_expression.apply_with(Expr::Request())),
 
-                Token::Some => Err(ParseError::Message("Dangling keyword Some".to_string())),
+                Token::Some => Err(ParseError::Message(format!("Dangling keyword {}", Token::Some.to_string()))),
+                Token::None => Err(ParseError::Message(format!("Dangling keyword {}", Token::None.to_string()))),
 
                 Token::WorkerResponse => go(
                     cursor,
@@ -370,17 +375,16 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                 }
 
                 Token::Match => {
-                    dbg!("Why cursor don't have ", &cursor.tokens);
                     let expr_under_evaluation =
                         cursor.capture_string_until(vec![], &Token::OpenCurlyBrace);
 
                     let new_expr = match expr_under_evaluation {
                         Some(expr_under_evaluation) => {
-                            let expr = ExprParser {};
-                            let expression = expr.parse(expr_under_evaluation.as_str())?;
+                            let mut new_cursor = Tokenizer::new(expr_under_evaluation.as_str()).run().to_cursor();
+                            let expression = go(&mut new_cursor, Context::Code, InternalExprResult::Empty)?;
                             match cursor.next_non_empty_token() {
                                 Some(Token::OpenCurlyBrace) => {
-                                    let constructors = get_constructor(cursor)?;
+                                    let constructors = get_constructors(cursor)?;
                                     Ok(InternalExprResult::complete(Expr::PatternMatch(
                                         Box::new(expression),
                                         constructors,
@@ -453,22 +457,20 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
 
     go(
         &mut tokeniser_cursor,
-        Context::Literal,
+        context,
         InternalExprResult::Empty,
     )
 }
 
-fn get_constructor(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExpr>, ParseError> {
-    dbg!("The tokens are {}", &cursor.peek());
-    dbg!("The tokens are {}", &cursor.tokens);
+fn get_constructors(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExpr>, ParseError> {
     let mut constructor_patterns: Vec<ConstructorPatternExpr> = vec![];
 
     fn go(
         cursor: &mut TokenCursor,
         constructor_patterns: &mut Vec<ConstructorPatternExpr>,
-    ) -> Result<(), ParseError> {
+    ) -> Result<(), ParseError>  {
         match cursor.next_non_empty_token() {
-            Some(token) if token.is_constructor() => {
+            Some(token) if token.is_non_empty_constructor() => {
                 let next_non_empty_open_braces = cursor.next_non_empty_token();
 
                 match next_non_empty_open_braces {
@@ -484,109 +486,9 @@ fn get_constructor(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExp
                                         )))],
                                     );
 
-                                dbg!("The constructor pattern is {}", constructor_pattern.clone());
-
                                 match cursor.next_non_empty_token() {
                                     Some(Token::CloseParen) => {
-                                        match cursor.next_non_empty_token() {
-                                            Some(Token::Arrow) => {
-                                                let index_of_closed_curly_brace = cursor
-                                                    .index_of_last_end_token(
-                                                        vec![&Token::OpenCurlyBrace],
-                                                        &Token::ClosedCurlyBrace,
-                                                    );
-                                                let index_of_commaseparator = cursor
-                                                    .index_of_last_end_token(
-                                                        vec![&Token::OpenCurlyBrace],
-                                                        &Token::RawString(",".to_string()),
-                                                    );
-
-                                                match (
-                                                    index_of_closed_curly_brace,
-                                                    index_of_commaseparator,
-                                                ) {
-                                                    (Some(end_of_constructors), Some(comma)) => {
-                                                        if end_of_constructors > comma {
-                                                            let captured_string = cursor
-                                                                .capture_string_until(
-                                                                    vec![],
-                                                                    &Token::RawString(
-                                                                        ",".to_string(),
-                                                                    ),
-                                                                );
-                                                            let expr_parser = ExprParser {};
-                                                            let individual_expr = expr_parser
-                                                                .parse(
-                                                                    captured_string
-                                                                        .unwrap()
-                                                                        .as_str(),
-                                                                )
-                                                                .map(|expr| {
-                                                                    ConstructorPatternExpr((
-                                                                        constructor_pattern,
-                                                                        Box::new(expr),
-                                                                    ))
-                                                                })?;
-                                                            constructor_patterns
-                                                                .push(individual_expr);
-                                                            go(cursor, constructor_patterns)
-                                                        } else {
-                                                            // End of constructor
-                                                            let captured_string = cursor
-                                                                .capture_string_until(
-                                                                    vec![&Token::OpenCurlyBrace],
-                                                                    &Token::ClosedCurlyBrace,
-                                                                );
-                                                            let expr_parser = ExprParser {};
-                                                            let individual_expr = expr_parser
-                                                                .parse(
-                                                                    captured_string
-                                                                        .unwrap()
-                                                                        .as_str(),
-                                                                )
-                                                                .map(|expr| {
-                                                                    ConstructorPatternExpr((
-                                                                        constructor_pattern,
-                                                                        Box::new(expr),
-                                                                    ))
-                                                                })?;
-                                                            constructor_patterns
-                                                                .push(individual_expr);
-                                                            Ok(())
-                                                        }
-                                                    }
-
-                                                    (Some(_), None) => {
-                                                        let captured_string = cursor
-                                                            .capture_string_until(
-                                                                vec![&Token::OpenCurlyBrace],
-                                                                &Token::ClosedCurlyBrace,
-                                                            );
-                                                        let expr_parser = ExprParser {};
-                                                        let individual_expr = expr_parser
-                                                            .parse(
-                                                                captured_string.unwrap().as_str(),
-                                                            )
-                                                            .map(|expr| {
-                                                                ConstructorPatternExpr((
-                                                                    constructor_pattern,
-                                                                    Box::new(expr),
-                                                                ))
-                                                            })?;
-                                                        constructor_patterns.push(individual_expr);
-                                                        Ok(())
-                                                    }
-
-                                                    _ => Err(ParseError::Message(
-                                                        "Invalid constructor pattern".to_string(),
-                                                    )),
-                                                }
-                                            }
-                                            _ => Err(ParseError::Message(
-                                                "Expecting an arrow after Some expression"
-                                                    .to_string(),
-                                            )),
-                                        }
+                                        accumulate_constructor_pattern_expr(cursor, constructor_pattern, constructor_patterns, go)
                                     }
                                     _ => Err(ParseError::Message(
                                         "Expecting a close parenthesis after some".to_string(),
@@ -594,7 +496,7 @@ fn get_constructor(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExp
                                 }
                             }
                             _ => Err(ParseError::Message(
-                                "Expecting a value after some".to_string(),
+                                format!("Token {} is a non empty constructor. Expecting the following pattern: {}(foo) => bar", token.to_string(), token.to_string()),
                             )),
                         }
                     }
@@ -603,10 +505,17 @@ fn get_constructor(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExp
                         "Expecting an open parenthesis after some".to_string(),
                     )),
                 }
+            },
+            Some(token) if token.is_empty_constructor() => {
+                let constructor_pattern = ConstructorPattern::Constructor(token.to_string(), vec![]);
+
+                accumulate_constructor_pattern_expr(cursor, constructor_pattern, constructor_patterns, go)
+
             }
             Some(token) => Err(ParseError::Message(
                 format!("Expecting a constructor pattern. But found {}", token),
             )),
+
             None => Err(ParseError::Message(
                 format!("Expecting a constructor pattern. But found nothing"),
             )),
@@ -615,6 +524,97 @@ fn get_constructor(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExp
 
     go(cursor, &mut constructor_patterns)?;
     Ok(constructor_patterns)
+}
+
+
+fn accumulate_constructor_pattern_expr<F>(cursor: &mut TokenCursor, constructor_pattern: ConstructorPattern, collected_exprs: &mut Vec<ConstructorPatternExpr>, accumulator: F) -> Result<(), ParseError>  where
+    F: FnOnce(&mut TokenCursor, &mut Vec<ConstructorPatternExpr>) -> Result<(), ParseError>,{
+    match cursor.next_non_empty_token() {
+        Some(Token::Arrow) => {
+            let index_of_closed_curly_brace = cursor
+                .index_of_last_end_token(
+                    vec![&Token::OpenCurlyBrace],
+                    &Token::ClosedCurlyBrace,
+                );
+            let index_of_commaseparator = cursor
+                .index_of_last_end_token(
+                    vec![&Token::OpenCurlyBrace],
+                    &Token::Comma
+                );
+
+            match (
+                index_of_closed_curly_brace,
+                index_of_commaseparator,
+            ) {
+                (Some(end_of_constructors), Some(comma)) => {
+                    if end_of_constructors > comma {
+                        let captured_string = cursor
+                            .capture_string_until(
+                                vec![],
+                                &Token::Comma
+                            );
+
+                        let individual_expr = parse_with_context(captured_string.unwrap().as_str(), Context::Code)
+                            .map(|expr| {
+                                ConstructorPatternExpr((
+                                    constructor_pattern,
+                                    Box::new(expr),
+                                ))
+                            })?;
+                        collected_exprs
+                            .push(individual_expr);
+                        cursor.next_non_empty_token(); // Skip CommaSeparator
+                        accumulator(cursor, collected_exprs)
+                    } else {
+                        // End of constructor
+                        let captured_string = cursor
+                            .capture_string_until(
+                                vec![&Token::OpenCurlyBrace],
+                                &Token::ClosedCurlyBrace,
+                            );
+                        let individual_expr = parse_with_context(captured_string.unwrap().as_str(), Context::Code)
+                            .map(|expr| {
+                                ConstructorPatternExpr((
+                                    constructor_pattern,
+                                    Box::new(expr),
+                                ))
+                            })?;
+                        collected_exprs
+                            .push(individual_expr);
+                        Ok(())
+                    }
+                }
+
+                (Some(_), None) => {
+                    let captured_string = cursor
+                        .capture_string_until(
+                            vec![&Token::OpenCurlyBrace],
+                            &Token::ClosedCurlyBrace,
+                        );
+
+                    let individual_expr = parse_with_context(captured_string.unwrap().as_str(), Context::Code)
+                        .map(|expr| {
+                            ConstructorPatternExpr((
+                                constructor_pattern,
+                                Box::new(expr),
+                            ))
+                        })?;
+                    collected_exprs.push(individual_expr);
+                    Ok(())
+                }
+
+                _ => Err(ParseError::Message(
+                    "Invalid constructor pattern".to_string(),
+                )),
+            }
+        }
+        _ => Err(ParseError::Message(
+            "Expecting an arrow after Some expression"
+                .to_string(),
+        )),
+
+    }
+
 }
 
 // possible_nested_token_starts
@@ -1228,39 +1228,23 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker.response { some(value) => value } }")
+            .parse("${match worker.response { some(foo) => result1, none => result2 } }")
             .unwrap();
 
-        // TODOl Use our own predicate combinators
-        let predicate_expressions = Expr::GreaterThan(
-            Box::new(Expr::Cond(
-                Box::new(Expr::SelectField(
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::Request()),
-                        "path".to_string(),
+        let expected =
+            Expr::PatternMatch(
+                Box::new(Expr::WorkerResponse()),
+                vec![
+                    ConstructorPatternExpr((
+                        ConstructorPattern::Constructor("some".to_string(), vec![ConstructorPattern::Literal(Box::new(Expr::Literal("foo".to_string())))]),
+                        Box::new(Expr::Literal("result1".to_string()))
                     )),
-                    "hello".to_string(),
-                )),
-                Box::new(Expr::Literal("1".to_string())),
-                Box::new(Expr::Literal("0".to_string())),
-            )),
-            Box::new(Expr::Literal("0".to_string())),
-        );
-
-        let expected = Expr::Concat(vec![
-            Expr::Literal("foo-".to_string()),
-            Expr::Cond(
-                Box::new(predicate_expressions),
-                Box::new(Expr::SelectField(
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::Request()),
-                        "path".to_string(),
+                    ConstructorPatternExpr((
+                        ConstructorPattern::Constructor("none".to_string(), vec![]),
+                        Box::new(Expr::Literal("result2".to_string()))
                     )),
-                    "user_id".to_string(),
-                )),
-                Box::new(Expr::Literal("0".to_string())),
-            ),
-        ]);
+                ]
+            );
 
         assert_eq!(result, expected);
     }

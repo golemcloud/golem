@@ -39,6 +39,7 @@ pub enum Token {
     Else,
     Dot,
     Arrow,
+    Comma,
 }
 
 impl Token {
@@ -71,6 +72,7 @@ impl Token {
             Token::OpenCurlyBrace => false,
             Token::Match => false,
             Token::Arrow => false,
+            Token::Comma => false
         }
     }
 
@@ -125,19 +127,26 @@ impl Display for Token {
                 Token::Match => "match",
                 Token::OpenCurlyBrace => "{",
                 Token::Arrow => "=>",
+                Token::Comma => ","
             }
         )
     }
 }
 
 impl Token {
-    pub fn is_constructor(&self) -> bool {
+    pub fn is_non_empty_constructor(&self) -> bool {
         match self {
             Token::Ok => true,
             Token::Err => true,
             Token::Some => true,
-            Token::None => true,
             Token::Match => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_empty_constructor(&self) -> bool {
+        match self {
+            Token::None => true,
             _ => false,
         }
     }
@@ -349,6 +358,12 @@ impl<'t> Tokenizer {
                     self.text[character_index + Token::Match.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::Match);
                 break;
+            }  else if c == "," {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text =
+                    self.text[character_index + Token::Comma.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Comma);
+                break;
             }
         }
 
@@ -390,7 +405,7 @@ fn tokenise_string_with_index(input_string: &str) -> Vec<(usize, &str)> {
     let mut result: Vec<(usize, &str)> = Vec::new();
     let mut current_index = 0;
     let token_regex_pattern = Regex::new(
-        r"(worker\.response|request|\.|<=|\$\{|\}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|\bmatch\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
+        r"(worker\.response|request|,|\.|<=|\$\{|\}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|\bnone\b|\bmatch\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
     )
         .unwrap();
 
@@ -836,7 +851,7 @@ else${z}
     }
 
     #[test]
-    fn test_token_processing_with_dol() {
+    fn test_token_processing_with_dollar() {
         let tokens: Vec<Token> = Tokenizer::new("${foo} raw${hi} bar").run().value;
         assert_eq!(
             tokens,
@@ -856,8 +871,8 @@ else${z}
     }
 
     #[test]
-    fn test_token_processing_with_dollar() {
-        let tokens: Vec<Token> = Tokenizer::new("${match worker.response { some(value) } }")
+    fn test_token_processing_with_match_expr() {
+        let tokens: Vec<Token> = Tokenizer::new("${match worker.response { some(value) => value, none => worker.response } }")
             .run()
             .value;
         assert_eq!(
@@ -874,6 +889,17 @@ else${z}
                 Token::OpenParen,
                 Token::raw_string("value"),
                 Token::CloseParen,
+                Token::Space,
+                Token::Arrow,
+                Token::Space,
+                Token::raw_string("value"),
+                Token::Comma,
+                Token::Space,
+                Token::None,
+                Token::Space,
+                Token::Arrow,
+                Token::Space,
+                Token::WorkerResponse,
                 Token::Space,
                 Token::ClosedCurlyBrace,
                 Token::Space,
