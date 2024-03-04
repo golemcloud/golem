@@ -18,6 +18,7 @@ pub enum Expr {
     Literal(String),
     Number(InnerNumber),
     Variable(String),
+    Boolean(bool),
     PathVar(String),
     Concat(Vec<Expr>),
     Not(Box<Expr>),
@@ -27,10 +28,23 @@ pub enum Expr {
     EqualTo(Box<Expr>, Box<Expr>),
     LessThan(Box<Expr>, Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
-    Option0(Option<Box<Expr>>),
-    Result0(Result<Box<Expr>, Box<Expr>>),
     PatternMatch(Box<Expr>, Vec<ConstructorPatternExpr>),
     Constructor0(ConstructorPattern), // Can exist standalone from pattern match
+}
+
+impl Expr {
+    pub fn unsigned_integer(value: u64) -> Expr {
+        Expr::Number(InnerNumber::UnsignedInteger(value))
+    }
+
+    pub fn integer(value: i64) -> Expr {
+        Expr::Number(InnerNumber::Integer(value))
+    }
+
+    pub fn float(value: f64) -> Expr {
+        Expr::Number(InnerNumber::Float(value))
+    }
+
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]

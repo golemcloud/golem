@@ -3,10 +3,10 @@ use std::rc::Rc;
 use strum_macros::Display;
 
 use super::*;
+use crate::expr::ConstructorPattern::Constructor;
 use crate::expr::*;
 use crate::tokeniser::cursor::TokenCursor;
 use crate::tokeniser::tokenizer::{Token, TokeniserResult, Tokenizer};
-use crate::value_typed::ValueTyped;
 
 #[derive(Clone, Debug)]
 pub struct ExprParser {}
@@ -98,8 +98,6 @@ enum ExpressionContext {
     EqualTo,
     GreaterThanOrEqualTo,
     LessThanOrEqualTo,
-    PatternMatch,
-    MatchCases,
 }
 
 fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<Expr, ParseError> {
@@ -131,31 +129,28 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                 token @ Token::Some | token @ Token::Ok | token @ Token::Err => {
                     match cursor.next_non_empty_token() {
                         Some(Token::OpenParen) => {
-                            let inner_value = cursor.capture_string_until_and_skip_end(
-                                vec![&Token::OpenParen],
-                                &Token::CloseParen,
-                            );
-                            let constructor = match inner_value {
-                                Some(inner_value) => {
+                            let constructor_var_optional = cursor
+                                .capture_string_until_and_skip_end(
+                                    vec![&Token::OpenParen],
+                                    &Token::CloseParen,
+                                );
+                            let constructor = match constructor_var_optional {
+                                Some(constructor_var) => {
                                     let mut cursor =
-                                        Tokenizer::new(inner_value.as_str()).run().to_cursor();
-                                    let inner_expr =
+                                        Tokenizer::new(constructor_var.as_str()).run().to_cursor();
+
+                                    let constructor_expr =
                                         go(&mut cursor, Context::Code, InternalExprResult::Empty)?;
-                                    dbg!("The inner expr is {}", inner_expr.clone());
-                                    match inner_expr {
-                                        Expr::Variable(variable) => {
-                                            Ok(ConstructorPattern::Constructor(
-                                                token.to_string(),
-                                                vec![ConstructorPattern::Literal(Box::new(
-                                                    Expr::Variable(variable),
-                                                ))],
-                                            ))
-                                        }
+
+                                    match constructor_expr {
+                                        Expr::Variable(variable) => Ok(Constructor(
+                                            token.to_string(),
+                                            vec![ConstructorPattern::Literal(Box::new(
+                                                Expr::Variable(variable),
+                                            ))],
+                                        )),
                                         Expr::Constructor0(pattern) => {
-                                            Ok(ConstructorPattern::Constructor(
-                                                token.to_string(),
-                                                vec![pattern],
-                                            ))
+                                            Ok(Constructor(token.to_string(), vec![pattern]))
                                         }
                                         _ => Err(ParseError::Message(format!(
                                             "Expecting a valid expression inside {}",
@@ -207,15 +202,10 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                 }
 
                 Token::Quote => {
-                    dbg!(
-                        "The cursor tokens are {}, {}",
-                        &cursor.tokens,
-                        &cursor.index
-                    );
+                    let non_code_string =
+                        cursor.capture_string_until_and_skip_end(vec![], &Token::Quote);
 
-                    let string = cursor.capture_string_until_and_skip_end(vec![], &Token::Quote);
-
-                    let new_expr = match string {
+                    let new_expr = match non_code_string {
                         Some(string) => {
                             let mut cursor = Tokenizer::new(string.as_str()).run().to_cursor();
 
@@ -537,7 +527,6 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                 Token::OpenCurlyBrace => go(cursor, context, prev_expression),
                 Token::Arrow => go(cursor, context, prev_expression),
                 Token::Comma => go(cursor, context, prev_expression),
-                _ => todo!("Token not implemented {:?}", token),
             }
         } else {
             match prev_expression {
@@ -561,6 +550,8 @@ fn resolve_literal_in_code_context(primitive: &str) -> Expr {
         Expr::Number(InnerNumber::Integer(i64_value))
     } else if let Ok(f64_value) = primitive.parse::<f64>() {
         Expr::Number(InnerNumber::Float(f64_value))
+    } else if let Ok(boolean) = primitive.parse::<bool>(){
+        Expr::Boolean(boolean)
     } else {
         Expr::Variable(primitive.to_string())
     }
@@ -579,18 +570,23 @@ fn get_constructors(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternEx
 
                 match next_non_empty_open_braces {
                     Some(Token::OpenParen) => {
-                        let value_of_some = cursor.capture_string_until_and_skip_end(
+                        let constructor_var_optional = cursor.capture_string_until_and_skip_end(
                             vec![&Token::OpenParen],
                             &Token::CloseParen,
                         );
-                        match value_of_some {
-                            Some(string) => {
-                                let expr = parse_with_context(string.as_str(), Context::Code)?;
+                        match constructor_var_optional {
+                            Some(constructor_var) => {
+                                let expr = parse_with_context(constructor_var.as_str(), Context::Code)?;
+
+                                let cons = match expr {
+                                    Expr::Constructor0(cons) => cons,
+                                    expr => ConstructorPattern::Literal(Box::new(expr))
+                                };
 
                                 let constructor_pattern: ConstructorPattern =
-                                    ConstructorPattern::Constructor(
+                                    Constructor(
                                         token.to_string(),
-                                        vec![ConstructorPattern::Literal(Box::new(expr))],
+                                        vec![cons],
                                     );
 
                                 accumulate_constructor_pattern_expr(cursor, constructor_pattern, constructor_patterns, go)
@@ -623,9 +619,9 @@ fn get_constructors(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternEx
                 token
             ))),
 
-            None => Err(ParseError::Message(format!(
-                "Expecting a constructor pattern. But found nothing"
-            ))),
+            None => Err(ParseError::Message(
+                "Expecting a constructor pattern. But found nothing".to_string(),
+            )),
         }
     }
 
@@ -832,8 +828,8 @@ mod tests {
         let result = expression_parser.parse("${1>2}");
 
         let expected = Expr::GreaterThan(
-            Box::new(Expr::Literal("1".to_string())),
-            Box::new(Expr::Literal("2".to_string())),
+            Box::new(Expr::unsigned_integer(1)),
+            Box::new(Expr::unsigned_integer(2)),
         );
 
         assert_eq!(result, Ok(expected));
@@ -905,7 +901,7 @@ mod tests {
                 )),
                 "user-id".to_string(),
             )),
-            Box::new(Expr::Literal("2".to_string())),
+            Box::new(Expr::unsigned_integer(2)),
         );
 
         assert_eq!(result, Ok(expected));
@@ -947,8 +943,8 @@ mod tests {
                 Box::new(Expr::Request()),
                 "path".to_string(),
             )),
-            Box::new(Expr::Literal("1".to_string())),
-            Box::new(Expr::Literal("0".to_string())),
+            Box::new(Expr::unsigned_integer(1)),
+            Box::new(Expr::unsigned_integer(0)),
         );
 
         assert_eq!(result, expected);
@@ -961,9 +957,9 @@ mod tests {
         let result = expression_parser.parse("${if hello then foo else bar}");
 
         let expected = Expr::Cond(
-            Box::new(Expr::Literal("hello".to_string())),
-            Box::new(Expr::Literal("foo".to_string())),
-            Box::new(Expr::Literal("bar".to_string())),
+            Box::new(Expr::Variable("hello".to_string())),
+            Box::new(Expr::Variable("foo".to_string())),
+            Box::new(Expr::Variable("bar".to_string())),
         );
 
         assert_eq!(result.unwrap(), expected)
@@ -988,12 +984,12 @@ mod tests {
 
         // cond(path, 1, cond(2, 2, 0))
         let expected = Expr::Cond(
-            Box::new(Expr::Literal("foo".to_string())),
-            Box::new(Expr::Literal("1".to_string())),
+            Box::new(Expr::Variable("foo".to_string())),
+            Box::new(Expr::unsigned_integer(1)),
             Box::new(Expr::Cond(
-                Box::new(Expr::Literal("bar".to_string())),
-                Box::new(Expr::Literal("2".to_string())),
-                Box::new(Expr::Literal("0".to_string())),
+                Box::new(Expr::Variable("bar".to_string())),
+                Box::new(Expr::unsigned_integer(2)),
+                Box::new(Expr::unsigned_integer(0)),
             )),
         );
 
@@ -1010,15 +1006,15 @@ mod tests {
 
         // cond(path, 1, cond(2, 2, 0))
         let expected = Expr::Cond(
-            Box::new(Expr::Literal("false".to_string())),
-            Box::new(Expr::Literal("1".to_string())),
+            Box::new(Expr::Boolean(false)),
+            Box::new(Expr::unsigned_integer(1)),
             Box::new(Expr::Cond(
-                Box::new(Expr::Literal("true".to_string())),
-                Box::new(Expr::Literal("2".to_string())),
+                Box::new(Expr::Boolean(true)),
+                Box::new(Expr::unsigned_integer(2)),
                 Box::new(Expr::Cond(
-                    Box::new(Expr::Literal("false".to_string())),
-                    Box::new(Expr::Literal("1".to_string())),
-                    Box::new(Expr::Literal("0".to_string())),
+                    Box::new(Expr::Boolean(false)),
+                    Box::new(Expr::unsigned_integer(1)),
+                    Box::new(Expr::unsigned_integer(0)),
                 )),
             )),
         );
@@ -1044,9 +1040,9 @@ mod tests {
                     )),
                     "user_id".to_string(),
                 )),
-                Box::new(Expr::Literal("1".to_string())),
+                Box::new(Expr::unsigned_integer(1)),
             )),
-            Box::new(Expr::Literal("1".to_string())),
+            Box::new(Expr::unsigned_integer(1)),
             Box::new(Expr::Cond(
                 Box::new(Expr::EqualTo(
                     Box::new(Expr::SelectField(
@@ -1056,9 +1052,9 @@ mod tests {
                         )),
                         "user_id".to_string(),
                     )),
-                    Box::new(Expr::Literal("2".to_string())),
+                    Box::new(Expr::unsigned_integer(2)),
                 )),
-                Box::new(Expr::Literal("2".to_string())),
+                Box::new(Expr::unsigned_integer(2)),
                 Box::new(Expr::Cond(
                     Box::new(Expr::EqualTo(
                         Box::new(Expr::SelectField(
@@ -1068,10 +1064,10 @@ mod tests {
                             )),
                             "user_id".to_string(),
                         )),
-                        Box::new(Expr::Literal("3".to_string())),
+                        Box::new(Expr::unsigned_integer(3)),
                     )),
-                    Box::new(Expr::Literal("3".to_string())),
-                    Box::new(Expr::Literal("0".to_string())),
+                    Box::new(Expr::unsigned_integer(3)),
+                    Box::new(Expr::unsigned_integer(0)),
                 )),
             )),
         );
@@ -1096,13 +1092,13 @@ mod tests {
                 )),
                 "user_id".to_string(),
             )),
-            Box::new(Expr::Literal("1".to_string())),
+            Box::new(Expr::unsigned_integer(1)),
         );
 
         let expected = Expr::Cond(
             Box::new(predicate_expressions),
-            Box::new(Expr::Literal("1".to_string())),
-            Box::new(Expr::Literal("0".to_string())),
+            Box::new(Expr::unsigned_integer(1)),
+            Box::new(Expr::unsigned_integer(0)),
         );
 
         assert_eq!(result, expected);
@@ -1125,7 +1121,7 @@ mod tests {
                 )),
                 "user_id".to_string(),
             )),
-            Box::new(Expr::Literal("1".to_string())),
+            Box::new(Expr::unsigned_integer(1)),
         );
 
         let expected = Expr::Cond(
@@ -1137,7 +1133,7 @@ mod tests {
                 )),
                 "user_id".to_string(),
             )),
-            Box::new(Expr::Literal("0".to_string())),
+            Box::new(Expr::unsigned_integer(0)),
         );
 
         assert_eq!(result, expected);
@@ -1160,7 +1156,7 @@ mod tests {
                 )),
                 "user_id".to_string(),
             )),
-            Box::new(Expr::Literal("1".to_string())),
+            Box::new(Expr::unsigned_integer(1)),
         );
 
         let expected = Expr::Cond(
@@ -1200,12 +1196,12 @@ mod tests {
                 )),
                 "user_id".to_string(),
             )),
-            Box::new(Expr::Literal("1".to_string())),
+            Box::new(Expr::unsigned_integer(1)),
         );
 
         let expected = Expr::Cond(
             Box::new(predicate_expressions),
-            Box::new(Expr::Literal("0".to_string())),
+            Box::new(Expr::unsigned_integer(0)),
             Box::new(Expr::Cond(
                 Box::new(Expr::EqualTo(
                     Box::new(Expr::SelectField(
@@ -1215,10 +1211,10 @@ mod tests {
                         )),
                         "user_id".to_string(),
                     )),
-                    Box::new(Expr::Literal("1".to_string())),
+                    Box::new(Expr::unsigned_integer(1)),
                 )),
-                Box::new(Expr::Literal("0".to_string())),
-                Box::new(Expr::Literal("1".to_string())),
+                Box::new(Expr::unsigned_integer(0)),
+                Box::new(Expr::unsigned_integer(1)),
             )),
         );
 
@@ -1243,10 +1239,10 @@ mod tests {
                     )),
                     "hello".to_string(),
                 )),
-                Box::new(Expr::Literal("1".to_string())),
-                Box::new(Expr::Literal("0".to_string())),
+                Box::new(Expr::unsigned_integer(1)),
+                Box::new(Expr::unsigned_integer(0)),
             )),
-            Box::new(Expr::Literal("0".to_string())),
+            Box::new(Expr::unsigned_integer(0)),
         );
 
         let expected = Expr::Concat(vec![
@@ -1260,7 +1256,7 @@ mod tests {
                     )),
                     "user_id".to_string(),
                 )),
-                Box::new(Expr::Literal("0".to_string())),
+                Box::new(Expr::unsigned_integer(0)),
             ),
         ]);
 
@@ -1285,10 +1281,10 @@ mod tests {
                     )),
                     "hello".to_string(),
                 )),
-                Box::new(Expr::Literal("1".to_string())),
-                Box::new(Expr::Literal("0".to_string())),
+                Box::new(Expr::unsigned_integer(1)),
+                Box::new(Expr::unsigned_integer(0)),
             )),
-            Box::new(Expr::Literal("0".to_string())),
+            Box::new(Expr::unsigned_integer(0)),
         );
 
         let expected = Expr::Concat(vec![
@@ -1302,7 +1298,7 @@ mod tests {
                     )),
                     "user_id".to_string(),
                 )),
-                Box::new(Expr::Literal("0".to_string())),
+                Box::new(Expr::unsigned_integer(0)),
             ),
         ]);
 
@@ -1330,7 +1326,7 @@ mod tests {
                     Box::new(Expr::Variable("foo".to_string())),
                 )),
                 ConstructorPatternExpr((
-                    ConstructorPattern::Constructor("none".to_string(), vec![]),
+                    Constructor("none".to_string(), vec![]),
                     Box::new(Expr::Variable("result2".to_string())),
                 )),
             ],
@@ -1351,7 +1347,7 @@ mod tests {
             Box::new(Expr::WorkerResponse()),
             vec![
                 ConstructorPatternExpr((
-                    ConstructorPattern::Constructor(
+                    Constructor(
                         "some".to_string(),
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
                             "foo".to_string(),
@@ -1360,7 +1356,7 @@ mod tests {
                     Box::new(Expr::WorkerResponse()),
                 )),
                 ConstructorPatternExpr((
-                    ConstructorPattern::Constructor("none".to_string(), vec![]),
+                    Constructor("none".to_string(), vec![]),
                     Box::new(Expr::Literal("nothing".to_string())),
                 )),
             ],
@@ -1381,21 +1377,19 @@ mod tests {
             Box::new(Expr::WorkerResponse()),
             vec![
                 ConstructorPatternExpr((
-                    ConstructorPattern::Constructor(
+                    Constructor(
                         "some".to_string(),
-                        vec![ConstructorPattern::Literal(Box::new(Expr::Constructor0(
-                            ConstructorPattern::Constructor(
-                                "some".to_string(),
-                                vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
-                                    "foo".to_string(),
-                                )))],
-                            ),
-                        )))],
+                        vec![Constructor(
+                            "some".to_string(),
+                            vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                                "foo".to_string(),
+                            )))],
+                        )],
                     ),
                     Box::new(Expr::WorkerResponse()),
                 )),
                 ConstructorPatternExpr((
-                    ConstructorPattern::Constructor("none".to_string(), vec![]),
+                    Constructor("none".to_string(), vec![]),
                     Box::new(Expr::Literal("nothing".to_string())),
                 )),
             ],
@@ -1415,7 +1409,7 @@ mod tests {
             Box::new(Expr::WorkerResponse()),
             vec![
                 ConstructorPatternExpr((
-                    ConstructorPattern::Constructor(
+                    Constructor(
                         "some".to_string(),
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
                             "foo".to_string(),
@@ -1424,7 +1418,7 @@ mod tests {
                     Box::new(Expr::Literal("foo".to_string())),
                 )),
                 ConstructorPatternExpr((
-                    ConstructorPattern::Constructor("none".to_string(), vec![]),
+                    Constructor("none".to_string(), vec![]),
                     Box::new(Expr::Concat(vec![
                         Expr::Concat(vec![
                             Expr::Literal("bar".to_string()),
