@@ -550,7 +550,7 @@ fn resolve_literal_in_code_context(primitive: &str) -> Expr {
         Expr::Number(InnerNumber::Integer(i64_value))
     } else if let Ok(f64_value) = primitive.parse::<f64>() {
         Expr::Number(InnerNumber::Float(f64_value))
-    } else if let Ok(boolean) = primitive.parse::<bool>(){
+    } else if let Ok(boolean) = primitive.parse::<bool>() {
         Expr::Boolean(boolean)
     } else {
         Expr::Variable(primitive.to_string())
@@ -1317,7 +1317,7 @@ mod tests {
             Box::new(Expr::WorkerResponse()),
             vec![
                 ConstructorPatternExpr((
-                    ConstructorPattern::Constructor(
+                    Constructor(
                         "some".to_string(),
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
                             "foo".to_string(),

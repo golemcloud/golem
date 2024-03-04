@@ -44,7 +44,6 @@ impl Expr {
     pub fn float(value: f64) -> Expr {
         Expr::Number(InnerNumber::Float(value))
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
