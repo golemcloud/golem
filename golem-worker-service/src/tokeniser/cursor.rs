@@ -124,7 +124,6 @@ impl TokenCursor {
 
         while let Some(current_token) = self.tokens.get(index).map(|x| x.to_string()) {
             if starts.contains(&current_token) {
-                dbg!("Is this hitting ever?");
                 // That it finds a start token again
                 start_token_count += 1;
             } else if current_token == end.to_string() {
@@ -247,16 +246,13 @@ mod tests {
 
     #[test]
     fn test_something() {
-        let string = "=> value }}";
+        let string = "'value'";
         let tokens = Tokenizer::new(string).run().value;
-       // let tokens = vec![Token::Else, Token::RawString("foo".to_string()), Token::ClosedCurlyBrace];
+        dbg!("tokens", tokens.clone());
         let mut cursor = TokenCursor::new(tokens.clone());
-
-        dbg!("cursor", cursor.peek());
-       let result = cursor.next_non_empty_token();
-        dbg!("cursor", cursor.peek());
-        let captured_string = cursor.index_of_last_end_token(vec![&Token::OpenCurlyBrace], &Token::ClosedCurlyBrace);
-        dbg!("The captured string is {}, {}", captured_string.clone());
+        cursor.next_non_empty_token();
+        let result = cursor.capture_string_until(vec![], &Token::Quote);
+        dbg!("cursor", result);
         assert_eq!(1, 1)
 
 

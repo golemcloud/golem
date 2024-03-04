@@ -6,6 +6,7 @@ use super::*;
 use crate::expr::*;
 use crate::tokeniser::cursor::TokenCursor;
 use crate::tokeniser::tokenizer::{Token, TokeniserResult, Tokenizer};
+use crate::value_typed::ValueTyped;
 
 #[derive(Clone, Debug)]
 pub struct ExprParser {}
@@ -116,7 +117,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
         if let Some(token) = token {
             match token {
                 Token::RawString(raw_string) => {
-                    let new_expr = Expr::Literal(raw_string);
+                    let new_expr = if context.is_code() { resolve_literal_in_code_context(raw_string.as_str()) } else { Expr::Literal(raw_string) };
 
                     go(cursor, context, prev_expression.apply_with(new_expr))
                 }
@@ -142,6 +143,21 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     )?;
 
                     go(cursor, context, new_expr)
+                }
+
+                Token::Quote => {
+                    let string = cursor.capture_string_until(vec![], &Token::Quote);
+
+                    let new_expr = match string {
+                        Some(string) => {
+                            let mut cursor = Tokenizer::new(string.as_str()).run().to_cursor();
+
+                            go(&mut cursor, Context::Literal, InternalExprResult::Empty)
+                        }
+                        None => Err(ParseError::Message("Expecting a non-empty string between quotes".to_string())),
+                    };
+
+                    go(cursor, context, prev_expression.apply_with(new_expr?))
                 }
 
                 Token::OpenParen => {
@@ -441,6 +457,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                 Token::NewLine => go(cursor, context, prev_expression),
                 Token::OpenCurlyBrace => go(cursor, context, prev_expression),
                 Token::Arrow => go(cursor, context, prev_expression),
+                Token::Comma => go(cursor, context, prev_expression),
                 _ => todo!("Token not implemented {:?}", token),
             }
         } else {
@@ -460,6 +477,18 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
         context,
         InternalExprResult::Empty,
     )
+}
+
+fn resolve_literal_in_code_context(primitive: &str) -> Expr {
+    if let Ok(u64) = primitive.parse::<u64>() {
+        Expr::Number(InnerNumber::UnsignedInteger(u64))
+    } else if let Ok(i64_value) = primitive.parse::<i64>() {
+        Expr::Number(InnerNumber::Integer(i64_value))
+    } else if let Ok(f64_value) = primitive.parse::<f64>() {
+        Expr::Number(InnerNumber::Float(f64_value))
+    } else {
+        Expr::Variable(primitive.to_string())
+    }
 }
 
 fn get_constructors(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExpr>, ParseError> {
@@ -1224,11 +1253,11 @@ mod tests {
     }
 
     #[test]
-    fn test_if_expr_with_match() {
+    fn test_if_expr_with_pattern_match() {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker.response { some(foo) => result1, none => result2 } }")
+            .parse("${match worker.response { some(foo) => foo, none => result2 } }")
             .unwrap();
 
         let expected =
@@ -1237,7 +1266,34 @@ mod tests {
                 vec![
                     ConstructorPatternExpr((
                         ConstructorPattern::Constructor("some".to_string(), vec![ConstructorPattern::Literal(Box::new(Expr::Literal("foo".to_string())))]),
-                        Box::new(Expr::Literal("result1".to_string()))
+                        Box::new(Expr::Literal("foo".to_string()))
+                    )),
+                    ConstructorPatternExpr((
+                        ConstructorPattern::Constructor("none".to_string(), vec![]),
+                        Box::new(Expr::Literal("result2".to_string()))
+                    )),
+                ]
+            );
+
+        assert_eq!(result, expected);
+    }
+
+
+    #[test]
+    fn test_if_expr_with_pattern_match_literals() {
+        let expression_parser = ExprParser {};
+
+        let result = expression_parser
+            .parse("${match worker.response { some(foo) => 'foo', none => 'bar' } }")
+            .unwrap();
+
+        let expected =
+            Expr::PatternMatch(
+                Box::new(Expr::WorkerResponse()),
+                vec![
+                    ConstructorPatternExpr((
+                        ConstructorPattern::Constructor("some".to_string(), vec![ConstructorPattern::Literal(Box::new(Expr::Literal("foo".to_string())))]),
+                        Box::new(Expr::Literal("foo".to_string()))
                     )),
                     ConstructorPatternExpr((
                         ConstructorPattern::Constructor("none".to_string(), vec![]),

@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use serde_json::Value;
+use crate::expr::InnerNumber;
 
 // More of a typed serde_json::Value but typed for its primitives
 // Anything other than primitives are just represented using JSON (i.e, non-recursive) itself
@@ -301,15 +302,14 @@ impl ValueTyped {
     }
 
     pub fn from_string(input: &str) -> ValueTyped {
-        if let Ok(u64) = input.parse::<u64>() {
-            return ValueTyped::U64(u64);
-        } else if let Ok(i64_value) = input.parse::<i64>() {
-            return ValueTyped::I64(i64_value);
-        } else if let Ok(f64_value) = input.parse::<f64>() {
-            return ValueTyped::Float(f64_value);
-        }
-
-        // If parsing as a number fails, treat it as a string
         ValueTyped::String(input.to_string())
+    }
+
+    pub fn from_number_expr(number: InnerNumber) -> ValueTyped {
+        match number {
+            InnerNumber::Float(f) => ValueTyped::Float(f),
+            InnerNumber::UnsignedInteger(u) => ValueTyped::U64(u),
+            InnerNumber::Integer(i) => ValueTyped::I64(i),
+        }
     }
 }

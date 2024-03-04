@@ -282,6 +282,8 @@ impl Evaluator<Value> for Expr {
 
                 Expr::Literal(literal) => Ok(ValueTyped::from_string(literal.as_str())),
 
+                Expr::Number(number) => Ok(ValueTyped::from_number_expr(number)),
+
                 Expr::PathVar(path_var) => resolved_variables
                     .get_key(path_var.as_str())
                     .map(ValueTyped::from_json)

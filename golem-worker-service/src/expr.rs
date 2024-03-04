@@ -16,6 +16,8 @@ pub enum Expr {
     Sequence(Vec<Expr>),
     Record(Vec<(String, Box<Expr>)>),
     Literal(String),
+    Number(InnerNumber),
+    Variable(String),
     PathVar(String),
     Concat(Vec<Expr>),
     Not(Box<Expr>),
@@ -29,6 +31,14 @@ pub enum Expr {
     Result0(Result<Box<Expr>, Box<Expr>>),
     PatternMatch(Box<Expr>, Vec<ConstructorPatternExpr>),
 }
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum InnerNumber {
+    UnsignedInteger(u64),
+    Integer(i64),
+    Float(f64),
+}
+
 
 // This standalone is not a valid expression
 // and can only be part of PatternMatch
