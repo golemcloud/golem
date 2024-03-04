@@ -302,6 +302,15 @@ impl ValueTyped {
     }
 
     pub fn from_string(input: &str) -> ValueTyped {
+        if let Ok(u64) = input.parse::<u64>() {
+            return ValueTyped::U64(u64);
+        } else if let Ok(i64_value) = input.parse::<i64>() {
+            return ValueTyped::I64(i64_value);
+        } else if let Ok(f64_value) = input.parse::<f64>() {
+            return ValueTyped::Float(f64_value);
+        }
+
+        // If parsing as a number fails, treat it as a string
         ValueTyped::String(input.to_string())
     }
 
