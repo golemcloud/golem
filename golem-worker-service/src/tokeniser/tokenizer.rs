@@ -40,6 +40,7 @@ pub enum Token {
     Dot,
     Arrow,
     Comma,
+    Quote
 }
 
 impl Token {
@@ -72,7 +73,8 @@ impl Token {
             Token::OpenCurlyBrace => false,
             Token::Match => false,
             Token::Arrow => false,
-            Token::Comma => false
+            Token::Comma => false,
+            Token::Quote => false
         }
     }
 
@@ -127,7 +129,8 @@ impl Display for Token {
                 Token::Match => "match",
                 Token::OpenCurlyBrace => "{",
                 Token::Arrow => "=>",
-                Token::Comma => ","
+                Token::Comma => ",",
+                Token::Quote => "'"
             }
         )
     }
@@ -364,6 +367,12 @@ impl<'t> Tokenizer {
                     self.text[character_index + Token::Comma.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::Comma);
                 break;
+            } else if c == "'" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text =
+                    self.text[character_index + Token::Quote.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Quote);
+                break;
             }
         }
 
@@ -405,7 +414,7 @@ fn tokenise_string_with_index(input_string: &str) -> Vec<(usize, &str)> {
     let mut result: Vec<(usize, &str)> = Vec::new();
     let mut current_index = 0;
     let token_regex_pattern = Regex::new(
-        r"(worker\.response|request|,|\.|<=|\$\{|\}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|\bnone\b|\bmatch\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
+        r"(worker\.response|request|,|\.|'|<=|\$\{|}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|\bnone\b|\bmatch\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
     )
         .unwrap();
 
@@ -872,7 +881,7 @@ else${z}
 
     #[test]
     fn test_token_processing_with_match_expr() {
-        let tokens: Vec<Token> = Tokenizer::new("${match worker.response { some(value) => value, none => worker.response } }")
+        let tokens: Vec<Token> = Tokenizer::new("${match worker.response { some(value) => worker.response, none => 'some_value' } }")
             .run()
             .value;
         assert_eq!(
@@ -892,14 +901,16 @@ else${z}
                 Token::Space,
                 Token::Arrow,
                 Token::Space,
-                Token::raw_string("value"),
+                Token::WorkerResponse,
                 Token::Comma,
                 Token::Space,
                 Token::None,
                 Token::Space,
                 Token::Arrow,
                 Token::Space,
-                Token::WorkerResponse,
+                Token::Quote,
+                Token::raw_string("some_value"),
+                Token::Quote,
                 Token::Space,
                 Token::ClosedCurlyBrace,
                 Token::Space,
