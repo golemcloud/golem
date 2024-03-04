@@ -291,8 +291,20 @@ impl Evaluator<Value> for Expr {
                         "The result doesn't contain the field {}",
                         path_var
                     ))),
-
-                _ => panic!("bhoom"),
+                Expr::Variable(variable) => resolved_variables
+                    .get_key(variable.as_str())
+                    .map(ValueTyped::from_json)
+                    .ok_or(EvaluationError::Message(format!(
+                        "The result doesn't contain the field {}",
+                        variable
+                    ))),
+                Expr::Boolean(bool) => Ok(ValueTyped::Boolean(bool)),
+                Expr::PatternMatch(_, _) => Err(EvaluationError::Message(
+                    "Pattern matching is not supported yet".to_string(),
+                )),
+                Expr::Constructor0(_) => Err(EvaluationError::Message(
+                    "Constructor0 is not supported yet".to_string(),
+                )),
             }
         }
 
@@ -403,8 +415,8 @@ mod tests {
             &resolved_variables,
         );
         test_expr_number_ok(
-            "${if (request.headers.authorisation == \"admin\") then 200 else 401}",
-            "401",
+            "${if (request.headers.authorisation == 'admin') then 200 else 401}",
+            "200",
             &resolved_variables,
         );
         test_expr_str_err(
