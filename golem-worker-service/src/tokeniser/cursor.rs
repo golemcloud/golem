@@ -49,7 +49,7 @@ impl TokenCursor {
         matches
     }
 
-    pub fn capture_string_between(&mut self, start: &Token, end: &Token) -> Option<String> {
+    pub fn capture_string_until(&mut self, start: Vec<&Token>, end: &Token) -> Option<String> {
         let capture_until = self.index_of_last_end_token(start, end);
 
         let mut tokens = vec![];
@@ -112,8 +112,10 @@ impl TokenCursor {
     // This is useful especially when we want to capture string between two tokens,
     // If the start token repeats again (nested start), then it looks for
     // the end token for the inner start, and repeats until it find
-    // the end token for the outer start
-    pub fn index_of_last_end_token(&mut self, start: &Token, end: &Token) -> Option<usize> {
+    // the end token for the outer start. Here start corresponding to a particular end
+    // can be n number of tokens. Example `${` can be the start of `}` or `{` can be the start of `}`.
+    pub fn index_of_last_end_token(&mut self, nested_starts: Vec<&Token>, end: &Token) -> Option<usize> {
+        let starts = nested_starts.iter().map(|x| x.to_string()).collect::<Vec<String>>();
         let mut index: usize = self.index;
 
         let mut start_token_count = 0;
@@ -121,7 +123,7 @@ impl TokenCursor {
         let mut found: bool = false;
 
         while let Some(current_token) = self.tokens.get(index).map(|x| x.to_string()) {
-            if current_token == start.to_string() {
+            if starts.contains(&current_token) {
                 dbg!("Is this hitting ever?");
                 // That it finds a start token again
                 start_token_count += 1;
@@ -174,7 +176,7 @@ mod tests {
         let mut cursor = TokenCursor::new(tokens.clone());
         cursor.next_token();
         let result = cursor
-            .capture_string_between(&Token::OpenParen, &Token::CloseParen)
+            .capture_string_until(vec![&Token::OpenParen], &Token::CloseParen)
             .unwrap();
 
         assert_eq!(result, "afsal".to_string())
@@ -193,7 +195,7 @@ mod tests {
         let mut cursor = TokenCursor::new(tokens.clone());
         cursor.next_token();
         let result = cursor
-            .capture_string_between(&Token::OpenParen, &Token::CloseParen)
+            .capture_string_until(vec![&Token::OpenParen], &Token::CloseParen)
             .unwrap();
 
         assert_eq!(result, "(afsal)".to_string())
@@ -205,7 +207,7 @@ mod tests {
 
         let mut cursor = TokenCursor::new(tokens.clone());
         let result = cursor
-            .capture_string_between(&Token::OpenParen, &Token::CloseParen)
+            .capture_string_until(vec![&Token::OpenParen], &Token::CloseParen)
             .unwrap();
         assert_eq!(result, "".to_string())
     }
@@ -215,7 +217,7 @@ mod tests {
         let tokens = vec![];
 
         let mut cursor = TokenCursor::new(tokens.clone());
-        let result = cursor.capture_string_between(&Token::OpenParen, &Token::CloseParen);
+        let result = cursor.capture_string_until(vec![&Token::OpenParen], &Token::CloseParen);
 
         assert_eq!(result, None)
     }
@@ -253,7 +255,7 @@ mod tests {
         dbg!("cursor", cursor.peek());
        let result = cursor.next_non_empty_token();
         dbg!("cursor", cursor.peek());
-        let captured_string = cursor.index_of_last_end_token(&Token::Else, &Token::ClosedCurlyBrace);
+        let captured_string = cursor.index_of_last_end_token(vec![&Token::OpenCurlyBrace], &Token::ClosedCurlyBrace);
         dbg!("The captured string is {}, {}", captured_string.clone());
         assert_eq!(1, 1)
 

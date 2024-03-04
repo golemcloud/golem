@@ -296,8 +296,8 @@ impl Path {
         while let Some(token) = cursor.next_non_empty_token() {
             match token {
                 Token::OpenSquareBracket => {
-                    let probable_index = cursor.capture_string_between(
-                        &Token::OpenSquareBracket,
+                    let probable_index = cursor.capture_string_until(
+                        vec![&Token::OpenSquareBracket],
                         &Token::ClosedSquareBracket,
                     );
 

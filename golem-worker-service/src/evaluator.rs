@@ -49,7 +49,7 @@ impl<'t> Evaluator<String> for Primitive<'t> {
             match token {
                 Token::InterpolationStart => {
                     let place_holder_name = cursor
-                        .capture_string_between(&Token::InterpolationStart, &Token::CloseParen);
+                        .capture_string_until(vec![&Token::InterpolationStart], &Token::CloseParen);
 
                     if let Some(place_holder_name) = place_holder_name {
                         match place_holder_values.get_key(place_holder_name.as_str()) {

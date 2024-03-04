@@ -128,9 +128,9 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                 ),
 
                 Token::InterpolationStart => {
-                    let new_expr = capture_expr_between(
+                    let new_expr = capture_expression_until(
                         cursor,
-                        &Token::InterpolationStart,
+                        vec![&Token::InterpolationStart, &Token::OpenCurlyBrace],
                         Some(&Token::ClosedCurlyBrace),
                         prev_expression,
                         go,
@@ -140,9 +140,9 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                 }
 
                 Token::OpenParen => {
-                    let expr = capture_expr_between(
+                    let expr = capture_expression_until(
                         cursor,
-                        &Token::OpenParen,
+                        vec![&Token::OpenParen],
                         Some(&Token::CloseParen),
                         prev_expression,
                         go,
@@ -298,8 +298,8 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
 
                 Token::OpenSquareBracket => match prev_expression {
                     InternalExprResult::Complete(prev_expr) => {
-                        let optional_possible_index = cursor.capture_string_between(
-                            &Token::OpenSquareBracket,
+                        let optional_possible_index = cursor.capture_string_until(
+                            vec![&Token::OpenSquareBracket],
                             &Token::ClosedSquareBracket,
                         );
 
@@ -358,9 +358,9 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                         },
                     );
 
-                    let captured_predicate = capture_expr_between(
+                    let captured_predicate = capture_expression_until(
                         cursor,
-                        &Token::If,
+                        vec![&Token::If],
                         Some(&Token::Then),
                         future_expr,
                         go,
@@ -370,8 +370,9 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                 }
 
                 Token::Match => {
+                    dbg!("Why cursor don't have ", &cursor.tokens);
                     let expr_under_evaluation =
-                        cursor.capture_string_between(&Token::Match, &Token::OpenCurlyBrace);
+                        cursor.capture_string_until(vec![], &Token::OpenCurlyBrace);
 
                     let new_expr = match expr_under_evaluation {
                         Some(expr_under_evaluation) => {
@@ -399,9 +400,9 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
 
                 Token::Then => match prev_expression {
                     InternalExprResult::InComplete(ExpressionContext::Condition, _) => {
-                        let mew_expr = capture_expr_between(
+                        let mew_expr = capture_expression_until(
                             cursor,
-                            &Token::Then,
+                            vec![&Token::Then],
                             Some(&Token::Else),
                             prev_expression,
                             go,
@@ -419,7 +420,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
                 Token::Else => match prev_expression {
                     InternalExprResult::InComplete(ExpressionContext::Condition, _) => {
                         let expr =
-                            capture_expr_between(cursor, &Token::Else, None, prev_expression, go)?;
+                            capture_expression_until(cursor, vec![&Token::Else], None, prev_expression, go)?;
 
                         go(cursor, context, expr)
                     }
@@ -459,6 +460,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult) -> Result<Expr, ParseError> {
 
 fn get_constructor(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExpr>, ParseError> {
     dbg!("The tokens are {}", &cursor.peek());
+    dbg!("The tokens are {}", &cursor.tokens);
     let mut constructor_patterns: Vec<ConstructorPatternExpr> = vec![];
 
     fn go(
@@ -488,17 +490,14 @@ fn get_constructor(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExp
                                     Some(Token::CloseParen) => {
                                         match cursor.next_non_empty_token() {
                                             Some(Token::Arrow) => {
-                                                dbg!("The cursor is {}", cursor.peek());
-                                                let string = cursor.capture_string_between(&Token::Arrow, &Token::ClosedCurlyBrace);
-                                                dbg!("The string is {:?}", string);
                                                 let index_of_closed_curly_brace = cursor
                                                     .index_of_last_end_token(
-                                                        &Token::Arrow,
+                                                        vec![&Token::OpenCurlyBrace],
                                                         &Token::ClosedCurlyBrace,
                                                     );
                                                 let index_of_commaseparator = cursor
                                                     .index_of_last_end_token(
-                                                        &Token::Arrow,
+                                                        vec![&Token::OpenCurlyBrace],
                                                         &Token::RawString(",".to_string()),
                                                     );
 
@@ -509,8 +508,8 @@ fn get_constructor(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExp
                                                     (Some(end_of_constructors), Some(comma)) => {
                                                         if end_of_constructors > comma {
                                                             let captured_string = cursor
-                                                                .capture_string_between(
-                                                                    &Token::Arrow,
+                                                                .capture_string_until(
+                                                                    vec![],
                                                                     &Token::RawString(
                                                                         ",".to_string(),
                                                                     ),
@@ -534,8 +533,8 @@ fn get_constructor(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExp
                                                         } else {
                                                             // End of constructor
                                                             let captured_string = cursor
-                                                                .capture_string_between(
-                                                                    &Token::Arrow,
+                                                                .capture_string_until(
+                                                                    vec![&Token::OpenCurlyBrace],
                                                                     &Token::ClosedCurlyBrace,
                                                                 );
                                                             let expr_parser = ExprParser {};
@@ -559,8 +558,8 @@ fn get_constructor(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExp
 
                                                     (Some(_), None) => {
                                                         let captured_string = cursor
-                                                            .capture_string_between(
-                                                                &Token::Arrow,
+                                                            .capture_string_until(
+                                                                vec![&Token::OpenCurlyBrace],
                                                                 &Token::ClosedCurlyBrace,
                                                             );
                                                         let expr_parser = ExprParser {};
@@ -618,9 +617,12 @@ fn get_constructor(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternExp
     Ok(constructor_patterns)
 }
 
-fn capture_expr_between<F>(
+// possible_nested_token_starts
+// corresponds to the tokens whose closed end is same as capture_until
+// and we should include those capture_untils
+fn capture_expression_until<F>(
     cursor: &mut TokenCursor,
-    capture_from: &Token,
+    possible_nested_token_starts: Vec<&Token>,
     capture_until: Option<&Token>,
     future_expression: InternalExprResult,
     get_expr: F,
@@ -629,7 +631,7 @@ where
     F: FnOnce(&mut TokenCursor, Context, InternalExprResult) -> Result<Expr, ParseError>,
 {
     let optional_captured_string = match capture_until {
-        Some(last_token) => cursor.capture_string_between(capture_from, last_token),
+        Some(last_token) => cursor.capture_string_until(possible_nested_token_starts, last_token),
         None => cursor.capture_tail(),
     };
 
@@ -642,8 +644,8 @@ where
             Ok(future_expression.apply_with(inner_expr))
         }
         None => Err(ParseError::Message(format!(
-            "Unable to find a matching closing symbol {:?} corresponding to {}",
-            capture_until, capture_from
+            "Unable to find a matching closing symbol {:?}",
+            capture_until
         ))),
     }
 }
