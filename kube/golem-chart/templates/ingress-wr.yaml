@@ -1,0 +1,23 @@
+{{- if eq .Values.ingressWorkerRequest.type "alb" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: golem-worker-service-request-{{.Values.env}}
+  labels:
+    env: {{.Values.env}}
+{{- if .Values.ingressWorkerRequest.alb.annotations }}
+  annotations: {{- .Values.ingressWorkerRequest.alb.annotations | toYaml | nindent 4 }}
+{{- end }}
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: service-worker-service-{{.Values.env}}
+                port:
+                  number: {{ .Values.workerService.ports.requestHttp }}
+{{- end }}
