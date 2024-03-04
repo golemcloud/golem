@@ -4,7 +4,7 @@ use super::tokenizer::Token;
 // without worrying about white spaces
 // It is decided that expression language is white space insensitive
 pub struct TokenCursor {
-    tokens: Vec<Token>,
+   pub tokens: Vec<Token>,
     index: usize,
 }
 
@@ -109,6 +109,10 @@ impl TokenCursor {
         }
     }
 
+    // This is useful especially when we want to capture string between two tokens,
+    // If the start token repeats again (nested start), then it looks for
+    // the end token for the inner start, and repeats until it find
+    // the end token for the outer start
     pub fn index_of_last_end_token(&mut self, start: &Token, end: &Token) -> Option<usize> {
         let mut index: usize = self.index;
 
@@ -118,6 +122,7 @@ impl TokenCursor {
 
         while let Some(current_token) = self.tokens.get(index).map(|x| x.to_string()) {
             if current_token == start.to_string() {
+                dbg!("Is this hitting ever?");
                 // That it finds a start token again
                 start_token_count += 1;
             } else if current_token == end.to_string() {
@@ -127,6 +132,7 @@ impl TokenCursor {
                     found = true;
                     break;
                 } else {
+                    // Implies end for nested happened
                     start_token_count -= 1;
                 }
             }
@@ -154,7 +160,7 @@ impl TokenCursor {
 
 #[cfg(test)]
 mod tests {
-
+    use crate::tokeniser::tokenizer::Tokenizer;
     use super::*;
 
     #[test]
@@ -235,5 +241,22 @@ mod tests {
         let result = cursor.capture_tail();
 
         assert_eq!(result, Some("foo".to_string()))
+    }
+
+    #[test]
+    fn test_something() {
+        let string = "=> value }}";
+        let tokens = Tokenizer::new(string).run().value;
+       // let tokens = vec![Token::Else, Token::RawString("foo".to_string()), Token::ClosedCurlyBrace];
+        let mut cursor = TokenCursor::new(tokens.clone());
+
+        dbg!("cursor", cursor.peek());
+       let result = cursor.next_non_empty_token();
+        dbg!("cursor", cursor.peek());
+        let captured_string = cursor.index_of_last_end_token(&Token::Else, &Token::ClosedCurlyBrace);
+        dbg!("The captured string is {}, {}", captured_string.clone());
+        assert_eq!(1, 1)
+
+
     }
 }

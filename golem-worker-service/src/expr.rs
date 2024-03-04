@@ -27,10 +27,14 @@ pub enum Expr {
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
     Option0(Option<Box<Expr>>),
     Result0(Result<Box<Expr>, Box<Expr>>),
-    PatternMatch(Box<Expr>, Vec<(ConstructorPattern, Box<Expr>)>),
-    ConstructorPattern0(ConstructorPattern)
+    PatternMatch(Box<Expr>, Vec<ConstructorPatternExpr>),
 }
 
+// This standalone is not a valid expression
+// and can only be part of PatternMatch
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct ConstructorPatternExpr(pub (ConstructorPattern, Box<Expr>));
 
 // A constructor pattern by itself is an expr,
 // as it may not be always associated with match expr
@@ -40,7 +44,7 @@ pub enum ConstructorPattern {
     WildCard,
     As(String, Box<ConstructorPattern>),
     Constructor(String, Vec<ConstructorPattern>),
-    Literal(Box<Expr>)
+    Literal(Box<Expr>),
 }
 
 impl Expr {
@@ -264,8 +268,8 @@ impl Expr {
                         ))),
                         _ => Err("Not supported type".into()),
                     }
-                },
-                _ => todo!("bhoom")
+                }
+                _ => todo!("bhoom"),
             }
         }
 
@@ -502,8 +506,8 @@ impl Expr {
                         ))),
                         _ => Err("Not supported type".into()),
                     }
-                },
-                _ => todo!("bh0oom")
+                }
+                _ => todo!("bh0oom"),
             }
         }
 
@@ -628,7 +632,7 @@ impl Expr {
                 vars.extend(value1.get_vars());
                 vars.extend(value2.get_vars());
             }
-            _ => todo!("Don't know why these thingsss!@!@!!!!!!!!!!")
+            _ => todo!("Don't know why these thingsss!@!@!!!!!!!!!!"),
         }
 
         vars

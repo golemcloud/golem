@@ -70,7 +70,7 @@ impl Token {
             Token::None => false,
             Token::OpenCurlyBrace => false,
             Token::Match => false,
-            Token::Arrow => false
+            Token::Arrow => false,
         }
     }
 
@@ -124,13 +124,24 @@ impl Display for Token {
                 Token::None => "none",
                 Token::Match => "match",
                 Token::OpenCurlyBrace => "{",
-                Token::Arrow => "=>"
+                Token::Arrow => "=>",
             }
         )
     }
 }
 
 impl Token {
+    pub fn is_constructor(&self) -> bool {
+        match self {
+            Token::Ok => true,
+            Token::Err => true,
+            Token::Some => true,
+            Token::None => true,
+            Token::Match => true,
+            _ => false,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         match self {
             Self::RawString(string) => string.is_empty(),
@@ -317,12 +328,14 @@ impl<'t> Tokenizer {
                 break;
             } else if c == "some" {
                 token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + Token::Some.to_string().len()..].to_string();
+                self.text =
+                    self.text[character_index + Token::Some.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::Some);
                 break;
             } else if c == "none" {
                 token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + Token::None.to_string().len()..].to_string();
+                self.text =
+                    self.text[character_index + Token::None.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::None);
                 break;
             } else if c == "null" {
@@ -332,7 +345,8 @@ impl<'t> Tokenizer {
                 break;
             } else if c == "match" {
                 token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + Token::Match.to_string().len()..].to_string();
+                self.text =
+                    self.text[character_index + Token::Match.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::Match);
                 break;
             }
@@ -843,7 +857,9 @@ else${z}
 
     #[test]
     fn test_token_processing_with_dollar() {
-        let tokens: Vec<Token> = Tokenizer::new("${match worker.response { some(value) } }").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("${match worker.response { some(value) } }")
+            .run()
+            .value;
         assert_eq!(
             tokens,
             vec![

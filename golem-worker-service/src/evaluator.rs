@@ -290,7 +290,7 @@ impl Evaluator<Value> for Expr {
                         path_var
                     ))),
 
-                _ => panic!("bhoom")
+                _ => panic!("bhoom"),
             }
         }
 
