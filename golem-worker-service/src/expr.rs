@@ -30,6 +30,7 @@ pub enum Expr {
     Option0(Option<Box<Expr>>),
     Result0(Result<Box<Expr>, Box<Expr>>),
     PatternMatch(Box<Expr>, Vec<ConstructorPatternExpr>),
+    Constructor0(ConstructorPattern), // Can exist standalone from pattern match
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
@@ -38,7 +39,6 @@ pub enum InnerNumber {
     Integer(i64),
     Float(f64),
 }
-
 
 // This standalone is not a valid expression
 // and can only be part of PatternMatch

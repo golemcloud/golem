@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
-use serde_json::Value;
 use crate::expr::InnerNumber;
+use serde_json::Value;
 
 // More of a typed serde_json::Value but typed for its primitives
 // Anything other than primitives are just represented using JSON (i.e, non-recursive) itself

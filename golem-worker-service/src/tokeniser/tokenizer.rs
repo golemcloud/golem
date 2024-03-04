@@ -40,7 +40,7 @@ pub enum Token {
     Dot,
     Arrow,
     Comma,
-    Quote
+    Quote,
 }
 
 impl Token {
@@ -74,7 +74,7 @@ impl Token {
             Token::Match => false,
             Token::Arrow => false,
             Token::Comma => false,
-            Token::Quote => false
+            Token::Quote => false,
         }
     }
 
@@ -130,7 +130,7 @@ impl Display for Token {
                 Token::OpenCurlyBrace => "{",
                 Token::Arrow => "=>",
                 Token::Comma => ",",
-                Token::Quote => "'"
+                Token::Quote => "'",
             }
         )
     }
@@ -361,7 +361,7 @@ impl<'t> Tokenizer {
                     self.text[character_index + Token::Match.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::Match);
                 break;
-            }  else if c == "," {
+            } else if c == "," {
                 token = Some(Token::RawString(self.text[..character_index].to_string()));
                 self.text =
                     self.text[character_index + Token::Comma.to_string().len()..].to_string();
@@ -881,9 +881,11 @@ else${z}
 
     #[test]
     fn test_token_processing_with_match_expr() {
-        let tokens: Vec<Token> = Tokenizer::new("${match worker.response { some(value) => worker.response, none => 'some_value' } }")
-            .run()
-            .value;
+        let tokens: Vec<Token> = Tokenizer::new(
+            "${match worker.response { some(value) => worker.response, none => 'some_value' } }",
+        )
+        .run()
+        .value;
         assert_eq!(
             tokens,
             vec![
