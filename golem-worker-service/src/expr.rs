@@ -53,6 +53,16 @@ pub enum InnerNumber {
     Float(f64),
 }
 
+impl InnerNumber {
+    pub fn to_string(&self) -> String {
+        match self {
+            InnerNumber::UnsignedInteger(value) => value.to_string(),
+            InnerNumber::Integer(value) => value.to_string(),
+            InnerNumber::Float(value) => value.to_string(),
+        }
+    }
+}
+
 // This standalone is not a valid expression
 // and can only be part of PatternMatch
 
@@ -292,7 +302,12 @@ impl Expr {
                         _ => Err("Not supported type".into()),
                     }
                 }
-                _ => todo!("bhoom"),
+
+                Expr::Number(number) => Ok(InternalValue::Interpolated(serde_json::Value::String(number.to_string()))),
+                Expr::Variable(variable) => Ok(InternalValue::Interpolated(serde_json::Value::String(variable.clone()))),
+                Expr::Boolean(boolean) => Ok(InternalValue::Interpolated(serde_json::Value::String(boolean.clone().to_string()))),
+                Expr::PatternMatch(_, _) => todo!(),
+                Expr::Constructor0(_) => todo!()
             }
         }
 
