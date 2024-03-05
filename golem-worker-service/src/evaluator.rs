@@ -809,7 +809,7 @@ mod tests {
         );
 
         let expr = Expr::from_primitive_string(
-            "${match worker.response { ok(value) => value.ids[0], err => 'not found' }}",
+            "${match worker.response { ok(value) => value.ids[0], none => 'not found' }}",
         )
         .unwrap();
         let result = expr.evaluate(&resolved_variables);
