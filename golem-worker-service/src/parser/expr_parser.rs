@@ -1336,6 +1336,41 @@ mod tests {
     }
 
     #[test]
+    fn test_if_expr_with_pattern_match_variables_ok() {
+        let expression_parser = ExprParser {};
+
+        let result = expression_parser
+            .parse("${match worker.response { ok(foo) => foo, err(bar) => result2 } }")
+            .unwrap();
+
+        let expected = Expr::PatternMatch(
+            Box::new(Expr::WorkerResponse()),
+            vec![
+                ConstructorPatternExpr((
+                    Constructor(
+                        "ok".to_string(),
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "foo".to_string(),
+                        )))],
+                    ),
+                    Box::new(Expr::Variable("foo".to_string())),
+                )),
+                ConstructorPatternExpr((
+                    Constructor(
+                        "err".to_string(),
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "bar".to_string(),
+                        )))],
+                    ),
+                    Box::new(Expr::Variable("result2".to_string())),
+                )),
+            ],
+        );
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
     fn test_if_expr_with_pattern_match_variable_and_constants() {
         let expression_parser = ExprParser {};
 

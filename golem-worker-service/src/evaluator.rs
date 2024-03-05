@@ -3,7 +3,7 @@ use std::fmt::Display;
 use serde_json::Value;
 
 use super::tokeniser::tokenizer::{Token, Tokenizer};
-use crate::expr::Expr;
+use crate::expr::{ConstructorPattern, Expr};
 use crate::resolved_variables::{Path, ResolvedVariables};
 use crate::value_typed::ValueTyped;
 
@@ -299,9 +299,105 @@ impl Evaluator<Value> for Expr {
                         variable
                     ))),
                 Expr::Boolean(bool) => Ok(ValueTyped::Boolean(bool)),
-                Expr::PatternMatch(_, _) => Err(EvaluationError::Message(
-                    "Pattern matching is not supported yet".to_string(),
-                )),
+                Expr::PatternMatch(input_expr, constructors) => {
+                    // if `match worker.response`, then match_evaluated is the value of worker.response
+                    let match_evaluated = go(&input_expr, resolved_variables)?.to_json();
+                    let mut resolved_result: Option<Value> = None;
+
+                    for constructor in constructors {
+                        // if `match worker.response { some(value) =>...}`, then condition pattern is some(value)
+                        let (condition_pattern, possible_resolution) = constructor.0;
+
+                        match condition_pattern {
+                            //  if `match worker.response { some(value) => value}`, then condition key is some
+                            // and patterns is vec![ConstructorPattern::Literal(Expr::Variable(value))] (as an example)
+                            ConstructorPattern::Constructor(condition_key, patterns) => {
+                                if patterns.len() > 1 {
+                                    return Err(EvaluationError::Message(
+                                        "Pattern matching is currently supported only for single pattern in constructor. i.e, {}(person), {}, {}(person_info) etc and not {}(age, birth_date)".to_string(),
+                                    ));
+                                } else if patterns.is_empty() {
+                                    if match_evaluated == Value::String(condition_key.clone()) {
+                                        let result =
+                                            go(&possible_resolution, resolved_variables)?.to_json();
+                                        resolved_result = Some(result);
+                                        break;
+                                    } else if condition_key == Token::None.to_string() {
+                                        if match_evaluated == Value::Null {
+                                            let result =
+                                                go(&possible_resolution, resolved_variables)?
+                                                    .to_json();
+                                            resolved_result = Some(result);
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    let result = if condition_key == Token::Some.to_string() {
+                                        if match_evaluated != Value::Null {
+                                            Some(&match_evaluated)
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        match_evaluated.get(condition_key)
+                                    };
+
+                                    match result {
+                                        Some(value) => {
+                                            let first_pattern = &patterns[0];
+
+                                            match first_pattern {
+                                                ConstructorPattern::Literal(expr) => {
+                                                    match *expr.clone() {
+                                                        Expr::Variable(variable) => {
+                                                            let mut resolved_variables =
+                                                                resolved_variables.clone();
+                                                            resolved_variables.insert(
+                                                                Path::from_raw_string(
+                                                                    variable.as_str(),
+                                                                ),
+                                                                value.clone(),
+                                                            );
+                                                            let value = go(
+                                                                &possible_resolution,
+                                                                &resolved_variables,
+                                                            )?
+                                                            .to_json();
+                                                            resolved_result = Some(value);
+                                                            break;
+                                                        }
+                                                        _ => {
+                                                            return Err(EvaluationError::Message(
+                                                                "Currently only variable pattern is supported. i.e, some(value), err(message) etc".to_string(),
+                                                            ));
+                                                        }
+                                                    }
+                                                }
+                                                _ => {
+                                                    return Err(EvaluationError::Message(
+                                                        "Currently only variable pattern is supported. i.e, some(value), err(message) etc".to_string(),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                        None => {}
+                                    }
+                                }
+                            }
+                            _ => {
+                                return Err(EvaluationError::Message(
+                                    "Currently only constructor pattern is supported".to_string(),
+                                ));
+                            }
+                        }
+                    }
+
+                    resolved_result
+                        .map(|value| ValueTyped::from_json(&value))
+                        .ok_or(EvaluationError::Message(
+                            "Pattern matching failed".to_string(),
+                        ))
+                }
                 Expr::Constructor0(_) => Err(EvaluationError::Message(
                     "Constructor0 is not supported yet".to_string(),
                 )),
@@ -320,6 +416,12 @@ mod tests {
     use http::HeaderMap;
     use serde_json::Value;
     use std::collections::HashMap;
+
+    fn resolved_variables_from_worker_response(input: &str) -> ResolvedVariables {
+        let worker_response: Value = serde_json::from_str(input).expect("Failed to parse json");
+
+        ResolvedVariables::from_worker_response(&worker_response)
+    }
 
     fn resolved_variables_from_request_body(input: &str) -> ResolvedVariables {
         let request_body: Value = serde_json::from_str(input).expect("Failed to parse json");
@@ -637,20 +739,80 @@ mod tests {
     }
 
     #[test]
-    fn test_12() {
-        let resolved_variables = resolved_variables_from_request_body(
+    fn test_evaluation_with_pattern_match() {
+        let resolved_variables = resolved_variables_from_worker_response(
             r#"
                     {
-                        "path": {
+                        "ok": {
                            "id": "pId"
                         }
                     }"#,
         );
 
-        let expr = Expr::from_primitive_string("${match request.response.address.street}").unwrap();
-        let expected_evaluated_result =
-            EvaluationError::Message("Details of worker response is missing".to_string());
+        let expr = Expr::from_primitive_string(
+            "${match worker.response { ok(value) => 'personal-id', err(msg) => 'not found' }}",
+        )
+        .unwrap();
         let result = expr.evaluate(&resolved_variables);
-        assert_eq!(result, Err(expected_evaluated_result));
+        assert_eq!(result, Ok(Value::String("personal-id".to_string())));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_use_success_variable() {
+        let resolved_variables = resolved_variables_from_worker_response(
+            r#"
+                    {
+                        "ok": {
+                           "id": "pId"
+                        }
+                    }"#,
+        );
+
+        let expr = Expr::from_primitive_string(
+            "${match worker.response { ok(value) => value, err => 'not found' }}",
+        )
+        .unwrap();
+        let result = expr.evaluate(&resolved_variables);
+        let expected_result =
+            serde_json::Map::from_iter(vec![("id".to_string(), Value::String("pId".to_string()))]);
+        assert_eq!(result, Ok(Value::Object(expected_result)));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_with_select_field() {
+        let resolved_variables = resolved_variables_from_worker_response(
+            r#"
+                    {
+                        "ok": {
+                           "id": "pId"
+                        }
+                    }"#,
+        );
+
+        let expr = Expr::from_primitive_string(
+            "${match worker.response { ok(value) => value.id, err => 'not found' }}",
+        )
+        .unwrap();
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Ok(Value::String("pId".to_string())));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_with_select_from_array() {
+        let resolved_variables = resolved_variables_from_worker_response(
+            r#"
+                    {
+                        "ok": {
+                           "ids": ["id1", "id2"]
+                        }
+                    }"#,
+        );
+
+        let expr = Expr::from_primitive_string(
+            "${match worker.response { ok(value) => value.ids[0], err => 'not found' }}",
+        )
+        .unwrap();
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Ok(Value::String("id1".to_string())));
     }
 }

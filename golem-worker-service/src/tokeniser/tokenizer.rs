@@ -414,7 +414,7 @@ fn tokenise_string_with_index(input_string: &str) -> Vec<(usize, &str)> {
     let mut result: Vec<(usize, &str)> = Vec::new();
     let mut current_index = 0;
     let token_regex_pattern = Regex::new(
-        r"(worker\.response|request|,|\.|'|<=|\$\{|}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|\bnone\b|\bmatch\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
+        r"(worker\.response|request|,|\.|'|<=|\$\{|}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|\bnone\b|\bmatch\b|\bok\b|\berr\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
     )
         .unwrap();
 
