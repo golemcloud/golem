@@ -321,6 +321,10 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.29.0
         with:

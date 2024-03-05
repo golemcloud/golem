@@ -5,6 +5,8 @@ interface stub-counters {
 
   resource api {
     constructor(location: uri);
+    inc-global-by: func(value: u64);
+    get-global-value: func() -> u64;
     get-all-dropped: func() -> list<tuple<string, u64>>;
   }
 

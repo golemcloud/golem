@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::error::GolemError;
+use crate::services::rpc::RpcError;
 use anyhow::anyhow;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
@@ -84,6 +85,7 @@ pub enum SerializableError {
     FsError { code: u8 },
     Golem { error: GolemError },
     SocketError { code: u8 },
+    Rpc { error: RpcError },
 }
 
 fn get_fs_error_code(value: &filesystem::types::ErrorCode) -> u8 {
@@ -271,6 +273,7 @@ impl From<SerializableError> for anyhow::Error {
                     None => anyhow::Error::msg(format!("Unknown socket error code: {}", code)),
                 }
             }
+            SerializableError::Rpc { error } => anyhow!(error),
         }
     }
 }
@@ -294,6 +297,7 @@ impl From<SerializableError> for FsError {
                 let anyhow: anyhow::Error = value.into();
                 FsError::trap(anyhow)
             }
+            SerializableError::Rpc { error } => FsError::trap(anyhow!(error)),
         }
     }
 }
@@ -317,6 +321,7 @@ impl From<SerializableError> for GolemError {
                 let anyhow: anyhow::Error = value.into();
                 GolemError::unknown(anyhow.to_string())
             }
+            SerializableError::Rpc { error } => GolemError::unknown(error.to_string()),
         }
     }
 }
@@ -356,6 +361,39 @@ impl From<SerializableError> for SocketError {
                     ))),
                 }
             }
+            SerializableError::Rpc { error } => SocketError::trap(anyhow!(error)),
+        }
+    }
+}
+
+impl From<&RpcError> for SerializableError {
+    fn from(value: &RpcError) -> Self {
+        Self::Rpc {
+            error: value.clone(),
+        }
+    }
+}
+
+impl From<SerializableError> for RpcError {
+    fn from(value: SerializableError) -> Self {
+        match value {
+            SerializableError::Generic { message } => RpcError::ProtocolError { details: message },
+            SerializableError::FsError { .. } => {
+                let anyhow: anyhow::Error = value.into();
+                RpcError::ProtocolError {
+                    details: anyhow.to_string(),
+                }
+            }
+            SerializableError::Golem { error } => RpcError::ProtocolError {
+                details: error.to_string(),
+            },
+            SerializableError::SocketError { .. } => {
+                let anyhow: anyhow::Error = value.into();
+                RpcError::ProtocolError {
+                    details: anyhow.to_string(),
+                }
+            }
+            SerializableError::Rpc { error } => error,
         }
     }
 }

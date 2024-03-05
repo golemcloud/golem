@@ -24,6 +24,7 @@ use crate::services::{
 use crate::worker::{invoke_and_await, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
@@ -34,6 +35,7 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_common::model::{AccountId, WorkerId};
 use golem_wasm_rpc::{Value, WitValue};
 use http::Uri;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Handle;
@@ -53,6 +55,7 @@ pub trait Rpc {
     ) -> Result<WitValue, RpcError>;
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub enum RpcError {
     ProtocolError { details: String },
     Denied { details: String },
@@ -72,6 +75,8 @@ impl Display for RpcError {
         }
     }
 }
+
+impl std::error::Error for RpcError {}
 
 impl From<WorkerError> for RpcError {
     fn from(value: WorkerError) -> Self {
