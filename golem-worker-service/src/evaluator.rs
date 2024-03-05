@@ -321,11 +321,11 @@ mod tests {
     use serde_json::Value;
     use std::collections::HashMap;
 
-    fn resolved_variables_from_request_body(json_str: &str) -> ResolvedVariables {
-        let request_body: &Value = serde_json::from_str(json_str).expect("Failed to parse json");
+    fn resolved_variables_from_request_body(input: &str) -> ResolvedVariables {
+        let request_body: Value = serde_json::from_str(input).expect("Failed to parse json");
 
         ResolvedVariables::from_http_request(
-            request_body,
+            &request_body,
             &HeaderMap::new(),
             HashMap::new(),
             vec![],
@@ -340,10 +340,10 @@ mod tests {
         path_values: &HashMap<usize, String>,
         spec_variables: &HashMap<usize, String>,
     ) -> ResolvedVariables {
-        let request_body = serde_json::from_str(json_str).expect("Failed to parse json");
+        let request_body: Value = serde_json::from_str(json_str).expect("Failed to parse json");
 
         ResolvedVariables::from_http_request(
-            request_body,
+            &request_body,
             &HeaderMap::new(),
             HashMap::new(),
             vec![],
