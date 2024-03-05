@@ -407,7 +407,7 @@ jobs:
         run: |
           export VERSION="${{ steps.get_version.outputs.version-without-v }}"
           cargo build
-          ./target/debug/golem-openapi-client-generator --spec-yaml ../openapi/golem-service.yaml --output-directory ../golem-client --name "golem-client" --client-version "${VERSION}"
+          ./target/debug/golem-openapi-client-generator generate --spec-yaml ../openapi/golem-service.yaml --output-directory ../golem-client --name "golem-client" --client-version "${VERSION}"
       - name: Publish Golem client
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
