@@ -568,7 +568,7 @@ mod tests {
                     {
                         "id": "bId"
                     }"#,
-            &header_map
+            &header_map,
         );
 
         let expr = Expr::from_primitive_string(
