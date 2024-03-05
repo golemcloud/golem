@@ -316,92 +316,71 @@ impl Evaluator<Value> for Expr {
 mod tests {
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expr::Expr;
-    use crate::resolved_variables::{Path, ResolvedVariables};
-    use crate::tokeniser::tokenizer::Token;
+    use crate::resolved_variables::ResolvedVariables;
+    use http::HeaderMap;
     use serde_json::Value;
+    use std::collections::HashMap;
 
-    fn test_expr(
-        expr: Expr,
-        expected: Result<Value, EvaluationError>,
-        resolved_variables: &ResolvedVariables,
-    ) {
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected);
+    fn resolved_variables_from_request_body(json_str: &str) -> ResolvedVariables {
+        let request_body: &Value = serde_json::from_str(json_str).expect("Failed to parse json");
+
+        ResolvedVariables::from_http_request(
+            request_body,
+            &HeaderMap::new(),
+            HashMap::new(),
+            vec![],
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .unwrap()
     }
 
-    fn test_expr_ok(expr: Expr, expected: Value, resolved_variables: &ResolvedVariables) {
-        test_expr(expr, Ok(expected), resolved_variables);
-    }
+    fn resolved_variables_from_request_path(
+        json_str: &str,
+        path_values: &HashMap<usize, String>,
+        spec_variables: &HashMap<usize, String>,
+    ) -> ResolvedVariables {
+        let request_body = serde_json::from_str(json_str).expect("Failed to parse json");
 
-    // TODO remove all these overly refactoring
-    fn test_expr_err(
-        expr: Expr,
-        expected: EvaluationError,
-        resolved_variables: &ResolvedVariables,
-    ) {
-        test_expr(expr, Err(expected), resolved_variables);
-    }
-
-    fn test_expr_str_ok(expr: &str, expected: &str, resolved_variables: &ResolvedVariables) {
-        test_expr_ok(
-            Expr::from_primitive_string(expr).expect("Failed to parse expr"),
-            Value::String(expected.to_string()),
-            resolved_variables,
-        );
-    }
-
-    fn test_expr_number_ok(expr: &str, expected: &str, resolved_variables: &ResolvedVariables) {
-        test_expr_ok(
-            Expr::from_primitive_string(expr).expect("Failed to parse expr"),
-            Value::Number(expected.parse().unwrap()),
-            resolved_variables,
-        );
-    }
-
-    fn test_expr_str_err(expr: &str, expected: &str, resolved_variables: &ResolvedVariables) {
-        test_expr_err(
-            Expr::from_primitive_string(expr).expect("Failed to parse expr"),
-            EvaluationError::Message(expected.to_string()),
-            resolved_variables,
-        );
-    }
-
-    fn get_request_variables(json_str: &str) -> ResolvedVariables {
-        let mut resolved_variables = ResolvedVariables::new();
-
-        let v = serde_json::from_str(json_str).expect("Failed to parse json");
-
-        resolved_variables.insert(
-            Path::from_string_unsafe(Token::Request.to_string().as_str()),
-            v,
-        );
-
-        resolved_variables
+        ResolvedVariables::from_http_request(
+            request_body,
+            &HeaderMap::new(),
+            HashMap::new(),
+            vec![],
+            path_values,
+            spec_variables,
+        )
+        .unwrap()
     }
 
     #[test]
-    fn test_1() {
-        let resolved_variables = get_request_variables(
+    fn test_evaluation_with_request_path() {
+        let mut request_path_values = HashMap::new();
+        request_path_values.insert(0, "pId".to_string());
+
+        let mut spec_path_variables = HashMap::new();
+        spec_path_variables.insert(0, "id".to_string());
+
+        let resolved_variables = resolved_variables_from_request_path(
             r#"
                     {
-                        "path": {
-                           "id": "pId"
-                        },
                         "body": {
                            "id": "bId",
                         },
                     }"#,
+            &request_path_values,
+            &spec_path_variables,
         );
 
-        let expr = "${request.path.id}";
+        let expr = Expr::from_primitive_string("${request.path.id}").unwrap();
         let expected_evaluated_result = Value::String("pID".to_string());
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected_evaluated_result);
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Ok(expected_evaluated_result));
     }
 
     #[test]
-    fn test_2() {
-        let resolved_variables = get_request_variables(
+    fn test_evaluation_with_request_body_id() {
+        let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
                         "body": {
@@ -418,15 +397,15 @@ mod tests {
                     }"#,
         );
 
-        let expr = "${request.body.id}";
+        let expr = Expr::from_primitive_string("${request.body.id}").unwrap();
         let expected_evaluated_result = Value::String("bId".to_string());
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected_evaluated_result);
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Ok(expected_evaluated_result));
     }
 
     #[test]
-    fn test_3() {
-        let resolved_variables = get_request_variables(
+    fn test_evaluation_with_request_body_select_index() {
+        let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
                         "path": {
@@ -441,15 +420,15 @@ mod tests {
                     }"#,
         );
 
-        let expr = "${request.body.titles[0]}";
+        let expr = Expr::from_primitive_string("${request.body.titles[0]}").unwrap();
         let expected_evaluated_result = Value::String("bTitle1".to_string());
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected_evaluated_result);
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Ok(expected_evaluated_result));
     }
 
     #[test]
-    fn test_4() {
-        let resolved_variables = get_request_variables(
+    fn test_evaluation_with_request_body_select_from_object() {
+        let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
                         "path": {
@@ -468,15 +447,18 @@ mod tests {
                     }"#,
         );
 
-        let expr = "${request.body.address.street} ${request.body.address.city}";
+        let expr = Expr::from_primitive_string(
+            "${request.body.address.street} ${request.body.address.city}",
+        )
+        .unwrap();
         let expected_evaluated_result = Value::String("bStreet bCity".to_string());
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected_evaluated_result);
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Ok(expected_evaluated_result));
     }
 
     #[test]
-    fn test_5() {
-        let resolved_variables = get_request_variables(
+    fn test_evaluation_with_request_body_if_condition() {
+        let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
                         "path": {
@@ -492,15 +474,18 @@ mod tests {
                     }"#,
         );
 
-        let expr = "${if (request.headers.authorisation == 'admin') then 200 else 401}";
+        let expr = Expr::from_primitive_string(
+            "${if (request.headers.authorisation == 'admin') then 200 else 401}",
+        )
+        .unwrap();
         let expected_evaluated_result = Value::Number("200".parse().unwrap());
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected_evaluated_result);
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Ok(expected_evaluated_result));
     }
 
     #[test]
-    fn test_6() {
-        let resolved_variables = get_request_variables(
+    fn test_evaluation_with_request_body_select_unknown_field() {
+        let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
                         "body": {
@@ -517,16 +502,16 @@ mod tests {
                     }"#,
         );
 
-        let expr = "${request.body.address.street2}";
+        let expr = Expr::from_primitive_string("${request.body.address.street2}").unwrap();
         let expected_evaluated_result =
             EvaluationError::Message("The result doesn't contain the field street2".to_string());
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected_evaluated_result);
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Err(expected_evaluated_result));
     }
 
     #[test]
-    fn test_7() {
-        let resolved_variables = get_request_variables(
+    fn test_evaluation_with_request_body_select_invalid_index() {
+        let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
                         "path": {
@@ -544,16 +529,16 @@ mod tests {
                     }"#,
         );
 
-        let expr = "${request.body.titles[4]}";
+        let expr = Expr::from_primitive_string("${request.body.titles[4]}").unwrap();
         let expected_evaluated_result =
             EvaluationError::Message("The array doesn't contain 4 elements".to_string());
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected_evaluated_result);
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Err(expected_evaluated_result));
     }
 
     #[test]
     fn test_8() {
-        let resolved_variables = get_request_variables(
+        let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
                         "path": {
@@ -569,34 +554,16 @@ mod tests {
                     }"#,
         );
 
-        let expr = "${request.body.address[4]}";
+        let expr = Expr::from_primitive_string("${request.body.address[4]}").unwrap();
         let expected_evaluated_result =
             EvaluationError::Message("Result is not an array to get the index 4".to_string());
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected_evaluated_result);
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Err(expected_evaluated_result));
     }
 
     #[test]
-    fn test_8() {
-        let resolved_variables = get_request_variables(
-            r#"
-                    {
-                        "path": {
-                           "id": "pId"
-                        }
-                    }"#,
-        );
-
-        let expr = "${request.path.id2}";
-        let expected_evaluated_result =
-            EvaluationError::Message("The result doesn't contain the field id2".to_string());
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected_evaluated_result);
-    }
-
-    #[test]
-    fn test_9() {
-        let resolved_variables = get_request_variables(
+    fn test_evaluation_with_request_body_invalid_type_comparison() {
+        let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
                         "body": {
@@ -613,18 +580,20 @@ mod tests {
                     }"#,
         );
 
-        let expr = "${if (request.headers.authorisation) then 200 else 401}";
+        let expr =
+            Expr::from_primitive_string("${if (request.headers.authorisation) then 200 else 401}")
+                .unwrap();
         let expected_evaluated_result = EvaluationError::Message(
             "The predicate expression is evaluated to admin, but it is not a boolean expression"
                 .to_string(),
         );
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected_evaluated_result);
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Err(expected_evaluated_result));
     }
 
     #[test]
-    fn test_10() {
-        let resolved_variables = get_request_variables(
+    fn test_evaluation_with_request_body_invalid_object_reference() {
+        let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
 
@@ -642,16 +611,16 @@ mod tests {
                     }"#,
         );
 
-        let expr = "${request.body.address.street.name}";
+        let expr = Expr::from_primitive_string("${request.body.address.street.name}").unwrap();
         let expected_evaluated_result =
             EvaluationError::Message("Result is not an object to get the field name".to_string());
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected_evaluated_result);
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Err(expected_evaluated_result));
     }
 
     #[test]
-    fn test_11() {
-        let resolved_variables = get_request_variables(
+    fn test_evaluation_with_zero_worker_response() {
+        let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
                         "path": {
@@ -660,10 +629,28 @@ mod tests {
                     }"#,
         );
 
-        let expr = "${worker.response.address.street}";
+        let expr = Expr::from_primitive_string("${worker.response.address.street}").unwrap();
         let expected_evaluated_result =
             EvaluationError::Message("Details of worker response is missing".to_string());
-        let result = expr.evaluate(resolved_variables);
-        assert_eq!(result, expected_evaluated_result);
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Err(expected_evaluated_result));
+    }
+
+    #[test]
+    fn test_12() {
+        let resolved_variables = resolved_variables_from_request_body(
+            r#"
+                    {
+                        "path": {
+                           "id": "pId"
+                        }
+                    }"#,
+        );
+
+        let expr = Expr::from_primitive_string("${match request.response.address.street}").unwrap();
+        let expected_evaluated_result =
+            EvaluationError::Message("Details of worker response is missing".to_string());
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Err(expected_evaluated_result));
     }
 }
