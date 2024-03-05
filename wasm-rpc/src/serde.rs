@@ -8,7 +8,7 @@ impl<'de> Deserialize<'de> for WitValue {
     {
         let binary = Vec::<u8>::deserialize(deserializer)?;
         bincode::decode_from_slice(&binary, bincode::config::standard())
-            .map_err(|err| serde::de::Error::custom(err))
+            .map_err(serde::de::Error::custom)
             .map(|(value, _)| value)
     }
 }
@@ -19,7 +19,7 @@ impl Serialize for WitValue {
         S: serde::Serializer,
     {
         let binary = bincode::encode_to_vec(self, bincode::config::standard())
-            .map_err(|err| serde::ser::Error::custom(err))?;
+            .map_err(serde::ser::Error::custom)?;
         binary.serialize(serializer)
     }
 }
