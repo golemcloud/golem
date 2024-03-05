@@ -29,6 +29,29 @@ impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestApi for A
             rpc: WasmRpc::new(&location),
         }
     }
+    fn inc_global_by(&self, value: u64) -> () {
+        let result = self
+            .rpc
+            .invoke_and_await(
+                "rpc:counters/api/inc-global-by",
+                &[WitValue::builder().u64(value)],
+            )
+            .expect(
+                &format!("Failed to invoke remote {}", "rpc:counters/api/inc-global-by"),
+            );
+        ()
+    }
+    fn get_global_value(&self) -> u64 {
+        let result = self
+            .rpc
+            .invoke_and_await("rpc:counters/api/get-global-value", &[])
+            .expect(
+                &format!(
+                    "Failed to invoke remote {}", "rpc:counters/api/get-global-value"
+                ),
+            );
+        (result.tuple_element(0).expect("tuple not found").u64().expect("u64 not found"))
+    }
     fn get_all_dropped(&self) -> Vec<(String, u64)> {
         let result = self
             .rpc

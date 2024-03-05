@@ -189,3 +189,143 @@ async fn counter_resource_test_1() {
             ])])
     );
 }
+
+#[tokio::test]
+async fn counter_resource_test_2() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let counters_template_id =
+        executor.store_template(Path::new("../test-templates/counters.wasm"));
+    let caller_template_id =
+        executor.store_template(Path::new("../test-templates/caller_composed.wasm"));
+
+    let mut env = HashMap::new();
+    env.insert(
+        "COUNTERS_TEMPLATE_ID".to_string(),
+        counters_template_id.to_string(),
+    );
+    let caller_worker_id = executor
+        .try_start_worker_versioned(&caller_template_id, 0, "rpc-counters-2", vec![], env)
+        .await
+        .unwrap();
+
+    let result1 = executor
+        .invoke_and_await(&caller_worker_id, "test2", vec![])
+        .await;
+    let result2 = executor
+        .invoke_and_await(&caller_worker_id, "test2", vec![])
+        .await;
+
+    drop(executor);
+
+    check!(result1 == Ok(vec![val_u64(1)]));
+    check!(result2 == Ok(vec![val_u64(2)]));
+}
+
+#[tokio::test]
+async fn counter_resource_test_2_with_restart() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let counters_template_id =
+        executor.store_template(Path::new("../test-templates/counters.wasm"));
+    let caller_template_id =
+        executor.store_template(Path::new("../test-templates/caller_composed.wasm"));
+
+    let mut env = HashMap::new();
+    env.insert(
+        "COUNTERS_TEMPLATE_ID".to_string(),
+        counters_template_id.to_string(),
+    );
+    let caller_worker_id = executor
+        .try_start_worker_versioned(&caller_template_id, 0, "rpc-counters-2r", vec![], env)
+        .await
+        .unwrap();
+
+    let result1 = executor
+        .invoke_and_await(&caller_worker_id, "test2", vec![])
+        .await;
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let result2 = executor
+        .invoke_and_await(&caller_worker_id, "test2", vec![])
+        .await;
+
+    drop(executor);
+
+    check!(result1 == Ok(vec![val_u64(1)]));
+    check!(result2 == Ok(vec![val_u64(2)]));
+}
+
+#[tokio::test]
+async fn counter_resource_test_3() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let counters_template_id =
+        executor.store_template(Path::new("../test-templates/counters.wasm"));
+    let caller_template_id =
+        executor.store_template(Path::new("../test-templates/caller_composed.wasm"));
+
+    let mut env = HashMap::new();
+    env.insert(
+        "COUNTERS_TEMPLATE_ID".to_string(),
+        counters_template_id.to_string(),
+    );
+    let caller_worker_id = executor
+        .try_start_worker_versioned(&caller_template_id, 0, "rpc-counters-3", vec![], env)
+        .await
+        .unwrap();
+
+    let result1 = executor
+        .invoke_and_await(&caller_worker_id, "test3", vec![])
+        .await;
+    let result2 = executor
+        .invoke_and_await(&caller_worker_id, "test3", vec![])
+        .await;
+
+    drop(executor);
+
+    check!(result1 == Ok(vec![val_u64(1)]));
+    check!(result2 == Ok(vec![val_u64(2)]));
+}
+
+#[tokio::test]
+async fn counter_resource_test_3_with_restart() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let counters_template_id =
+        executor.store_template(Path::new("../test-templates/counters.wasm"));
+    let caller_template_id =
+        executor.store_template(Path::new("../test-templates/caller_composed.wasm"));
+
+    let mut env = HashMap::new();
+    env.insert(
+        "COUNTERS_TEMPLATE_ID".to_string(),
+        counters_template_id.to_string(),
+    );
+    let caller_worker_id = executor
+        .try_start_worker_versioned(&caller_template_id, 0, "rpc-counters-3r", vec![], env)
+        .await
+        .unwrap();
+
+    let result1 = executor
+        .invoke_and_await(&caller_worker_id, "test3", vec![])
+        .await;
+
+    drop(executor);
+    let mut executor = common::start(&context).await.unwrap();
+
+    let result2 = executor
+        .invoke_and_await(&caller_worker_id, "test3", vec![])
+        .await;
+
+    drop(executor);
+
+    check!(result1 == Ok(vec![val_u64(1)]));
+    check!(result2 == Ok(vec![val_u64(2)]));
+}
