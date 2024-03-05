@@ -80,27 +80,45 @@ It can be constructed by hand using the pattern `worker://template-id/worker-nam
 
 ### Stub generator
 
-The latest version of the stub generator can be installed using:
+The latest version of `golem-cli` and `golem-cloud-cli` contains a `stubgen` subcommand which implements a set of tools to generate and integrate WASM RPC stubs:
+
+```
+WASM RPC stub generator
+
+Usage: golem-cli stubgen [OPTIONS] <COMMAND>
+
+Commands:
+  generate              Generate a Rust RPC stub crate for a WASM component
+  build                 Build an RPC stub for a WASM component
+  add-stub-dependency   Adds a generated stub as a dependency to another WASM component
+  compose               Compose a WASM component with a generated stub WASM
+  initialize-workspace  Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically generating stubs and composing results
+  help                  Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose...  Increase logging verbosity
+  -q, --quiet...    Decrease logging verbosity
+  -h, --help        Print help
+```
+
+#### stubgen generate
 
 ```shell
-cargo install golem-wasm-rpc-stubgen
-```
+Generate a Rust RPC stub crate for a WASM component
 
-Once it's installed, it provides the following command:
-
-```
-Golem WASM RPC stub generator
-
-Usage: golem-wasm-rpc-stubgen generate [OPTIONS] --source-wit-root <SOURCE_WIT_ROOT> --dest-crate-root <DEST_CRATE_ROOT>
+Usage: golem-cli stubgen generate [OPTIONS] --source-wit-root <SOURCE_WIT_ROOT> --dest-crate-root <DEST_CRATE_ROOT>
 
 Options:
   -s, --source-wit-root <SOURCE_WIT_ROOT>
+          The root directory of the component's WIT definition to be called via RPC
   -d, --dest-crate-root <DEST_CRATE_ROOT>
+          The target path to generate a new stub crate to
   -w, --world <WORLD>
-      --stub-crate-version <STUB_CRATE_VERSION>          [default: 0.0.1]
+          The world name to be used in the generated stub crate. If there is only a single world in the source root package, no need to specify
+      --stub-crate-version <STUB_CRATE_VERSION>
+          The crate version of the generated stub crate [default: 0.0.1]
       --wasm-rpc-path-override <WASM_RPC_PATH_OVERRIDE>
-  -h, --help                                             Print help
-  -V, --version                                          Print version
+          The path to the `wasm-rpc` crate to be used in the generated stub crate. If not specified, the latest version of `wasm-rpc` will be used
 ```
 
 The parameters have the following meaning:
@@ -164,77 +182,114 @@ world wasm-rpc-stub-my-world {
 
 Each exported interface and resource becomes a new **resource**, accepting a remote worker URI as a parameter.
 
-## Example steps
+#### stubgen build
 
-The current state of wasm-rpc tooling still requires some manual steps:
+```shell
+Build an RPC stub for a WASM component
 
-1. Generate the stub crate for the worker to be called, for example:
+Usage: golem-cli stubgen build [OPTIONS] --source-wit-root <SOURCE_WIT_ROOT> --dest-wasm <DEST_WASM> --dest-wit-root <DEST_WIT_ROOT>
 
-```
-golem-wasm-rpc-stubgen generate --source-wit-root counters/wit --dest-crate-root counters-stub
-```
-
-2. Copy the generated stub crate's `wit/deps` directory to the **caller worker**'s `wit/deps` directory:
-
-```
-cp -rv counters-stub/wit/deps/* caller/wit/deps
-```
-
-3. Copy the generated `_stub.wit` to the **caller worker**'s `wit/deps/counters-stub` directory:
-
-```
-cp counters-stub/wit/_stub.wit caller/wit/deps/counters-stub/stub.wit
-```
-
-4. Add both the remote worker's and the stub's package as a dependency into the caller worker's `Cargo.toml`:
-
-```
-"rpc:counters" = { path = "wit/deps/rpc_counters" }
-"rpc:counters-stub" = { path = "wit/deps/counters-stub" }
+Options:
+  -s, --source-wit-root <SOURCE_WIT_ROOT>
+          The root directory of the component's WIT definition to be called via RPC
+      --dest-wasm <DEST_WASM>
+          The name of the stub WASM file to be generated
+      --dest-wit-root <DEST_WIT_ROOT>
+          The directory name where the generated WIT files should be placed
+  -w, --world <WORLD>
+          The world name to be used in the generated stub crate. If there is only a single world in the source root package, no need to specify
+      --stub-crate-version <STUB_CRATE_VERSION>
+          The crate version of the generated stub crate [default: 0.0.1]
+      --wasm-rpc-path-override <WASM_RPC_PATH_OVERRIDE>
+          The path to the `wasm-rpc` crate to be used in the generated stub crate. If not specified, the latest version of `wasm-rpc` will be used. It needs to be an **absolute path**
 ```
 
-5. Use the generated stub to call remote workers, for example:
+Similar to the `stubgen generate` subcommand, but instead of generating the source code for a Rust crate, it builds the stub WASM directly.
 
-```rust
-use crate::bindings::rpc::counters_stub::stub_counters::Counter;
+The parameters have the following meaning:
 
-let template_id = env::var("COUNTERS_TEMPLATE_ID").expect("COUNTERS_TEMPLATE_ID not set");
-let counters_uri = Uri { value: format!("worker://{template_id}/counters_test1") };
+- `--source-wit-root` must point to the directory of the WIT specification of the **worker to be called remotely**. This is usually a `wit` subdirectory in the worker's template's source code.
+- `--dest-wasm` is the target WASM file to be generated.
+- `--dest-wit-root` is the target **directory** where the stub's WIT file and its dependencies will be generated into.
+- `--world` can be used to select the exported world from the source WIT, if there are more than one. If there is only one world defined, there is no need to use this parameter.
+- `--stub-crate-version` sets the generated Rust crate's version to the given value.
+- `--wasm-rpc-path-override` is useful when working on the `wasm-rpc` crate itself, to point the dependency to a local path instead of using the published version. It must be an **absolute path**.
 
-let counter1 = Counter::new(counters_uri, "counter1");
-counter1.inc_by(1);
-let value1 = counter1.get_value();
+See the `stubgen generate` command's description above for more details about the generated WIT interface.
+
+#### stubgen add-stub-dependency
+
+```shell
+Adds a generated stub as a dependency to another WASM component
+
+Usage: golem-cli stubgen add-stub-dependency [OPTIONS] --stub-wit-root <STUB_WIT_ROOT> --dest-wit-root <DEST_WIT_ROOT>
+
+Options:
+  -s, --stub-wit-root <STUB_WIT_ROOT>  The WIT root generated by either `generate` or `build` command
+  -d, --dest-wit-root <DEST_WIT_ROOT>  The WIT root of the component where the stub should be added as a dependency
+  -o, --overwrite                      This command would not do anything if it detects that it would change an existing WIT file's contents at the destination. With this flag, it can be forced to overwrite those files
+  -u, --update-cargo-toml              Enables updating the Cargo.toml file in the parent directory of `dest-wit-root` with the copied dependencies
 ```
 
-Note it is a good practice to pass the called worker's **template id** as an environment variable to the caller worker.
+This is a follow-up step after generating (and/or building) the RPC stub. It takes the generated stub's WIT specification and integrates it into another project's WIT specification as a dependency, so that other project can use the stub interface for the remote procedure call.
 
-6. Compile the worker that uses the generated stub interfaces
+The parameters have the following meaning:
 
-```
-cargo component build --release
-```
+- `--stub-wit-root` must point to the directory of the WIT specification of the **generated stub**. This is the `wit` directory in the output of `stubgen generate` or the directory passed by `--dest-wit-root` to `stubgen build`.
+- `--dest-wit-root` is the `wit` directory of the Golem project that will **use** the generated stub for remote worker calls.
+- `--overwrite` is an optional flag to force overwriting the destination WIT files if they already exist.
+- `--update-cargo-toml` is an optional flag to update the `Cargo.toml` file in the parent directory of `dest-wit-root` with the copied dependencies. While the command in general works with any guest language, this extra flag enables support for Rust projects built by `cargo-component` where the dependencies are listed in the `Cargo.toml` file.
 
-7. Compose the newly compiled WASM with the stub WASM
+#### stubgen compose
 
-This results in a composed WASM that no longer depends on the stub, just the low-level invocation API that Golem provides for each worker.
-Unfortunately `wasm-tools` requires a certain directory structure for the `compose` command to work.
+```shell
+Compose a WASM component with a generated stub WASM
 
-In our example, assuming we are doing a **release** build, and called the generated stub `counters-stub`, we have to create the following directory:
+Usage: golem-cli stubgen compose [OPTIONS] --source-wasm <SOURCE_WASM> --stub-wasm <STUB_WASM> --dest-wasm <DEST_WASM>
 
-```
-mkdir -pv target/wasm32-wasi/release/rpc:counters-stub
-```
-
-and copy the compiled stub WASM there
-
-```
-cp target/wasm32-wasi/release/counters_stub.wasm target/wasm32-wasi/release/rpc:counters-stub/stub-counters.wasm
+Options:
+      --source-wasm <SOURCE_WASM>  The WASM file of the caller component
+      --stub-wasm <STUB_WASM>      The WASM file of the generated stub. Multiple stubs can be listed
+      --dest-wasm <DEST_WASM>      The name of the composed WASM file to be generated
 ```
 
-Finally use `wasm-tools` to create the composed WASM:
+The `compose` subcommand is an alternative for using the general purpose `wasm-tools compose` command providing a simpler way to compose the generated RPC stubs with the compiled WASM components using these stubs.
 
-```
-wasm-tools compose -v target/wasm32-wasi/release/caller.wasm -o target/wasm32-wasi/release/caller_composed.wasm
+Compiling a project that uses a stub as a dependency cannot be directly uploaded to Golem, as its stub dependencies will not be satisfied by the Golem worker executor. It first has to be **composed** with the compiled stub WASMs.
+This is the last step to be performed before uploading the WASM to Golem.
+
+The parameters have the following meaning:
+
+- `--source-wasm` is the WASM file of the caller component (the one depending on the stub).
+- `--stub-wasm` is the WASM file of the generated stub. Multiple stubs can be listed.
+- `--dest-wasm` is the target WASM file to be generated. This is the file that can be uploaded to Golem.
+
+#### stubgen initialize-workspace
+
+```shell
+Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically generating stubs and composing results
+
+Usage: golem-cli stubgen initialize-workspace [OPTIONS] --targets <TARGETS> --callers <CALLERS>
+
+Options:
+      --targets <TARGETS>
+          List of subprojects to be called via RPC
+      --callers <CALLERS>
+          List of subprojects using the generated stubs for calling remote workers
+      --wasm-rpc-path-override <WASM_RPC_PATH_OVERRIDE>
+          The path to the `wasm-rpc` crate to be used in the generated stub crate. If not specified, the latest version of `wasm-rpc` will be used
 ```
 
-This resulting `caller_composed.wasm` is ready to be used in Golem.
+If all the workers involved in worker to worker communication have their source code in a single **cargo workspace**, then this command can be used to add a [cargo-make](https://github.com/sagiegurari/cargo-make) build specification that performs all the above steps automatically when building the workspace with `cargo make build-flow` or `cargo make release-build-flow`.
+
+The parameters have the following meaning:
+
+- `--targets` is a list of subprojects to be called via RPC. These are the projects that the tool will generate stubs for.
+- `--callers` is a list of subprojects using (any of) the generated stubs for calling remote workers.
+- `--wasm-rpc-path-override` is useful when working on the `wasm-rpc` crate itself, to point the dependency to a local path instead of using the published version. It must be an **absolute path**.
+
+The `initialize-workspace` command is supposed to be used only once in a workspace. After it succeeds, `cargo make build-flow` and `cargo make release-build-flow` can be used to build the workspace, and the generated stubs will be automatically added as dependencies to the caller projects and the compiled WASM files will be composed with the stubs.
+
+## Example
+
+Please read the [worker to worker communication blog post](https://www.golem.cloud/post/worker-to-worker-communication) for a full example of how to use the stub generator calling one worker from another.
