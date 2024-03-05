@@ -203,24 +203,24 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
             golem_wasm_rpc_stubgen::Command::Generate(args) => {
                 golem_wasm_rpc_stubgen::generate(args)
                     .map_err(|err| GolemError(format!("{err}")))
-                    .map(|res| GolemResult::Ok(Box::new(res)))
+                    .map(|_| GolemResult::Ok(Box::new("Done")))
             }
             golem_wasm_rpc_stubgen::Command::Build(args) => golem_wasm_rpc_stubgen::build(args)
                 .await
                 .map_err(|err| GolemError(format!("{err}")))
-                .map(|res| GolemResult::Ok(Box::new(res))),
+                .map(|_| GolemResult::Ok(Box::new("Done"))),
             golem_wasm_rpc_stubgen::Command::AddStubDependency(args) => {
                 golem_wasm_rpc_stubgen::add_stub_dependency(args)
                     .map_err(|err| GolemError(format!("{err}")))
-                    .map(|res| GolemResult::Ok(Box::new(res)))
+                    .map(|_| GolemResult::Ok(Box::new("Done")))
             }
             golem_wasm_rpc_stubgen::Command::Compose(args) => golem_wasm_rpc_stubgen::compose(args)
                 .map_err(|err| GolemError(format!("{err}")))
-                .map(|res| GolemResult::Ok(Box::new(res))),
+                .map(|_| GolemResult::Ok(Box::new("Done"))),
             golem_wasm_rpc_stubgen::Command::InitializeWorkspace(args) => {
                 golem_wasm_rpc_stubgen::initialize_workspace(args, "golem-cli", &["stubgen"])
                     .map_err(|err| GolemError(format!("{err}")))
-                    .map(|res| GolemResult::Ok(Box::new(res)))
+                    .map(|_| GolemResult::Ok(Box::new("Done")))
             }
         },
     };
