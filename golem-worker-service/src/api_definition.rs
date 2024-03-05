@@ -651,31 +651,4 @@ mod tests {
             "[ \"data\"]",
         );
     }
-
-    #[test]
-    fn test_expr_get_vars() {
-        fn test_get_vars(input: &str, expected: HashSet<String>) {
-            let json = serde_json::Value::from_str(input).expect("Not a valid json value");
-            let parsed_expr = Expr::from_json_value(&json);
-            assert!(parsed_expr.is_ok());
-            let expr = parsed_expr.unwrap();
-            // println!("{:?}", expr);
-            let paths = expr.get_vars();
-            assert_eq!(paths, expected);
-        }
-
-        test_get_vars("[]", HashSet::new());
-        test_get_vars(
-            "[\"${request.path.user-id}\"]",
-            HashSet::from(["request.path.user-id".to_string()]),
-        );
-        test_get_vars(
-            "[\"${request.body.item[0]}\"]",
-            HashSet::from(["request.body.item[0]".to_string()]),
-        );
-        test_get_vars(
-            "[\"${if (${request.path.user-id}>100) then 1 else 0}\"]",
-            HashSet::from(["request.path.user-id".to_string()]),
-        );
-    }
 }

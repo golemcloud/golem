@@ -379,9 +379,8 @@ mod tests {
         resolved_variables
     }
 
-    // I don't know why this refactored to be non debuggable tests
     #[test]
-    fn test_evaluator() {
+    fn test_1() {
         let resolved_variables = get_request_variables(
             r#"
                     {
@@ -390,10 +389,73 @@ mod tests {
                         },
                         "body": {
                            "id": "bId",
+                        },
+                    }"#,
+        );
+
+        let expr = "${request.path.id}";
+        let expected_evaluated_result = Value::String("pID".to_string());
+        let result = expr.evaluate(resolved_variables);
+        assert_eq!(result, expected_evaluated_result);
+    }
+
+    #[test]
+    fn test_2() {
+        let resolved_variables = get_request_variables(
+            r#"
+                    {
+                        "body": {
+                           "id": "bId",
                            "name": "bName",
                            "titles": [
                              "bTitle1", "bTitle2"
                            ],
+                           "address": {
+                             "street": "bStreet",
+                             "city": "bCity"
+                           }
+                        }
+                    }"#,
+        );
+
+        let expr = "${request.body.id}";
+        let expected_evaluated_result = Value::String("bId".to_string());
+        let result = expr.evaluate(resolved_variables);
+        assert_eq!(result, expected_evaluated_result);
+    }
+
+    #[test]
+    fn test_3() {
+        let resolved_variables = get_request_variables(
+            r#"
+                    {
+                        "path": {
+                           "id": "pId"
+                        },
+                        "body": {
+                           "id": "bId",
+                           "titles": [
+                             "bTitle1", "bTitle2"
+                           ],
+                        }
+                    }"#,
+        );
+
+        let expr = "${request.body.titles[0]}";
+        let expected_evaluated_result = Value::String("bTitle1".to_string());
+        let result = expr.evaluate(resolved_variables);
+        assert_eq!(result, expected_evaluated_result);
+    }
+
+    #[test]
+    fn test_4() {
+        let resolved_variables = get_request_variables(
+            r#"
+                    {
+                        "path": {
+                           "id": "pId"
+                        },
+                        "body": {
                            "address": {
                              "street": "bStreet",
                              "city": "bCity"
@@ -406,53 +468,202 @@ mod tests {
                     }"#,
         );
 
-        test_expr_str_ok("${request.path.id}", "pId", &resolved_variables);
-        test_expr_str_ok("${request.body.id}", "bId", &resolved_variables);
-        test_expr_str_ok("${request.body.titles[0]}", "bTitle1", &resolved_variables);
-        test_expr_str_ok(
-            "${request.body.address.street} ${request.body.address.city}",
-            "bStreet bCity",
-            &resolved_variables,
+        let expr = "${request.body.address.street} ${request.body.address.city}";
+        let expected_evaluated_result = Value::String("bStreet bCity".to_string());
+        let result = expr.evaluate(resolved_variables);
+        assert_eq!(result, expected_evaluated_result);
+    }
+
+    #[test]
+    fn test_5() {
+        let resolved_variables = get_request_variables(
+            r#"
+                    {
+                        "path": {
+                           "id": "pId"
+                        },
+                        "body": {
+                           "id": "bId"
+                        },
+                        "headers": {
+                           "authorisation": "admin",
+                           "content-type": "application/json"
+                        }
+                    }"#,
         );
-        test_expr_number_ok(
-            "${if (request.headers.authorisation == 'admin') then 200 else 401}",
-            "200",
-            &resolved_variables,
+
+        let expr = "${if (request.headers.authorisation == 'admin') then 200 else 401}";
+        let expected_evaluated_result = Value::Number("200".parse().unwrap());
+        let result = expr.evaluate(resolved_variables);
+        assert_eq!(result, expected_evaluated_result);
+    }
+
+    #[test]
+    fn test_6() {
+        let resolved_variables = get_request_variables(
+            r#"
+                    {
+                        "body": {
+                           "id": "bId",
+                           "name": "bName",
+                           "titles": [
+                             "bTitle1", "bTitle2"
+                           ],
+                           "address": {
+                             "street": "bStreet",
+                             "city": "bCity"
+                           }
+                        }
+                    }"#,
         );
-        test_expr_str_err(
-            "${request.body.address.street2}",
-            "The result doesn't contain the field street2",
-            &resolved_variables,
+
+        let expr = "${request.body.address.street2}";
+        let expected_evaluated_result =
+            EvaluationError::Message("The result doesn't contain the field street2".to_string());
+        let result = expr.evaluate(resolved_variables);
+        assert_eq!(result, expected_evaluated_result);
+    }
+
+    #[test]
+    fn test_7() {
+        let resolved_variables = get_request_variables(
+            r#"
+                    {
+                        "path": {
+                           "id": "pId"
+                        },
+                        "body": {
+                           "titles": [
+                             "bTitle1", "bTitle2"
+                           ],
+                           "address": {
+                             "street": "bStreet",
+                             "city": "bCity"
+                           }
+                        }
+                    }"#,
         );
-        test_expr_str_err(
-            "${request.body.titles[4]}",
-            "The array doesn't contain 4 elements",
-            &resolved_variables,
+
+        let expr = "${request.body.titles[4]}";
+        let expected_evaluated_result =
+            EvaluationError::Message("The array doesn't contain 4 elements".to_string());
+        let result = expr.evaluate(resolved_variables);
+        assert_eq!(result, expected_evaluated_result);
+    }
+
+    #[test]
+    fn test_8() {
+        let resolved_variables = get_request_variables(
+            r#"
+                    {
+                        "path": {
+                           "id": "pId"
+                        },
+                        "body": {
+                           "id": "bId",
+                           "address": {
+                             "street": "bStreet",
+                             "city": "bCity"
+                           }
+                        }
+                    }"#,
         );
-        test_expr_str_err(
-            "${request.body.address[4]}",
-            "Result is not an array to get the index 4",
-            &resolved_variables,
+
+        let expr = "${request.body.address[4]}";
+        let expected_evaluated_result =
+            EvaluationError::Message("Result is not an array to get the index 4".to_string());
+        let result = expr.evaluate(resolved_variables);
+        assert_eq!(result, expected_evaluated_result);
+    }
+
+    #[test]
+    fn test_8() {
+        let resolved_variables = get_request_variables(
+            r#"
+                    {
+                        "path": {
+                           "id": "pId"
+                        }
+                    }"#,
         );
-        test_expr_str_err(
-            "${request.path.id2}",
-            "The result doesn't contain the field id2",
-            &resolved_variables,
+
+        let expr = "${request.path.id2}";
+        let expected_evaluated_result =
+            EvaluationError::Message("The result doesn't contain the field id2".to_string());
+        let result = expr.evaluate(resolved_variables);
+        assert_eq!(result, expected_evaluated_result);
+    }
+
+    #[test]
+    fn test_9() {
+        let resolved_variables = get_request_variables(
+            r#"
+                    {
+                        "body": {
+                           "id": "bId",
+                           "name": "bName",
+                           "titles": [
+                             "bTitle1", "bTitle2"
+                           ]
+                        },
+                        "headers": {
+                           "authorisation": "admin",
+                           "content-type": "application/json"
+                        }
+                    }"#,
         );
-        test_expr_str_err(
-            "${if (request.headers.authorisation) then 200 else 401}",
-            "The predicate expression is evaluated to admin, but it is not a boolean expression",
-            &resolved_variables,
+
+        let expr = "${if (request.headers.authorisation) then 200 else 401}";
+        let expected_evaluated_result = EvaluationError::Message(
+            "The predicate expression is evaluated to admin, but it is not a boolean expression"
+                .to_string(),
         );
-        test_expr_str_err(
-            "${request.body.address.street.name}",
-            "Result is not an object to get the field name",
-            &resolved_variables,
+        let result = expr.evaluate(resolved_variables);
+        assert_eq!(result, expected_evaluated_result);
+    }
+
+    #[test]
+    fn test_10() {
+        let resolved_variables = get_request_variables(
+            r#"
+                    {
+
+                        "body": {
+                           "id": "bId",
+                           "name": "bName",
+                           "titles": [
+                             "bTitle1", "bTitle2"
+                           ],
+                           "address": {
+                             "street": "bStreet",
+                             "city": "bCity"
+                           }
+                        }
+                    }"#,
         );
-        test_expr_str_err(
-            "${worker.response.address.street}",
-            "Details of worker response is missing",
-            &resolved_variables,
+
+        let expr = "${request.body.address.street.name}";
+        let expected_evaluated_result =
+            EvaluationError::Message("Result is not an object to get the field name".to_string());
+        let result = expr.evaluate(resolved_variables);
+        assert_eq!(result, expected_evaluated_result);
+    }
+
+    #[test]
+    fn test_11() {
+        let resolved_variables = get_request_variables(
+            r#"
+                    {
+                        "path": {
+                           "id": "pId"
+                        }
+                    }"#,
         );
+
+        let expr = "${worker.response.address.street}";
+        let expected_evaluated_result =
+            EvaluationError::Message("Details of worker response is missing".to_string());
+        let result = expr.evaluate(resolved_variables);
+        assert_eq!(result, expected_evaluated_result);
     }
 }
