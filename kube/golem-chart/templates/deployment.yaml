@@ -20,8 +20,8 @@ spec:
 {{- if .Values.serviceAccountName }}
       serviceAccountName: {{ .Values.serviceAccountName }}
 {{- end }}
-{{- if .Values.workerExecutor.nodeSelector }}
-      nodeSelector: {{- .Values.workerExecutor.nodeSelector | toYaml | nindent 8 }}
+{{- if .Values.shardManager.nodeSelector }}
+      nodeSelector: {{- .Values.shardManager.nodeSelector | toYaml | nindent 8 }}
 {{- end }}
       containers:
         - name: shard-manager-app-{{.Values.env}}
@@ -31,25 +31,27 @@ spec:
             - name: ENVIRONMENT
               value: {{.Values.env}}
             - name: REDIS_HOST
-              value: {{ .Values.redis.host }}
+              value: {{ .Values.shardManager.redis.host }}
             - name: GOLEM__REDIS__KEY_PREFIX
               value: {{.Values.env}}
             - name: GOLEM__REDIS__HOST
-              value: {{ .Values.redis.host }}
+              value: {{ .Values.shardManager.redis.host }}
             - name: GOLEM__REDIS__PORT
-              value: "{{ .Values.redis.port }}"
+              value: "{{ .Values.shardManager.redis.port }}"
+            - name: GOLEM__REDIS__DATABASE
+              value: "{{ .Values.shardManager.redis.database }}"
             - name: GOLEM__REDIS__USERNAME
-              value: "{{ .Values.redis.username }}"
-{{- if .Values.redis.password.plain }}
+              value: "{{ .Values.shardManager.redis.username }}"
+{{- if .Values.shardManager.redis.password.plain }}
             - name: GOLEM__REDIS__PASSWORD
-              value: "{{ .Values.redis.password.plain }}"
+              value: "{{ .Values.shardManager.redis.password.plain }}"
 {{- end }}
-{{- if .Values.redis.password.fromSecret.name }}
+{{- if .Values.shardManager.redis.password.fromSecret.name }}
             - name: GOLEM__REDIS__PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.redis.password.fromSecret.name }}
-                  key: {{ .Values.redis.password.fromSecret.key }}
+                  name: {{ .Values.shardManager.redis.password.fromSecret.name }}
+                  key: {{ .Values.shardManager.redis.password.fromSecret.key }}
 {{- end }}
             - name: RUST_BACKTRACE
               value: "1"
@@ -107,7 +109,7 @@ spec:
             - name: ENVIRONMENT
               value: {{.Values.env}}
             - name: REDIS_HOST
-              value: {{ .Values.redis.host }}
+              value: {{ .Values.workerExecutor.redis.host }}
             - name: GOLEM__TEMPLATE_SERVICE__CONFIG__HOST
               value: service-template-service-{{.Values.env}}
             - name: GOLEM__TEMPLATE_SERVICE__CONFIG__PORT
@@ -131,21 +133,23 @@ spec:
             - name: GOLEM__REDIS__KEY_PREFIX
               value: {{.Values.env}}
             - name: GOLEM__REDIS__HOST
-              value: {{ .Values.redis.host }}
+              value: {{ .Values.workerExecutor.redis.host }}
             - name: GOLEM__REDIS__PORT
-              value: "{{ .Values.redis.port }}"
+              value: "{{ .Values.workerExecutor.redis.port }}"
+            - name: GOLEM__REDIS__DATABASE
+              value: "{{ .Values.workerExecutor.redis.database }}"
             - name: GOLEM__REDIS__USERNAME
-              value: "{{ .Values.redis.username }}"
-{{- if .Values.redis.password.plain }}
+              value: "{{ .Values.workerExecutor.redis.username }}"
+{{- if .Values.workerExecutor.redis.password.plain }}
             - name: GOLEM__REDIS__PASSWORD
-              value: "{{ .Values.redis.password.plain }}"
+              value: "{{ .Values.workerExecutor.redis.password.plain }}"
 {{- end }}
-{{- if .Values.redis.password.fromSecret.name }}
+{{- if .Values.workerExecutor.redis.password.fromSecret.name }}
             - name: GOLEM__REDIS__PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.redis.password.fromSecret.name }}
-                  key: {{ .Values.redis.password.fromSecret.key }}
+                  name: {{ .Values.workerExecutor.redis.password.fromSecret.name }}
+                  key: {{ .Values.workerExecutor.redis.password.fromSecret.key }}
 {{- end }}
             - name: WASMTIME_BACKTRACE_DETAILS
               value: "1"
@@ -271,7 +275,7 @@ spec:
             - name: GOLEM__ENVIRONMENT
               value: {{.Values.env}}
             - name: REDIS_HOST
-              value: {{ .Values.redis.host }}
+              value: {{ .Values.workerService.redis.host }}
             - name: GOLEM__ROUTING_TABLE__HOST
               value: service-shard-manager-{{.Values.env}}
             - name: GOLEM__ROUTING_TABLE__PORT
@@ -285,21 +289,23 @@ spec:
             - name: GOLEM__REDIS__KEY_PREFIX
               value: {{.Values.env}}
             - name: GOLEM__REDIS__HOST
-              value: {{ .Values.redis.host }}
+              value: {{ .Values.workerService.redis.host }}
             - name: GOLEM__REDIS__PORT
-              value: "{{ .Values.redis.port }}"
+              value: "{{ .Values.workerService.redis.port }}"
+            - name: GOLEM__REDIS__DATABASE
+              value: "{{ .Values.workerService.redis.database }}"
             - name: GOLEM__REDIS__USERNAME
-              value: "{{ .Values.redis.username }}"
-{{- if .Values.redis.password.plain }}
+              value: "{{ .Values.workerService.redis.username }}"
+{{- if .Values.workerService.redis.password.plain }}
             - name: GOLEM__REDIS__PASSWORD
-              value: "{{ .Values.redis.password.plain }}"
+              value: "{{ .Values.workerService.redis.password.plain }}"
 {{- end }}
-{{- if .Values.redis.password.fromSecret.name }}
+{{- if .Values.workerService.redis.password.fromSecret.name }}
             - name: GOLEM__REDIS__PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.redis.password.fromSecret.name }}
-                  key: {{ .Values.redis.password.fromSecret.key }}
+                  name: {{ .Values.workerService.redis.password.fromSecret.name }}
+                  key: {{ .Values.workerService.redis.password.fromSecret.key }}
 {{- end }}
             - name: WASMTIME_BACKTRACE_DETAILS
               value: "1"
@@ -380,23 +386,25 @@ spec:
             - name: GOLEM__DB__CONFIG__MAX_CONNECTIONS
               value: "10"
             - name: GOLEM__DB__CONFIG__DATABASE
-              value: {{ .Values.postgres.database }}
+              value: {{ .Values.templateService.postgres.database }}
+            - name: GOLEM__DB__CONFIG__SCHEMA
+              value: {{ .Values.templateService.postgres.schema }}
             - name: GOLEM__DB__CONFIG__HOST
-              value: {{ .Values.postgres.host }}
+              value: {{ .Values.templateService.postgres.host }}
             - name: GOLEM__DB__CONFIG__PORT
-              value: "{{ .Values.postgres.port }}"
+              value: "{{ .Values.templateService.postgres.port }}"
             - name: GOLEM__DB__CONFIG__USERNAME
-              value: {{ .Values.postgres.username }}
-{{- if .Values.postgres.password.plain }}
+              value: {{ .Values.templateService.postgres.username }}
+{{- if .Values.templateService.postgres.password.plain }}
             - name: GOLEM__DB__CONFIG__PASSWORD
-              value: "{{ .Values.postgres.password.plain }}"
+              value: "{{ .Values.templateService.postgres.password.plain }}"
 {{- end }}
-{{- if .Values.postgres.password.fromSecret.name }}
+{{- if .Values.templateService.postgres.password.fromSecret.name }}
             - name: GOLEM__DB__CONFIG__PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.postgres.password.fromSecret.name }}
-                  key: {{ .Values.postgres.password.fromSecret.key }}
+                  name: {{ .Values.templateService.postgres.password.fromSecret.name }}
+                  key: {{ .Values.templateService.postgres.password.fromSecret.key }}
 {{- end }}
             - name: GOLEM__HTTP_PORT
               value: "{{ .Values.templateService.ports.http }}"
