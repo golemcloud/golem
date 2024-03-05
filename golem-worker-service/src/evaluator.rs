@@ -3,7 +3,7 @@ use std::fmt::Display;
 use serde_json::Value;
 
 use super::tokeniser::tokenizer::{Token, Tokenizer};
-use crate::expr::{ConstructorPattern, Expr};
+use crate::expr::{ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner};
 use crate::resolved_variables::{Path, ResolvedVariables};
 use crate::value_typed::ValueTyped;
 
@@ -316,71 +316,86 @@ impl Evaluator<Value> for Expr {
                                     return Err(EvaluationError::Message(
                                         "Pattern matching is currently supported only for single pattern in constructor. i.e, {}(person), {}, {}(person_info) etc and not {}(age, birth_date)".to_string(),
                                     ));
-                                } else if patterns.is_empty() {
-                                    if match_evaluated == Value::String(condition_key.clone()) {
-                                        let result =
-                                            go(&possible_resolution, resolved_variables)?.to_json();
-                                        resolved_result = Some(result);
-                                        break;
-                                    } else if condition_key == Token::None.to_string() {
-                                        if match_evaluated == Value::Null {
-                                            let result =
-                                                go(&possible_resolution, resolved_variables)?
-                                                    .to_json();
-                                            resolved_result = Some(result);
-                                            break;
-                                        }
-                                    }
                                 } else {
-                                    let result = if condition_key == Token::Some.to_string() {
-                                        if match_evaluated != Value::Null {
-                                            Some(&match_evaluated)
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        match_evaluated.get(condition_key)
-                                    };
-
-                                    match result {
-                                        Some(value) => {
-                                            let first_pattern = &patterns[0];
-
-                                            match first_pattern {
-                                                ConstructorPattern::Literal(expr) => {
-                                                    match *expr.clone() {
-                                                        Expr::Variable(variable) => {
-                                                            let mut resolved_variables =
-                                                                resolved_variables.clone();
-                                                            resolved_variables.insert(
-                                                                Path::from_raw_string(
-                                                                    variable.as_str(),
-                                                                ),
-                                                                value.clone(),
-                                                            );
-                                                            let value = go(
-                                                                &possible_resolution,
-                                                                &resolved_variables,
-                                                            )?
-                                                            .to_json();
-                                                            resolved_result = Some(value);
-                                                            break;
-                                                        }
-                                                        _ => {
-                                                            return Err(EvaluationError::Message(
-                                                                "Currently only variable pattern is supported. i.e, some(value), err(message) etc".to_string(),
-                                                            ));
-                                                        }
-                                                    }
-                                                }
-                                                _ => {
-                                                    return Err(EvaluationError::Message(
-                                                        "Currently only variable pattern is supported. i.e, some(value), err(message) etc".to_string(),
-                                                    ));
+                                    match condition_key {
+                                        ConstructorTypeName::InBuiltConstructor(
+                                            constructor_type,
+                                        ) => match constructor_type {
+                                            InBuiltConstructorInner::Some => {
+                                                if match_evaluated != Value::Null {
+                                                    let result = go(
+                                                        &possible_resolution,
+                                                        resolved_variables,
+                                                    )?
+                                                    .to_json();
+                                                    resolved_result = Some(result);
+                                                    break;
                                                 }
                                             }
+                                            InBuiltConstructorInner::None => {
+                                                if match_evaluated == Value::Null {
+                                                    let result = go(
+                                                        &possible_resolution,
+                                                        resolved_variables,
+                                                    )?
+                                                    .to_json();
+                                                    resolved_result = Some(result);
+                                                    break;
+                                                }
+                                            }
+                                            any_other => {
+                                                let result =
+                                                    match_evaluated.get(any_other.to_string());
+
+                                                match result {
+                                                    Some(value) => {
+                                                        let first_pattern = &patterns[0];
+
+                                                        match first_pattern {
+                                                            ConstructorPattern::Literal(expr) => {
+                                                                match *expr.clone() {
+                                                                    Expr::Variable(variable) => {
+                                                                        let mut resolved_variables =
+                                                                            resolved_variables
+                                                                                .clone();
+                                                                        resolved_variables.insert(
+                                                                            Path::from_raw_string(
+                                                                                variable.as_str(),
+                                                                            ),
+                                                                            value.clone(),
+                                                                        );
+                                                                        let value = go(
+                                                                            &possible_resolution,
+                                                                            &resolved_variables,
+                                                                        )?
+                                                                        .to_json();
+                                                                        resolved_result =
+                                                                            Some(value);
+                                                                        break;
+                                                                    }
+                                                                    _ => {
+                                                                        return Err(EvaluationError::Message(
+                                                                                "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
+                                                                            ));
+                                                                    }
+                                                                }
+                                                            }
+                                                            _ => {
+                                                                return Err(EvaluationError::Message(
+                                                                        "Currently only variable pattern is supported. i.e, some(value), err(message) etc".to_string(),
+                                                                    ));
+                                                            }
+                                                        }
+                                                    }
+                                                    None => {}
+                                                }
+                                            }
+                                        },
+                                        ConstructorTypeName::CustomConstructor(_) => {
+                                            return Err(EvaluationError::Message(
+                                                "Pattern matching is currently supported only for inbuilt constructors. ok, err, some, none".to_string(),
+                                            ));
                                         }
-                                        None => {}
                                     }
                                 }
                             }
@@ -423,12 +438,15 @@ mod tests {
         ResolvedVariables::from_worker_response(&worker_response)
     }
 
-    fn resolved_variables_from_request_body(input: &str) -> ResolvedVariables {
+    fn resolved_variables_from_request_body(
+        input: &str,
+        header_map: &HeaderMap,
+    ) -> ResolvedVariables {
         let request_body: Value = serde_json::from_str(input).expect("Failed to parse json");
 
         ResolvedVariables::from_http_request(
             &request_body,
-            &HeaderMap::new(),
+            &header_map,
             HashMap::new(),
             vec![],
             &HashMap::new(),
@@ -438,14 +456,11 @@ mod tests {
     }
 
     fn resolved_variables_from_request_path(
-        json_str: &str,
         path_values: &HashMap<usize, String>,
         spec_variables: &HashMap<usize, String>,
     ) -> ResolvedVariables {
-        let request_body: Value = serde_json::from_str(json_str).expect("Failed to parse json");
-
         ResolvedVariables::from_http_request(
-            &request_body,
+            &Value::Null,
             &HeaderMap::new(),
             HashMap::new(),
             vec![],
@@ -463,19 +478,11 @@ mod tests {
         let mut spec_path_variables = HashMap::new();
         spec_path_variables.insert(0, "id".to_string());
 
-        let resolved_variables = resolved_variables_from_request_path(
-            r#"
-                    {
-                        "body": {
-                           "id": "bId",
-                        },
-                    }"#,
-            &request_path_values,
-            &spec_path_variables,
-        );
+        let resolved_variables =
+            resolved_variables_from_request_path(&request_path_values, &spec_path_variables);
 
         let expr = Expr::from_primitive_string("${request.path.id}").unwrap();
-        let expected_evaluated_result = Value::String("pID".to_string());
+        let expected_evaluated_result = Value::String("pId".to_string());
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
@@ -485,7 +492,7 @@ mod tests {
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
-                        "body": {
+
                            "id": "bId",
                            "name": "bName",
                            "titles": [
@@ -495,8 +502,9 @@ mod tests {
                              "street": "bStreet",
                              "city": "bCity"
                            }
-                        }
+
                     }"#,
+            &HeaderMap::new(),
         );
 
         let expr = Expr::from_primitive_string("${request.body.id}").unwrap();
@@ -510,16 +518,14 @@ mod tests {
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
-                        "path": {
-                           "id": "pId"
-                        },
-                        "body": {
+
                            "id": "bId",
                            "titles": [
                              "bTitle1", "bTitle2"
-                           ],
-                        }
+                           ]
+
                     }"#,
+            &HeaderMap::new(),
         );
 
         let expr = Expr::from_primitive_string("${request.body.titles[0]}").unwrap();
@@ -530,23 +536,17 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_request_body_select_from_object() {
-        let resolved_variables = resolved_variables_from_request_body(
+        let resolved_request = resolved_variables_from_request_body(
             r#"
                     {
-                        "path": {
-                           "id": "pId"
-                        },
-                        "body": {
-                           "address": {
-                             "street": "bStreet",
-                             "city": "bCity"
-                           }
-                        },
-                        "headers": {
-                           "authorisation": "admin",
-                           "content-type": "application/json"
-                        }
+
+                     "address": {
+                         "street": "bStreet",
+                         "city": "bCity"
+                      }
+
                     }"#,
+            &HeaderMap::new(),
         );
 
         let expr = Expr::from_primitive_string(
@@ -554,30 +554,25 @@ mod tests {
         )
         .unwrap();
         let expected_evaluated_result = Value::String("bStreet bCity".to_string());
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate(&resolved_request);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
 
     #[test]
     fn test_evaluation_with_request_body_if_condition() {
+        let mut header_map = HeaderMap::new();
+        header_map.insert("authorisation", "admin".parse().unwrap());
+
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
-                        "path": {
-                           "id": "pId"
-                        },
-                        "body": {
-                           "id": "bId"
-                        },
-                        "headers": {
-                           "authorisation": "admin",
-                           "content-type": "application/json"
-                        }
+                        "id": "bId"
                     }"#,
+            &header_map
         );
 
         let expr = Expr::from_primitive_string(
-            "${if (request.headers.authorisation == 'admin') then 200 else 401}",
+            "${if (request.header.authorisation == 'admin') then 200 else 401}",
         )
         .unwrap();
         let expected_evaluated_result = Value::Number("200".parse().unwrap());
@@ -590,7 +585,7 @@ mod tests {
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
-                        "body": {
+
                            "id": "bId",
                            "name": "bName",
                            "titles": [
@@ -600,8 +595,9 @@ mod tests {
                              "street": "bStreet",
                              "city": "bCity"
                            }
-                        }
+
                     }"#,
+            &HeaderMap::new(),
         );
 
         let expr = Expr::from_primitive_string("${request.body.address.street2}").unwrap();
@@ -616,10 +612,7 @@ mod tests {
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
-                        "path": {
-                           "id": "pId"
-                        },
-                        "body": {
+
                            "titles": [
                              "bTitle1", "bTitle2"
                            ],
@@ -627,8 +620,8 @@ mod tests {
                              "street": "bStreet",
                              "city": "bCity"
                            }
-                        }
                     }"#,
+            &HeaderMap::new(),
         );
 
         let expr = Expr::from_primitive_string("${request.body.titles[4]}").unwrap();
@@ -639,21 +632,17 @@ mod tests {
     }
 
     #[test]
-    fn test_8() {
+    fn test_evaluation_with_request_body_index_of_object() {
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
-                        "path": {
-                           "id": "pId"
-                        },
-                        "body": {
-                           "id": "bId",
-                           "address": {
-                             "street": "bStreet",
-                             "city": "bCity"
-                           }
-                        }
+                      "id": "bId",
+                      "address": {
+                        "street": "bStreet",
+                        "city": "bCity"
+                      }
                     }"#,
+            &HeaderMap::new(),
         );
 
         let expr = Expr::from_primitive_string("${request.body.address[4]}").unwrap();
@@ -665,25 +654,25 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_request_body_invalid_type_comparison() {
+        let mut header_map = HeaderMap::new();
+        header_map.insert("authorisation", "admin".parse().unwrap());
+
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
-                        "body": {
+
                            "id": "bId",
                            "name": "bName",
                            "titles": [
                              "bTitle1", "bTitle2"
                            ]
-                        },
-                        "headers": {
-                           "authorisation": "admin",
-                           "content-type": "application/json"
-                        }
+
                     }"#,
+            &header_map,
         );
 
         let expr =
-            Expr::from_primitive_string("${if (request.headers.authorisation) then 200 else 401}")
+            Expr::from_primitive_string("${if (request.header.authorisation) then 200 else 401}")
                 .unwrap();
         let expected_evaluated_result = EvaluationError::Message(
             "The predicate expression is evaluated to admin, but it is not a boolean expression"
@@ -699,7 +688,7 @@ mod tests {
             r#"
                     {
 
-                        "body": {
+
                            "id": "bId",
                            "name": "bName",
                            "titles": [
@@ -709,8 +698,9 @@ mod tests {
                              "street": "bStreet",
                              "city": "bCity"
                            }
-                        }
+
                     }"#,
+            &HeaderMap::new(),
         );
 
         let expr = Expr::from_primitive_string("${request.body.address.street.name}").unwrap();
@@ -729,6 +719,7 @@ mod tests {
                            "id": "pId"
                         }
                     }"#,
+            &HeaderMap::new(),
         );
 
         let expr = Expr::from_primitive_string("${worker.response.address.street}").unwrap();
@@ -736,6 +727,101 @@ mod tests {
             EvaluationError::Message("Details of worker response is missing".to_string());
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_optional() {
+        let resolved_variables = resolved_variables_from_worker_response(
+            r#"
+                        {
+
+                           "id": "pId"
+                        }
+                   "#,
+        );
+
+        let expr = Expr::from_primitive_string(
+            "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
+        )
+        .unwrap();
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Ok(Value::String("personal-id".to_string())));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_none() {
+        let resolved_variables =
+            resolved_variables_from_worker_response(Value::Null.to_string().as_str());
+
+        let expr = Expr::from_primitive_string(
+            "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
+        )
+        .unwrap();
+        let result = expr.evaluate(&resolved_variables);
+        assert_eq!(result, Ok(Value::String("not found".to_string())));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_with_other_exprs() {
+        let mut request_path_values = HashMap::new();
+        request_path_values.insert(0, "foo".to_string());
+
+        let mut spec_path_variables = HashMap::new();
+        spec_path_variables.insert(0, "id".to_string());
+
+        let mut resolved_variables =
+            resolved_variables_from_request_path(&request_path_values, &spec_path_variables);
+
+        resolved_variables.extend(&resolved_variables_from_worker_response(
+            r#"
+                    {
+                        "ok": {
+                           "id": "baz"
+                        }
+                    }"#,
+        ));
+
+        let expr1 = Expr::from_primitive_string(
+            "${if request.path.id == 'foo' then 'bar' else match worker.response { ok(value) => value.id, err(msg) => 'empty' }}",
+        )
+            .unwrap();
+
+        let result1 = expr1.evaluate(&resolved_variables);
+
+        // Intentionally bringing an curly brace
+        let expr2 = Expr::from_primitive_string(
+            "${if request.path.id == 'bar' then 'foo' else { match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }} }",
+
+        ).unwrap();
+
+        let result2 = expr2.evaluate(&resolved_variables);
+
+        let new_worker_response = resolved_variables_from_worker_response(
+            r#"
+                    {
+                        "err": {
+                           "msg": "failed"
+                        }
+                    }"#,
+        );
+
+        resolved_variables.extend(&new_worker_response);
+
+        let expr3 = Expr::from_primitive_string(
+            "${if request.path.id == 'bar' then 'foo' else { match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }} }",
+
+        ).unwrap();
+
+        let result3 = expr3.evaluate(&resolved_variables);
+
+        assert_eq!(
+            (result1, result2, result3),
+            (
+                Ok(Value::String("bar".to_string())),
+                Ok(Value::String("baz".to_string())),
+                Ok(Value::String("empty".to_string()))
+            )
+        );
     }
 
     #[test]
@@ -769,7 +855,7 @@ mod tests {
         );
 
         let expr = Expr::from_primitive_string(
-            "${match worker.response { ok(value) => value, err => 'not found' }}",
+            "${match worker.response { ok(value) => value, err(msg) => 'not found' }}",
         )
         .unwrap();
         let result = expr.evaluate(&resolved_variables);
@@ -790,7 +876,7 @@ mod tests {
         );
 
         let expr = Expr::from_primitive_string(
-            "${match worker.response { ok(value) => value.id, err => 'not found' }}",
+            "${match worker.response { ok(value) => value.id, err(msg) => 'not found' }}",
         )
         .unwrap();
         let result = expr.evaluate(&resolved_variables);

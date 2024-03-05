@@ -3,7 +3,6 @@ use std::rc::Rc;
 use strum_macros::Display;
 
 use super::*;
-use crate::expr::ConstructorPattern::Constructor;
 use crate::expr::*;
 use crate::tokeniser::cursor::TokenCursor;
 use crate::tokeniser::tokenizer::{Token, TokeniserResult, Tokenizer};
@@ -143,14 +142,19 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                                         go(&mut cursor, Context::Code, InternalExprResult::Empty)?;
 
                                     match constructor_expr {
-                                        Expr::Variable(variable) => Ok(Constructor(
-                                            token.to_string(),
-                                            vec![ConstructorPattern::Literal(Box::new(
-                                                Expr::Variable(variable),
-                                            ))],
-                                        )),
+                                        Expr::Variable(variable) => {
+                                            ConstructorPattern::constructor(
+                                                token.to_string().as_str(),
+                                                vec![ConstructorPattern::Literal(Box::new(
+                                                    Expr::Variable(variable),
+                                                ))],
+                                            )
+                                        }
                                         Expr::Constructor0(pattern) => {
-                                            Ok(Constructor(token.to_string(), vec![pattern]))
+                                            ConstructorPattern::constructor(
+                                                token.to_string().as_str(),
+                                                vec![pattern],
+                                            )
                                         }
                                         _ => Err(ParseError::Message(format!(
                                             "Expecting a valid expression inside {}",
@@ -583,13 +587,13 @@ fn get_constructors(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternEx
                                     expr => ConstructorPattern::Literal(Box::new(expr))
                                 };
 
-                                let constructor_pattern: ConstructorPattern =
-                                    Constructor(
-                                        token.to_string(),
+                                let constructor_pattern =
+                                    ConstructorPattern::constructor(
+                                        token.to_string().as_str(),
                                         vec![cons],
                                     );
 
-                                accumulate_constructor_pattern_expr(cursor, constructor_pattern, constructor_patterns, go)
+                                accumulate_constructor_pattern_expr(cursor, constructor_pattern?, constructor_patterns, go)
 
                             }
                             _ => Err(ParseError::Message(
@@ -598,18 +602,19 @@ fn get_constructors(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternEx
                         }
                     }
 
-                    _ => Err(ParseError::Message(
-                        "Expecting an open parenthesis after some".to_string(),
-                    )),
+                    value => Err(ParseError::Message(format!(
+                        "Expecting an open parenthesis, but found {}",
+                        value.map(|x| x.to_string()).unwrap_or("".to_string())
+                    ))),
                 }
             }
             Some(token) if token.is_empty_constructor() => {
                 let constructor_pattern =
-                    ConstructorPattern::Constructor(token.to_string(), vec![]);
+                    ConstructorPattern::constructor(token.to_string().as_str(), vec![]);
 
                 accumulate_constructor_pattern_expr(
                     cursor,
-                    constructor_pattern,
+                    constructor_pattern?,
                     constructor_patterns,
                     go,
                 )
@@ -1317,16 +1322,17 @@ mod tests {
             Box::new(Expr::WorkerResponse()),
             vec![
                 ConstructorPatternExpr((
-                    Constructor(
-                        "some".to_string(),
+                    ConstructorPattern::constructor(
+                        "some",
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
                             "foo".to_string(),
                         )))],
-                    ),
+                    )
+                    .unwrap(),
                     Box::new(Expr::Variable("foo".to_string())),
                 )),
                 ConstructorPatternExpr((
-                    Constructor("none".to_string(), vec![]),
+                    ConstructorPattern::constructor("none", vec![]).unwrap(),
                     Box::new(Expr::Variable("result2".to_string())),
                 )),
             ],
@@ -1347,21 +1353,23 @@ mod tests {
             Box::new(Expr::WorkerResponse()),
             vec![
                 ConstructorPatternExpr((
-                    Constructor(
-                        "ok".to_string(),
+                    ConstructorPattern::constructor(
+                        "ok",
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
                             "foo".to_string(),
                         )))],
-                    ),
+                    )
+                    .unwrap(),
                     Box::new(Expr::Variable("foo".to_string())),
                 )),
                 ConstructorPatternExpr((
-                    Constructor(
-                        "err".to_string(),
+                    ConstructorPattern::constructor(
+                        "err",
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
                             "bar".to_string(),
                         )))],
-                    ),
+                    )
+                    .unwrap(),
                     Box::new(Expr::Variable("result2".to_string())),
                 )),
             ],
@@ -1382,16 +1390,17 @@ mod tests {
             Box::new(Expr::WorkerResponse()),
             vec![
                 ConstructorPatternExpr((
-                    Constructor(
-                        "some".to_string(),
+                    ConstructorPattern::constructor(
+                        "some",
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
                             "foo".to_string(),
                         )))],
-                    ),
+                    )
+                    .unwrap(),
                     Box::new(Expr::WorkerResponse()),
                 )),
                 ConstructorPatternExpr((
-                    Constructor("none".to_string(), vec![]),
+                    ConstructorPattern::constructor("none", vec![]).unwrap(),
                     Box::new(Expr::Literal("nothing".to_string())),
                 )),
             ],
@@ -1412,19 +1421,21 @@ mod tests {
             Box::new(Expr::WorkerResponse()),
             vec![
                 ConstructorPatternExpr((
-                    Constructor(
-                        "some".to_string(),
-                        vec![Constructor(
-                            "some".to_string(),
+                    ConstructorPattern::constructor(
+                        "some",
+                        vec![ConstructorPattern::constructor(
+                            "some",
                             vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
                                 "foo".to_string(),
                             )))],
-                        )],
-                    ),
+                        )
+                        .unwrap()],
+                    )
+                    .unwrap(),
                     Box::new(Expr::WorkerResponse()),
                 )),
                 ConstructorPatternExpr((
-                    Constructor("none".to_string(), vec![]),
+                    ConstructorPattern::constructor("none", vec![]).unwrap(),
                     Box::new(Expr::Literal("nothing".to_string())),
                 )),
             ],
@@ -1444,16 +1455,17 @@ mod tests {
             Box::new(Expr::WorkerResponse()),
             vec![
                 ConstructorPatternExpr((
-                    Constructor(
-                        "some".to_string(),
+                    ConstructorPattern::constructor(
+                        "some",
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
                             "foo".to_string(),
                         )))],
-                    ),
+                    )
+                    .unwrap(),
                     Box::new(Expr::Literal("foo".to_string())),
                 )),
                 ConstructorPatternExpr((
-                    Constructor("none".to_string(), vec![]),
+                    ConstructorPattern::constructor("none", vec![]).unwrap(),
                     Box::new(Expr::Concat(vec![
                         Expr::Concat(vec![
                             Expr::Literal("bar".to_string()),

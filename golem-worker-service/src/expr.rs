@@ -69,14 +69,107 @@ impl InnerNumber {
 pub struct ConstructorPatternExpr(pub (ConstructorPattern, Box<Expr>));
 
 // A constructor pattern by itself is an expr,
-// as it may not be always associated with match expr
-// or a simple if statement. if ok(res) == foo then res else bar
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum ConstructorPattern {
     WildCard,
     As(String, Box<ConstructorPattern>),
-    Constructor(String, Vec<ConstructorPattern>),
+    Constructor(ConstructorTypeName, Vec<ConstructorPattern>),
     Literal(Box<Expr>),
+}
+
+impl ConstructorPattern {
+    pub fn constructor(
+        constructor_name: &str,
+        variables: Vec<ConstructorPattern>,
+    ) -> Result<ConstructorPattern, ParseError> {
+        if constructor_name == "ok" {
+            validate_single_variable_constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Ok),
+                variables,
+            )
+        } else if constructor_name == "err" {
+            validate_single_variable_constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Err),
+                variables,
+            )
+        } else if constructor_name == "none" {
+            validate_empty_constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::None),
+                variables,
+            )
+        } else if constructor_name == "some" {
+            validate_single_variable_constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Some),
+                variables,
+            )
+        } else {
+            let constructor_type =
+                ConstructorTypeName::CustomConstructor(constructor_name.to_string());
+            Ok(ConstructorPattern::Constructor(constructor_type, variables))
+        }
+    }
+}
+
+fn validate_empty_constructor(
+    constructor_type: ConstructorTypeName,
+    variables: Vec<ConstructorPattern>,
+) -> Result<ConstructorPattern, ParseError> {
+    if variables.len() != 0 {
+        Err(ParseError::Message(
+            "constructor should have zero variables".to_string(),
+        ))
+    } else {
+        Ok(ConstructorPattern::Constructor(constructor_type, variables))
+    }
+}
+
+fn validate_single_variable_constructor(
+    constructor_type: ConstructorTypeName,
+    variables: Vec<ConstructorPattern>,
+) -> Result<ConstructorPattern, ParseError> {
+    if variables.len() != 1 {
+        Err(ParseError::Message(
+            "constructor should have exactly one variable".to_string(),
+        ))
+    } else {
+        match variables.first().unwrap() {
+            ConstructorPattern::Literal(_) => {
+                Ok(ConstructorPattern::Constructor(constructor_type, variables))
+            }
+
+            ConstructorPattern::Constructor(_, _) => {
+                Ok(ConstructorPattern::Constructor(constructor_type, variables))
+            }
+            _ => Err(ParseError::Message(
+                "Ok constructor should have exactly one variable".to_string(),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum ConstructorTypeName {
+    InBuiltConstructor(InBuiltConstructorInner),
+    CustomConstructor(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum InBuiltConstructorInner {
+    Ok,
+    Err,
+    None,
+    Some,
+}
+
+impl InBuiltConstructorInner {
+    pub fn to_string(&self) -> String {
+        match self {
+            InBuiltConstructorInner::Ok => "ok".to_string(),
+            InBuiltConstructorInner::Err => "err".to_string(),
+            InBuiltConstructorInner::None => "none".to_string(),
+            InBuiltConstructorInner::Some => "some".to_string(),
+        }
+    }
 }
 
 impl Expr {
