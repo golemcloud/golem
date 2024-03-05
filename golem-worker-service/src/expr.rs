@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::str::FromStr;
 
 use bincode::{Decode, Encode};
@@ -52,12 +53,12 @@ pub enum InnerNumber {
     Float(f64),
 }
 
-impl InnerNumber {
-    pub fn to_string(&self) -> String {
+impl Display for InnerNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InnerNumber::UnsignedInteger(value) => value.to_string(),
-            InnerNumber::Integer(value) => value.to_string(),
-            InnerNumber::Float(value) => value.to_string(),
+            InnerNumber::UnsignedInteger(value) => write!(f, "{}", value),
+            InnerNumber::Integer(value) => write!(f, "{}", value),
+            InnerNumber::Float(value) => write!(f, "{}", value),
         }
     }
 }
@@ -114,7 +115,7 @@ fn validate_empty_constructor(
     constructor_type: ConstructorTypeName,
     variables: Vec<ConstructorPattern>,
 ) -> Result<ConstructorPattern, ParseError> {
-    if variables.len() != 0 {
+    if !variables.is_empty() {
         Err(ParseError::Message(
             "constructor should have zero variables".to_string(),
         ))
@@ -161,13 +162,13 @@ pub enum InBuiltConstructorInner {
     Some,
 }
 
-impl InBuiltConstructorInner {
-    pub fn to_string(&self) -> String {
+impl Display for InBuiltConstructorInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InBuiltConstructorInner::Ok => "ok".to_string(),
-            InBuiltConstructorInner::Err => "err".to_string(),
-            InBuiltConstructorInner::None => "none".to_string(),
-            InBuiltConstructorInner::Some => "some".to_string(),
+            InBuiltConstructorInner::Ok => write!(f, "ok"),
+            InBuiltConstructorInner::Err => write!(f, "err"),
+            InBuiltConstructorInner::None => write!(f, "none"),
+            InBuiltConstructorInner::Some => write!(f, "some"),
         }
     }
 }

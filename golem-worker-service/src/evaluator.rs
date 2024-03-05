@@ -347,47 +347,42 @@ impl Evaluator<Value> for Expr {
                                                 let result =
                                                     match_evaluated.get(any_other.to_string());
 
-                                                match result {
-                                                    Some(value) => {
-                                                        let first_pattern = &patterns[0];
+                                                if let Some(value) = result {
+                                                    let first_pattern = &patterns[0];
 
-                                                        match first_pattern {
-                                                            ConstructorPattern::Literal(expr) => {
-                                                                match *expr.clone() {
-                                                                    Expr::Variable(variable) => {
-                                                                        let mut resolved_variables =
-                                                                            resolved_variables
-                                                                                .clone();
-                                                                        resolved_variables.insert(
-                                                                            Path::from_raw_string(
-                                                                                variable.as_str(),
-                                                                            ),
-                                                                            value.clone(),
-                                                                        );
-                                                                        let value = go(
-                                                                            &possible_resolution,
-                                                                            &resolved_variables,
-                                                                        )?
-                                                                        .to_json();
-                                                                        resolved_result =
-                                                                            Some(value);
-                                                                        break;
-                                                                    }
-                                                                    _ => {
-                                                                        return Err(EvaluationError::Message(
+                                                    match first_pattern {
+                                                        ConstructorPattern::Literal(expr) => {
+                                                            match *expr.clone() {
+                                                                Expr::Variable(variable) => {
+                                                                    let mut resolved_variables =
+                                                                        resolved_variables.clone();
+                                                                    resolved_variables.insert(
+                                                                        Path::from_raw_string(
+                                                                            variable.as_str(),
+                                                                        ),
+                                                                        value.clone(),
+                                                                    );
+                                                                    let value = go(
+                                                                        &possible_resolution,
+                                                                        &resolved_variables,
+                                                                    )?
+                                                                    .to_json();
+                                                                    resolved_result = Some(value);
+                                                                    break;
+                                                                }
+                                                                _ => {
+                                                                    return Err(EvaluationError::Message(
                                                                                 "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
                                                                             ));
-                                                                    }
                                                                 }
                                                             }
-                                                            _ => {
-                                                                return Err(EvaluationError::Message(
+                                                        }
+                                                        _ => {
+                                                            return Err(EvaluationError::Message(
                                                                         "Currently only variable pattern is supported. i.e, some(value), err(message) etc".to_string(),
                                                                     ));
-                                                            }
                                                         }
                                                     }
-                                                    None => {}
                                                 }
                                             }
                                         },

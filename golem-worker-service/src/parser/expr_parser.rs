@@ -184,7 +184,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
 
                 Token::None => Err(ParseError::Message(format!(
                     "Dangling keyword {}",
-                    Token::None.to_string()
+                    Token::None
                 ))),
 
                 Token::WorkerResponse => go(
@@ -597,7 +597,7 @@ fn get_constructors(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternEx
 
                             }
                             _ => Err(ParseError::Message(
-                                format!("Token {} is a non empty constructor. Expecting the following pattern: {}(foo) => bar", token.to_string(), token.to_string()),
+                                format!("Token {} is a non empty constructor. Expecting the following pattern: {}(foo) => bar", token, token),
                             )),
                         }
                     }

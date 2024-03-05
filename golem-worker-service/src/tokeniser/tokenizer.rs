@@ -138,20 +138,11 @@ impl Display for Token {
 
 impl Token {
     pub fn is_non_empty_constructor(&self) -> bool {
-        match self {
-            Token::Ok => true,
-            Token::Err => true,
-            Token::Some => true,
-            Token::Match => true,
-            _ => false,
-        }
+        matches!(self, Token::Ok | Token::Err | Token::Some | Token::Match)
     }
 
     pub fn is_empty_constructor(&self) -> bool {
-        match self {
-            Token::None => true,
-            _ => false,
-        }
+        matches!(self, Token::None)
     }
 
     pub fn is_empty(&self) -> bool {
