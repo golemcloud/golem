@@ -33,10 +33,12 @@ prost-build = "0.12.3"
 
 [features]
 default = ["host"]
-host = ["arbitrary", "json", "protobuf", "typeinfo", "wasmtime"]
+host = ["arbitrary", "bincode", "json", "protobuf", "serde", "typeinfo", "wasmtime"]
 arbitrary = ["dep:arbitrary"]
+bincode = ["dep:bincode"]
 json = ["dep:serde", "dep:serde_json", "dep:bigdecimal", "typeinfo"]
 protobuf = ["dep:bincode", "dep:serde", "dep:prost"]
+serde = ["dep:serde"]
 stub = []
 typeinfo = ["dep:golem-wasm-ast"]
 wasmtime = ["dep:wasmtime", "typeinfo"]

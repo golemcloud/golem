@@ -18,6 +18,9 @@
 #[cfg(feature = "stub")]
 mod bindings;
 
+/// Implements bincode encoders and decoders for WitValue instances
+#[cfg(feature = "bincode")]
+pub mod bincode;
 /// A builder interface for WitValue instances
 mod builder;
 
@@ -31,6 +34,10 @@ pub mod json;
 /// Protobuf-defined value types and conversion to them
 #[cfg(feature = "protobuf")]
 pub mod protobuf;
+
+/// Serde instances for WitValue
+#[cfg(feature = "serde")]
+pub mod serde;
 
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
