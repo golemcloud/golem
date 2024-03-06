@@ -85,7 +85,7 @@ impl<'docker_client> GolemTemplateService<'docker_client> {
                 match client.find(None).await {
                     Ok(_) => break,
                     Err(e) => {
-                        println!("Cloud Service healthcheck failed: ${e:?}");
+                        println!("Cloud Service healthcheck failed: {e:?}");
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                 }

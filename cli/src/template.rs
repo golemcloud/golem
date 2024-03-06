@@ -126,7 +126,7 @@ impl<C: TemplateClient + Send + Sync> TemplateHandler for TemplateHandlerLive<C>
                     match templates.first() {
                         None => {
                             let template_name = name.0;
-                            Err(GolemError(format!("Can't find template ${template_name}")))
+                            Err(GolemError(format!("Can't find template {template_name}")))
                         }
                         Some(template) => {
                             let parsed = Uuid::parse_str(&template.template_id);
