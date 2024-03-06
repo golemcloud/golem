@@ -139,7 +139,7 @@ From the root of the project
 
 ```bash
 rustup target add aarch64-unknown-linux-gnu-gcc
-cargo build --release --target aarch64-unknown-linux-gnu-gcc
+cargo build --release --target aarch64-unknown-linux-gnu
 ```
 
 ### LINUX
