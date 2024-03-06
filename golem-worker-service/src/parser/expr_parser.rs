@@ -65,17 +65,14 @@ impl InternalExprResult {
 
     fn apply_with(&self, expr: Expr) -> InternalExprResult {
         match self {
-            InternalExprResult::Complete(complete_expr) => {
-                match complete_expr {
-                    Expr::Concat(vec) => {
-                        let mut new_expr = vec.clone();
-                        new_expr.push(expr);
-                        InternalExprResult::complete(Expr::Concat(new_expr))
-                    }
-                    _ => InternalExprResult::complete(Expr::Concat(vec![complete_expr.clone(), expr]))
-
+            InternalExprResult::Complete(complete_expr) => match complete_expr {
+                Expr::Concat(vec) => {
+                    let mut new_expr = vec.clone();
+                    new_expr.push(expr);
+                    InternalExprResult::complete(Expr::Concat(new_expr))
                 }
-            }
+                _ => InternalExprResult::complete(Expr::Concat(vec![complete_expr.clone(), expr])),
+            },
             InternalExprResult::InComplete(_, in_complete) => in_complete(expr),
             InternalExprResult::Empty => InternalExprResult::Complete(expr),
         }
@@ -217,7 +214,6 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                 Token::Quote => {
                     let non_code_string =
                         cursor.capture_string_until_and_skip_end(vec![], &Token::Quote);
-
 
                     let new_expr = match non_code_string {
                         Some(string) => {
@@ -656,10 +652,11 @@ where
 {
     match cursor.next_non_empty_token() {
         Some(Token::Arrow) => {
-            let index_of_closed_curly_brace = cursor
-                .index_of_last_end_token(vec![&Token::OpenCurlyBrace, &Token::InterpolationStart], &Token::ClosedCurlyBrace);
-            let index_of_commaseparator =
-                cursor.index_of_last_end_token(vec![], &Token::Comma);
+            let index_of_closed_curly_brace = cursor.index_of_last_end_token(
+                vec![&Token::OpenCurlyBrace, &Token::InterpolationStart],
+                &Token::ClosedCurlyBrace,
+            );
+            let index_of_commaseparator = cursor.index_of_last_end_token(vec![], &Token::Comma);
 
             match (index_of_closed_curly_brace, index_of_commaseparator) {
                 (Some(end_of_constructors), Some(comma)) => {

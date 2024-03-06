@@ -71,10 +71,15 @@ pub struct ConstructorPatternExpr(pub (ConstructorPattern, Box<Expr>));
 
 impl Display for ConstructorPatternExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} => {}", self.0.0, match Expr::to_json_value(&self.0.1).unwrap() {
-            serde_json::Value::String(s) => s,
-            anything_else => anything_else.to_string(),
-        })
+        write!(
+            f,
+            "{} => {}",
+            self.0 .0,
+            match Expr::to_json_value(&self.0 .1).unwrap() {
+                serde_json::Value::String(s) => s,
+                anything_else => anything_else.to_string(),
+            }
+        )
     }
 }
 
@@ -93,12 +98,25 @@ impl Display for ConstructorPattern {
             ConstructorPattern::WildCard => write!(f, "_"),
             ConstructorPattern::As(name, pattern) => write!(f, "{} as {}", pattern, name),
             ConstructorPattern::Constructor(constructor_type, variables) => {
-                write!(f, "{}({})", constructor_type, variables.iter().map(|x| x.to_string()).collect::<Vec<String>>().join(", "))
+                write!(
+                    f,
+                    "{}({})",
+                    constructor_type,
+                    variables
+                        .iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )
             }
-            ConstructorPattern::Literal(expr) => write!(f, "{}", match expr.to_json_value().unwrap() {
-                serde_json::Value::String(s) => s,
-                anything_else => anything_else.to_string(),
-            }),
+            ConstructorPattern::Literal(expr) => write!(
+                f,
+                "{}",
+                match expr.to_json_value().unwrap() {
+                    serde_json::Value::String(s) => s,
+                    anything_else => anything_else.to_string(),
+                }
+            ),
         }
     }
 }
@@ -319,7 +337,7 @@ impl Expr {
                     Ok(InternalValue::NonInterpolated(serde_json::Value::Array(vs)))
                 }
                 Expr::Literal(value) => Ok(InternalValue::NonInterpolated(
-                    serde_json::Value::String(format!("'{}'", value.clone()))
+                    serde_json::Value::String(format!("'{}'", value.clone())),
                 )),
                 Expr::PathVar(value) => Ok(InternalValue::Interpolated(serde_json::Value::String(
                     value.clone(),
@@ -447,12 +465,14 @@ impl Expr {
                         match_cases_str.push(match_case.to_string());
                     }
                     match c.unwrap() {
-                        serde_json::Value::String(c) => Ok(InternalValue::Interpolated(
-                            serde_json::Value::String(format!("match {} {{ {} }}", c, match_cases_str.join(", ")),
-                        )),
-                    ),
-                    _ => Err("Not supported type".into()),
-                }},
+                        serde_json::Value::String(c) => {
+                            Ok(InternalValue::Interpolated(serde_json::Value::String(
+                                format!("match {} {{ {} }}", c, match_cases_str.join(", ")),
+                            )))
+                        }
+                        _ => Err("Not supported type".into()),
+                    }
+                }
                 Expr::Constructor0(constructor) => Ok(InternalValue::NonInterpolated(
                     serde_json::Value::String(constructor.to_string()),
                 )),
@@ -530,9 +550,9 @@ impl<T> InternalValue<T> {
 
 mod tests {
     use super::*;
-    use serde_json::json;
     use crate::evaluator::Evaluator;
     use crate::resolved_variables::ResolvedVariables;
+    use serde_json::json;
 
     #[test]
     fn test_round_trip_json() {
@@ -546,16 +566,16 @@ mod tests {
         let expr = Expr::from_json_value(&json).unwrap();
         let result = expr.to_json_value().unwrap();
 
-        assert_eq!(
-            result,
-            json
-        );
+        assert_eq!(result, json);
     }
 
     #[test]
     fn test_expr_to_json_value() {
         let expr = Expr::Record(vec![
-            ("name".to_string(), Box::new(Expr::Literal("John".to_string()))),
+            (
+                "name".to_string(),
+                Box::new(Expr::Literal("John".to_string())),
+            ),
             ("age".to_string(), Box::new(Expr::Literal("30".to_string()))),
             (
                 "cars".to_string(),
@@ -585,11 +605,15 @@ mod tests {
 
         let expr1_string = "${match worker.response { ok(x) => '${x.id}-foo', err(msg) => msg }}";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
-        let value1 = expr1.evaluate(&ResolvedVariables::from_worker_response(&worker_response)).unwrap();
+        let value1 = expr1
+            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
-        let value2 = expr2.evaluate(&ResolvedVariables::from_worker_response(&worker_response)).unwrap();
+        let value2 = expr2
+            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .unwrap();
 
         let expected = serde_json::Value::String("afsal-foo".to_string());
         assert_eq!((&value1, &value2), (&expected, &expected));
