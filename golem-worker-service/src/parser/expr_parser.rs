@@ -125,7 +125,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     let new_expr = if context.is_code() {
                         resolve_literal_in_code_context(raw_string.as_str())
                     } else {
-                        dbg!("The raw sri")
+                        dbg!("The raw sring is {}", raw_string.clone());
                         Expr::Literal(raw_string)
                     };
 
@@ -215,7 +215,6 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                 }
 
                 Token::Quote => {
-                    dbg!("Rest of the string is {}", &cursor.tokens);
                     let non_code_string =
                         cursor.capture_string_until_and_skip_end(vec![], &Token::Quote);
 
@@ -583,7 +582,6 @@ fn get_constructors(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternEx
             Some(token) if token.is_non_empty_constructor() => {
                 let next_non_empty_open_braces = cursor.next_non_empty_token();
 
-                dbg!("The token is {}", token.clone());
                 match next_non_empty_open_braces {
                     Some(Token::OpenParen) => {
                         let constructor_var_optional = cursor.capture_string_until_and_skip_end(
@@ -593,8 +591,6 @@ fn get_constructors(cursor: &mut TokenCursor) -> Result<Vec<ConstructorPatternEx
 
                         match constructor_var_optional {
                             Some(constructor_var) => {
-                                dbg!("The constructor_var_optional is {:?}", &constructor_var);
-
                                 let expr = parse_with_context(constructor_var.as_str(), Context::Code)?;
 
                                 let cons = match expr {
@@ -696,7 +692,7 @@ where
 
                 (Some(_), None) => {
                     let captured_string = cursor.capture_string_until(
-                        vec![&Token::OpenCurlyBrace],
+                        vec![&Token::OpenCurlyBrace, &Token::InterpolationStart],
                         &Token::ClosedCurlyBrace,
                     );
 

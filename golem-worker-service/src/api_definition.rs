@@ -620,9 +620,6 @@ mod tests {
         fn test_encode_decode(path_pattern: &str, worker_id: &str, function_params: &str) {
             let yaml = get_api_spec(path_pattern, worker_id, function_params);
             let original: ApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
-
-            dbg!({original.clone()});
-
             let encoded = serialization::serialize(&original).unwrap();
             let decoded: ApiDefinition = serialization::deserialize(&encoded).unwrap();
 

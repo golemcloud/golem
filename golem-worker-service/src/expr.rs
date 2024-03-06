@@ -71,7 +71,10 @@ pub struct ConstructorPatternExpr(pub (ConstructorPattern, Box<Expr>));
 
 impl Display for ConstructorPatternExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} => {}", self.0.0, Expr::to_json_value(&self.0.1).unwrap())
+        write!(f, "{} => {}", self.0.0, match Expr::to_json_value(&self.0.1).unwrap() {
+            serde_json::Value::String(s) => s,
+            anything_else => anything_else.to_string(),
+        })
     }
 }
 
@@ -92,7 +95,10 @@ impl Display for ConstructorPattern {
             ConstructorPattern::Constructor(constructor_type, variables) => {
                 write!(f, "{}({})", constructor_type, variables.iter().map(|x| x.to_string()).collect::<Vec<String>>().join(", "))
             }
-            ConstructorPattern::Literal(expr) => write!(f, "{}", expr.to_string().unwrap()),
+            ConstructorPattern::Literal(expr) => write!(f, "{}", match expr.to_json_value().unwrap() {
+                serde_json::Value::String(s) => s,
+                anything_else => anything_else.to_string(),
+            }),
         }
     }
 }
@@ -313,7 +319,7 @@ impl Expr {
                     Ok(InternalValue::NonInterpolated(serde_json::Value::Array(vs)))
                 }
                 Expr::Literal(value) => Ok(InternalValue::NonInterpolated(
-                    serde_json::Value::String(value.clone()),
+                    serde_json::Value::String(format!("'{}'", value.clone()))
                 )),
                 Expr::PathVar(value) => Ok(InternalValue::Interpolated(serde_json::Value::String(
                     value.clone(),
@@ -427,6 +433,7 @@ impl Expr {
                 Expr::Number(number) => Ok(InternalValue::Interpolated(serde_json::Value::String(
                     number.to_string(),
                 ))),
+
                 Expr::Variable(variable) => Ok(InternalValue::Interpolated(
                     serde_json::Value::String(variable.clone()),
                 )),
@@ -526,7 +533,6 @@ mod tests {
     use serde_json::json;
     use crate::evaluator::Evaluator;
     use crate::resolved_variables::ResolvedVariables;
-    use crate::tokeniser::tokenizer::Tokenizer;
 
     #[test]
     fn test_round_trip_json() {
@@ -573,15 +579,19 @@ mod tests {
         );
     }
 
-    // TODO; GOL-248: Ideally, Expr::from(expr_string).to_string() should be equal to expr_string, but that's not the case now
-    // That said, currently Expr::from(expr_string).to_string() == Expr::from(Expr::from(expr_string).to_string()) is true -- this test case
     #[test]
-    fn valid_expr_after_roundtrip() {
-        let user_created_expr = "${match worker.response { ok(x) => 'x-${x}', err(y) => 'thaj' }}";
-        let expr = Expr::from_primitive_string(user_created_expr).unwrap();
-        let value = expr.evaluate(&ResolvedVariables::from_worker_response(&json!({"ok": "afsal"}))).unwrap();
-        let expr_string = expr.to_string().unwrap();
-        let expr_again = Expr::from_primitive_string(expr_string.as_str()).unwrap();
-        assert_eq!(expr_again, expr);
+    fn expr_to_string_round_trip() {
+        let worker_response = &json!({"ok": { "id" : "afsal"} });
+
+        let expr1_string = "${match worker.response { ok(x) => '${x.id}-foo', err(msg) => msg }}";
+        let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
+        let value1 = expr1.evaluate(&ResolvedVariables::from_worker_response(&worker_response)).unwrap();
+
+        let expr2_string = expr1.to_string().unwrap();
+        let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
+        let value2 = expr2.evaluate(&ResolvedVariables::from_worker_response(&worker_response)).unwrap();
+
+        let expected = serde_json::Value::String("afsal-foo".to_string());
+        assert_eq!((&value1, &value2), (&expected, &expected));
     }
 }
