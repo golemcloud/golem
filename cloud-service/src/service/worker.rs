@@ -449,8 +449,18 @@ impl WorkerServiceDefault {
     ) -> Result<i32, WorkerError> {
         match self.get_metadata(worker_id, auth).await {
             Ok(metadata) => Ok(metadata.template_version),
-            Err(WorkerError::WorkerNotFound(_)) => Ok(0),
-            Err(WorkerError::Golem(GolemError::WorkerNotFound(_))) => Ok(0),
+            Err(WorkerError::WorkerNotFound(_)) => Ok(self
+                .template_service
+                .get_latest_version(&worker_id.template_id, auth)
+                .await?
+                .map(|t| t.versioned_template_id.version)
+                .unwrap_or(0)),
+            Err(WorkerError::Golem(GolemError::WorkerNotFound(_))) => Ok(self
+                .template_service
+                .get_latest_version(&worker_id.template_id, auth)
+                .await?
+                .map(|t| t.versioned_template_id.version)
+                .unwrap_or(0)),
             Err(other) => Err(other),
         }
     }
