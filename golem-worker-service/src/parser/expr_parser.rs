@@ -122,7 +122,6 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     let new_expr = if context.is_code() {
                         resolve_literal_in_code_context(raw_string.as_str())
                     } else {
-                        dbg!("The raw sring is {}", raw_string.clone());
                         Expr::Literal(raw_string)
                     };
 
@@ -926,7 +925,7 @@ mod tests {
 
         let result = expression_parser.parse("${request.path.user-id}>2");
 
-        let expected = Expr::Concat(vec![
+        let expected =
             Expr::Concat(vec![
                 Expr::SelectField(
                     Box::new(Expr::SelectField(
@@ -936,9 +935,8 @@ mod tests {
                     "user-id".to_string(),
                 ),
                 Expr::Literal(">".to_string()),
-            ]),
-            Expr::Literal("2".to_string()),
-        ]);
+                Expr::Literal("2".to_string()),
+            ]);
 
         assert_eq!(result, Ok(expected));
     }
@@ -1474,13 +1472,12 @@ mod tests {
                 )),
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
-                    Box::new(Expr::Concat(vec![
+                    Box::new(
                         Expr::Concat(vec![
                             Expr::Literal("bar".to_string()),
                             Expr::Literal(" ".to_string()),
-                        ]),
-                        Expr::Literal("bar".to_string()),
-                    ])),
+                            Expr::Literal("bar".to_string()),
+                        ])),
                 )),
             ],
         );
