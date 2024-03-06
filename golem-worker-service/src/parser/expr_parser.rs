@@ -925,18 +925,17 @@ mod tests {
 
         let result = expression_parser.parse("${request.path.user-id}>2");
 
-        let expected =
-            Expr::Concat(vec![
-                Expr::SelectField(
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::Request()),
-                        "path".to_string(),
-                    )),
-                    "user-id".to_string(),
-                ),
-                Expr::Literal(">".to_string()),
-                Expr::Literal("2".to_string()),
-            ]);
+        let expected = Expr::Concat(vec![
+            Expr::SelectField(
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::Request()),
+                    "path".to_string(),
+                )),
+                "user-id".to_string(),
+            ),
+            Expr::Literal(">".to_string()),
+            Expr::Literal("2".to_string()),
+        ]);
 
         assert_eq!(result, Ok(expected));
     }
@@ -1472,12 +1471,11 @@ mod tests {
                 )),
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
-                    Box::new(
-                        Expr::Concat(vec![
-                            Expr::Literal("bar".to_string()),
-                            Expr::Literal(" ".to_string()),
-                            Expr::Literal("bar".to_string()),
-                        ])),
+                    Box::new(Expr::Concat(vec![
+                        Expr::Literal("bar".to_string()),
+                        Expr::Literal(" ".to_string()),
+                        Expr::Literal("bar".to_string()),
+                    ])),
                 )),
             ],
         );
