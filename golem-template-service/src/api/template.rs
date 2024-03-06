@@ -204,9 +204,12 @@ impl TemplateApi {
     #[oai(
         path = "/:template_id/latest",
         method = "get",
-        operation_id = "get_latest_template"
+        operation_id = "get_latest_template_metadata"
     )]
-    async fn get_latest_template(&self, template_id: Path<TemplateId>) -> Result<Json<Template>> {
+    async fn get_latest_template_metadata(
+        &self,
+        template_id: Path<TemplateId>,
+    ) -> Result<Json<Template>> {
         let response = self
             .template_service
             .get_latest_version(&template_id.0)

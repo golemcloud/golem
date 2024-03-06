@@ -1270,7 +1270,7 @@ paths:
     get:
       tags:
       - Template
-      operationId: get_latest_template
+      operationId: get_latest_template_metadata
       parameters:
       - in: path
         name: template_id
