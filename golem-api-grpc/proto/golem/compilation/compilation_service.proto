@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+import "golem/common/empty.proto";
+import "golem/common/error_body.proto";
+import "golem/common/uuid.proto";
+
+package golem.compilationserver;
+
+service CompilationServer {
+    rpc EnqueueCompilation(CompilationRequest) returns (CompilationResponse);
+}
+
+
+message CompilationRequest {
+    golem.common.UUID template_id = 1;
+    int32 template_version = 2;
+}
+
+message CompilationResponse {
+    oneof result {
+        golem.common.Empty success = 1;
+        CompilationError failure = 2;
+    }
+}
+
+message CompilationError {
+    oneof error {
+        golem.common.ErrorsBody bad_request = 1;
+        golem.common.ErrorBody not_found = 2;
+        golem.common.ErrorBody internal_error = 3;
+    }
+}

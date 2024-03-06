@@ -2012,6 +2012,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-compilation-server"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "futures-util",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-worker-executor-base",
+ "http 0.2.11",
+ "http 1.0.0",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tracing",
+ "uuid",
+ "wasmtime",
+]
+
+[[package]]
 name = "golem-service"
 version = "0.1.0"
 dependencies = [

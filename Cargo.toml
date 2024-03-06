@@ -9,7 +9,8 @@ members = [
     "golem-service-base",
     "golem-service",
     "golem-shard-manager",
-    "golem-worker-bridge"
+    "golem-worker-bridge", 
+    "golem-compilation-server"
 ]
 
 exclude = [
@@ -88,12 +89,10 @@ tonic = "0.10.2"
 tonic-reflection = "0.10.2"
 tonic-health = "0.10.2"
 tracing = { version = "0.1.40", features = ["log"] }
-tracing-opentelemetry = "0.22.0"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter", "fmt", "std", "json"] }
 url = "2.5.0"
 uuid = { version = "1.7.0", features = ["serde", "v4"] }
 warp = "0.3.6"
-webpki-roots = { version = "0.26.0" }
 
 [patch.crates-io]
 wasmtime = { path = "wasmtime/crates/wasmtime" }
