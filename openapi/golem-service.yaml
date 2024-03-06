@@ -1270,7 +1270,7 @@ paths:
     get:
       tags:
       - Template
-      operationId: get_latest_template_version
+      operationId: get_latest_template
       parameters:
       - in: path
         name: template_id
@@ -1287,8 +1287,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                type: integer
-                format: int32
+                $ref: '#/components/schemas/Template'
         '400':
           description: ''
           content:
