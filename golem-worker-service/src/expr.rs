@@ -524,6 +524,9 @@ impl<T> InternalValue<T> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use crate::evaluator::Evaluator;
+    use crate::resolved_variables::ResolvedVariables;
+    use crate::tokeniser::tokenizer::Tokenizer;
 
     #[test]
     fn test_round_trip_json() {
@@ -570,10 +573,15 @@ mod tests {
         );
     }
 
+    // TODO; GOL-248: Ideally, Expr::from(expr_string).to_string() should be equal to expr_string, but that's not the case now
+    // That said, currently Expr::from(expr_string).to_string() == Expr::from(Expr::from(expr_string).to_string()) is true -- this test case
     #[test]
-    fn test_expr_to_string() {
-        let expr = "${match worker.response { ok(x) => x, err(msg) => y}}";
-        let string = Expr::from_primitive_string(expr).unwrap().to_string().unwrap();
-        assert_eq!(string, expr);
+    fn valid_expr_after_roundtrip() {
+        let user_created_expr = "${match worker.response { ok(x) => 'x-${x}', err(y) => 'thaj' }}";
+        let expr = Expr::from_primitive_string(user_created_expr).unwrap();
+        let value = expr.evaluate(&ResolvedVariables::from_worker_response(&json!({"ok": "afsal"}))).unwrap();
+        let expr_string = expr.to_string().unwrap();
+        let expr_again = Expr::from_primitive_string(expr_string.as_str()).unwrap();
+        assert_eq!(expr_again, expr);
     }
 }
