@@ -10,11 +10,11 @@ package = "rpc:counters"
 world = "wasm-rpc-stub-counters"
 path = "wit"
 
-[package.metadata.component.target.dependencies."rpc:counters"]
-path = "wit/deps/rpc_counters"
-
 [package.metadata.component.target.dependencies."golem:rpc"]
 path = "wit/deps/wasm-rpc"
+
+[package.metadata.component.target.dependencies."rpc:counters"]
+path = "wit/deps/rpc_counters"
 
 [dependencies.golem-wasm-rpc]
 path = "../../../wasm-rpc/wasm-rpc"

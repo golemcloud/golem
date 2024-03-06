@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::{TemplateId, WorkerId};
+use golem_common::model::{TemplateId, WorkerId, WrappedFunctionType};
 use golem_wasm_rpc::golem::rpc::types::Uri;
 use golem_wasm_rpc::{HostWasmRpc, WasmRpcEntry, WitValue};
 use std::str::FromStr;
@@ -58,15 +59,26 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let entry = self.table.get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-        let result = self
-            .rpc()
-            .invoke_and_await(
-                &payload.remote_worker_id,
-                function_name,
-                function_params,
-                &self.private_state.account_id,
-            )
-            .await;
+        let remote_worker_id = payload.remote_worker_id.clone();
+
+        let result = Durability::<Ctx, WitValue, SerializableError>::wrap(
+            self,
+            WrappedFunctionType::WriteRemote,
+            "golem::rpc::wasm-rpc::invoke-and-await",
+            |ctx| {
+                Box::pin(async move {
+                    ctx.rpc()
+                        .invoke_and_await(
+                            &remote_worker_id,
+                            function_name,
+                            function_params,
+                            &ctx.private_state.account_id,
+                        )
+                        .await
+                })
+            },
+        )
+        .await;
 
         match result {
             Ok(result) => {

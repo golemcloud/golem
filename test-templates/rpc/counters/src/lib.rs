@@ -8,10 +8,12 @@ pub struct Component;
 
 struct State {
     dropped_counters: Vec<(String, u64)>,
+    global: u64
 }
 
 static mut STATE: State = State {
     dropped_counters: vec![],
+    global: 0
 };
 
 fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
@@ -24,6 +26,18 @@ impl Guest for Component {
     fn get_all_dropped() -> Vec<(String, u64)> {
         with_state(|state| {
             state.dropped_counters.clone()
+        })
+    }
+
+    fn inc_global_by(value: u64) {
+        with_state(|state| {
+            state.global += value;
+        });
+    }
+
+    fn get_global_value() -> u64 {
+        with_state(|state| {
+            state.global
         })
     }
 }
