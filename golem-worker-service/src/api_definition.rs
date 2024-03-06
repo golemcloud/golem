@@ -621,6 +621,8 @@ mod tests {
             let yaml = get_api_spec(path_pattern, worker_id, function_params);
             let original: ApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
 
+            dbg!({original.clone()});
+
             let encoded = serialization::serialize(&original).unwrap();
             let decoded: ApiDefinition = serialization::deserialize(&encoded).unwrap();
 
@@ -648,6 +650,12 @@ mod tests {
         test_encode_decode(
             "foo",
             "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
+            "[ \"data\"]",
+        );
+
+        test_encode_decode(
+            "foo",
+            "match worker.response { ok(value) => 1, error => 0 }",
             "[ \"data\"]",
         );
     }

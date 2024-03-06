@@ -69,6 +69,12 @@ impl Display for InnerNumber {
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct ConstructorPatternExpr(pub (ConstructorPattern, Box<Expr>));
 
+impl Display for ConstructorPatternExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} => {}", self.0.0, Expr::to_json_value(&self.0.1).unwrap())
+    }
+}
+
 // A constructor pattern by itself is an expr,
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum ConstructorPattern {
@@ -76,6 +82,19 @@ pub enum ConstructorPattern {
     As(String, Box<ConstructorPattern>),
     Constructor(ConstructorTypeName, Vec<ConstructorPattern>),
     Literal(Box<Expr>),
+}
+
+impl Display for ConstructorPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConstructorPattern::WildCard => write!(f, "_"),
+            ConstructorPattern::As(name, pattern) => write!(f, "{} as {}", pattern, name),
+            ConstructorPattern::Constructor(constructor_type, variables) => {
+                write!(f, "{}({})", constructor_type, variables.iter().map(|x| x.to_string()).collect::<Vec<String>>().join(", "))
+            }
+            ConstructorPattern::Literal(expr) => write!(f, "{}", expr.to_string().unwrap()),
+        }
+    }
 }
 
 impl ConstructorPattern {
@@ -152,6 +171,15 @@ fn validate_single_variable_constructor(
 pub enum ConstructorTypeName {
     InBuiltConstructor(InBuiltConstructorInner),
     CustomConstructor(String),
+}
+
+impl Display for ConstructorTypeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConstructorTypeName::InBuiltConstructor(inner) => write!(f, "{}", inner),
+            ConstructorTypeName::CustomConstructor(name) => write!(f, "{}", name),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
@@ -405,8 +433,22 @@ impl Expr {
                 Expr::Boolean(boolean) => Ok(InternalValue::Interpolated(
                     serde_json::Value::String(boolean.clone().to_string()),
                 )),
-                Expr::PatternMatch(_, _) => todo!(),
-                Expr::Constructor0(_) => todo!(),
+                Expr::PatternMatch(condition, match_cases) => {
+                    let c = go(condition)?;
+                    let mut match_cases_str = vec![];
+                    for match_case in match_cases {
+                        match_cases_str.push(match_case.to_string());
+                    }
+                    match c.unwrap() {
+                        serde_json::Value::String(c) => Ok(InternalValue::Interpolated(
+                            serde_json::Value::String(format!("match {} {{ {} }}", c, match_cases_str.join(", ")),
+                        )),
+                    ),
+                    _ => Err("Not supported type".into()),
+                }},
+                Expr::Constructor0(constructor) => Ok(InternalValue::NonInterpolated(
+                    serde_json::Value::String(constructor.to_string()),
+                )),
             }
         }
 
@@ -476,5 +518,62 @@ impl<T> InternalValue<T> {
             InternalValue::Interpolated(value) => value,
             InternalValue::NonInterpolated(value) => value,
         }
+    }
+}
+
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_round_trip_json() {
+        let json = json!({
+            "name": "John",
+            "age": 30,
+            "cars": ["Ford", "BMW", "Fiat"],
+            "user": "${worker.response}-user"
+        });
+
+        let expr = Expr::from_json_value(&json).unwrap();
+        let result = expr.to_json_value().unwrap();
+
+        assert_eq!(
+            result,
+            json
+        );
+    }
+
+    #[test]
+    fn test_expr_to_json_value() {
+        let expr = Expr::Record(vec![
+            ("name".to_string(), Box::new(Expr::Literal("John".to_string()))),
+            ("age".to_string(), Box::new(Expr::Literal("30".to_string()))),
+            (
+                "cars".to_string(),
+                Box::new(Expr::Sequence(vec![
+                    Expr::Literal("Ford".to_string()),
+                    Expr::Literal("BMW".to_string()),
+                    Expr::Literal("Fiat".to_string()),
+                ])),
+            ),
+        ]);
+
+        let json = expr.to_json_value().unwrap();
+
+        assert_eq!(
+            json,
+            json!({
+                "name": "John",
+                "age": "30",
+                "cars": ["Ford", "BMW", "Fiat"]
+            })
+        );
+    }
+
+    #[test]
+    fn test_expr_to_string() {
+        let expr = "${match worker.response { ok(x) => x, err(msg) => y}}";
+        let string = Expr::from_primitive_string(expr).unwrap().to_string().unwrap();
+        assert_eq!(string, expr);
     }
 }

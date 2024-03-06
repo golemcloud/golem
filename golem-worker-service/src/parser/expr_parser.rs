@@ -66,7 +66,15 @@ impl InternalExprResult {
     fn apply_with(&self, expr: Expr) -> InternalExprResult {
         match self {
             InternalExprResult::Complete(complete_expr) => {
-                InternalExprResult::complete(Expr::Concat(vec![complete_expr.clone(), expr]))
+                match complete_expr {
+                    Expr::Concat(vec) => {
+                        let mut new_expr = vec.clone();
+                        new_expr.push(expr);
+                        InternalExprResult::complete(Expr::Concat(new_expr))
+                    }
+                    _ => InternalExprResult::complete(Expr::Concat(vec![complete_expr.clone(), expr]))
+
+                }
             }
             InternalExprResult::InComplete(_, in_complete) => in_complete(expr),
             InternalExprResult::Empty => InternalExprResult::Complete(expr),
