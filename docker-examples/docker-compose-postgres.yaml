@@ -33,6 +33,11 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "${POSTGRES_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U golem_user -d golem_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   golem-shard-manager:
     image: golemservices/golem-shard-manager:v0.0.65
@@ -71,7 +76,8 @@ services:
       - "${TEMPLATE_SERVICE_HTTP_PORT}:${TEMPLATE_SERVICE_HTTP_PORT}"
       - "${TEMPLATE_SERVICE_GRPC_PORT}:${TEMPLATE_SERVICE_GRPC_PORT}"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   golem-worker-service:
     image: golemservices/golem-worker-service:v0.0.65
