@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   router:
-    image: golemservices/golem-router:v0.0.65
+    image: golemservices/golem-router:v0.0.67
     ports:
       - "${GOLEM_ROUTER_PORT}:80"
     environment:
@@ -24,7 +24,7 @@ services:
       - "${REDIS_PORT}:${REDIS_PORT}"
 
   golem-shard-manager:
-    image: golemservices/golem-shard-manager:v0.0.65
+    image: golemservices/golem-shard-manager:v0.0.67
     environment:
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
@@ -37,7 +37,7 @@ services:
       - redis
 
   golem-template-service:
-    image: golemservices/golem-template-service:v0.0.65
+    image: golemservices/golem-template-service:v0.0.67
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1
@@ -59,7 +59,7 @@ services:
       - "${TEMPLATE_SERVICE_GRPC_PORT}:${TEMPLATE_SERVICE_GRPC_PORT}"
 
   golem-worker-service:
-    image: golemservices/golem-worker-service:v0.0.65
+    image: golemservices/golem-worker-service:v0.0.67
     pull_policy: always
     environment:
       - RUST_BACKTRACE=1
@@ -84,7 +84,7 @@ services:
       - redis
 
   golem-worker-executor:
-    image: golemservices/golem-worker-executor:v0.0.65
+    image: golemservices/golem-worker-executor:v0.0.67
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1
