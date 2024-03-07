@@ -27,4 +27,9 @@ uuid = "1.7.0"
 wasmtime = { version = "=17.0.0", features = ["component-model"] }
 tonic.workspace = true
 thiserror.workspace = true
-
+serde.workspace = true
+figment.workspace = true
+console-subscriber = "0.2.0"
+tracing-subscriber = "0.3.18"
+prometheus.workspace = true
+tonic-health = "0.10.2"

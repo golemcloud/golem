@@ -1,3 +1,4 @@
+use crate::config::CompileWorkerConfig;
 use crate::model::*;
 use crate::UriBackConversion;
 use futures_util::TryStreamExt;
@@ -29,8 +30,7 @@ pub struct CompileWorker {
     // Config
     uri: Uri,
     access_token: Uuid,
-    retry_config: RetryConfig,
-    max_template_size: usize,
+    config: CompileWorkerConfig,
 
     // Resources
     engine: Engine,
@@ -41,8 +41,7 @@ impl CompileWorker {
     pub fn start(
         uri: Uri,
         access_token: Uuid,
-        retry_config: RetryConfig,
-        max_template_size: usize,
+        config: CompileWorkerConfig,
 
         engine: Engine,
         compiled_template_service: Arc<dyn CompiledTemplateService + Send + Sync>,
@@ -55,8 +54,7 @@ impl CompileWorker {
             uri,
             engine,
             compiled_template_service,
-            retry_config,
-            max_template_size,
+            config,
             access_token,
         };
 
@@ -67,17 +65,11 @@ impl CompileWorker {
                             if let Some(request) = request {
                                 let result = worker.compile_template(&request.template).await;
                                 match result {
-                                    Err(err) => {
-                                        if request.result.send(Err(err)).is_err() {
-                                            tracing::error!("Failed to send compilation result");
-                                            break;
-                                        }
-                                    }
+                                    Err(_) => {}
                                     Ok(component) => {
                                         let send_result = sender.send(CompiledTemplate {
                                             template: request.template,
                                             component,
-                                            result: request.result,
                                         }).await;
 
                                         if send_result.is_err() {
@@ -124,10 +116,10 @@ impl CompileWorker {
         let bytes = download_via_grpc(
             &self.uri,
             &self.access_token,
-            &self.retry_config,
+            &self.config.retry_config,
             &template.id,
             template.version,
-            self.max_template_size,
+            self.config.max_template_size,
         )
         .await?;
 

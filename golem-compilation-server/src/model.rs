@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use golem_common::model::TemplateId;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use wasmtime::component::Component;
 
 #[derive(Debug, Clone)]
@@ -19,13 +19,11 @@ impl Display for TemplateWithVersion {
 #[derive(Debug)]
 pub struct CompilationRequest {
     pub template: TemplateWithVersion,
-    pub result: oneshot::Sender<Result<(), CompilationError>>,
 }
 
 pub struct CompiledTemplate {
     pub template: TemplateWithVersion,
     pub component: Component,
-    pub result: oneshot::Sender<Result<(), CompilationError>>,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]

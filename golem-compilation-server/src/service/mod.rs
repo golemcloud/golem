@@ -1,4 +1,4 @@
-mod compile_service;
+pub mod compile_service;
 mod compile_worker;
 mod upload_worker;
 

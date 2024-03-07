@@ -1,13 +1,12 @@
 use super::*;
+use crate::config::{CompileWorkerConfig, UploadWorkerConfig};
 use crate::model::*;
 use async_trait::async_trait;
-use golem_common::config::RetryConfig;
 use golem_common::model::TemplateId;
 use golem_worker_executor_base::services::compiled_template::CompiledTemplateService;
 use http::Uri;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use wasmtime::Engine;
@@ -28,22 +27,24 @@ pub struct CompilationServiceDefault {
 
 impl CompilationServiceDefault {
     pub fn new(
+        upload_worker: UploadWorkerConfig,
+        compile_worker: CompileWorkerConfig,
+
         uri: Uri,
         access_token: Uuid,
+
         engine: Engine,
-        compiled_template_service: Arc<dyn CompiledTemplateService + Send + Sync>,
         cancel: CancellationToken,
+
+        compiled_template_service: Arc<dyn CompiledTemplateService + Send + Sync>,
     ) -> Self {
         let (compile_tx, compile_rx) = mpsc::channel(100);
         let (upload_tx, upload_rx) = mpsc::channel(100);
-        let retry = RetryConfig::default();
-        let max_tempalte_size = 1024 * 1024 * 10;
 
         CompileWorker::start(
             uri.clone(),
             access_token,
-            retry.clone(),
-            max_tempalte_size,
+            compile_worker,
             engine.clone(),
             compiled_template_service.clone(),
             upload_tx,
@@ -52,8 +53,7 @@ impl CompilationServiceDefault {
         );
 
         UploadWorker::start(
-            retry.clone(),
-            10,
+            upload_worker,
             compiled_template_service.clone(),
             upload_rx,
             cancel.clone(),
@@ -70,20 +70,13 @@ impl CompilationService for CompilationServiceDefault {
         template_id: TemplateId,
         template_version: i32,
     ) -> Result<(), CompilationError> {
-        let (tx, rx) = oneshot::channel();
         let request = CompilationRequest {
             template: TemplateWithVersion {
                 id: template_id,
                 version: template_version,
             },
-            result: tx,
         };
         self.queue.send(request).await?;
-        match rx.await {
-            Ok(result) => result,
-            Err(_) => Err(CompilationError::Unexpected(
-                "Failed to receive compilation result".into(),
-            )),
-        }
+        Ok(())
     }
 }

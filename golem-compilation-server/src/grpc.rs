@@ -12,8 +12,15 @@ use golem_api_grpc::proto::golem::compilationserver::{
 use golem_common::model::TemplateId;
 use tonic::{Request, Response, Status};
 
-struct CompileGrpcService {
+#[derive(Clone)]
+pub struct CompileGrpcService {
     service: Arc<dyn CompilationService + Send + Sync>,
+}
+
+impl CompileGrpcService {
+    pub fn new(service: Arc<dyn CompilationService + Send + Sync>) -> Self {
+        Self { service }
+    }
 }
 
 #[async_trait]

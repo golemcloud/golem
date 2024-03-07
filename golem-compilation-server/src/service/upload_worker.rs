@@ -1,31 +1,31 @@
 use std::sync::Arc;
 
 use futures::stream::StreamExt;
-use golem_common::config::RetryConfig;
 use golem_worker_executor_base::services::compiled_template::CompiledTemplateService;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
-use crate::model::*;
+use crate::{config::UploadWorkerConfig, model::*};
 
 // Worker that uploads compiled templates to the cloud.
 #[derive(Clone)]
 pub struct UploadWorker {
-    retry_config: RetryConfig,
+    config: UploadWorkerConfig,
     compiled_template_service: Arc<dyn CompiledTemplateService + Send + Sync>,
 }
 
 impl UploadWorker {
     pub fn start(
-        retry_config: RetryConfig,
-        num_workers: usize,
+        config: UploadWorkerConfig,
         compiled_template_service: Arc<dyn CompiledTemplateService + Send + Sync>,
         recv: mpsc::Receiver<CompiledTemplate>,
         cancellation: CancellationToken,
     ) {
+        let num_workers = config.num_workers;
+
         let worker = Self {
-            retry_config,
+            config,
             compiled_template_service,
         };
 
@@ -48,11 +48,11 @@ impl UploadWorker {
         });
     }
 
+    // TODO: Integrate retries?
     async fn upload_template(&self, template: CompiledTemplate) {
         let CompiledTemplate {
             template,
             component,
-            result,
         } = template;
 
         let upload_result = self
@@ -64,9 +64,5 @@ impl UploadWorker {
         if let Err(ref err) = upload_result {
             tracing::warn!("Failed to upload compiled template {template:?}: {err:?}");
         }
-
-        result.send(upload_result).unwrap_or_else(|_| {
-            tracing::warn!("Failed to send upload result");
-        });
     }
 }
