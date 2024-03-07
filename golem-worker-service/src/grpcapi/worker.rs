@@ -257,7 +257,7 @@ impl WorkerGrpcApi {
 
         let latest_template_version = self
             .template_service
-            .get_latest_version(&template_id)
+            .get_latest(&template_id)
             .await
             .tap_err(|error| tracing::error!("Error getting latest template version: {:?}", error))
             .map_err(|_| GrpcWorkerError {
@@ -272,7 +272,7 @@ impl WorkerGrpcApi {
             .worker_service
             .create(
                 &worker_id,
-                latest_template_version,
+                latest_template_version.versioned_template_id.version,
                 request.args,
                 request.env,
             )
