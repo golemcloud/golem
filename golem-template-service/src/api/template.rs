@@ -204,19 +204,19 @@ impl TemplateApi {
     #[oai(
         path = "/:template_id/latest",
         method = "get",
-        operation_id = "get_latest_template_version"
+        operation_id = "get_latest_template_metadata"
     )]
-    async fn get_latest_template_version(
+    async fn get_latest_template_metadata(
         &self,
         template_id: Path<TemplateId>,
-    ) -> Result<Json<i32>> {
+    ) -> Result<Json<Template>> {
         let response = self
             .template_service
             .get_latest_version(&template_id.0)
             .await?;
 
         match response {
-            Some(template) => Ok(Json(template.versioned_template_id.version)),
+            Some(template) => Ok(Json(template)),
             None => Err(TemplateError::NotFound(Json(ErrorBody {
                 error: "Template not found".to_string(),
             }))),
