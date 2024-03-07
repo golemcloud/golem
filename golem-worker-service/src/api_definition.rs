@@ -445,19 +445,11 @@ mod tests {
     }
 
     fn test_string_expr_parse_and_encode(input: &str) {
-        let parsed_expr = Expr::from_primitive_string(input);
+        let parsed_expr1 = Expr::from_primitive_string(input).unwrap();
+        let encoded_expr = parsed_expr1.to_string().unwrap();
+        let parsed_expr2 = Expr::from_primitive_string(encoded_expr.as_str()).unwrap();
 
-        assert!(parsed_expr.is_ok());
-
-        let encoded_expr = parsed_expr.unwrap().to_json_value();
-
-        assert!(encoded_expr.is_ok());
-
-        if let Value::String(encoded) = encoded_expr.unwrap() {
-            assert_eq!(encoded, input);
-        } else {
-            panic!("The encoded value is not a string")
-        }
+        assert_eq!(parsed_expr1, parsed_expr2);
     }
 
     #[test]
@@ -477,7 +469,7 @@ mod tests {
 
     #[test]
     fn expression_with_predicate1() {
-        test_string_expr_parse_and_encode("${request.path.user-id}>${request.path.id}");
+        test_string_expr_parse_and_encode("${request.path.user-id > request.path.id}");
     }
 
     #[test]
