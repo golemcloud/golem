@@ -1,112 +1,30 @@
 {
   "openapi": "3.0.0",
-  "x-golem-api-definition-id": "shopping-cart-v4",
-  "x-golem-api-definition-version": "0.0.5",
+  "x-golem-api-definition-id": "shopping-cart-v2",
+  "x-golem-api-definition-version": "0.0.3",
   "info": {
     "title": "Sample API",
     "version": "1.0.1"
   },
-    "servers": [
-        {
-        "url": "http://169.254.141.101:9006"
-        }
-    ],
+  "servers": [
+    {
+      "url": "http://169.254.141.101:9006"
+    }
+  ],
   "paths": {
-    "/{user-id}/get-item-option-none": {
-      "x-golem-worker-bridge": {
-        "worker-id": "worker-${request.path.user-id}",
-        "function-name": "golem:template/api/get-cart-contents-option-none",
-        "function-params": [],
-        "template-id": "4f2cb4e7-aaf3-45f6-9315-aa845a450adb",
-        "response" : {
-          "status": "200",
-          "body": "${worker.response}",
-          "headers": {}
-        }
-      },
-      "get": {
-        "summary": "Get Cart Contents None",
-        "description": "Get the contents of a user's cart",
-        "parameters": [
-          {
-            "name": "user-id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content":{
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CartItem"
-                }
-              }
-
-            }
-          },
-          "404": {
-            "description": "Contents not found"
-          }
-        }
-      }
-    },
-    "/{user-id}/get-item-option-some": {
-      "x-golem-worker-bridge": {
-        "worker-id": "worker-${request.path.user-id}",
-        "function-name": "golem:template/api/get-cart-contents-option-some",
-        "function-params": [],
-        "template-id": "4f2cb4e7-aaf3-45f6-9315-aa845a450adb",
-        "response" : {
-          "status": "200",
-          "body": "${worker.response}",
-          "headers": {}
-        }
-      },
-      "get": {
-        "summary": "Get Cart Contents Option",
-        "description": "Get the contents of a user's cart",
-        "parameters": [
-          {
-            "name": "user-id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content":{
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CartItem"
-                }
-              }
-
-            }
-          },
-          "404": {
-            "description": "Contents not found"
-          }
-        }
-      }
-    },
     "/{user-id}/get-cart-contents": {
       "x-golem-worker-bridge": {
         "worker-id": "worker-${request.path.user-id}",
-        "function-name": "golem:template/api/get-cart-contents-failed",
+        "function-name": "golem:it/api/get-cart-contents",
         "function-params": [],
-        "template-id": "4f2cb4e7-aaf3-45f6-9315-aa845a450adb",
+        "template-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
         "response" : {
           "status": "200",
-          "body": "${worker.response}",
+          "body": {
+            "name" : "${worker.response[0][0].name}",
+            "price" : "${worker.response[0][0].price}",
+            "quantity" : "${worker.response[0][0].quantity}"
+          },
           "headers": {}
         }
       },
