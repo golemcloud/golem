@@ -634,11 +634,12 @@ impl Display for InternalValue {
 }
 
 //TODO: GOL-249 Add more round trip tests
+#[cfg(test)]
 mod tests {
-    use super::*;
     use crate::evaluator::Evaluator;
+    use crate::expr::Expr;
     use crate::resolved_variables::ResolvedVariables;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     #[test]
     fn test_expr_from_json_value() {
