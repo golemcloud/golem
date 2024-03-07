@@ -283,6 +283,12 @@ impl Path {
         }
     }
 
+    pub fn from_raw_string(input: &str) -> Path {
+        let mut path = Path::new();
+        path.update_key(input);
+        path
+    }
+
     // For strings that are static and can never fail and make use of it
     pub fn from_string_unsafe(input: &str) -> Path {
         Path::from_string(input).unwrap()
@@ -296,8 +302,8 @@ impl Path {
         while let Some(token) = cursor.next_non_empty_token() {
             match token {
                 Token::OpenSquareBracket => {
-                    let probable_index = cursor.capture_string_between(
-                        &Token::OpenSquareBracket,
+                    let probable_index = cursor.capture_string_until(
+                        vec![&Token::OpenSquareBracket],
                         &Token::ClosedSquareBracket,
                     );
 

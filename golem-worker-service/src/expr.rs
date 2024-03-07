@@ -1,11 +1,13 @@
-use std::collections::HashSet;
+use std::fmt::Display;
 use std::str::FromStr;
 
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize, Serializer};
+use serde_json::Value;
 
 use crate::parser::expr_parser::ExprParser;
 use crate::parser::{GolemParser, ParseError};
+use crate::value_typed::ValueTyped;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
@@ -16,6 +18,9 @@ pub enum Expr {
     Sequence(Vec<Expr>),
     Record(Vec<(String, Box<Expr>)>),
     Literal(String),
+    Number(InnerNumber),
+    Variable(String),
+    Boolean(bool),
     PathVar(String),
     Concat(Vec<Expr>),
     Not(Box<Expr>),
@@ -25,6 +30,158 @@ pub enum Expr {
     EqualTo(Box<Expr>, Box<Expr>),
     LessThan(Box<Expr>, Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
+    PatternMatch(Box<Expr>, Vec<ConstructorPatternExpr>),
+    Constructor0(ConstructorPattern), // Can exist standalone from pattern match
+}
+
+impl Expr {
+    pub fn unsigned_integer(value: u64) -> Expr {
+        Expr::Number(InnerNumber::UnsignedInteger(value))
+    }
+
+    pub fn integer(value: i64) -> Expr {
+        Expr::Number(InnerNumber::Integer(value))
+    }
+
+    pub fn float(value: f64) -> Expr {
+        Expr::Number(InnerNumber::Float(value))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum InnerNumber {
+    UnsignedInteger(u64),
+    Integer(i64),
+    Float(f64),
+}
+
+impl Display for InnerNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InnerNumber::UnsignedInteger(value) => write!(f, "{}", value),
+            InnerNumber::Integer(value) => write!(f, "{}", value),
+            InnerNumber::Float(value) => write!(f, "{}", value),
+        }
+    }
+}
+
+// This standalone is not a valid expression
+// and can only be part of PatternMatch
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct ConstructorPatternExpr(pub (ConstructorPattern, Box<Expr>));
+
+// A constructor pattern by itself is an expr,
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum ConstructorPattern {
+    WildCard,
+    As(String, Box<ConstructorPattern>),
+    Constructor(ConstructorTypeName, Vec<ConstructorPattern>),
+    Literal(Box<Expr>),
+}
+
+impl ConstructorPattern {
+    pub fn constructor(
+        constructor_name: &str,
+        variables: Vec<ConstructorPattern>,
+    ) -> Result<ConstructorPattern, ParseError> {
+        if constructor_name == "ok" {
+            validate_single_variable_constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Ok),
+                variables,
+            )
+        } else if constructor_name == "err" {
+            validate_single_variable_constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Err),
+                variables,
+            )
+        } else if constructor_name == "none" {
+            validate_empty_constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::None),
+                variables,
+            )
+        } else if constructor_name == "some" {
+            validate_single_variable_constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Some),
+                variables,
+            )
+        } else {
+            let constructor_type =
+                ConstructorTypeName::CustomConstructor(constructor_name.to_string());
+            Ok(ConstructorPattern::Constructor(constructor_type, variables))
+        }
+    }
+}
+
+fn validate_empty_constructor(
+    constructor_type: ConstructorTypeName,
+    variables: Vec<ConstructorPattern>,
+) -> Result<ConstructorPattern, ParseError> {
+    if !variables.is_empty() {
+        Err(ParseError::Message(
+            "constructor should have zero variables".to_string(),
+        ))
+    } else {
+        Ok(ConstructorPattern::Constructor(constructor_type, variables))
+    }
+}
+
+fn validate_single_variable_constructor(
+    constructor_type: ConstructorTypeName,
+    variables: Vec<ConstructorPattern>,
+) -> Result<ConstructorPattern, ParseError> {
+    if variables.len() != 1 {
+        Err(ParseError::Message(
+            "constructor should have exactly one variable".to_string(),
+        ))
+    } else {
+        match variables.first().unwrap() {
+            ConstructorPattern::Literal(_) => {
+                Ok(ConstructorPattern::Constructor(constructor_type, variables))
+            }
+
+            ConstructorPattern::Constructor(_, _) => {
+                Ok(ConstructorPattern::Constructor(constructor_type, variables))
+            }
+            _ => Err(ParseError::Message(
+                "Ok constructor should have exactly one variable".to_string(),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum ConstructorTypeName {
+    InBuiltConstructor(InBuiltConstructorInner),
+    CustomConstructor(String),
+}
+
+impl Display for ConstructorTypeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConstructorTypeName::InBuiltConstructor(inner) => write!(f, "{}", inner),
+            ConstructorTypeName::CustomConstructor(name) => write!(f, "{}", name),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum InBuiltConstructorInner {
+    Ok,
+    Err,
+    None,
+    Some,
+}
+
+impl Display for InBuiltConstructorInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InBuiltConstructorInner::Ok => write!(f, "ok"),
+            InBuiltConstructorInner::Err => write!(f, "err"),
+            InBuiltConstructorInner::None => write!(f, "none"),
+            InBuiltConstructorInner::Some => write!(f, "some"),
+        }
+    }
 }
 
 impl Expr {
@@ -43,12 +200,12 @@ impl Expr {
     }
 
     // A json can be mapped to Expr. Example: Json::Record can be mmpped to Expr::Record
-    pub fn from_json_value(input: &serde_json::Value) -> Result<Expr, ParseError> {
+    pub fn from_json_value(input: &Value) -> Result<Expr, ParseError> {
         match input {
-            serde_json::Value::Bool(bool) => Ok(Expr::Literal(bool.to_string())),
-            serde_json::Value::Number(number) => Ok(Expr::Literal(number.to_string())),
-            serde_json::Value::String(string) => Expr::from_primitive_string(string),
-            serde_json::Value::Array(sequence) => {
+            Value::Bool(bool) => Ok(Expr::Literal(bool.to_string())),
+            Value::Number(number) => Ok(Expr::Literal(number.to_string())),
+            Value::String(string) => Expr::from_primitive_string(string),
+            Value::Array(sequence) => {
                 let mut exprs: Vec<Expr> = vec![];
 
                 for s in sequence {
@@ -58,7 +215,7 @@ impl Expr {
 
                 Ok(Expr::Sequence(exprs))
             }
-            serde_json::Value::Object(mapping) => {
+            Value::Object(mapping) => {
                 let mut tuple_vec: Vec<(String, Box<Expr>)> = vec![];
 
                 for (k, v) in mapping {
@@ -69,434 +226,294 @@ impl Expr {
                 Ok(Expr::Record(tuple_vec))
             }
 
-            serde_json::Value::Null => {
-                Err(ParseError::Message("Json Null not implemented".to_string()))
-            }
+            Value::Null => Err(ParseError::Message("Json Null not implemented".to_string())),
         }
     }
 
-    pub fn to_json_value(&self) -> Result<serde_json::Value, String> {
-        fn go(expr: &Expr) -> Result<InternalValue<serde_json::Value>, String> {
+    //  TODO; GOL-248: Ideally, Expr::from(expr_string).to_string() should be similar to expr_string.
+    //  They don't need to be exact but there are confusing expressions being emitted
+    pub fn to_json_value(&self) -> Result<Value, String> {
+        fn go(expr: &Expr, is_code: bool) -> Result<InternalValue, String> {
             match expr {
                 Expr::SelectField(expr0, field_name) => {
                     let expr0: &Expr = expr0;
-                    let expr = go(expr0)?;
+                    let expr_internal = go(expr0, true)?;
 
-                    match expr.unwrap() {
-                        serde_json::Value::String(expr_string) =>
-                            Ok(InternalValue::Interpolated(serde_json::Value::String(format!(
+                    // Doesn't matter if inner expression was interpolated, we will interpolate it outside
+                    match expr_internal {
+                        InternalValue::Interpolated(expr_string) =>
+                            Ok(InternalValue::Interpolated(format!(
                                 "{}.{}",
                                 expr_string,
                                 field_name
-                            )))),
-                        _ => Err("Invalid selection of field. {}. Example of a valid selection: request.body.users".into())
+                            ))),
+                        InternalValue::NonInterpolated(expr_string) =>
+                            Ok(InternalValue::Interpolated(format!(
+                                "{}.{}",
+                                expr_string,
+                                field_name
+                            ))),
+                        InternalValue::Quoted(expr_string) =>
+                            Ok(InternalValue::Interpolated(format!(
+                                "'{}'.{}",
+                                expr_string,
+                                field_name
+                            ))),
+                        InternalValue::RawJson(_) =>
+                            Err("Invalid selection of field. Example of a valid selection: request.body.users[1]".into())
                     }
                 }
 
                 Expr::SelectIndex(expr0, index) => {
                     let expr0: &Expr = expr0;
-                    let expr = go(expr0)?;
+                    let expr_internal = go(expr0, true)?;
 
-                    match expr.unwrap() {
-                        serde_json::Value::String(expr_string) =>
-                            Ok(InternalValue::Interpolated(serde_json::Value::String(format!(
+                    // Doesn't matter if inner expression was interpolated, we will interpolate it outside
+                    match expr_internal {
+                        InternalValue::Interpolated(expr_string) =>
+                            Ok(InternalValue::Interpolated(format!(
                                 "{}[{}]",
                                 expr_string,
                                 index
-                            )))),
-                        _ => Err("Invalid selection of index. Example of a valid selection: request.body.users[1]".into())
+                            ))),
+                        InternalValue::NonInterpolated(expr_string) =>
+                            Ok(InternalValue::Interpolated(format!(
+                                "{}[{}]",
+                                expr_string,
+                                index
+                            ))),
+                        InternalValue::Quoted(expr_string) =>
+                            Ok(InternalValue::Interpolated(format!(
+                                "'{}'[{}]",
+                                expr_string,
+                                index
+                            ))),
+                        InternalValue::RawJson(_) =>
+                            Err("Invalid selection of field. Example of a valid selection: request.body.users[1]".into())
                     }
                 }
 
-                Expr::Request() => Ok(InternalValue::Interpolated(serde_json::Value::String(
-                    "request".to_string(),
-                ))),
+                // A request is a valid code, hence we interpolate
+                Expr::Request() => Ok(InternalValue::Interpolated("request".to_string())),
 
-                // TODO; only worker as response
-                Expr::WorkerResponse() => Ok(InternalValue::Interpolated(
-                    serde_json::Value::String("worker.response".to_string()),
-                )),
+                // A worker response is a valid code, hence we interpolate
+                Expr::WorkerResponse() => {
+                    Ok(InternalValue::Interpolated("worker.response".to_string()))
+                }
 
                 Expr::Record(values) => {
                     let mut mapping = serde_json::Map::new();
 
-                    for (key, value) in values {
+                    for (key, expr) in values {
                         let key_yaml = key.clone();
-                        let value_json = Expr::to_json_value(value)?;
-                        mapping.insert(key_yaml, value_json);
+                        match *expr.clone() {
+                            Expr::Literal(value) => {
+                                mapping.insert(key_yaml, Value::String(value.clone()));
+                            }
+                            Expr::Variable(variable) => {
+                                mapping
+                                    .insert(key_yaml, Value::String(format!("${{{}}}", variable)));
+                            }
+                            _ => {
+                                let value_json = expr.to_json_value()?;
+                                mapping.insert(key_yaml, value_json);
+                            }
+                        }
                     }
 
-                    Ok(InternalValue::NonInterpolated(serde_json::Value::Object(
-                        mapping,
-                    )))
+                    Ok(InternalValue::RawJson(Value::Object(mapping)))
                 }
+
                 Expr::Sequence(values) => {
-                    let mut vs: Vec<serde_json::Value> = vec![];
-                    for value in values {
-                        let v = value.to_json_value()?;
-                        vs.push(v);
+                    let mut vs: Vec<Value> = vec![];
+                    for expr in values {
+                        match expr {
+                            Expr::Literal(value) => {
+                                vs.push(Value::String(value.clone()));
+                            }
+                            Expr::Variable(variable) => {
+                                vs.push(Value::String(format!("${{{}}}", variable)));
+                            }
+                            _ => {
+                                let value_json = expr.to_json_value()?;
+                                vs.push(value_json);
+                            }
+                        }
                     }
-                    Ok(InternalValue::NonInterpolated(serde_json::Value::Array(vs)))
+
+                    Ok(InternalValue::RawJson(Value::Array(vs)))
                 }
-                Expr::Literal(value) => Ok(InternalValue::NonInterpolated(
-                    serde_json::Value::String(value.clone()),
-                )),
-                Expr::PathVar(value) => Ok(InternalValue::Interpolated(serde_json::Value::String(
-                    value.clone(),
-                ))),
+
+                Expr::Literal(value) => match ValueTyped::from_string(value) {
+                    ValueTyped::String(string) => {
+                        if is_code {
+                            Ok(InternalValue::Quoted(string.clone()))
+                        } else {
+                            Ok(InternalValue::NonInterpolated(string.clone()))
+                        }
+                    }
+
+                    ValueTyped::I64(i64) => Ok(InternalValue::NonInterpolated(i64.to_string())),
+                    ValueTyped::U64(u64) => Ok(InternalValue::NonInterpolated(u64.to_string())),
+                    ValueTyped::Float(f64) => Ok(InternalValue::NonInterpolated(f64.to_string())),
+                    ValueTyped::Boolean(bool) => {
+                        Ok(InternalValue::NonInterpolated(bool.to_string()))
+                    }
+                    ValueTyped::ComplexJson(value) => Ok(InternalValue::RawJson(value)),
+                },
+
+                Expr::PathVar(value) => Ok(InternalValue::Interpolated(value.clone())),
                 Expr::Concat(values) => {
                     let mut vs: Vec<String> = vec![];
                     for value in values {
-                        let v = go(value)?;
+                        let v = go(value, is_code)?;
                         match v {
-                            InternalValue::Interpolated(serde_json::Value::String(v)) => {
+                            InternalValue::Interpolated(v) => {
                                 vs.push(format!("${{{}}}", v));
                             }
-                            InternalValue::NonInterpolated(serde_json::Value::String(v)) => {
+                            InternalValue::NonInterpolated(v) => {
                                 vs.push(v);
+                            }
+                            InternalValue::Quoted(v) => {
+                                vs.push(v.to_string());
                             }
                             _ => return Err("Not supported type".into()),
                         }
                     }
-                    Ok(InternalValue::NonInterpolated(serde_json::Value::String(
-                        vs.join(""),
-                    )))
+                    let value_string = vs.join("");
+
+                    if is_code {
+                        Ok(InternalValue::Quoted(value_string))
+                    } else {
+                        Ok(InternalValue::NonInterpolated(value_string))
+                    }
                 }
+
                 Expr::Not(value) => {
-                    let v = value.to_json_value()?;
+                    let v = go(value, true)?;
+
                     match v {
-                        serde_json::Value::String(v) => Ok(InternalValue::Interpolated(
-                            serde_json::Value::String(format!("!{}", v)),
-                        )),
-                        _ => Err("Not supported type".into()),
+                        // Bringing interpolation outside
+                        InternalValue::Interpolated(v) => {
+                            Ok(InternalValue::Interpolated(format!("!{}", v)))
+                        }
+                        // Bringing interpolation
+                        InternalValue::NonInterpolated(v) => {
+                            Ok(InternalValue::Interpolated(format!("!{}", v)))
+                        }
+                        // Bringing quotes outside, with interpolation inside
+                        InternalValue::Quoted(v) => {
+                            Ok(InternalValue::Quoted(format!("${{!{}}}", v)))
+                        }
+
+                        InternalValue::RawJson(_) => {
+                            Err("Applying ! to a complex json is not supported".into())
+                        }
                     }
                 }
                 Expr::GreaterThan(value1, value2) => {
-                    let v1 = go(value1)?;
-                    let v2 = go(value2)?;
-                    match (v1.unwrap(), v2.unwrap()) {
-                        (serde_json::Value::String(v1), serde_json::Value::String(v2)) => {
-                            Ok(InternalValue::Interpolated(serde_json::Value::String(
-                                format!("{}>{}", v1, v2),
-                            )))
-                        }
-                        _ => Err("Not supported type".into()),
-                    }
+                    let v1 = go(value1, true)?;
+                    let v2 = go(value2, true)?;
+
+                    Ok(InternalValue::Interpolated(format!(
+                        "{}>{}",
+                        v1.unwrap_string(),
+                        v2.unwrap_string()
+                    )))
                 }
                 Expr::GreaterThanOrEqualTo(value1, value2) => {
-                    let v1 = go(value1)?;
-                    let v2 = go(value2)?;
-                    match (v1.unwrap(), v2.unwrap()) {
-                        (serde_json::Value::String(v1), serde_json::Value::String(v2)) => {
-                            Ok(InternalValue::Interpolated(serde_json::Value::String(
-                                format!("{}>={}", v1, v2),
-                            )))
-                        }
-                        _ => Err("Not supported type".into()),
-                    }
+                    let v1 = go(value1, true)?;
+                    let v2 = go(value2, true)?;
+
+                    Ok(InternalValue::Interpolated(format!(
+                        "{}>={}",
+                        v1.unwrap_string(),
+                        v2.unwrap_string()
+                    )))
                 }
                 Expr::EqualTo(value1, value2) => {
-                    let v1 = go(value1)?;
-                    let v2 = go(value2)?;
-                    match (v1.unwrap(), v2.unwrap()) {
-                        (serde_json::Value::String(v1), serde_json::Value::String(v2)) => {
-                            Ok(InternalValue::Interpolated(serde_json::Value::String(
-                                format!("{}=={}", v1, v2),
-                            )))
-                        }
-                        _ => Err("Not supported type".into()),
-                    }
+                    let v1 = go(value1, true)?;
+                    let v2 = go(value2, true)?;
+
+                    Ok(InternalValue::Interpolated(format!(
+                        "{}=={}",
+                        v1.unwrap_string(),
+                        v2.unwrap_string()
+                    )))
                 }
                 Expr::LessThan(value1, value2) => {
-                    let v1 = go(value1)?;
-                    let v2 = go(value2)?;
-                    match (v1.unwrap(), v2.unwrap()) {
-                        (serde_json::Value::String(v1), serde_json::Value::String(v2)) => {
-                            Ok(InternalValue::Interpolated(serde_json::Value::String(
-                                format!("{}<{}", v1, v2),
-                            )))
-                        }
-                        _ => Err("Not supported type".into()),
-                    }
+                    let v1 = go(value1, true)?;
+                    let v2 = go(value2, true)?;
+
+                    Ok(InternalValue::Interpolated(format!(
+                        "{}<{}",
+                        v1.unwrap_string(),
+                        v2.unwrap_string()
+                    )))
                 }
+
                 Expr::LessThanOrEqualTo(value1, value2) => {
-                    let v1 = go(value1)?;
-                    let v2 = go(value2)?;
-                    match (v1.unwrap(), v2.unwrap()) {
-                        (serde_json::Value::String(v1), serde_json::Value::String(v2)) => {
-                            Ok(InternalValue::Interpolated(serde_json::Value::String(
-                                format!("{}<={}", v1, v2),
-                            )))
-                        }
-                        _ => Err("Not supported type".into()),
-                    }
+                    let v1 = go(value1, true)?;
+                    let v2 = go(value2, true)?;
+
+                    Ok(InternalValue::Interpolated(format!(
+                        "{}<={}",
+                        v1.unwrap_string(),
+                        v2.unwrap_string()
+                    )))
                 }
                 Expr::Cond(pred, value1, value2) => {
-                    let p = go(pred)?;
-                    let v1 = go(value1)?;
-                    let v2 = go(value2)?;
-                    // FIXME: How did we handle encoding of elseif ?
-                    // It's good to remove this encoding as it doesn't give much value add.
-                    // once parsed, we can pipe the input directly to the datastore
-                    match (p.unwrap(), v1.unwrap(), v2.unwrap()) {
-                        (
-                            serde_json::Value::String(p),
-                            serde_json::Value::String(v1),
-                            serde_json::Value::String(v2),
-                        ) => Ok(InternalValue::Interpolated(serde_json::Value::String(
-                            format!("if ({}) then {} else {}", p, v1, v2),
-                        ))),
-                        _ => Err("Not supported type".into()),
-                    }
+                    let p = go(pred, true)?;
+                    let v1 = go(value1, true)?;
+                    let v2 = go(value2, true)?;
+
+                    Ok(InternalValue::Interpolated(format!(
+                        "if ({}) then {} else {}",
+                        p.unwrap_string(),
+                        v1.unwrap_string(),
+                        v2.unwrap_string()
+                    )))
                 }
+
+                Expr::Number(number) => Ok(InternalValue::Interpolated(number.to_string())),
+
+                Expr::Variable(variable) => Ok(InternalValue::Interpolated(variable.clone())),
+                Expr::Boolean(boolean) => Ok(InternalValue::Interpolated(boolean.to_string())),
+
+                Expr::PatternMatch(condition, match_cases) => {
+                    let c = go(condition, true)?;
+                    let mut match_cases_str = vec![];
+
+                    for match_case in match_cases {
+                        let constructor_pattern = format!(
+                            "{} => {}",
+                            convert_constructor_to_string(&match_case.0 .0, &|x| go(x, true))?,
+                            go(&match_case.0 .1, true)?.unwrap_string()
+                        );
+
+                        match_cases_str.push(constructor_pattern);
+                    }
+
+                    Ok(InternalValue::Interpolated(format!(
+                        "match {} {{ {} }}",
+                        c.unwrap_string(),
+                        match_cases_str.join(", ")
+                    )))
+                }
+
+                Expr::Constructor0(constructor) => Ok(InternalValue::NonInterpolated(
+                    convert_constructor_to_string(constructor, &|x| go(x, false))?,
+                )),
             }
         }
 
-        let internal_result = go(self)?;
+        let internal_result = go(self, false)?;
 
         match internal_result {
-            InternalValue::Interpolated(serde_json::Value::String(string)) => {
-                Ok(serde_json::Value::String(format!("${{{}}}", string)))
-            }
-            InternalValue::NonInterpolated(value) => Ok(value),
-            _ => Err("Cannot write back the expr".into()),
-        }
-    }
-
-    // A  yaml can be mapped to Expr. Example: Yaml::Mapping can be mmpped to Expr::Record
-    pub fn from_yaml_value(input: &serde_yaml::Value) -> Result<Expr, ParseError> {
-        match input {
-            serde_yaml::Value::Bool(bool) => Ok(Expr::Literal(bool.to_string())),
-            serde_yaml::Value::Number(number) => Ok(Expr::Literal(number.to_string())),
-            serde_yaml::Value::String(string) => Expr::from_primitive_string(string),
-            serde_yaml::Value::Sequence(sequence) => {
-                let mut exprs: Vec<Expr> = vec![];
-
-                for s in sequence {
-                    let expr: Expr = Expr::from_yaml_value(s)?;
-                    exprs.push(expr);
-                }
-
-                Ok(Expr::Sequence(exprs))
-            }
-            serde_yaml::Value::Mapping(mapping) => {
-                let mut tuple_vec: Vec<(String, Box<Expr>)> = vec![];
-
-                for (k, v) in mapping {
-                    let key_expr = Expr::from_yaml_value(k)?;
-
-                    let key = match key_expr {
-                        Expr::Literal(value) => value,
-                        _ => {
-                            return Err(ParseError::Message(
-                                format!(
-                                    "The key {:?} cannot be a complex structure but a primitive value",
-                                    k
-                                )
-                                    .to_string(),
-                            ));
-                        }
-                    };
-                    let value_expr: Expr = Expr::from_yaml_value(v)?;
-
-                    tuple_vec.push((key, Box::new(value_expr)))
-                }
-                Ok(Expr::Record(tuple_vec))
-            }
-            serde_yaml::Value::Tagged(_) => {
-                Err(ParseError::Message("Tagged not implemented".to_string()))
-            }
-            serde_yaml::Value::Null => Err(ParseError::Message("Null not implemented".to_string())),
-        }
-    }
-
-    pub fn to_yaml_value(&self) -> Result<serde_yaml::Value, String> {
-        fn go(expr: &Expr) -> Result<InternalValue<serde_yaml::Value>, String> {
-            match expr {
-                Expr::SelectField(expr0, field_name) => {
-                    let expr0: &Expr = expr0;
-                    let expr = go(expr0)?;
-
-                    match expr.unwrap() {
-                        serde_yaml::Value::String(expr_string) =>
-                            Ok(InternalValue::Interpolated(serde_yaml::Value::String(format!(
-                                "{}.{}",
-                                expr_string,
-                                field_name
-                            )))),
-                        _ => Err("Invalid selection of field. {}. Example of a valid selection: request.body.users".into())
-                    }
-                }
-
-                Expr::SelectIndex(expr0, index) => {
-                    let expr0: &Expr = expr0;
-                    let expr = go(expr0)?;
-
-                    match expr.unwrap() {
-                        serde_yaml::Value::String(expr_string) =>
-                            Ok(InternalValue::Interpolated(serde_yaml::Value::String(format!(
-                                "{}[{}]",
-                                expr_string,
-                                index
-                            )))),
-                        _ => Err("Invalid selection of index. Example of a valid selection: request.body.users[1]".into())
-                    }
-                }
-
-                Expr::Request() => Ok(InternalValue::Interpolated(serde_yaml::Value::String(
-                    "request".to_string(),
-                ))),
-
-                // TODO; only worker as response
-                Expr::WorkerResponse() => Ok(InternalValue::Interpolated(
-                    serde_yaml::Value::String("worker.response".to_string()),
-                )),
-
-                Expr::Record(values) => {
-                    let mut mapping = serde_yaml::mapping::Mapping::new();
-
-                    for (key, value) in values {
-                        let key_yaml = serde_yaml::Value::String(key.clone());
-                        let value_yaml = Expr::to_yaml_value(value)?;
-                        mapping.insert(key_yaml, value_yaml);
-                    }
-
-                    Ok(InternalValue::NonInterpolated(serde_yaml::Value::Mapping(
-                        mapping,
-                    )))
-                }
-                Expr::Sequence(values) => {
-                    let mut vs: Vec<serde_yaml::Value> = vec![];
-                    for value in values {
-                        let v = value.to_yaml_value()?;
-                        vs.push(v);
-                    }
-                    Ok(InternalValue::NonInterpolated(serde_yaml::Value::Sequence(
-                        vs,
-                    )))
-                }
-                Expr::Literal(value) => Ok(InternalValue::NonInterpolated(
-                    serde_yaml::Value::String(value.clone()),
-                )),
-                Expr::PathVar(value) => Ok(InternalValue::Interpolated(serde_yaml::Value::String(
-                    value.clone(),
-                ))),
-                Expr::Concat(values) => {
-                    let mut vs: Vec<String> = vec![];
-                    for value in values {
-                        let v = go(value)?;
-                        match v {
-                            InternalValue::Interpolated(serde_yaml::Value::String(v)) => {
-                                vs.push(format!("${{{}}}", v));
-                            }
-                            InternalValue::NonInterpolated(serde_yaml::Value::String(v)) => {
-                                vs.push(v);
-                            }
-                            _ => return Err("Not supported type".into()),
-                        }
-                    }
-                    Ok(InternalValue::NonInterpolated(serde_yaml::Value::String(
-                        vs.join(""),
-                    )))
-                }
-                Expr::Not(value) => {
-                    let v = value.to_yaml_value()?;
-                    match v {
-                        serde_yaml::Value::String(v) => Ok(InternalValue::Interpolated(
-                            serde_yaml::Value::String(format!("!{}", v)),
-                        )),
-                        _ => Err("Not supported type".into()),
-                    }
-                }
-                Expr::GreaterThan(value1, value2) => {
-                    let v1 = go(value1)?;
-                    let v2 = go(value2)?;
-                    match (v1.unwrap(), v2.unwrap()) {
-                        (serde_yaml::Value::String(v1), serde_yaml::Value::String(v2)) => {
-                            Ok(InternalValue::Interpolated(serde_yaml::Value::String(
-                                format!("{}>{}", v1, v2),
-                            )))
-                        }
-                        _ => Err("Not supported type".into()),
-                    }
-                }
-                Expr::GreaterThanOrEqualTo(value1, value2) => {
-                    let v1 = go(value1)?;
-                    let v2 = go(value2)?;
-                    match (v1.unwrap(), v2.unwrap()) {
-                        (serde_yaml::Value::String(v1), serde_yaml::Value::String(v2)) => {
-                            Ok(InternalValue::Interpolated(serde_yaml::Value::String(
-                                format!("{}>={}", v1, v2),
-                            )))
-                        }
-                        _ => Err("Not supported type".into()),
-                    }
-                }
-                Expr::EqualTo(value1, value2) => {
-                    let v1 = go(value1)?;
-                    let v2 = go(value2)?;
-                    match (v1.unwrap(), v2.unwrap()) {
-                        (serde_yaml::Value::String(v1), serde_yaml::Value::String(v2)) => {
-                            Ok(InternalValue::Interpolated(serde_yaml::Value::String(
-                                format!("{}=={}", v1, v2),
-                            )))
-                        }
-                        _ => Err("Not supported type".into()),
-                    }
-                }
-                Expr::LessThan(value1, value2) => {
-                    let v1 = go(value1)?;
-                    let v2 = go(value2)?;
-                    match (v1.unwrap(), v2.unwrap()) {
-                        (serde_yaml::Value::String(v1), serde_yaml::Value::String(v2)) => {
-                            Ok(InternalValue::Interpolated(serde_yaml::Value::String(
-                                format!("{}<{}", v1, v2),
-                            )))
-                        }
-                        _ => Err("Not supported type".into()),
-                    }
-                }
-                Expr::LessThanOrEqualTo(value1, value2) => {
-                    let v1 = go(value1)?;
-                    let v2 = go(value2)?;
-                    match (v1.unwrap(), v2.unwrap()) {
-                        (serde_yaml::Value::String(v1), serde_yaml::Value::String(v2)) => {
-                            Ok(InternalValue::Interpolated(serde_yaml::Value::String(
-                                format!("{}<={}", v1, v2),
-                            )))
-                        }
-                        _ => Err("Not supported type".into()),
-                    }
-                }
-                Expr::Cond(pred, value1, value2) => {
-                    let p = go(pred)?;
-                    let v1 = go(value1)?;
-                    let v2 = go(value2)?;
-                    // FIXME: How did we handle encoding of elseif ?
-                    // It's good to remove this encoding as it doesn't give much value add.
-                    // once parsed, we can pipe the input directly to the datastore
-                    match (p.unwrap(), v1.unwrap(), v2.unwrap()) {
-                        (
-                            serde_yaml::Value::String(p),
-                            serde_yaml::Value::String(v1),
-                            serde_yaml::Value::String(v2),
-                        ) => Ok(InternalValue::Interpolated(serde_yaml::Value::String(
-                            format!("if ({}) then {} else {}", p, v1, v2),
-                        ))),
-                        _ => Err("Not supported type".into()),
-                    }
-                }
-            }
-        }
-
-        let internal_result = go(self)?;
-
-        match internal_result {
-            InternalValue::Interpolated(serde_yaml::Value::String(string)) => {
-                Ok(serde_yaml::Value::String(format!("${{{}}}", string)))
-            }
-            InternalValue::NonInterpolated(value) => Ok(value),
-            _ => Err("Cannot write back the expr".into()),
+            InternalValue::Interpolated(string) => Ok(Value::String(format!("${{{}}}", string))),
+            InternalValue::NonInterpolated(value) => Ok(Value::String(value)),
+            InternalValue::Quoted(value) => Ok(Value::String(format!("'{}'", value))),
+            InternalValue::RawJson(value) => Ok(value),
         }
     }
 
@@ -507,111 +524,39 @@ impl Expr {
             _ => Err("Not supported type".to_string()),
         }
     }
+}
 
-    pub fn get_vars(&self) -> HashSet<String> {
-        let mut vars: HashSet<String> = HashSet::new();
-        match self {
-            Expr::Request() => {}
-            Expr::WorkerResponse() => {}
-            sf @ Expr::SelectField(_, _) => {
-                fn go(expr: &Expr) -> Option<String> {
-                    match expr {
-                        Expr::Request() => Some("request".to_string()),
-                        Expr::WorkerResponse() => Some("worker.response".to_string()),
-                        Expr::SelectField(expr, field) => {
-                            go(expr).map(|v| format!("{}.{}", v, field))
-                        }
-                        Expr::SelectIndex(expr, index) => {
-                            go(expr).map(|v: String| format!("{}[{}]", v, index))
-                        }
-                        _ => None,
-                    }
-                }
-                let sfv = go(sf);
-                if let Some(v) = sfv {
-                    vars.insert(v);
-                }
+fn convert_constructor_to_string<F>(
+    match_case: &ConstructorPattern,
+    get_internal_value: &F,
+) -> Result<String, String>
+where
+    F: Fn(&Expr) -> Result<InternalValue, String>,
+{
+    match match_case {
+        ConstructorPattern::WildCard => Ok("_".to_string()),
+        ConstructorPattern::As(name, pattern) => Ok(format!(
+            "{} as {}",
+            convert_constructor_to_string(pattern, get_internal_value)?,
+            name
+        )),
+        ConstructorPattern::Constructor(constructor_type, variables) => {
+            let mut variables_str = vec![];
+            for pattern in variables {
+                let string = convert_constructor_to_string(pattern, get_internal_value)?;
+                variables_str.push(string);
             }
 
-            sf @ Expr::SelectIndex(_, _) => {
-                fn go(expr: &Expr) -> Option<String> {
-                    match expr {
-                        Expr::Request() => Some("request".to_string()),
-                        Expr::WorkerResponse() => Some("worker.response".to_string()),
-                        Expr::SelectField(expr, field) => {
-                            go(expr).map(|v| format!("{}.{}", v, field))
-                        }
-                        Expr::SelectIndex(expr, index) => {
-                            go(expr).map(|v: String| format!("{}[{}]", v, index))
-                        }
-                        _ => None,
-                    }
-                }
-                let sfv = go(sf);
-                if let Some(v) = sfv {
-                    vars.insert(v);
-                }
-            }
-
-            Expr::Record(values) => {
-                let vs = values
-                    .iter()
-                    .flat_map(|(_, v)| v.get_vars())
-                    .collect::<HashSet<String>>();
-
-                vars.extend(vs);
-            }
-            Expr::Sequence(values) => {
-                let vs = values
-                    .iter()
-                    .flat_map(|v| v.get_vars())
-                    .collect::<HashSet<String>>();
-
-                vars.extend(vs);
-            }
-            Expr::PathVar(v) => {
-                vars.insert(v.clone());
-            }
-            Expr::Literal(_) => {}
-            Expr::Concat(values) => {
-                let vs = values
-                    .iter()
-                    .flat_map(|v| v.get_vars())
-                    .collect::<HashSet<String>>();
-
-                vars.extend(vs);
-            }
-            Expr::Not(value) => {
-                vars.extend(value.get_vars());
-            }
-            Expr::GreaterThan(value1, value2) => {
-                vars.extend(value1.get_vars());
-                vars.extend(value2.get_vars());
-            }
-            Expr::GreaterThanOrEqualTo(value1, value2) => {
-                vars.extend(value1.get_vars());
-                vars.extend(value2.get_vars());
-            }
-            Expr::EqualTo(value1, value2) => {
-                vars.extend(value1.get_vars());
-                vars.extend(value2.get_vars());
-            }
-            Expr::LessThan(value1, value2) => {
-                vars.extend(value1.get_vars());
-                vars.extend(value2.get_vars());
-            }
-            Expr::LessThanOrEqualTo(value1, value2) => {
-                vars.extend(value1.get_vars());
-                vars.extend(value2.get_vars());
-            }
-            Expr::Cond(pred, value1, value2) => {
-                vars.extend(pred.get_vars());
-                vars.extend(value1.get_vars());
-                vars.extend(value2.get_vars());
-            }
+            Ok(format!(
+                "{}({})",
+                constructor_type,
+                variables_str.join(", ")
+            ))
         }
-
-        vars
+        ConstructorPattern::Literal(expr) => Ok(match *expr.clone() {
+            Expr::Variable(s) => s,
+            any_expr => get_internal_value(&any_expr)?.unwrap_string(),
+        }),
     }
 }
 
@@ -650,16 +595,192 @@ impl Serialize for Expr {
     }
 }
 
-enum InternalValue<T> {
-    Interpolated(T),
-    NonInterpolated(T),
+enum InternalValue {
+    Interpolated(String),
+    NonInterpolated(String),
+    RawJson(Value),
+    Quoted(String),
 }
 
-impl<T> InternalValue<T> {
-    fn unwrap(&self) -> &T {
+impl InternalValue {
+    fn unwrap_string(self) -> String {
         match self {
-            InternalValue::Interpolated(value) => value,
-            InternalValue::NonInterpolated(value) => value,
+            InternalValue::Interpolated(s) => s,
+            InternalValue::NonInterpolated(s) => s,
+            InternalValue::Quoted(s) => format!("'{}'", s),
+            InternalValue::RawJson(v) => match v {
+                // Unwrap quotes
+                Value::String(s) => s,
+                v => v.to_string(),
+            },
         }
+    }
+}
+
+impl Display for InternalValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InternalValue::Interpolated(s) => write!(f, "{}", s),
+            InternalValue::NonInterpolated(s) => write!(f, "{}", s),
+            InternalValue::RawJson(v) => match v {
+                // Unwrap quotes
+                Value::String(s) => write!(f, "{}", s),
+                v => write!(f, "{}", v),
+            },
+
+            InternalValue::Quoted(s) => write!(f, "'{}'", s),
+        }
+    }
+}
+
+//TODO: GOL-249 Add more round trip tests
+#[cfg(test)]
+mod tests {
+    use crate::evaluator::Evaluator;
+    use crate::expr::Expr;
+    use crate::resolved_variables::ResolvedVariables;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn test_expr_from_json_value() {
+        let json = json!({
+            "name": "John",
+            "age": 30,
+            "cars": ["Ford", "BMW", "Fiat"],
+            "user": "${worker.response}-user"
+        });
+
+        let expr = Expr::from_json_value(&json).unwrap();
+        let result = expr.to_json_value().unwrap();
+
+        let expected = json!({
+            "name": "John",
+            "age": "30",
+            "cars": ["Ford", "BMW", "Fiat"],
+            "user": "${worker.response}-user"
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_expr_to_json_value() {
+        let expr = Expr::Record(vec![
+            (
+                "name".to_string(),
+                Box::new(Expr::Literal("John".to_string())),
+            ),
+            ("age".to_string(), Box::new(Expr::Literal("30".to_string()))),
+            (
+                "cars".to_string(),
+                Box::new(Expr::Sequence(vec![
+                    Expr::Literal("Ford".to_string()),
+                    Expr::Literal("BMW".to_string()),
+                    Expr::Literal("Fiat".to_string()),
+                ])),
+            ),
+        ]);
+
+        let json = expr.to_json_value().unwrap();
+
+        assert_eq!(
+            json,
+            json!({
+                "name": "John",
+                "age": "30",
+                "cars": ["Ford", "BMW", "Fiat"]
+            })
+        );
+    }
+
+    #[test]
+    fn test_round_trip_simple_string() {
+        let worker_response = "foo";
+        let expr = Expr::from_primitive_string(worker_response).unwrap();
+        let result = expr.to_json_value().unwrap();
+
+        assert_eq!(result, Value::String("foo".to_string()));
+    }
+
+    #[test]
+    fn expr_to_string_round_trip_match_expr_ok() {
+        let worker_response = &json!({"ok": { "id" : "afsal"} });
+
+        let expr1_string = "${match worker.response { ok(x) => '${x.id}-foo', err(msg) => msg }}";
+        let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
+        let value1 = expr1
+            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .unwrap();
+
+        let expr2_string = expr1.to_string().unwrap();
+        let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
+        let value2 = expr2
+            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .unwrap();
+
+        let expected = Value::String("afsal-foo".to_string());
+        assert_eq!((&value1, &value2), (&expected, &expected));
+    }
+
+    #[test]
+    fn expr_to_string_round_trip_match_expr_err() {
+        let worker_response = &json!({"err": { "id" : "afsal"} });
+
+        let expr1_string = "${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
+        let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
+        let value1 = expr1
+            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .unwrap();
+
+        let expr2_string = expr1.to_string().unwrap();
+        let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
+        let value2 = expr2
+            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .unwrap();
+
+        let expected = Value::String("error".to_string());
+        assert_eq!((&value1, &value2), (&expected, &expected));
+    }
+
+    #[test]
+    fn expr_to_string_round_trip_match_expr_append() {
+        let worker_response = &json!({"err": { "id" : "afsal"} });
+
+        let expr1_string =
+            "append-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
+        let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
+        let value1 = expr1
+            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .unwrap();
+
+        let expr2_string = expr1.to_string().unwrap();
+        let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
+        let value2 = expr2
+            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .unwrap();
+
+        let expected = Value::String("append-error".to_string());
+        assert_eq!((&value1, &value2), (&expected, &expected));
+    }
+
+    #[test]
+    fn expr_to_string_round_trip_match_expr_append_suffix() {
+        let worker_response = &json!({"err": { "id" : "afsal"} });
+
+        let expr1_string =
+            "prefix-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}-suffix";
+        let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
+        let value1 = expr1
+            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .unwrap();
+
+        let expr2_string = expr1.to_string().unwrap();
+        let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
+        let value2 = expr2
+            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .unwrap();
+
+        let expected = Value::String("prefix-error-suffix".to_string());
+        assert_eq!((&value1, &value2), (&expected, &expected));
     }
 }
