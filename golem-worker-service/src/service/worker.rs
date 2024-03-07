@@ -251,14 +251,34 @@ impl WorkerServiceDefault {
         }
     }
 
-    async fn try_get_template_version_for_worker(
+    async fn try_get_template_for_worker(
         &self,
         worker_id: &WorkerId,
-    ) -> Result<i32, WorkerError> {
+    ) -> Result<Template, WorkerError> {
         match self.get_metadata(worker_id).await {
-            Ok(metadata) => Ok(metadata.template_version),
-            Err(WorkerError::WorkerNotFound(_)) => Ok(0),
-            Err(WorkerError::Golem(GolemError::WorkerNotFound(_))) => Ok(0),
+            Ok(metadata) => {
+                let template_version = metadata.template_version;
+                let template_details = self
+                    .template_service
+                    .get_by_version(&worker_id.template_id, template_version)
+                    .await?
+                    .ok_or_else(|| {
+                        WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
+                            template_id: worker_id.template_id.clone(),
+                            version: template_version,
+                        })
+                    })?;
+
+                Ok(template_details)
+            }
+            Err(WorkerError::WorkerNotFound(_)) => Ok(self
+                .template_service
+                .get_latest(&worker_id.template_id)
+                .await?),
+            Err(WorkerError::Golem(GolemError::WorkerNotFound(_))) => Ok(self
+                .template_service
+                .get_latest(&worker_id.template_id)
+                .await?),
             Err(other) => Err(other),
         }
     }
@@ -532,17 +552,8 @@ impl WorkerService for WorkerServiceDefault {
         params: Value,
         calling_convention: &CallingConvention,
     ) -> Result<Value, WorkerError> {
-        let template_version = self.try_get_template_version_for_worker(worker_id).await?;
-        let template_details = self
-            .template_service
-            .get_by_version(&worker_id.template_id, template_version)
-            .await?
-            .ok_or_else(|| {
-                WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
-                    template_id: worker_id.template_id.clone(),
-                    version: template_version,
-                })
-            })?;
+        let template_details = self.try_get_template_for_worker(worker_id).await?;
+
         let function_type = template_details
             .metadata
             .function_by_name(&function_name)
@@ -590,17 +601,7 @@ impl WorkerService for WorkerServiceDefault {
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
     ) -> Result<ProtoInvokeResult, WorkerError> {
-        let template_version = self.try_get_template_version_for_worker(worker_id).await?;
-        let template_details = self
-            .template_service
-            .get_by_version(&worker_id.template_id, template_version)
-            .await?
-            .ok_or_else(|| {
-                WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
-                    template_id: worker_id.template_id.clone(),
-                    version: template_version,
-                })
-            })?;
+        let template_details = self.try_get_template_for_worker(worker_id).await?;
         let function_type = template_details
             .metadata
             .function_by_name(&function_name)
@@ -671,17 +672,7 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Value,
     ) -> Result<(), WorkerError> {
-        let template_version = self.try_get_template_version_for_worker(worker_id).await?;
-        let template_details = self
-            .template_service
-            .get_by_version(&worker_id.template_id, template_version)
-            .await?
-            .ok_or_else(|| {
-                WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
-                    template_id: worker_id.template_id.clone(),
-                    version: template_version,
-                })
-            })?;
+        let template_details = self.try_get_template_for_worker(worker_id).await?;
         let function_type = template_details
             .metadata
             .function_by_name(&function_name)
@@ -709,17 +700,7 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<ProtoVal>,
     ) -> Result<(), WorkerError> {
-        let template_version = self.try_get_template_version_for_worker(worker_id).await?;
-        let template_details = self
-            .template_service
-            .get_by_version(&worker_id.template_id, template_version)
-            .await?
-            .ok_or_else(|| {
-                WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
-                    template_id: worker_id.template_id.clone(),
-                    version: template_version,
-                })
-            })?;
+        let template_details = self.try_get_template_for_worker(worker_id).await?;
         let function_type = template_details
             .metadata
             .function_by_name(&function_name)

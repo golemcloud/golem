@@ -14,9 +14,15 @@ use super::cursor::TokenCursor;
 pub enum Token {
     WorkerResponse,
     Request,
+    Ok,
+    Err,
+    Some,
+    None,
+    Match,
     RawString(String),
     InterpolationStart,
     ClosedCurlyBrace,
+    OpenCurlyBrace,
     OpenSquareBracket,
     ClosedSquareBracket,
     GreaterThan,
@@ -32,6 +38,9 @@ pub enum Token {
     Then,
     Else,
     Dot,
+    Arrow,
+    Comma,
+    Quote,
 }
 
 impl Token {
@@ -57,6 +66,15 @@ impl Token {
             Token::Dot => false,
             Token::WorkerResponse => false,
             Token::Request => false,
+            Token::Ok => false,
+            Token::Err => false,
+            Token::Some => false,
+            Token::None => false,
+            Token::OpenCurlyBrace => false,
+            Token::Match => false,
+            Token::Arrow => false,
+            Token::Comma => false,
+            Token::Quote => false,
         }
     }
 
@@ -104,12 +122,29 @@ impl Display for Token {
                 Token::Dot => ".",
                 Token::WorkerResponse => "worker.response",
                 Token::Request => "request",
+                Token::Ok => "ok",
+                Token::Err => "err",
+                Token::Some => "some",
+                Token::None => "none",
+                Token::Match => "match",
+                Token::OpenCurlyBrace => "{",
+                Token::Arrow => "=>",
+                Token::Comma => ",",
+                Token::Quote => "'",
             }
         )
     }
 }
 
 impl Token {
+    pub fn is_non_empty_constructor(&self) -> bool {
+        matches!(self, Token::Ok | Token::Err | Token::Some | Token::Match)
+    }
+
+    pub fn is_empty_constructor(&self) -> bool {
+        matches!(self, Token::None)
+    }
+
     pub fn is_empty(&self) -> bool {
         match self {
             Self::RawString(string) => string.is_empty(),
@@ -242,6 +277,16 @@ impl<'t> Tokenizer {
                 self.text = self.text[character_index + 2..].to_string();
                 self.state = TokenizerState::Static(Token::InterpolationStart);
                 break;
+            } else if c == "=>" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + 2..].to_string();
+                self.state = TokenizerState::Static(Token::Arrow);
+                break;
+            } else if c == "{" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + 1..].to_string();
+                self.state = TokenizerState::Static(Token::OpenCurlyBrace);
+                break;
             } else if c == "}" {
                 token = Some(Token::RawString(self.text[..character_index].to_string()));
                 self.text = self.text[character_index + 1..].to_string();
@@ -273,6 +318,51 @@ impl<'t> Tokenizer {
                 self.text =
                     self.text[character_index + Token::Request.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::Request);
+                break;
+            } else if c == "ok" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + Token::Ok.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Ok);
+                break;
+            } else if c == "err" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + Token::Err.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Err);
+                break;
+            } else if c == "some" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text =
+                    self.text[character_index + Token::Some.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Some);
+                break;
+            } else if c == "none" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text =
+                    self.text[character_index + Token::None.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::None);
+                break;
+            } else if c == "null" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text = self.text[character_index + "null".to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::None);
+                break;
+            } else if c == "match" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text =
+                    self.text[character_index + Token::Match.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Match);
+                break;
+            } else if c == "," {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text =
+                    self.text[character_index + Token::Comma.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Comma);
+                break;
+            } else if c == "'" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text =
+                    self.text[character_index + Token::Quote.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Quote);
                 break;
             }
         }
@@ -315,7 +405,7 @@ fn tokenise_string_with_index(input_string: &str) -> Vec<(usize, &str)> {
     let mut result: Vec<(usize, &str)> = Vec::new();
     let mut current_index = 0;
     let token_regex_pattern = Regex::new(
-        r"(worker\.response|request|\.|<=|\$\{|\}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
+        r"(worker\.response|request|,|\.|'|<=|\$\{|}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|\bnone\b|\bmatch\b|\bok\b|\berr\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
     )
         .unwrap();
 
@@ -776,6 +866,48 @@ else${z}
                 Token::ClosedCurlyBrace,
                 Token::Space,
                 Token::raw_string("bar"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_token_processing_with_match_expr() {
+        let tokens: Vec<Token> = Tokenizer::new(
+            "${match worker.response { some(value) => worker.response, none => 'some_value' } }",
+        )
+        .run()
+        .value;
+        assert_eq!(
+            tokens,
+            vec![
+                Token::InterpolationStart,
+                Token::Match,
+                Token::Space,
+                Token::WorkerResponse,
+                Token::Space,
+                Token::OpenCurlyBrace,
+                Token::Space,
+                Token::Some,
+                Token::OpenParen,
+                Token::raw_string("value"),
+                Token::CloseParen,
+                Token::Space,
+                Token::Arrow,
+                Token::Space,
+                Token::WorkerResponse,
+                Token::Comma,
+                Token::Space,
+                Token::None,
+                Token::Space,
+                Token::Arrow,
+                Token::Space,
+                Token::Quote,
+                Token::raw_string("some_value"),
+                Token::Quote,
+                Token::Space,
+                Token::ClosedCurlyBrace,
+                Token::Space,
+                Token::ClosedCurlyBrace,
             ]
         );
     }
