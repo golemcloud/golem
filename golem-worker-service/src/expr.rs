@@ -375,12 +375,12 @@ impl Expr {
                                 vs.push(v);
                             }
                             InternalValue::Quoted(v) => {
-                                vs.push(format!("{}", v));
+                                vs.push(v.to_string());
                             }
                             _ => return Err("Not supported type".into()),
                         }
                     }
-                    let value_string = format!("{}", vs.join(""));
+                    let value_string = vs.join("");
 
                     if is_code {
                         Ok(InternalValue::Quoted(value_string))
@@ -417,8 +417,8 @@ impl Expr {
 
                     Ok(InternalValue::Interpolated(format!(
                         "{}>{}",
-                        v1.unwrap(),
-                        v2.unwrap()
+                        v1.unwrap_string(),
+                        v2.unwrap_string()
                     )))
                 }
                 Expr::GreaterThanOrEqualTo(value1, value2) => {
@@ -427,8 +427,8 @@ impl Expr {
 
                     Ok(InternalValue::Interpolated(format!(
                         "{}>={}",
-                        v1.unwrap(),
-                        v2.unwrap()
+                        v1.unwrap_string(),
+                        v2.unwrap_string()
                     )))
                 }
                 Expr::EqualTo(value1, value2) => {
@@ -437,8 +437,8 @@ impl Expr {
 
                     Ok(InternalValue::Interpolated(format!(
                         "{}=={}",
-                        v1.unwrap(),
-                        v2.unwrap()
+                        v1.unwrap_string(),
+                        v2.unwrap_string()
                     )))
                 }
                 Expr::LessThan(value1, value2) => {
@@ -447,8 +447,8 @@ impl Expr {
 
                     Ok(InternalValue::Interpolated(format!(
                         "{}<{}",
-                        v1.unwrap(),
-                        v2.unwrap()
+                        v1.unwrap_string(),
+                        v2.unwrap_string()
                     )))
                 }
 
@@ -458,8 +458,8 @@ impl Expr {
 
                     Ok(InternalValue::Interpolated(format!(
                         "{}<={}",
-                        v1.unwrap(),
-                        v2.unwrap()
+                        v1.unwrap_string(),
+                        v2.unwrap_string()
                     )))
                 }
                 Expr::Cond(pred, value1, value2) => {
@@ -469,9 +469,9 @@ impl Expr {
 
                     Ok(InternalValue::Interpolated(format!(
                         "if ({}) then {} else {}",
-                        p.unwrap(),
-                        v1.unwrap(),
-                        v2.unwrap()
+                        p.unwrap_string(),
+                        v1.unwrap_string(),
+                        v2.unwrap_string()
                     )))
                 }
 
@@ -488,7 +488,7 @@ impl Expr {
                         let constructor_pattern = format!(
                             "{} => {}",
                             convert_constructor_to_string(&match_case.0 .0, &|x| go(x, true))?,
-                            go(&match_case.0 .1, true)?.unwrap()
+                            go(&match_case.0 .1, true)?.unwrap_string()
                         );
 
                         match_cases_str.push(constructor_pattern);
@@ -496,13 +496,13 @@ impl Expr {
 
                     Ok(InternalValue::Interpolated(format!(
                         "match {} {{ {} }}",
-                        c.unwrap(),
+                        c.unwrap_string(),
                         match_cases_str.join(", ")
                     )))
                 }
 
                 Expr::Constructor0(constructor) => Ok(InternalValue::NonInterpolated(
-                    convert_constructor_to_string(&constructor, &|x| go(x, false))?,
+                    convert_constructor_to_string(constructor, &|x| go(x, false))?,
                 )),
             }
         }
@@ -537,7 +537,7 @@ where
         ConstructorPattern::WildCard => Ok("_".to_string()),
         ConstructorPattern::As(name, pattern) => Ok(format!(
             "{} as {}",
-            convert_constructor_to_string(&pattern, get_internal_value)?,
+            convert_constructor_to_string(pattern, get_internal_value)?,
             name
         )),
         ConstructorPattern::Constructor(constructor_type, variables) => {
@@ -553,13 +553,10 @@ where
                 variables_str.join(", ")
             ))
         }
-        ConstructorPattern::Literal(expr) => Ok(format!(
-            "{}",
-            match *expr.clone() {
-                Expr::Variable(s) => s,
-                any_expr => get_internal_value(&any_expr)?.unwrap(),
-            }
-        )),
+        ConstructorPattern::Literal(expr) => Ok(match *expr.clone() {
+            Expr::Variable(s) => s,
+            any_expr => get_internal_value(&any_expr)?.unwrap_string(),
+        }),
     }
 }
 
@@ -606,7 +603,7 @@ enum InternalValue {
 }
 
 impl InternalValue {
-    fn unwrap(self) -> String {
+    fn unwrap_string(self) -> String {
         match self {
             InternalValue::Interpolated(s) => s,
             InternalValue::NonInterpolated(s) => s,
