@@ -208,11 +208,11 @@ impl TemplateApi {
     ///
     /// Gets the latest version of a template.
     #[oai(path = "/:template_id/latest", method = "get")]
-    async fn get_latest_version(
+    async fn get_latest_template(
         &self,
         template_id: Path<TemplateId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<i32>> {
+    ) -> Result<Json<crate::model::Template>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
         let response = self
             .template_service
@@ -220,7 +220,7 @@ impl TemplateApi {
             .await?;
 
         match response {
-            Some(template) => Ok(Json(template.versioned_template_id.version)),
+            Some(template) => Ok(Json(template)),
             None => Err(TemplateError::NotFound(Json(ErrorBody {
                 error: "Template not found".to_string(),
             }))),

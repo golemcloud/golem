@@ -6,11 +6,10 @@ use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::template::template_service_server::TemplateService;
 use golem_api_grpc::proto::golem::template::{
     create_template_request, create_template_response, download_template_response,
-    get_latest_template_version_response, get_template_metadata_all_versions_response,
-    get_template_metadata_response, get_templates_response, update_template_request,
-    update_template_response, CreateTemplateRequest, CreateTemplateRequestHeader,
-    CreateTemplateResponse, DownloadTemplateRequest, DownloadTemplateResponse,
-    GetLatestTemplateVersionRequest, GetLatestTemplateVersionResponse,
+    get_template_metadata_all_versions_response, get_template_metadata_response,
+    get_templates_response, update_template_request, update_template_response,
+    CreateTemplateRequest, CreateTemplateRequestHeader, CreateTemplateResponse,
+    DownloadTemplateRequest, DownloadTemplateResponse, GetLatestTemplateRequest,
     GetTemplateMetadataAllVersionsResponse, GetTemplateMetadataResponse,
     GetTemplateMetadataSuccessResponse, GetTemplateRequest, GetTemplateSuccessResponse,
     GetTemplatesRequest, GetTemplatesResponse, GetTemplatesSuccessResponse, UpdateTemplateRequest,
@@ -173,11 +172,11 @@ impl TemplateGrpcApi {
         Ok(result.into_iter().map(|p| p.into()).collect())
     }
 
-    async fn get_latest_version(
+    async fn get_latest_template_metadata(
         &self,
-        request: GetLatestTemplateVersionRequest,
+        request: GetLatestTemplateRequest,
         metadata: MetadataMap,
-    ) -> Result<i32, TemplateError> {
+    ) -> Result<Template, TemplateError> {
         let auth = self.auth(metadata).await?;
         let id: TemplateId = request
             .template_id
@@ -185,7 +184,7 @@ impl TemplateGrpcApi {
             .ok_or_else(|| bad_request_error("Missing template id"))?;
         let result = self.template_service.get_latest_version(&id, &auth).await?;
         match result {
-            Some(template) => Ok(template.versioned_template_id.version),
+            Some(template) => Ok(template.into()),
             None => Err(TemplateError {
                 error: Some(template_error::Error::NotFound(ErrorBody {
                     error: "Template not found".to_string(),
@@ -343,17 +342,19 @@ impl TemplateService for TemplateGrpcApi {
         }
     }
 
-    async fn get_latest_template_version(
+    async fn get_latest_template_metadata(
         &self,
-        request: Request<GetLatestTemplateVersionRequest>,
-    ) -> Result<Response<GetLatestTemplateVersionResponse>, Status> {
+        request: Request<GetLatestTemplateRequest>,
+    ) -> Result<Response<GetTemplateMetadataResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get_latest_version(r, m).await {
-            Ok(v) => Ok(Response::new(GetLatestTemplateVersionResponse {
-                result: Some(get_latest_template_version_response::Result::Success(v)),
+        match self.get_latest_template_metadata(r, m).await {
+            Ok(t) => Ok(Response::new(GetTemplateMetadataResponse {
+                result: Some(get_template_metadata_response::Result::Success(
+                    GetTemplateMetadataSuccessResponse { template: Some(t) },
+                )),
             })),
-            Err(err) => Ok(Response::new(GetLatestTemplateVersionResponse {
-                result: Some(get_latest_template_version_response::Result::Error(err)),
+            Err(err) => Ok(Response::new(GetTemplateMetadataResponse {
+                result: Some(get_template_metadata_response::Result::Error(err)),
             })),
         }
     }
