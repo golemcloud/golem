@@ -1,14 +1,11 @@
 use super::*;
-use crate::config::{CompileWorkerConfig, UploadWorkerConfig};
+use crate::config::{CompileWorkerConfig, TemplateServiceConfig, UploadWorkerConfig};
 use crate::model::*;
 use async_trait::async_trait;
 use golem_common::model::TemplateId;
 use golem_worker_executor_base::services::compiled_template::CompiledTemplateService;
-use http::Uri;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 use wasmtime::Engine;
 
 #[async_trait]
@@ -29,12 +26,9 @@ impl CompilationServiceDefault {
     pub fn new(
         upload_worker: UploadWorkerConfig,
         compile_worker: CompileWorkerConfig,
-
-        uri: Uri,
-        access_token: Uuid,
+        template_service: TemplateServiceConfig,
 
         engine: Engine,
-        cancel: CancellationToken,
 
         compiled_template_service: Arc<dyn CompiledTemplateService + Send + Sync>,
     ) -> Self {
@@ -42,22 +36,16 @@ impl CompilationServiceDefault {
         let (upload_tx, upload_rx) = mpsc::channel(100);
 
         CompileWorker::start(
-            uri.clone(),
-            access_token,
+            template_service.uri(),
+            template_service.access_token,
             compile_worker,
             engine.clone(),
             compiled_template_service.clone(),
             upload_tx,
             compile_rx,
-            cancel.clone(),
         );
 
-        UploadWorker::start(
-            upload_worker,
-            compiled_template_service.clone(),
-            upload_rx,
-            cancel.clone(),
-        );
+        UploadWorker::start(upload_worker, compiled_template_service.clone(), upload_rx);
 
         Self { queue: compile_tx }
     }

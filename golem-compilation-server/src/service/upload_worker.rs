@@ -4,14 +4,12 @@ use futures::stream::StreamExt;
 use golem_worker_executor_base::services::compiled_template::CompiledTemplateService;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tokio_util::sync::CancellationToken;
 
 use crate::{config::UploadWorkerConfig, model::*};
 
 // Worker that uploads compiled templates to the cloud.
 #[derive(Clone)]
 pub struct UploadWorker {
-    config: UploadWorkerConfig,
     compiled_template_service: Arc<dyn CompiledTemplateService + Send + Sync>,
 }
 
@@ -20,12 +18,10 @@ impl UploadWorker {
         config: UploadWorkerConfig,
         compiled_template_service: Arc<dyn CompiledTemplateService + Send + Sync>,
         recv: mpsc::Receiver<CompiledTemplate>,
-        cancellation: CancellationToken,
     ) {
         let num_workers = config.num_workers;
 
         let worker = Self {
-            config,
             compiled_template_service,
         };
 
@@ -38,17 +34,12 @@ impl UploadWorker {
 
         tokio::spawn(async move {
             loop {
-                tokio::select! {
-                    _ = cancellation.cancelled() => {
-                        break;
-                    }
-                    _ = stream.next() => {}
-                }
+                let _ = stream.next().await;
             }
         });
     }
 
-    // TODO: Integrate retries?
+    // Don't need retries because they're baked into CompiledTemplateService.
     async fn upload_template(&self, template: CompiledTemplate) {
         let CompiledTemplate {
             template,

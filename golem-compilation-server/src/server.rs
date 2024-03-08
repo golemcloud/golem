@@ -4,7 +4,6 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::service::compile_service::CompilationServiceDefault;
 use config::ServerConfig;
@@ -48,24 +47,20 @@ fn main() {
 }
 
 async fn run(config: ServerConfig) {
-    let cancellation = CancellationToken::new();
-
     let compiled_template = compiled_template::configured(&config.compiled_template_service).await;
     let engine = wasmtime::Engine::new(&create_wasmtime_config()).expect("Failed to create engine");
 
     let compilation_service = CompilationServiceDefault::new(
         config.upload_worker,
         config.compile_worker,
-        config.template_service.uri(),
-        config.template_service.access_token,
+        config.template_service,
         engine,
-        cancellation.clone(),
         compiled_template,
     );
 
     let compilation_service = Arc::new(compilation_service);
 
-    let _ = tokio::spawn(async move {
+    tokio::spawn(async move {
         let address = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), config.grpc_port);
         start_grpc_server(address, compilation_service)
             .await

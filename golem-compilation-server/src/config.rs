@@ -40,21 +40,23 @@ pub struct TemplateServiceConfig {
 
 impl TemplateServiceConfig {
     pub fn uri(&self) -> Uri {
-        format!("http://{}:{}", self.host, self.port)
-            .try_into()
-            .expect("Valid Template Service URI")
+        Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build TemplateServiceTemplateService  URI")
     }
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct UploadWorkerConfig {
     pub num_workers: usize,
-    pub retry_config: RetryConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct CompileWorkerConfig {
-    pub retry_config: RetryConfig,
+    pub retries: RetryConfig,
     pub max_template_size: usize,
 }
 
@@ -66,4 +68,36 @@ impl ServerConfig {
             .extract()
             .expect("Failed to parse config")
     }
+}
+
+#[test]
+fn config_load() {
+    std::env::set_var("GOLEM__TEMPLATE_SERVICE__HOST", "0.0.0.0");
+    std::env::set_var("GOLEM__TEMPLATE_SERVICE__PORT", "9001");
+    std::env::set_var(
+        "GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN",
+        "6778f06f-43ac-4e45-b501-6adb3253edf2",
+    );
+
+    std::env::set_var("GOLEM__WORKER_SERVICE__HOST", "0.0.0.0");
+    std::env::set_var("GOLEM__WORKER_SERVICE__PORT", "9001");
+    std::env::set_var(
+        "GOLEM__WORKER_SERVICE__ACCESS_TOKEN",
+        "6778f06f-43ac-4e45-b501-6adb3253edf2",
+    );
+
+    std::env::set_var(
+        "GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION",
+        "us-east-1",
+    );
+    std::env::set_var(
+        "GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__BUCKET",
+        "golem-compiled-components",
+    );
+    std::env::set_var(
+        "GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX",
+        "",
+    );
+
+    let _ = ServerConfig::new();
 }

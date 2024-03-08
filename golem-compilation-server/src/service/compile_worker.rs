@@ -19,7 +19,6 @@ use http::Uri;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
@@ -48,8 +47,7 @@ impl CompileWorker {
 
         sender: mpsc::Sender<CompiledTemplate>,
         mut recv: mpsc::Receiver<CompilationRequest>,
-        cancellation: CancellationToken,
-    ) -> () {
+    ) {
         let worker = Self {
             uri,
             engine,
@@ -59,32 +57,24 @@ impl CompileWorker {
         };
 
         tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                        request = recv.recv() => {
-                            if let Some(request) = request {
-                                let result = worker.compile_template(&request.template).await;
-                                match result {
-                                    Err(_) => {}
-                                    Ok(component) => {
-                                        let send_result = sender.send(CompiledTemplate {
-                                            template: request.template,
-                                            component,
-                                        }).await;
+            while let Some(request) = recv.recv().await {
+                let result = worker.compile_template(&request.template).await;
+                match result {
+                    Err(_) => {}
+                    Ok(component) => {
+                        let send_result = sender
+                            .send(CompiledTemplate {
+                                template: request.template,
+                                component,
+                            })
+                            .await;
 
-                                        if send_result.is_err() {
-                                            tracing::error!("Failed to send compiled template");
-                                            break;
-                                        }
-                                    }
-
-                                };
-                            }
-                        }
-                        _ = cancellation.cancelled() => {
+                        if send_result.is_err() {
+                            tracing::error!("Failed to send compiled template");
                             break;
                         }
-                }
+                    }
+                };
             }
         });
     }
@@ -116,7 +106,7 @@ impl CompileWorker {
         let bytes = download_via_grpc(
             &self.uri,
             &self.access_token,
-            &self.config.retry_config,
+            &self.config.retries,
             &template.id,
             template.version,
             self.config.max_template_size,
@@ -153,7 +143,7 @@ async fn download_via_grpc(
     template_version: i32,
     max_template_size: usize,
 ) -> Result<Vec<u8>, CompilationError> {
-    let desc = format!("Downloading template {template_id}");
+    let desc = format!("Downloading template {template_id}@{template_version}");
     tracing::debug!("{}", &desc);
     with_retries(
         &desc,

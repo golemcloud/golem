@@ -2,7 +2,7 @@ syntax = "proto3";
 
 import "golem/common/empty.proto";
 import "golem/common/error_body.proto";
-import "golem/common/uuid.proto";
+import "golem/template/template_id.proto";
 
 package golem.compilationserver;
 
@@ -10,9 +10,8 @@ service CompilationServer {
     rpc EnqueueCompilation(CompilationRequest) returns (CompilationResponse);
 }
 
-
 message CompilationRequest {
-    golem.common.UUID template_id = 1;
+    golem.template.TemplateId template_id = 1;
     int32 template_version = 2;
 }
 
