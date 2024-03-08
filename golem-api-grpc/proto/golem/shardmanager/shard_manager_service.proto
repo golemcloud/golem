@@ -35,5 +35,4 @@ message RegisterResponse {
 
 message RegisterSuccess {
   uint32 number_of_shards = 1;
-  repeated golem.shardmanager.ShardId shard_ids = 2;
 }

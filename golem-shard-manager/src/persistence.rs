@@ -17,7 +17,8 @@ use bytes::Bytes;
 use golem_common::redis::RedisPool;
 
 use crate::error::ShardManagerError;
-use crate::model::{Rebalance, RoutingTable, ShardManagerState};
+use crate::model::{RoutingTable, ShardManagerState};
+use crate::rebalancing::Rebalance;
 
 #[async_trait]
 pub trait PersistenceService {
@@ -76,7 +77,7 @@ impl PersistenceService for PersistenceServiceDefault {
                     shard_manager_state.get_rebalance(),
                 ))
             }
-            None => Ok((RoutingTable::new(self.number_of_shards), Rebalance::new())),
+            None => Ok((RoutingTable::new(self.number_of_shards), Rebalance::empty())),
         }
     }
 }

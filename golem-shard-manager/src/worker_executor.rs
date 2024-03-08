@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem;
@@ -34,7 +34,7 @@ pub trait WorkerExecutorService {
     async fn assign_shards(
         &self,
         pod: &Pod,
-        shard_ids: &HashSet<ShardId>,
+        shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError>;
 
     async fn health_check(&self, pod: &Pod) -> bool;
@@ -42,7 +42,7 @@ pub trait WorkerExecutorService {
     async fn revoke_shards(
         &self,
         pod: &Pod,
-        shard_ids: &HashSet<ShardId>,
+        shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError>;
 }
 
@@ -55,7 +55,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
     async fn assign_shards(
         &self,
         pod: &Pod,
-        shard_ids: &HashSet<ShardId>,
+        shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!("Assigning shards {:?} to pod {:?}", shard_ids, pod);
 
@@ -110,7 +110,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
     async fn revoke_shards(
         &self,
         pod: &Pod,
-        shard_ids: &HashSet<ShardId>,
+        shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!("Revoking shards {:?} from pod {:?}", shard_ids, pod);
 
@@ -146,7 +146,7 @@ impl WorkerExecutorServiceDefault {
     async fn assign_shards_internal(
         &self,
         pod: &Pod,
-        shard_ids: &HashSet<ShardId>,
+        shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         let assign_shards_request = golem::workerexecutor::AssignShardsRequest {
             shard_ids: shard_ids
@@ -231,7 +231,7 @@ impl WorkerExecutorServiceDefault {
     async fn revoke_shards_internal(
         &self,
         pod: &Pod,
-        shard_ids: &HashSet<ShardId>,
+        shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         let revoke_shards_request = golem::workerexecutor::RevokeShardsRequest {
             shard_ids: shard_ids
