@@ -60,8 +60,10 @@ async fn run(config: ServerConfig) {
 
     let compilation_service = Arc::new(compilation_service);
 
+    let ipv4_address: Ipv4Addr = config.grpc_host.parse().expect("Invalid IP address");
+    let address = SocketAddr::new(ipv4_address.into(), config.grpc_port);
+
     tokio::spawn(async move {
-        let address = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), config.grpc_port);
         start_grpc_server(address, compilation_service)
             .await
             .expect("gRPC server failed");

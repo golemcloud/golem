@@ -21,6 +21,7 @@ pub struct ServerConfig {
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
     pub grpc_port: u16,
+    pub grpc_host: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -1,6 +1,6 @@
 enable_tracing_console = false
 enable_json_log = false
-grpc_address = "0.0.0.0"
+grpc_host = "0.0.0.0"
 grpc_port = 50051
 
 [template_service.retries]
