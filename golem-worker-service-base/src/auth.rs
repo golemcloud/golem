@@ -1,17 +1,10 @@
 use std::error::Error;
-use std::sync::Arc;
 
 use async_trait::async_trait;
-use cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectAction;
-use cloud_common::model::TokenSecret;
 use derive_more::Display;
-use golem_common::model::ProjectId;
 use serde::{Deserialize, Serialize};
 use tonic::Request;
-use tracing::debug;
 use uuid::Uuid;
-
-use crate::project::ProjectService;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
 pub enum Permission {
@@ -39,18 +32,9 @@ pub struct AuthServiceNoop{}
 impl AuthService<()> for AuthServiceNoop {
     async fn is_authorized(
         &self,
-        permission: Permission,
-        ctx: &(),
+        _permission: Permission,
+        _ctx: &(),
     ) -> Result<bool, Box<dyn Error>> {
         Ok(true)
     }
-}
-
-pub fn authorised_request<T>(request: T, access_token: &Uuid) -> Request<T> {
-    let mut req = Request::new(request);
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {}", access_token).parse().unwrap(),
-    );
-    req
 }

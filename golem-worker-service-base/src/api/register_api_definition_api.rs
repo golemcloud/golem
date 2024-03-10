@@ -16,9 +16,11 @@ use crate::expr::Expr;
 use crate::oas_worker_bridge::*;
 use crate::register::{ApiDefinitionKey, ApiRegistrationError, RegisterApiDefinition};
 use golem_service_base::api_tags::ApiTags;
+use crate::auth::AuthService;
 
 pub struct RegisterApiDefinitionApi {
     pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService<()> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
 use async_trait::async_trait;
@@ -8,28 +8,33 @@ use bytes::Bytes;
 use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
 use tracing::{debug, info};
+use crate::auth::AuthService;
 
 const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 
+// A namespace here can be example: (account, project) etc.
 #[async_trait]
-pub trait RegisterApiDefinition {
-    async fn register(&self, definition: &ApiDefinition) -> Result<(), ApiRegistrationError>;
+pub trait RegisterApiDefinition<Namespace> {
+    async fn register(&self, definition: &ApiDefinition, namespace: &Namespace) -> Result<(), ApiRegistrationError>;
 
     async fn get(
         &self,
         api_definition_key: &ApiDefinitionKey,
+        namespace: &Namespace,
     ) -> Result<Option<ApiDefinition>, ApiRegistrationError>;
 
     async fn delete(
         &self,
         api_definition_key: &ApiDefinitionKey,
+        namespace: &Namespace,
     ) -> Result<bool, ApiRegistrationError>;
 
-    async fn get_all(&self) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
+    async fn get_all(&self, namespace: &Namespace) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
 
     async fn get_all_versions(
         &self,
         api_id: &ApiDefinitionId,
+        namespace: &Namespace,
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
 }
 
@@ -125,8 +130,8 @@ impl Default for InMemoryRegistry {
 }
 
 #[async_trait]
-impl RegisterApiDefinition for InMemoryRegistry {
-    async fn register(&self, definition: &ApiDefinition) -> Result<(), ApiRegistrationError> {
+impl RegisterApiDefinition<()> for InMemoryRegistry {
+    async fn register(&self, definition: &ApiDefinition, _namespace: &()) -> Result<(), ApiRegistrationError> {
         let mut registry = self.registry.lock().unwrap();
         let key: ApiDefinitionKey = ApiDefinitionKey::from(definition);
 
@@ -141,18 +146,19 @@ impl RegisterApiDefinition for InMemoryRegistry {
     async fn get(
         &self,
         api_id: &ApiDefinitionKey,
+        _namespace: &()
     ) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
         let registry = self.registry.lock().unwrap();
         Ok(registry.get(api_id).cloned())
     }
 
-    async fn delete(&self, api_id: &ApiDefinitionKey) -> Result<bool, ApiRegistrationError> {
+    async fn delete(&self, api_id: &ApiDefinitionKey,  _namespace: &()) -> Result<bool, ApiRegistrationError> {
         let mut registry = self.registry.lock().unwrap();
         let result = registry.remove(api_id);
         Ok(result.is_some())
     }
 
-    async fn get_all(&self) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+    async fn get_all(&self,  _namespace: &()) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         let registry = self.registry.lock().unwrap();
 
         let result: Vec<ApiDefinition> = registry.values().cloned().collect();
@@ -163,6 +169,7 @@ impl RegisterApiDefinition for InMemoryRegistry {
     async fn get_all_versions(
         &self,
         api_id: &ApiDefinitionId,
+        _namespace: &()
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         let registry = self.registry.lock().unwrap();
 
@@ -176,23 +183,24 @@ impl RegisterApiDefinition for InMemoryRegistry {
     }
 }
 
-pub struct RedisApiRegistry {
+pub struct RedisApiRegistry<Namespace> {
     pool: RedisPool,
+    auth_service: Arc<dyn AuthService<Namespace> + Sync + Send>,
 }
 
-impl RedisApiRegistry {
-    pub async fn new(config: &RedisConfig) -> Result<RedisApiRegistry, ApiRegistrationError> {
-        let pool_result = golem_common::redis::RedisPool::configured(config)
+impl<Namespace> RedisApiRegistry<Namespace> {
+    pub async fn new(config: &RedisConfig, auth_service: Arc<dyn AuthService<Namespace> + Sync + Send>,) -> Result<RedisApiRegistry<Namespace>, ApiRegistrationError> {
+        let pool_result = RedisPool::configured(config)
             .await
             .map_err(|err| ApiRegistrationError::InternalError(err.to_string()))?;
 
-        Ok(RedisApiRegistry { pool: pool_result })
+        Ok(RedisApiRegistry { pool: pool_result, auth_service })
     }
 }
 
 #[async_trait]
-impl RegisterApiDefinition for RedisApiRegistry {
-    async fn register(&self, definition: &ApiDefinition) -> Result<(), ApiRegistrationError> {
+impl<Namespace> RegisterApiDefinition<Namespace> for RedisApiRegistry<Namespace> {
+    async fn register(&self, definition: &ApiDefinition, namespace: &Namespace) -> Result<(), ApiRegistrationError> {
         debug!("Register definition: id: {}", definition.id);
         let key: ApiDefinitionKey = ApiDefinitionKey::from(definition);
         let redis_key = key.get_api_definition_redis_key();
@@ -242,6 +250,7 @@ impl RegisterApiDefinition for RedisApiRegistry {
     async fn get(
         &self,
         api_id: &ApiDefinitionKey,
+        namespace: &Namespace
     ) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
         info!("Get definition: id: {}", api_id);
         let key = api_id.get_api_definition_redis_key();
@@ -264,7 +273,7 @@ impl RegisterApiDefinition for RedisApiRegistry {
         }
     }
 
-    async fn delete(&self, api_id: &ApiDefinitionKey) -> Result<bool, ApiRegistrationError> {
+    async fn delete(&self, api_id: &ApiDefinitionKey, namespace: &Namespace) -> Result<bool, ApiRegistrationError> {
         debug!("Delete definition: id: {}", api_id);
         let definition_key = api_id.get_api_definition_redis_key();
         let all_definitions_key = ApiDefinitionKey::get_all_apis_set_redis_key();
@@ -290,7 +299,7 @@ impl RegisterApiDefinition for RedisApiRegistry {
         Ok(definition_delete > 0)
     }
 
-    async fn get_all(&self) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+    async fn get_all(&self, namespace: &Namespace) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         let all_apis: Vec<ApiDefinitionKey> = self.get_all_keys().await?;
 
         let api_definitions = self.get_all_api_definitions(all_apis).await?;
@@ -301,6 +310,7 @@ impl RegisterApiDefinition for RedisApiRegistry {
     async fn get_all_versions(
         &self,
         api_id: &ApiDefinitionId,
+        namespace: &Namespace
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         let api_versions: Vec<ApiDefinitionKey> = self
             .get_all_keys()
@@ -315,7 +325,7 @@ impl RegisterApiDefinition for RedisApiRegistry {
     }
 }
 
-impl RedisApiRegistry {
+impl<Namespace> RedisApiRegistry<Namespace> {
     async fn get_all_api_definitions(
         &self,
         keys: Vec<ApiDefinitionKey>,
@@ -369,6 +379,7 @@ impl RedisApiRegistry {
 mod tests {
     use super::*;
     use golem_common::config::RedisConfig;
+    use crate::auth::AuthServiceNoop;
 
     use crate::register::{
         ApiDefinitionKey, InMemoryRegistry, RedisApiRegistry, RegisterApiDefinition,
@@ -424,27 +435,27 @@ mod tests {
             "cart-${path.cart-id}",
         );
 
-        registry.register(&api_definition1).await.unwrap();
+        registry.register(&api_definition1, &()).await.unwrap();
 
-        registry.register(&api_definition2).await.unwrap();
+        registry.register(&api_definition2, &()).await.unwrap();
 
-        let api_definition1_result1 = registry.get(&api_id1).await.unwrap_or(None);
+        let api_definition1_result1 = registry.get(&api_id1, &()).await.unwrap_or(None);
 
-        let api_definition2_result1 = registry.get(&api_id2).await.unwrap_or(None);
+        let api_definition2_result1 = registry.get(&api_id2, &()).await.unwrap_or(None);
 
-        let api_definition_result2 = registry.get_all().await.unwrap_or(vec![]);
+        let api_definition_result2 = registry.get_all(&()).await.unwrap_or(vec![]);
 
-        let delete1_result = registry.delete(&api_id1).await.unwrap_or(false);
+        let delete1_result = registry.delete(&api_id1, &()).await.unwrap_or(false);
 
-        let api_definition1_result3 = registry.get(&api_id1).await.unwrap_or(None);
+        let api_definition1_result3 = registry.get(&api_id1, &()).await.unwrap_or(None);
 
-        let api_definition_result3 = registry.get_all().await.unwrap_or(vec![]);
+        let api_definition_result3 = registry.get_all(&()).await.unwrap_or(vec![]);
 
-        let delete2_result = registry.delete(&api_id2).await.unwrap_or(false);
+        let delete2_result = registry.delete(&api_id2, &()).await.unwrap_or(false);
 
-        let api_definition2_result3 = registry.get(&api_id2).await.unwrap_or(None);
+        let api_definition2_result3 = registry.get(&api_id2, &()).await.unwrap_or(None);
 
-        let api_definition_result4 = registry.get_all().await.unwrap_or(vec![]);
+        let api_definition_result4 = registry.get_all(&()).await.unwrap_or(vec![]);
 
         assert!(api_definition1_result1.is_some());
         assert!(!api_definition_result2.is_empty());
@@ -468,7 +479,9 @@ mod tests {
             ..Default::default()
         };
 
-        let registry = RedisApiRegistry::new(&config).await.unwrap();
+        let auth_context = AuthServiceNoop{};
+
+        let registry = RedisApiRegistry::new(&config, Arc::new(auth_context)).await.unwrap();
 
         let id1 = ApiDefinitionId("api1".to_string());
         let version = Version("0.0.1".to_string());
@@ -490,27 +503,27 @@ mod tests {
             "cart-${path.cart-id}",
         );
 
-        registry.register(&api_definition1).await.unwrap();
+        registry.register(&api_definition1, &()).await.unwrap();
 
-        registry.register(&api_definition2).await.unwrap();
+        registry.register(&api_definition2, &()).await.unwrap();
 
-        let api_definition1_result1 = registry.get(&api_id1).await.unwrap_or(None);
+        let api_definition1_result1 = registry.get(&api_id1, &()).await.unwrap_or(None);
 
-        let api_definition2_result1 = registry.get(&api_id2).await.unwrap_or(None);
+        let api_definition2_result1 = registry.get(&api_id2, &()).await.unwrap_or(None);
 
-        let api_definition_result2 = registry.get_all().await.unwrap_or(vec![]);
+        let api_definition_result2 = registry.get_all(&()).await.unwrap_or(vec![]);
 
-        let delete1_result = registry.delete(&api_id1).await.unwrap_or(false);
+        let delete1_result = registry.delete(&api_id1, &()).await.unwrap_or(false);
 
-        let api_definition1_result3 = registry.get(&api_id1).await.unwrap_or(None);
+        let api_definition1_result3 = registry.get(&api_id1, &()).await.unwrap_or(None);
 
-        let api_definition_result3 = registry.get_all().await.unwrap_or(vec![]);
+        let api_definition_result3 = registry.get_all(&()).await.unwrap_or(vec![]);
 
-        let delete2_result = registry.delete(&api_id2).await.unwrap_or(false);
+        let delete2_result = registry.delete(&api_id2, &()).await.unwrap_or(false);
 
-        let api_definition2_result3 = registry.get(&api_id2).await.unwrap_or(None);
+        let api_definition2_result3 = registry.get(&api_id2, &()).await.unwrap_or(None);
 
-        let api_definition_result4 = registry.get_all().await.unwrap_or(vec![]);
+        let api_definition_result4 = registry.get_all(&()).await.unwrap_or(vec![]);
 
         assert!(api_definition1_result1.is_some());
         assert!(!api_definition_result2.is_empty());
