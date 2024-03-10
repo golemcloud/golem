@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud"
-description = "Base functionalities of Golem Worker Service"
+description = "Golem Worker Service including API Gateway functionalities"
 
 
 [[bin]]
