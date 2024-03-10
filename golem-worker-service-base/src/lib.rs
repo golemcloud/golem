@@ -16,8 +16,8 @@ pub mod value_typed;
 pub mod worker_request;
 pub mod worker_request_to_http_response;
 pub mod worker_request_to_response;
-
 pub mod metrics;
+pub mod auth;
 
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;
