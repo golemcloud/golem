@@ -34,12 +34,6 @@ pub trait RegisterApiDefinitionRepo<Namespace> {
         &self,
         namespace: &Namespace,
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>>;
-
-    async fn get_all_versions(
-        &self,
-        api_id: &ApiDefinitionId,
-        namespace: &Namespace,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>>;
 }
 
 #[derive(Debug, Clone)]
@@ -113,22 +107,6 @@ impl<Namespace: Clone> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry
         let registry = self.registry.lock().unwrap();
 
         let result: Vec<ApiDefinition> = registry.values().cloned().collect();
-
-        Ok(result)
-    }
-
-    async fn get_all_versions(
-        &self,
-        api_id: &ApiDefinitionId,
-        _namespace: &Namespace
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
-        let registry = self.registry.lock().unwrap();
-
-        let result: Vec<ApiDefinition> = registry
-            .values()
-            .filter(|api| api.id == *api_id)
-            .cloned()
-            .collect();
 
         Ok(result)
     }
@@ -246,27 +224,32 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
         &self,
         api_id: &ApiDefinitionKey<Namespace>,
     ) -> Result<bool, ApiRegistrationRepoError<Namespace>> {
-        debug!("Delete definition: id: {}", api_id);
-        let definition_key = api_id.get_api_definition_redis_key();
-        let all_definitions_key = ApiDefinitionKey::get_all_apis_set_redis_key();
+        debug!(
+            "Delete from namespace: {}, id: {}",
+            api_id.namespace, api_id.id
+        );
+        let definition_key = get_api_definition_redis_key(&api_id.namespace, &api_id.id);
 
-        let definition_value = api_id.make_all_apis_redis_value();
+        let namespace_key = get_namespace_redis_key(&api_id.namespace);
 
-        let (definition_delete, _): (u32, ()) = self
+        let definition_id_value = self
+            .pool
+            .serialize(&api_id.to_string())
+            .map_err(|e| e.to_string())?;
+
+        let _ = self
+            .pool
+            .with("persistence", "delete_project_definition")
+            .srem(namespace_key, definition_id_value)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let definition_delete: u32 = self
             .pool
             .with("persistence", "delete_definition")
-            .transaction({
-                move |transaction| async move {
-                    transaction.del(definition_key).await?;
-                    transaction
-                        .srem(all_definitions_key, vec![definition_value])
-                        .await?;
-
-                    Ok(transaction)
-                }
-            })
+            .del(definition_key)
             .await
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+            .map_err(|e| e.to_string())?;
 
         Ok(definition_delete > 0)
     }
@@ -275,93 +258,81 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
         &self,
         namespace: &Namespace,
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
-        let all_apis: Vec<ApiDefinitionKey> = self.get_all_keys().await?;
+        info!("Get all definitions in the namespace: {}", namespace);
 
-        let api_definitions = self.get_all_api_definitions(all_apis).await?;
+        let namespace_key = get_namespace_redis_key(&namespace);
 
-        Ok(api_definitions)
-    }
-
-    async fn get_all_versions(
-        &self,
-        api_id: &ApiDefinitionId,
-        namespace: &Namespace,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
-        let api_versions: Vec<ApiDefinitionKey> = self
-            .get_all_keys()
-            .await?
-            .into_iter()
-            .filter(|api| api.id == *api_id)
-            .collect();
-
-        let api_definitions = self.get_all_api_definitions(api_versions).await?;
-
-        Ok(api_definitions)
-    }
-}
-
-impl<Namespace> RedisApiRegistry {
-    async fn get_all_api_definitions(
-        &self,
-        keys: Vec<ApiDefinitionKey<Namespace>>,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
-        let keys = keys
-            .into_iter()
-            .map(|api_id| api_id.get_api_definition_redis_key())
-            .collect::<Vec<_>>();
-
-        let result: Vec<Option<Bytes>> = self
+        let project_ids: Vec<Bytes> = self
             .pool
-            .with("persistence", "mget_all_definitions")
-            .mget(keys)
+            .with("persistence", "get_project_definition_ids")
+            .smembers(&namespace_key)
             .await
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+            .map_err(|e| e.to_string())?;
 
-        let definitions = result
-            .into_iter()
-            .flatten()
-            .map(|value| {
-                self.pool
+        let mut api_ids = Vec::new();
+
+        for api_id_value in project_ids {
+            let api_id: Result<String, Box<dyn Error>> = self
+                .pool
+                .deserialize(&api_id_value)
+                .map_err(|e| e.to_string().into());
+
+            api_ids.push(ApiDefinitionId(api_id?));
+        }
+
+        let mut definitions = Vec::new();
+
+        for api_id in api_ids {
+            let key = get_api_definition_redis_key(&namespace, &api_id);
+
+            let value: Option<Bytes> = self
+                .pool
+                .with("persistence", "get_definition")
+                .get(&key)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if let Some(value) = value {
+                let definition: Result<ApiDefinition, Box<dyn Error>> = self
+                    .pool
                     .deserialize(&value)
-                    .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))
-            })
-            .collect::<Result<Vec<ApiDefinition>, ApiRegistrationRepoError>>()?;
+                    .map_err(|e| e.to_string().into());
+                definitions.push(definition?);
+            }
+        }
 
         Ok(definitions)
-    }
-
-    async fn get_all_keys(&self) -> Result<Vec<ApiDefinitionKey>, ApiRegistrationRepoError<Namespace>> {
-        let all_apis_set_key = ApiDefinitionKey::get_all_apis_set_redis_key();
-        let result: Vec<String> = self
-            .pool
-            .with("persistence", "get_all_definitions")
-            .smembers(all_apis_set_key)
-            .await
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
-
-        let keys = result
-            .into_iter()
-            .filter_map(|definition_string| {
-                ApiDefinitionKey::try_from(definition_string.as_str()).ok()
-            })
-            .collect();
-
-        Ok(keys)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Formatter;
     use super::*;
     use crate::auth::AuthServiceNoop;
     use golem_common::config::RedisConfig;
 
     use crate::register::{
-        ApiDefinitionKey, InMemoryRegistry, RedisApiRegistry, RegisterApiDefinition,
+        ApiDefinitionKey, InMemoryRegistry, RedisApiRegistry, RegisterApiDefinitionRepo,
     };
 
+    #[derive(Clone)]
+    struct CommonNamespace(String);
+
+    impl CommonNamespace {
+        pub fn default() -> CommonNamespace {
+            CommonNamespace("common".to_string())
+        }
+    }
+
+    impl Display for CommonNamespace {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
     fn get_simple_api_definition_example(
-        id: &ApiDefinitionKey,
+        id: &ApiDefinitionKey<CommonNamespace>,
         path_pattern: &str,
         worker_id: &str,
     ) -> ApiDefinition {
@@ -391,8 +362,9 @@ mod tests {
 
         let id = ApiDefinitionId("api1".to_string());
         let version = Version("0.0.1".to_string());
+        let namespace = CommonNamespace::default();
 
-        let api_id1 = ApiDefinitionKey { id, version };
+        let api_id1 = ApiDefinitionKey { namespace,  id, version };
 
         let api_definition1 = get_simple_api_definition_example(
             &api_id1,
@@ -402,7 +374,9 @@ mod tests {
 
         let id2 = ApiDefinitionId("api2".to_string());
         let version = Version("0.0.1".to_string());
-        let api_id2 = ApiDefinitionKey { id: id2, version };
+        let namespace = CommonNamespace::default();
+
+        let api_id2 = ApiDefinitionKey { namespace, id: id2, version };
 
         let api_definition2 = get_simple_api_definition_example(
             &api_id2,
@@ -414,23 +388,23 @@ mod tests {
 
         registry.register(&api_definition2, &()).await.unwrap();
 
-        let api_definition1_result1 = registry.get(&api_id1, &()).await.unwrap_or(None);
+        let api_definition1_result1 = registry.get(&api_id1).await.unwrap_or(None);
 
-        let api_definition2_result1 = registry.get(&api_id2, &()).await.unwrap_or(None);
+        let api_definition2_result1 = registry.get(&api_id2).await.unwrap_or(None);
 
-        let api_definition_result2 = registry.get_all(&()).await.unwrap_or(vec![]);
+        let api_definition_result2 = registry.get_all(&namespace).await.unwrap_or(vec![]);
 
-        let delete1_result = registry.delete(&api_id1, &()).await.unwrap_or(false);
+        let delete1_result = registry.delete(&api_id1).await.unwrap_or(false);
 
-        let api_definition1_result3 = registry.get(&api_id1, &()).await.unwrap_or(None);
+        let api_definition1_result3 = registry.get(&api_id1).await.unwrap_or(None);
 
-        let api_definition_result3 = registry.get_all(&()).await.unwrap_or(vec![]);
+        let api_definition_result3 = registry.get_all(&namespace).await.unwrap_or(vec![]);
 
-        let delete2_result = registry.delete(&api_id2, &()).await.unwrap_or(false);
+        let delete2_result = registry.delete(&api_id2).await.unwrap_or(false);
 
-        let api_definition2_result3 = registry.get(&api_id2, &()).await.unwrap_or(None);
+        let api_definition2_result3 = registry.get(&api_id2).await.unwrap_or(None);
 
-        let api_definition_result4 = registry.get_all(&()).await.unwrap_or(vec![]);
+        let api_definition_result4 = registry.get_all(&namespace).await.unwrap_or(vec![]);
 
         assert!(api_definition1_result1.is_some());
         assert!(!api_definition_result2.is_empty());
@@ -456,13 +430,15 @@ mod tests {
 
         let auth_context = AuthServiceNoop {};
 
-        let registry = RedisApiRegistry::new(&config, Arc::new(auth_context))
+        let registry = RedisApiRegistry::new(&config)
             .await
             .unwrap();
 
         let id1 = ApiDefinitionId("api1".to_string());
         let version = Version("0.0.1".to_string());
-        let api_id1 = ApiDefinitionKey { id: id1, version };
+        let namespace = CommonNamespace::default();
+
+        let api_id1 = ApiDefinitionKey { namespace, id: id1, version };
 
         let api_definition1 = get_simple_api_definition_example(
             &api_id1,
@@ -472,7 +448,9 @@ mod tests {
 
         let id2 = ApiDefinitionId("api2".to_string());
         let version = Version("0.0.1".to_string());
-        let api_id2 = ApiDefinitionKey { id: id2, version };
+        let namespace = CommonNamespace::default();
+
+        let api_id2 = ApiDefinitionKey { namespace, id: id2, version };
 
         let api_definition2 = get_simple_api_definition_example(
             &api_id2,
@@ -480,27 +458,27 @@ mod tests {
             "cart-${path.cart-id}",
         );
 
-        registry.register(&api_definition1, &()).await.unwrap();
+        registry.register(&api_definition1, &api_id1).await.unwrap();
 
         registry.register(&api_definition2, &()).await.unwrap();
 
-        let api_definition1_result1 = registry.get(&api_id1, &()).await.unwrap_or(None);
+        let api_definition1_result1 = registry.get(&api_id1).await.unwrap_or(None);
 
-        let api_definition2_result1 = registry.get(&api_id2, &()).await.unwrap_or(None);
+        let api_definition2_result1 = registry.get(&api_id2).await.unwrap_or(None);
 
-        let api_definition_result2 = registry.get_all(&()).await.unwrap_or(vec![]);
+        let api_definition_result2 = registry.get_all(&namespace).await.unwrap_or(vec![]);
 
-        let delete1_result = registry.delete(&api_id1, &()).await.unwrap_or(false);
+        let delete1_result = registry.delete(&api_id1).await.unwrap_or(false);
 
-        let api_definition1_result3 = registry.get(&api_id1, &()).await.unwrap_or(None);
+        let api_definition1_result3 = registry.get(&api_id1).await.unwrap_or(None);
 
-        let api_definition_result3 = registry.get_all(&()).await.unwrap_or(vec![]);
+        let api_definition_result3 = registry.get_all(&namespace).await.unwrap_or(vec![]);
 
-        let delete2_result = registry.delete(&api_id2, &()).await.unwrap_or(false);
+        let delete2_result = registry.delete(&api_id2).await.unwrap_or(false);
 
-        let api_definition2_result3 = registry.get(&api_id2, &()).await.unwrap_or(None);
+        let api_definition2_result3 = registry.get(&api_id2).await.unwrap_or(None);
 
-        let api_definition_result4 = registry.get_all(&()).await.unwrap_or(vec![]);
+        let api_definition_result4 = registry.get_all(&namespace).await.unwrap_or(vec![]);
 
         assert!(api_definition1_result1.is_some());
         assert!(!api_definition_result2.is_empty());
@@ -519,11 +497,13 @@ mod tests {
     pub fn test_get_api_definition_redis_key() {
         let id = ApiDefinitionId("api1".to_string());
         let version = Version("0.0.1".to_string());
-        let api_id = ApiDefinitionKey { id, version };
+        let namespace = CommonNamespace::default();
+
+        let api_id = ApiDefinitionKey { namespace, id, version };
 
         assert_eq!(
             api_id.get_api_definition_redis_key(),
-            "apidefinition:definition:api1:0.0.1"
+            "apidefinition:definition:common:api1"
         );
     }
 }
