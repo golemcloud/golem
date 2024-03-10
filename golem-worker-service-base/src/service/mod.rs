@@ -1,20 +1,21 @@
 pub mod template;
 pub mod worker;
 
+use crate::api_definition::ResponseMapping;
 use crate::app_config::WorkerServiceConfig;
 use crate::register::{InMemoryRegistry, RedisApiRegistry, RegisterApiDefinition};
-use crate::worker_request_to_response::{WorkerRequestToResponse};
-use std::sync::Arc;
-use poem::Response;
-use tracing::error;
-use crate::api_definition::ResponseMapping;
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
+use crate::worker_request_to_response::WorkerRequestToResponse;
+use poem::Response;
+use std::sync::Arc;
+use tracing::error;
 
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
     pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
-    pub worker_to_http_service: Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
+    pub worker_to_http_service:
+        Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
 }
 
@@ -55,13 +56,15 @@ impl Services {
                 format!("RedisApiRegistry - init error: {}", e)
             })?);
 
-        let worker_to_http_service: Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send> = Arc::new(
-            WorkerRequestToHttpResponse::new(worker::WorkerServiceDefault::new(
+        let worker_to_http_service: Arc<
+            dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send,
+        > = Arc::new(WorkerRequestToHttpResponse::new(
+            worker::WorkerServiceDefault::new(
                 worker_executor_grpc_clients.clone(),
                 template_service.clone(),
                 routing_table_service.clone(),
-            )),
-        );
+            ),
+        ));
 
         Ok(Services {
             worker_service,
@@ -89,13 +92,15 @@ impl Services {
         let definition_service: Arc<dyn RegisterApiDefinition + Sync + Send> =
             Arc::new(InMemoryRegistry::default());
 
-        let worker_to_http_service: Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send> = Arc::new(
-            WorkerRequestToHttpResponse::new(worker::WorkerServiceDefault::new(
+        let worker_to_http_service: Arc<
+            dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send,
+        > = Arc::new(WorkerRequestToHttpResponse::new(
+            worker::WorkerServiceDefault::new(
                 worker_executor_grpc_clients.clone(),
                 template_service.clone(),
                 routing_table_service.clone(),
-            )),
-        );
+            ),
+        ));
 
         Services {
             worker_service,

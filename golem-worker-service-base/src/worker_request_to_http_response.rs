@@ -33,13 +33,12 @@ impl WorkerRequestToResponse<ResponseMapping, poem::Response> for WorkerRequestT
         &self,
         worker_request_params: WorkerRequest,
         response_mapping: &Option<ResponseMapping>,
-        resolved_variables: &ResolvedVariables
+        resolved_variables: &ResolvedVariables,
     ) -> poem::Response {
         match execute(self, worker_request_params.clone()).await {
-            Ok(worker_response) => worker_response.to_http_response(
-                response_mapping,
-                &resolved_variables,
-            ),
+            Ok(worker_response) => {
+                worker_response.to_http_response(response_mapping, &resolved_variables)
+            }
             Err(e) => poem::Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::from_string(format!(
@@ -110,14 +109,12 @@ impl WorkerResponse {
         if let Some(mapping) = response_mapping {
             match &self.to_intermediate_http_response(mapping, resolved_variables_from_request) {
                 Ok(intermediate_response) => intermediate_response.to_http_response(),
-                Err(e) => {
-                    poem::Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(Body::from_string(format!(
-                            "Error when  converting worker response to http response. Error: {}",
-                            e
-                        )))
-                }
+                Err(e) => poem::Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from_string(format!(
+                        "Error when  converting worker response to http response. Error: {}",
+                        e
+                    ))),
             }
         } else {
             let body: Body = Body::from_json(&self.result).unwrap();
@@ -176,14 +173,12 @@ impl IntermediateHttpResponse {
                 let body: Body = Body::from_json(body.clone()).unwrap();
                 poem::Response::from_parts(parts, body)
             }
-            Err(err) => {
-                poem::Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from_string(format!(
-                        "Unable to resolve valid headers. Error: {}",
-                        err
-                    )))
-            }
+            Err(err) => poem::Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from_string(format!(
+                    "Unable to resolve valid headers. Error: {}",
+                    err
+                ))),
         }
     }
 }
@@ -237,7 +232,7 @@ impl WorkerRequestToResponse<ResponseMapping, poem::Response> for NoOpWorkerRequ
         &self,
         worker_request_params: WorkerRequest,
         response_mapping: &Option<ResponseMapping>,
-        resolved_variables: &ResolvedVariables // resolved variables from the input request can also be useful to form the response
+        resolved_variables: &ResolvedVariables, // resolved variables from the input request can also be useful to form the response
     ) -> poem::Response {
         let worker_name = worker_request_params.worker_id;
         let template_id = worker_request_params.template;
@@ -271,10 +266,7 @@ impl WorkerRequestToResponse<ResponseMapping, poem::Response> for NoOpWorkerRequ
             result: sample_json_data,
         };
 
-        worker_response.to_http_response(
-            response_mapping,
-            resolved_variables,
-        )
+        worker_response.to_http_response(response_mapping, resolved_variables)
     }
 }
 

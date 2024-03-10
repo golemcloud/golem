@@ -18,13 +18,16 @@ use crate::worker_request_to_response::WorkerRequestToResponse;
 // Executes custom request with the help of worker_request_executor and definition_service
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
-    worker_to_http_response_service: Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
+    worker_to_http_response_service:
+        Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
     api_definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
     pub fn new(
-        worker_to_http_response_service: Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
+        worker_to_http_response_service: Arc<
+            dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send,
+        >,
         api_definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
     ) -> Self {
         Self {
@@ -126,8 +129,7 @@ impl CustomHttpRequestApi {
         match api_request.resolve(&api_definition) {
             Some(resolved_route) => {
                 let resolved_worker_request =
-                    match WorkerRequest::from_resolved_route(resolved_route.clone())
-                    {
+                    match WorkerRequest::from_resolved_route(resolved_route.clone()) {
                         Ok(golem_worker_request) => golem_worker_request,
                         Err(e) => {
                             error!(

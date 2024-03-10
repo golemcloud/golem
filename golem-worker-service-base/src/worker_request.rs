@@ -16,9 +16,7 @@ pub struct WorkerRequest {
 
 impl WorkerRequest {
     // A worker-request can be formed from a route definition along with variables that were resolved using incoming http request
-    pub fn from_resolved_route(
-        resolved_route: ResolvedRoute,
-    ) -> Result<WorkerRequest, String> {
+    pub fn from_resolved_route(resolved_route: ResolvedRoute) -> Result<WorkerRequest, String> {
         let worker_id: Value = resolved_route
             .route_definition
             .binding
