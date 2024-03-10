@@ -26,7 +26,7 @@ pub trait AuthService<Ctx> {
     ) -> Result<bool, Box<dyn Error>>;
 }
 
-pub struct AuthServiceNoop{}
+pub struct AuthServiceNoop {}
 
 #[async_trait]
 impl AuthService<()> for AuthServiceNoop {

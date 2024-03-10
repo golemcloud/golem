@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::error::Error;
 use std::fmt::Display;
 use std::sync::{Arc, Mutex};
 
@@ -10,49 +9,105 @@ use bytes::Bytes;
 use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
 use tracing::{debug, info};
-use crate::service::register_definition::ApiDefinitionKey;
 
+// A namespace here can be example: (account, project) etc.
+// Ideally a repo service and its implementation with a different service impl that takes care of
+// validations, authorisations etc is the right approach. However we are keeping it simple for now.
 #[async_trait]
-pub trait RegisterApiDefinitionRepo<Namespace> {
+pub trait RegisterApiDefinition<Namespace> {
     async fn register(
         &self,
         definition: &ApiDefinition,
-        key: &ApiDefinitionKey<Namespace>,
-    ) -> Result<(), ApiRegistrationRepoError<Namespace>>;
+        api_definition_key: &ApiDefinitionKey<Namespace>,
+    ) -> Result<(), ApiRegistrationError<Namespace>>;
 
     async fn get(
         &self,
         api_definition_key: &ApiDefinitionKey<Namespace>,
-    ) -> Result<Option<ApiDefinition>, ApiRegistrationRepoError<Namespace>>;
+        namespace: &Namespace,
+    ) -> Result<Option<ApiDefinition>, ApiRegistrationError<Namespace>>;
 
     async fn delete(
         &self,
         api_definition_key: &ApiDefinitionKey<Namespace>,
-    ) -> Result<bool, ApiRegistrationRepoError<Namespace>>;
+        namespace: &Namespace,
+    ) -> Result<bool, ApiRegistrationError<Namespace>>;
 
     async fn get_all(
         &self,
         namespace: &Namespace,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>>;
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError<Namespace>>;
 
     async fn get_all_versions(
         &self,
         api_id: &ApiDefinitionId,
         namespace: &Namespace,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>>;
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError<Namespace>>;
+}
+
+// An ApiDefinitionKey is just the original ApiDefinitionId with additional information of version and a possibility of namespace.
+// A namespace here can be for example: account, project, production, dev or a composite value, or infact as simple
+// as a constant string or unit.
+// A namespace is not pre-tied to any other parts of original ApiDefinitionId to keep the ApiDefinition part simple, reusable.
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct ApiDefinitionKey<Namespace> {
+    pub namespace: Namespace,
+    pub id: ApiDefinitionId,
+    pub version: Version,
+}
+
+impl<Namespace: Display> ApiDefinitionKey<Namespace> {
+    /// Specific Api Definition Key.
+    fn get_api_definition_redis_key(&self) -> String {
+        format!("{}:definition:{}:{}", self.namespace, self.id, self.version)
+    }
+
+    /// Value for the [`Self::get_all_apis_set_redis_key`] set.
+    fn make_all_apis_redis_value(&self) -> String {
+        format!("{}:{}", self.id.0, self.version.0)
+    }
+
+    /// Set containing all Api Definition Keys.
+    /// Values should only be added by [`Self::make_all_apis_redis_value`].
+    fn get_all_apis_set_redis_key() -> String {
+        format!("{API_DEFINITION_REDIS_NAMESPACE}:definition:all_api_definitions")
+    }
+}
+
+impl<Namespace: Display> Display for ApiDefinitionKey<Namespace> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}:{}", self.namespace, self.id, self.version.0)
+    }
+}
+
+impl<Namespace: TryFrom<&str>> TryFrom<&str> for ApiDefinitionKey<Namespace> {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let parts: Vec<&str> = value.split(':').collect();
+        if parts.len() != 3 {
+            Err(format!("Invalid ApiDefinitionKey string: {}", value))
+        } else {
+            Ok(ApiDefinitionKey {
+                namespace: Namespace::try_from(parts[0]),
+                id: ApiDefinitionId(parts[1].to_string()),
+                version: Version(parts[2].to_string()),
+            })
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
-pub enum ApiRegistrationRepoError<Namespace> {
+pub enum ApiRegistrationError<Namespace> {
     AlreadyExists(ApiDefinitionKey<Namespace>),
     InternalError(String),
 }
 
-impl<Namespace: Display> Display for ApiRegistrationRepoError<Namespace> {
+impl<Namespace: Display> Display for ApiRegistrationError<Namespace> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ApiRegistrationRepoError::InternalError(msg) => write!(f, "InternalError: {}", msg),
-            ApiRegistrationRepoError::AlreadyExists(api_definition_key) => {
+            ApiRegistrationError::InternalError(msg) => write!(f, "InternalError: {}", msg),
+            ApiRegistrationError::AlreadyExists(api_definition_key) => {
                 write!(
                     f,
                     "AlreadyExists: ApiDefinition with id: {} and version:{} already exists in the namespace {}",
@@ -76,40 +131,43 @@ impl<Namespace> Default for InMemoryRegistry<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: Clone> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace> {
+impl RegisterApiDefinition<()> for InMemoryRegistry {
     async fn register(
         &self,
         definition: &ApiDefinition,
-        key: &ApiDefinitionKey<Namespace>,
-    ) -> Result<(), ApiRegistrationRepoError<Namespace>> {
+        _namespace: &(),
+    ) -> Result<(), ApiRegistrationError> {
         let mut registry = self.registry.lock().unwrap();
+        let key: ApiDefinitionKey = ApiDefinitionKey::from(definition);
 
         if let std::collections::hash_map::Entry::Vacant(e) = registry.entry(key.clone()) {
             e.insert(definition.clone());
             Ok(())
         } else {
-            Err(ApiRegistrationRepoError::AlreadyExists(key.clone()))
+            Err(ApiRegistrationError::AlreadyExists(key.clone()))
         }
     }
 
     async fn get(
         &self,
-        api_id: &ApiDefinitionKey<Namespace>,
-    ) -> Result<Option<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
+        api_id: &ApiDefinitionKey,
+        _namespace: &(),
+    ) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
         let registry = self.registry.lock().unwrap();
         Ok(registry.get(api_id).cloned())
     }
 
     async fn delete(
         &self,
-        api_id: &ApiDefinitionKey<Namespace>,
-    ) -> Result<bool, ApiRegistrationRepoError<Namespace>> {
+        api_id: &ApiDefinitionKey,
+        _namespace: &(),
+    ) -> Result<bool, ApiRegistrationError> {
         let mut registry = self.registry.lock().unwrap();
         let result = registry.remove(api_id);
         Ok(result.is_some())
     }
 
-    async fn get_all(&self, _namespace: &Namespace) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
+    async fn get_all(&self, _namespace: &()) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         let registry = self.registry.lock().unwrap();
 
         let result: Vec<ApiDefinition> = registry.values().cloned().collect();
@@ -120,8 +178,8 @@ impl<Namespace: Clone> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry
     async fn get_all_versions(
         &self,
         api_id: &ApiDefinitionId,
-        _namespace: &Namespace
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
+        _namespace: &(),
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         let registry = self.registry.lock().unwrap();
 
         let result: Vec<ApiDefinition> = registry
@@ -134,108 +192,100 @@ impl<Namespace: Clone> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry
     }
 }
 
-pub struct RedisApiRegistry {
+pub struct RedisApiRegistry<Namespace> {
     pool: RedisPool,
+    auth_service: Arc<dyn AuthService<Namespace> + Sync + Send>,
 }
 
-impl<Namespace> RedisApiRegistry {
+impl<Namespace> RedisApiRegistry<Namespace> {
     pub async fn new(
         config: &RedisConfig,
-    ) -> Result<RedisApiRegistry, ApiRegistrationRepoError<Namespace>> {
+        auth_service: Arc<dyn AuthService<Namespace> + Sync + Send>,
+    ) -> Result<RedisApiRegistry<Namespace>, ApiRegistrationError> {
         let pool_result = RedisPool::configured(config)
             .await
-            .map_err(|err| ApiRegistrationRepoError::InternalError(err.to_string()))?;
+            .map_err(|err| ApiRegistrationError::InternalError(err.to_string()))?;
 
         Ok(RedisApiRegistry {
             pool: pool_result,
+            auth_service,
         })
     }
 }
 
-fn get_api_definition_redis_key<Namespace: Display>(
-    namespace: &Namespace,
-    api_id: &ApiDefinitionId,
-) -> String {
-    format!(
-        "{}:definition:{}:{}",
-        "apidefinition", namespace, api_id
-    )
-}
-
-fn get_namespace_redis_key<Namespace: Display>(namespace: &Namespace) -> String {
-    format!(
-        "{}:definition:{}",
-        "apidefinition", namespace
-    )
-}
-
-
 #[async_trait]
-impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegistry {
+impl<Namespace> RegisterApiDefinition<Namespace> for RedisApiRegistry<Namespace> {
     async fn register(
         &self,
         definition: &ApiDefinition,
-        key: &ApiDefinitionKey<Namespace>,
-    ) -> Result<(), ApiRegistrationRepoError<Namespace>> {
-        debug!(
-            "Register API definition {} under namespace: {}",
-            key.id, key.namespace
-        );
+        namespace: &Namespace,
+    ) -> Result<(), ApiRegistrationError> {
+        debug!("Register definition: id: {}", definition.id);
+        let key: ApiDefinitionKey = ApiDefinitionKey::from(definition);
+        let redis_key = key.get_api_definition_redis_key();
 
-        // TODO: Bring back version
-        let definition_key = get_api_definition_redis_key(
-            &key.namespace,
-            &key.id,
-        );
-
-        let definition_value = self.pool.serialize(definition).map_err(|e| e.to_string())?;
-
-        self.pool
-            .with("persistence", "register_definition")
-            .set(definition_key, definition_value, None, None, false)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let project_key = get_namespace_redis_key(
-            &key.namespace,
-        );
-
-        // TODO; bring back the transaction part
-        let definition_id_value = self
+        let value: u32 = self
             .pool
-            .serialize(&definition.id.to_string())
-            .map_err(|e| e.to_string())?;
-
-        self.pool
-            .with("persistence", "register_project_definition")
-            .sadd(project_key, definition_id_value)
+            .with("persistence", "get_definition")
+            .exists(redis_key.clone())
             .await
-            .map_err(|e| e.to_string().into())
+            .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+
+        // if key already exists return conflict error
+        if value > 0 {
+            Err(ApiRegistrationError::AlreadyExists(key))
+        } else {
+            let definition_value = self
+                .pool
+                .serialize(definition)
+                .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+
+            self.pool
+                .with("persistence", "register_definition")
+                .transaction({
+                    move |transaction| async move {
+                        let all_apis_value = key.make_all_apis_redis_value();
+
+                        transaction
+                            .set(redis_key, definition_value, None, None, false)
+                            .await?;
+                        transaction
+                            .sadd(
+                                ApiDefinitionKey::get_all_apis_set_redis_key(),
+                                vec![all_apis_value],
+                            )
+                            .await?;
+
+                        Ok(transaction)
+                    }
+                })
+                .await
+                .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
+
+            Ok(())
+        }
     }
 
     async fn get(
         &self,
-        api_id: &ApiDefinitionKey<Namespace>,
-    ) -> Result<Option<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
-        info!(
-            "Get from namespace: {}, id: {}",
-            api_id.namespace, api_id.id
-        );
-        let key = get_api_definition_redis_key(&api_id.namespace, api_id);
+        api_id: &ApiDefinitionKey,
+        namespace: &Namespace,
+    ) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
+        info!("Get definition: id: {}", api_id);
+        let key = api_id.get_api_definition_redis_key();
         let value: Option<Bytes> = self
             .pool
             .with("persistence", "get_definition")
             .get(key)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
         match value {
             Some(value) => {
-                let value: Result<ApiDefinition, ApiRegistrationRepoError<Namespace>> = self
+                let value: Result<ApiDefinition, ApiRegistrationError> = self
                     .pool
                     .deserialize(&value)
-                    .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()));
-
+                    .map_err(|e| ApiRegistrationError::InternalError(e.to_string()));
                 value.map(Some)
             }
             None => Ok(None),
@@ -244,8 +294,9 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
 
     async fn delete(
         &self,
-        api_id: &ApiDefinitionKey<Namespace>,
-    ) -> Result<bool, ApiRegistrationRepoError<Namespace>> {
+        api_id: &ApiDefinitionKey,
+        namespace: &Namespace,
+    ) -> Result<bool, ApiRegistrationError> {
         debug!("Delete definition: id: {}", api_id);
         let definition_key = api_id.get_api_definition_redis_key();
         let all_definitions_key = ApiDefinitionKey::get_all_apis_set_redis_key();
@@ -266,7 +317,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
                 }
             })
             .await
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+            .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
         Ok(definition_delete > 0)
     }
@@ -274,7 +325,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
     async fn get_all(
         &self,
         namespace: &Namespace,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         let all_apis: Vec<ApiDefinitionKey> = self.get_all_keys().await?;
 
         let api_definitions = self.get_all_api_definitions(all_apis).await?;
@@ -286,7 +337,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
         &self,
         api_id: &ApiDefinitionId,
         namespace: &Namespace,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         let api_versions: Vec<ApiDefinitionKey> = self
             .get_all_keys()
             .await?
@@ -300,11 +351,11 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
     }
 }
 
-impl<Namespace> RedisApiRegistry {
+impl<Namespace> RedisApiRegistry<Namespace> {
     async fn get_all_api_definitions(
         &self,
-        keys: Vec<ApiDefinitionKey<Namespace>>,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
+        keys: Vec<ApiDefinitionKey>,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         let keys = keys
             .into_iter()
             .map(|api_id| api_id.get_api_definition_redis_key())
@@ -315,7 +366,7 @@ impl<Namespace> RedisApiRegistry {
             .with("persistence", "mget_all_definitions")
             .mget(keys)
             .await
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+            .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
         let definitions = result
             .into_iter()
@@ -323,21 +374,21 @@ impl<Namespace> RedisApiRegistry {
             .map(|value| {
                 self.pool
                     .deserialize(&value)
-                    .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))
+                    .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))
             })
-            .collect::<Result<Vec<ApiDefinition>, ApiRegistrationRepoError>>()?;
+            .collect::<Result<Vec<ApiDefinition>, ApiRegistrationError>>()?;
 
         Ok(definitions)
     }
 
-    async fn get_all_keys(&self) -> Result<Vec<ApiDefinitionKey>, ApiRegistrationRepoError<Namespace>> {
+    async fn get_all_keys(&self) -> Result<Vec<ApiDefinitionKey>, ApiRegistrationError> {
         let all_apis_set_key = ApiDefinitionKey::get_all_apis_set_redis_key();
         let result: Vec<String> = self
             .pool
             .with("persistence", "get_all_definitions")
             .smembers(all_apis_set_key)
             .await
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+            .map_err(|e| ApiRegistrationError::InternalError(e.to_string()))?;
 
         let keys = result
             .into_iter()

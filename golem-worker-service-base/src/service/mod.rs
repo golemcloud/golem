@@ -1,6 +1,8 @@
 pub mod template;
 pub mod worker;
 
+pub mod register_definition;
+
 use crate::api_definition::ResponseMapping;
 use crate::app_config::WorkerServiceConfig;
 use crate::register::{InMemoryRegistry, RedisApiRegistry, RegisterApiDefinition};

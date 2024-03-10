@@ -12,11 +12,11 @@ use tracing::{error, info};
 use crate::api::common::ApiEndpointError;
 use crate::api_definition;
 use crate::api_definition::{ApiDefinitionId, MethodPattern, Version};
+use crate::auth::AuthService;
 use crate::expr::Expr;
 use crate::oas_worker_bridge::*;
 use crate::register::{ApiDefinitionKey, ApiRegistrationError, RegisterApiDefinition};
 use golem_service_base::api_tags::ApiTags;
-use crate::auth::AuthService;
 
 pub struct RegisterApiDefinitionApi {
     pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
