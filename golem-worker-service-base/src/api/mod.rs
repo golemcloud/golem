@@ -1,6 +1,6 @@
 pub mod register_api_definition_api;
 pub mod common;
-pub mod custom_request_endpoint;
+pub mod custom_http_request_api;
 pub mod healthcheck;
 pub mod worker;
 pub mod worker_connect;
@@ -41,7 +41,7 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
 }
 
 pub fn custom_request_route(services: Services) -> Route {
-    let custom_request_executor = custom_request_endpoint::CustomRequestApi::new(
+    let custom_request_executor = custom_http_request_api::CustomHttpRequestApi::new(
         services.worker_to_http_service,
         services.definition_service,
     );

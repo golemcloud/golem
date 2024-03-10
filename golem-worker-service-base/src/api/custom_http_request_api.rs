@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::api_definition::{ApiDefinitionId, Version};
+use crate::api_definition::{ApiDefinitionId, ResponseMapping, Version};
 use async_trait::async_trait;
 use http::HeaderMap;
 use hyper::header::HOST;
@@ -12,19 +12,19 @@ use crate::api_request_route_resolver::RouteResolver;
 use crate::http_request::{ApiInputPath, InputHttpRequest};
 use crate::oas_worker_bridge::{GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION};
 use crate::register::{ApiDefinitionKey, RegisterApiDefinition};
-use crate::worker_request::ResolvedWorkerRequest;
-use crate::worker_request_to_http::WorkerToResponse;
+use crate::worker_request::WorkerRequest;
+use crate::worker_request_to_response::WorkerRequestToResponse;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 #[derive(Clone)]
-pub struct CustomRequestApi {
-    worker_to_http_response_service: Arc<dyn WorkerToResponse + Sync + Send>,
+pub struct CustomHttpRequestApi {
+    worker_to_http_response_service: Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
     api_definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
 }
 
-impl CustomRequestApi {
+impl CustomHttpRequestApi {
     pub fn new(
-        worker_to_http_response_service: Arc<dyn WorkerToResponse + Sync + Send>,
+        worker_to_http_response_service: Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
         api_definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
     ) -> Self {
         Self {
@@ -125,8 +125,8 @@ impl CustomRequestApi {
 
         match api_request.resolve(&api_definition) {
             Some(resolved_route) => {
-                let worker_request_with_resolved_route =
-                    match ResolvedWorkerRequest::from_resolved_route(resolved_route.clone())
+                let resolved_worker_request =
+                    match WorkerRequest::from_resolved_route(resolved_route.clone())
                     {
                         Ok(golem_worker_request) => golem_worker_request,
                         Err(e) => {
@@ -145,8 +145,9 @@ impl CustomRequestApi {
                 // Execute the request using a executor
                 self.worker_to_http_response_service
                     .execute(
-                        worker_request_with_resolved_route.clone(),
+                        resolved_worker_request.clone(),
                         &resolved_route.route_definition.binding.response,
+                        &resolved_route.resolved_variables,
                     )
                     .await
             }
@@ -179,7 +180,7 @@ fn get_header_value(headers: &HeaderMap, header_name: &str) -> Result<String, St
 }
 
 #[async_trait]
-impl Endpoint for CustomRequestApi {
+impl Endpoint for CustomHttpRequestApi {
     type Output = Response;
 
     async fn call(&self, req: Request) -> poem::Result<Self::Output> {

@@ -14,38 +14,26 @@ use serde_json::{json, Value};
 use tracing::info;
 
 use crate::service::worker::{WorkerService, WorkerServiceDefault};
-use crate::worker_request::ResolvedWorkerRequest;
+use crate::worker_request::WorkerRequest;
+use crate::worker_request_to_response::WorkerRequestToResponse;
 
-// A generic interface that can convert a worker request to a any type of response
-// give some variable values and a mapping spec mainly consisting of expressions. Example: In the case of http response,
-// a response header can be ${worker.response.user} expression. We call this response_mapping
-#[async_trait]
-pub trait WorkerToResponse<Mapper, Response> {
-    async fn execute(
-        &self,
-        resolved_worker_request: ResolvedWorkerRequest,
-        response_mapping: &Option<Mapper>,
-        resolved_variables: &ResolvedVariables // resolved variables from the input request can also be useful to form the response
-    ) -> Response;
-}
-
-pub struct WorkerToHttpResponseDefault {
+pub struct WorkerRequestToHttpResponse {
     pub worker_service: WorkerServiceDefault,
 }
 
-impl WorkerToHttpResponseDefault {
+impl WorkerRequestToHttpResponse {
     pub fn new(worker_service: WorkerServiceDefault) -> Self {
         Self { worker_service }
     }
 }
 
 #[async_trait]
-impl WorkerToResponse<ResponseMapping, poem::Response> for WorkerToHttpResponseDefault {
+impl WorkerRequestToResponse<ResponseMapping, poem::Response> for WorkerRequestToHttpResponse {
     async fn execute(
         &self,
-        worker_request_params: ResolvedWorkerRequest,
+        worker_request_params: WorkerRequest,
         response_mapping: &Option<ResponseMapping>,
-        resolved_variables: ResolvedVariables
+        resolved_variables: &ResolvedVariables
     ) -> poem::Response {
         match execute(self, worker_request_params.clone()).await {
             Ok(worker_response) => worker_response.to_http_response(
@@ -63,8 +51,8 @@ impl WorkerToResponse<ResponseMapping, poem::Response> for WorkerToHttpResponseD
 }
 
 async fn execute(
-    default_executor: &WorkerToHttpResponseDefault,
-    worker_request_params: ResolvedWorkerRequest,
+    default_executor: &WorkerRequestToHttpResponse,
+    worker_request_params: WorkerRequest,
 ) -> Result<WorkerResponse, Box<dyn Error>> {
     let worker_name = worker_request_params.worker_id;
 
@@ -244,10 +232,10 @@ impl ResolvedResponseHeaders {
 pub struct NoOpWorkerRequestExecutor {}
 
 #[async_trait]
-impl WorkerToResponse<ResponseMapping, poem::Response> for NoOpWorkerRequestExecutor {
+impl WorkerRequestToResponse<ResponseMapping, poem::Response> for NoOpWorkerRequestExecutor {
     async fn execute(
         &self,
-        worker_request_params: ResolvedWorkerRequest,
+        worker_request_params: WorkerRequest,
         response_mapping: &Option<ResponseMapping>,
         resolved_variables: &ResolvedVariables // resolved variables from the input request can also be useful to form the response
     ) -> poem::Response {

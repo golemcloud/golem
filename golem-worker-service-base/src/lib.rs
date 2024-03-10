@@ -14,7 +14,8 @@ pub mod service;
 pub mod tokeniser;
 pub mod value_typed;
 pub mod worker_request;
-pub mod worker_request_to_http;
+pub mod worker_request_to_http_response;
+pub mod worker_request_to_response;
 
 pub mod metrics;
 

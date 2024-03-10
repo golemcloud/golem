@@ -65,7 +65,7 @@ impl<'a> ApiInputPath<'a> {
 #[cfg(test)]
 mod tests {
     use crate::api_definition::ApiDefinition;
-    use crate::worker_request::ResolvedWorkerRequest;
+    use crate::worker_request::WorkerRequest;
 
     use crate::api_request_route_resolver::RouteResolver;
     use golem_common::model::TemplateId;
@@ -87,9 +87,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -120,13 +120,13 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let mut expected_map = serde_json::Map::new();
 
         expected_map.insert("x".to_string(), serde_json::Value::String("y".to_string()));
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -156,7 +156,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let mut expected_map = serde_json::Map::new();
 
@@ -165,7 +165,7 @@ mod tests {
             serde_json::Value::Number(serde_json::Number::from(1)),
         );
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -200,7 +200,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let mut expected_map = serde_json::Map::new();
 
@@ -209,7 +209,7 @@ mod tests {
             serde_json::Value::Number(serde_json::Number::from(1)),
         );
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -253,9 +253,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -306,7 +306,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let mut user_id_map = serde_json::Map::new();
 
@@ -322,7 +322,7 @@ mod tests {
             serde_json::Value::String("foo".to_string()),
         );
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -354,9 +354,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -393,9 +393,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -428,9 +428,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -461,9 +461,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -494,9 +494,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -532,9 +532,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -567,9 +567,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -621,9 +621,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -675,9 +675,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -728,9 +728,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -787,9 +787,9 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = ResolvedWorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
-        let expected = ResolvedWorkerRequest {
+        let expected = WorkerRequest {
             input_request_resolved_variables: resolved_route,
             template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<TemplateId>()
@@ -825,7 +825,7 @@ mod tests {
 
             let result = match resolved_route {
                 Some(resolved_route) => {
-                    ResolvedWorkerRequest::from_resolved_route(resolved_route)
+                    WorkerRequest::from_resolved_route(resolved_route)
                         .map_err(|err| err.to_string())
                 }
                 None => Err("not found".to_string()),
