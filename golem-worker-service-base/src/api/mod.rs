@@ -1,4 +1,4 @@
-pub mod api_definition_endpoints;
+pub mod register_api_definition_api;
 pub mod common;
 pub mod custom_request_endpoint;
 pub mod healthcheck;
@@ -16,7 +16,7 @@ use crate::service::Services;
 
 type ApiServices = (
     worker::WorkerApi,
-    api_definition_endpoints::RegisterApiDefinitionApi,
+    register_api_definition_api::RegisterApiDefinitionApi,
     healthcheck::HealthcheckApi,
 );
 
@@ -56,7 +56,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
                 template_service: services.template_service.clone(),
                 worker_service: services.worker_service.clone(),
             },
-            api_definition_endpoints::RegisterApiDefinitionApi::new(
+            register_api_definition_api::RegisterApiDefinitionApi::new(
                 services.definition_service.clone(),
             ),
             healthcheck::HealthcheckApi,

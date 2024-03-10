@@ -3,22 +3,23 @@ use serde_json::Value;
 
 use crate::api_request_route_resolver::ResolvedRoute;
 use crate::evaluator::{Evaluator, Primitive};
+use crate::resolved_variables::ResolvedVariables;
 
-// Every resolved route definition can be mapped to a worker request
+// Every input request can be resolved to a worker request,
+// along with the value of any variables that's associated with it.
 #[derive(PartialEq, Debug, Clone)]
-pub struct ResolvedRouteAsWorkerRequest {
-    pub resolved_route: ResolvedRoute,
+pub struct ResolvedWorkerRequest {
     pub template: TemplateId,
     pub worker_id: String,
     pub function: String,
     pub function_params: Value,
 }
 
-impl ResolvedRouteAsWorkerRequest {
+impl ResolvedWorkerRequest {
     // A worker-request can be formed from a route definition along with variables that were resolved using incoming http request
     pub fn from_resolved_route(
         resolved_route: ResolvedRoute,
-    ) -> Result<ResolvedRouteAsWorkerRequest, String> {
+    ) -> Result<ResolvedWorkerRequest, String> {
         let worker_id: Value = resolved_route
             .route_definition
             .binding
@@ -45,8 +46,8 @@ impl ResolvedRouteAsWorkerRequest {
             worker_id
         ))?;
 
-        Ok(ResolvedRouteAsWorkerRequest {
-            resolved_route: resolved_route.clone(),
+        Ok(ResolvedWorkerRequest {
+            input_request_resolved_variables: resolved_route.clone(),
             worker_id: worker_id_str.to_string(),
             template: resolved_route.route_definition.binding.template.clone(),
             function: function_name,

@@ -9,19 +9,23 @@ use async_trait::async_trait;
 use golem_common::model::CallingConvention;
 use golem_service_base::model::WorkerId;
 use http::{HeaderMap, StatusCode};
-use poem::{Body, Response, ResponseParts};
+use poem::{Body, ResponseParts};
 use serde_json::{json, Value};
 use tracing::info;
 
 use crate::service::worker::{WorkerService, WorkerServiceDefault};
-use crate::worker_request::ResolvedRouteAsWorkerRequest;
+use crate::worker_request::ResolvedWorkerRequest;
 
+// A generic interface that can convert a worker request to a any type of response
+// give some variable values and a mapping spec mainly consisting of expressions. Example: In the case of http response,
+// a response header can be ${worker.response.user} expression. We call this response_mapping
 #[async_trait]
-pub trait WorkerToHttpResponse {
+pub trait WorkerToResponse<Mapper, Response> {
     async fn execute(
         &self,
-        resolved_worker_request: ResolvedRouteAsWorkerRequest,
-        response_mapping: &Option<ResponseMapping>,
+        resolved_worker_request: ResolvedWorkerRequest,
+        response_mapping: &Option<Mapper>,
+        resolved_variables: &ResolvedVariables // resolved variables from the input request can also be useful to form the response
     ) -> Response;
 }
 
@@ -36,18 +40,19 @@ impl WorkerToHttpResponseDefault {
 }
 
 #[async_trait]
-impl WorkerToHttpResponse for WorkerToHttpResponseDefault {
+impl WorkerToResponse<ResponseMapping, poem::Response> for WorkerToHttpResponseDefault {
     async fn execute(
         &self,
-        worker_request_params: ResolvedRouteAsWorkerRequest,
+        worker_request_params: ResolvedWorkerRequest,
         response_mapping: &Option<ResponseMapping>,
-    ) -> Response {
+        resolved_variables: ResolvedVariables
+    ) -> poem::Response {
         match execute(self, worker_request_params.clone()).await {
             Ok(worker_response) => worker_response.to_http_response(
                 response_mapping,
-                &worker_request_params.resolved_route.resolved_variables,
+                &resolved_variables,
             ),
-            Err(e) => Response::builder()
+            Err(e) => poem::Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::from_string(format!(
                     "Error when executing resolved worker request. Error: {}",
@@ -59,7 +64,7 @@ impl WorkerToHttpResponse for WorkerToHttpResponseDefault {
 
 async fn execute(
     default_executor: &WorkerToHttpResponseDefault,
-    worker_request_params: ResolvedRouteAsWorkerRequest,
+    worker_request_params: ResolvedWorkerRequest,
 ) -> Result<WorkerResponse, Box<dyn Error>> {
     let worker_name = worker_request_params.worker_id;
 
@@ -113,12 +118,12 @@ impl WorkerResponse {
         &self,
         response_mapping: &Option<ResponseMapping>,
         resolved_variables_from_request: &ResolvedVariables,
-    ) -> Response {
+    ) -> poem::Response {
         if let Some(mapping) = response_mapping {
             match &self.to_intermediate_http_response(mapping, resolved_variables_from_request) {
                 Ok(intermediate_response) => intermediate_response.to_http_response(),
                 Err(e) => {
-                    Response::builder()
+                    poem::Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .body(Body::from_string(format!(
                             "Error when  converting worker response to http response. Error: {}",
@@ -128,7 +133,7 @@ impl WorkerResponse {
             }
         } else {
             let body: Body = Body::from_json(&self.result).unwrap();
-            Response::builder().body(body)
+            poem::Response::builder().body(body)
         }
     }
 
@@ -164,7 +169,7 @@ pub struct IntermediateHttpResponse {
 }
 
 impl IntermediateHttpResponse {
-    fn to_http_response(&self) -> Response {
+    fn to_http_response(&self) -> poem::Response {
         let headers: Result<HeaderMap, String> = (&self.headers.to_string_map())
             .try_into()
             .map_err(|e: hyper::http::Error| e.to_string());
@@ -181,10 +186,10 @@ impl IntermediateHttpResponse {
                     extensions: Default::default(),
                 };
                 let body: Body = Body::from_json(body.clone()).unwrap();
-                Response::from_parts(parts, body)
+                poem::Response::from_parts(parts, body)
             }
             Err(err) => {
-                Response::builder()
+                poem::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .body(Body::from_string(format!(
                         "Unable to resolve valid headers. Error: {}",
@@ -239,12 +244,13 @@ impl ResolvedResponseHeaders {
 pub struct NoOpWorkerRequestExecutor {}
 
 #[async_trait]
-impl WorkerToHttpResponse for NoOpWorkerRequestExecutor {
+impl WorkerToResponse<ResponseMapping, poem::Response> for NoOpWorkerRequestExecutor {
     async fn execute(
         &self,
-        worker_request_params: ResolvedRouteAsWorkerRequest,
+        worker_request_params: ResolvedWorkerRequest,
         response_mapping: &Option<ResponseMapping>,
-    ) -> Response {
+        resolved_variables: &ResolvedVariables // resolved variables from the input request can also be useful to form the response
+    ) -> poem::Response {
         let worker_name = worker_request_params.worker_id;
         let template_id = worker_request_params.template;
 
@@ -279,7 +285,7 @@ impl WorkerToHttpResponse for NoOpWorkerRequestExecutor {
 
         worker_response.to_http_response(
             response_mapping,
-            &worker_request_params.resolved_route.resolved_variables,
+            resolved_variables,
         )
     }
 }
