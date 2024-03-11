@@ -5,12 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
 use crate::auth::AuthService;
+use crate::service::register_definition::ApiDefinitionKey;
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
 use tracing::{debug, info};
-use crate::service::register_definition::ApiDefinitionKey;
 
 #[async_trait]
 pub trait RegisterApiDefinitionRepo<Namespace> {
@@ -103,7 +103,10 @@ impl<Namespace: Clone> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry
         Ok(result.is_some())
     }
 
-    async fn get_all(&self, _namespace: &Namespace) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
+    async fn get_all(
+        &self,
+        _namespace: &Namespace,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
         let registry = self.registry.lock().unwrap();
 
         let result: Vec<ApiDefinition> = registry.values().cloned().collect();
@@ -124,9 +127,7 @@ impl<Namespace> RedisApiRegistry {
             .await
             .map_err(|err| ApiRegistrationRepoError::InternalError(err.to_string()))?;
 
-        Ok(RedisApiRegistry {
-            pool: pool_result,
-        })
+        Ok(RedisApiRegistry { pool: pool_result })
     }
 }
 
@@ -134,19 +135,12 @@ fn get_api_definition_redis_key<Namespace: Display>(
     namespace: &Namespace,
     api_id: &ApiDefinitionId,
 ) -> String {
-    format!(
-        "{}:definition:{}:{}",
-        "apidefinition", namespace, api_id
-    )
+    format!("{}:definition:{}:{}", "apidefinition", namespace, api_id)
 }
 
 fn get_namespace_redis_key<Namespace: Display>(namespace: &Namespace) -> String {
-    format!(
-        "{}:definition:{}",
-        "apidefinition", namespace
-    )
+    format!("{}:definition:{}", "apidefinition", namespace)
 }
-
 
 #[async_trait]
 impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegistry {
@@ -161,10 +155,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
         );
 
         // TODO: Bring back version
-        let definition_key = get_api_definition_redis_key(
-            &key.namespace,
-            &key.id,
-        );
+        let definition_key = get_api_definition_redis_key(&key.namespace, &key.id);
 
         let definition_value = self.pool.serialize(definition).map_err(|e| e.to_string())?;
 
@@ -174,9 +165,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
             .await
             .map_err(|e| e.to_string())?;
 
-        let project_key = get_namespace_redis_key(
-            &key.namespace,
-        );
+        let project_key = get_namespace_redis_key(&key.namespace);
 
         // TODO; bring back the transaction part
         let definition_id_value = self
@@ -307,10 +296,10 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::Formatter;
     use super::*;
     use crate::auth::AuthServiceNoop;
     use golem_common::config::RedisConfig;
+    use std::fmt::Formatter;
 
     use crate::register::{
         ApiDefinitionKey, InMemoryRegistry, RedisApiRegistry, RegisterApiDefinitionRepo,
@@ -364,7 +353,11 @@ mod tests {
         let version = Version("0.0.1".to_string());
         let namespace = CommonNamespace::default();
 
-        let api_id1 = ApiDefinitionKey { namespace,  id, version };
+        let api_id1 = ApiDefinitionKey {
+            namespace,
+            id,
+            version,
+        };
 
         let api_definition1 = get_simple_api_definition_example(
             &api_id1,
@@ -376,7 +369,11 @@ mod tests {
         let version = Version("0.0.1".to_string());
         let namespace = CommonNamespace::default();
 
-        let api_id2 = ApiDefinitionKey { namespace, id: id2, version };
+        let api_id2 = ApiDefinitionKey {
+            namespace,
+            id: id2,
+            version,
+        };
 
         let api_definition2 = get_simple_api_definition_example(
             &api_id2,
@@ -430,15 +427,17 @@ mod tests {
 
         let auth_context = AuthServiceNoop {};
 
-        let registry = RedisApiRegistry::new(&config)
-            .await
-            .unwrap();
+        let registry = RedisApiRegistry::new(&config).await.unwrap();
 
         let id1 = ApiDefinitionId("api1".to_string());
         let version = Version("0.0.1".to_string());
         let namespace = CommonNamespace::default();
 
-        let api_id1 = ApiDefinitionKey { namespace, id: id1, version };
+        let api_id1 = ApiDefinitionKey {
+            namespace,
+            id: id1,
+            version,
+        };
 
         let api_definition1 = get_simple_api_definition_example(
             &api_id1,
@@ -450,7 +449,11 @@ mod tests {
         let version = Version("0.0.1".to_string());
         let namespace = CommonNamespace::default();
 
-        let api_id2 = ApiDefinitionKey { namespace, id: id2, version };
+        let api_id2 = ApiDefinitionKey {
+            namespace,
+            id: id2,
+            version,
+        };
 
         let api_definition2 = get_simple_api_definition_example(
             &api_id2,
@@ -499,7 +502,11 @@ mod tests {
         let version = Version("0.0.1".to_string());
         let namespace = CommonNamespace::default();
 
-        let api_id = ApiDefinitionKey { namespace, id, version };
+        let api_id = ApiDefinitionKey {
+            namespace,
+            id,
+            version,
+        };
 
         assert_eq!(
             api_id.get_api_definition_redis_key(),
