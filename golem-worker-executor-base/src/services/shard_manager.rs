@@ -56,7 +56,7 @@ impl ShardManagerServiceGrpc {
 impl ShardManagerService for ShardManagerServiceGrpc {
     async fn register(&self, host: String, port: u16) -> Result<ShardAssignment, GolemError> {
         let uri: hyper::Uri = self.config.url().to_string().parse().unwrap();
-        let desc = format!("Registering instance server with shard manager at {}", uri);
+        let desc = format!("Registering worker executor with shard manager at {}", uri);
         with_retries(
             &desc,
             "shard_manager",
@@ -94,16 +94,12 @@ impl ShardManagerService for ShardManagerServiceGrpc {
                             result:
                                 Some(shardmanager::register_response::Result::Success(
                                     shardmanager::RegisterSuccess {
-                                        number_of_shards,
-                                        shard_ids,
+                                        number_of_shards
                                     },
                                 )),
                         } => Ok(ShardAssignment {
                             number_of_shards: number_of_shards as usize,
-                            shard_ids: shard_ids
-                                .into_iter()
-                                .map(|shard_id| shard_id.into())
-                                .collect(),
+                            shard_ids: HashSet::new()
                         }),
                         shardmanager::RegisterResponse {
                             result: Some(shardmanager::register_response::Result::Failure(failure)),
