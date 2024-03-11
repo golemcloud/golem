@@ -18,31 +18,37 @@ pub trait RegisterApiDefinitionRepo<Namespace> {
         &self,
         definition: &ApiDefinition,
         key: &ApiDefinitionKey<Namespace>,
-    ) -> Result<(), ApiRegistrationRepoError<Namespace>>;
+    ) -> Result<(), ApiRegistrationRepoError>;
 
     async fn get(
         &self,
         api_definition_key: &ApiDefinitionKey<Namespace>,
-    ) -> Result<Option<ApiDefinition>, ApiRegistrationRepoError<Namespace>>;
+    ) -> Result<Option<ApiDefinition>, ApiRegistrationRepoError>;
 
     async fn delete(
         &self,
         api_definition_key: &ApiDefinitionKey<Namespace>,
-    ) -> Result<bool, ApiRegistrationRepoError<Namespace>>;
+    ) -> Result<bool, ApiRegistrationRepoError>;
 
     async fn get_all(
         &self,
         namespace: &Namespace,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>>;
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError>;
+
+    async fn get_all_versions(
+        &self,
+        api_id: &ApiDefinitionId,
+        namespace: &Namespace,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError>;
 }
 
 #[derive(Debug, Clone)]
-pub enum ApiRegistrationRepoError<Namespace> {
-    AlreadyExists(ApiDefinitionKey<Namespace>),
+pub enum ApiRegistrationRepoError {
+    AlreadyExists(ApiDefinitionKey<String>),
     InternalError(String),
 }
 
-impl<Namespace: Display> Display for ApiRegistrationRepoError<Namespace> {
+impl<Namespace: Display> Display for ApiRegistrationRepoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ApiRegistrationRepoError::InternalError(msg) => write!(f, "InternalError: {}", msg),
@@ -75,7 +81,7 @@ impl<Namespace: Clone> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry
         &self,
         definition: &ApiDefinition,
         key: &ApiDefinitionKey<Namespace>,
-    ) -> Result<(), ApiRegistrationRepoError<Namespace>> {
+    ) -> Result<(), ApiRegistrationRepoError> {
         let mut registry = self.registry.lock().unwrap();
 
         if let std::collections::hash_map::Entry::Vacant(e) = registry.entry(key.clone()) {
@@ -89,7 +95,7 @@ impl<Namespace: Clone> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry
     async fn get(
         &self,
         api_id: &ApiDefinitionKey<Namespace>,
-    ) -> Result<Option<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
+    ) -> Result<Option<ApiDefinition>, ApiRegistrationRepoError> {
         let registry = self.registry.lock().unwrap();
         Ok(registry.get(api_id).cloned())
     }
@@ -97,7 +103,7 @@ impl<Namespace: Clone> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry
     async fn delete(
         &self,
         api_id: &ApiDefinitionKey<Namespace>,
-    ) -> Result<bool, ApiRegistrationRepoError<Namespace>> {
+    ) -> Result<bool, ApiRegistrationRepoError> {
         let mut registry = self.registry.lock().unwrap();
         let result = registry.remove(api_id);
         Ok(result.is_some())
@@ -106,7 +112,7 @@ impl<Namespace: Clone> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry
     async fn get_all(
         &self,
         _namespace: &Namespace,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError> {
         let registry = self.registry.lock().unwrap();
 
         let result: Vec<ApiDefinition> = registry.values().cloned().collect();
@@ -122,7 +128,7 @@ pub struct RedisApiRegistry {
 impl<Namespace> RedisApiRegistry {
     pub async fn new(
         config: &RedisConfig,
-    ) -> Result<RedisApiRegistry, ApiRegistrationRepoError<Namespace>> {
+    ) -> Result<RedisApiRegistry, ApiRegistrationRepoError> {
         let pool_result = RedisPool::configured(config)
             .await
             .map_err(|err| ApiRegistrationRepoError::InternalError(err.to_string()))?;
@@ -148,7 +154,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
         &self,
         definition: &ApiDefinition,
         key: &ApiDefinitionKey<Namespace>,
-    ) -> Result<(), ApiRegistrationRepoError<Namespace>> {
+    ) -> Result<(), ApiRegistrationRepoError> {
         debug!(
             "Register API definition {} under namespace: {}",
             key.id, key.namespace
@@ -183,7 +189,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
     async fn get(
         &self,
         api_id: &ApiDefinitionKey<Namespace>,
-    ) -> Result<Option<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
+    ) -> Result<Option<ApiDefinition>, ApiRegistrationRepoError> {
         info!(
             "Get from namespace: {}, id: {}",
             api_id.namespace, api_id.id
@@ -198,7 +204,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
 
         match value {
             Some(value) => {
-                let value: Result<ApiDefinition, ApiRegistrationRepoError<Namespace>> = self
+                let value: Result<ApiDefinition, ApiRegistrationRepoError> = self
                     .pool
                     .deserialize(&value)
                     .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()));
@@ -212,7 +218,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
     async fn delete(
         &self,
         api_id: &ApiDefinitionKey<Namespace>,
-    ) -> Result<bool, ApiRegistrationRepoError<Namespace>> {
+    ) -> Result<bool, ApiRegistrationRepoError> {
         debug!(
             "Delete from namespace: {}, id: {}",
             api_id.namespace, api_id.id
@@ -246,7 +252,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
     async fn get_all(
         &self,
         namespace: &Namespace,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError<Namespace>> {
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError> {
         info!("Get all definitions in the namespace: {}", namespace);
 
         let namespace_key = get_namespace_redis_key(&namespace);
@@ -291,6 +297,10 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
         }
 
         Ok(definitions)
+    }
+
+    async fn get_all_versions(&self, api_id: &ApiDefinitionId, namespace: &Namespace) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError> {
+        todo!()
     }
 }
 
