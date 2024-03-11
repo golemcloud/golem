@@ -48,6 +48,12 @@ pub enum ApiRegistrationRepoError {
     InternalError(String),
 }
 
+impl From<Box<dyn Error>> for ApiRegistrationRepoError {
+    fn from(value: Box<dyn Error>) -> Self {
+        ApiRegistrationRepoError::InternalError(value.to_string())
+    }
+}
+
 impl Display for ApiRegistrationRepoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -76,7 +82,7 @@ impl<Namespace> Default for InMemoryRegistry<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: Clone> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace> {
+impl<Namespace: Clone + Send> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace> {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -118,6 +124,14 @@ impl<Namespace: Clone> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry
         let result: Vec<ApiDefinition> = registry.values().cloned().collect();
 
         Ok(result)
+    }
+
+    async fn get_all_versions(
+        &self,
+        api_id: &ApiDefinitionId,
+        namespace: &Namespace,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError> {
+        todo!()
     }
 }
 
@@ -169,7 +183,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
             .with("persistence", "register_definition")
             .set(definition_key, definition_value, None, None, false)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
 
         let project_key = get_namespace_redis_key(&key.namespace);
 
@@ -177,13 +191,13 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
         let definition_id_value = self
             .pool
             .serialize(&definition.id.to_string())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
 
         self.pool
             .with("persistence", "register_project_definition")
             .sadd(project_key, definition_id_value)
             .await
-            .map_err(|e| e.to_string().into())
+            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))
     }
 
     async fn get(
@@ -200,7 +214,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
             .with("persistence", "get_definition")
             .get(key)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
 
         match value {
             Some(value) => {
@@ -230,21 +244,21 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
         let definition_id_value = self
             .pool
             .serialize(&api_id.to_string())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
 
         let _ = self
             .pool
             .with("persistence", "delete_project_definition")
             .srem(namespace_key, definition_id_value)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
 
         let definition_delete: u32 = self
             .pool
             .with("persistence", "delete_definition")
             .del(definition_key)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
 
         Ok(definition_delete > 0)
     }
@@ -262,15 +276,15 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
             .with("persistence", "get_project_definition_ids")
             .smembers(&namespace_key)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
 
         let mut api_ids = Vec::new();
 
         for api_id_value in project_ids {
-            let api_id: Result<String, Box<dyn Error>> = self
+            let api_id: Result<String, ApiRegistrationRepoError> = self
                 .pool
                 .deserialize(&api_id_value)
-                .map_err(|e| e.to_string().into());
+                .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()));
 
             api_ids.push(ApiDefinitionId(api_id?));
         }
@@ -285,13 +299,13 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
                 .with("persistence", "get_definition")
                 .get(&key)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
 
             if let Some(value) = value {
-                let definition: Result<ApiDefinition, Box<dyn Error>> = self
+                let definition: Result<ApiDefinition, ApiRegistrationRepoError> = self
                     .pool
                     .deserialize(&value)
-                    .map_err(|e| e.to_string().into());
+                    .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()));
                 definitions.push(definition?);
             }
         }

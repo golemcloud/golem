@@ -122,11 +122,23 @@ impl Display for ApiRegistrationError {
     }
 }
 
-struct RegisterApiDefinitionDefault<Namespace, AuthCtx> {
+pub struct RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
     pub register_repo: Arc<dyn RegisterApiDefinitionRepo<Namespace>>,
 }
 
+impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
+    pub fn new(
+        auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
+        register_repo: Arc<dyn RegisterApiDefinitionRepo<Namespace>>,
+    ) -> Self {
+        Self {
+            auth_service,
+            register_repo,
+        }
+    }
+
+}
 impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     async fn is_authorized(
         &self,
@@ -137,7 +149,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
             .auth_service
             .is_authorized(permission, auth_ctx)
             .await
-            .map_err(ApiRegistrationError::InternalError)
+            .map_err(|err| ApiRegistrationError::InternalError(err.to_string()))
     }
 
     async fn register_api(&self, api_definition: &ApiDefinition, key: &ApiDefinitionKey<Namespace>) -> Result<(), ApiRegistrationError> {
@@ -162,7 +174,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinition<Namespace, AuthCtx>
         let key = ApiDefinitionKey {
             namespace: &namespace,
             id: definition.id.clone(),
-            version,
+            version: definition.version.clone(),
         };
 
         self.register_api(definition, &key).await

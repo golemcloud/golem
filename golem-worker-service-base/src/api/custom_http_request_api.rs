@@ -12,7 +12,7 @@ use crate::api_request_route_resolver::RouteResolver;
 use crate::auth::CommonNamespace;
 use crate::http_request::{ApiInputPath, InputHttpRequest};
 use crate::oas_worker_bridge::{GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION};
-use crate::register::{ApiDefinitionKey, RegisterApiDefinitionRepo};
+use crate::register::{RegisterApiDefinitionRepo};
 use crate::service::register_definition::RegisterApiDefinition;
 use crate::worker_request::WorkerRequest;
 use crate::worker_request_to_response::WorkerRequestToResponse;
@@ -20,18 +20,18 @@ use crate::service::register_definition::ApiDefinitionKey;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 #[derive(Clone)]
-pub struct CustomHttpRequestApi<Namespace> {
+pub struct CustomHttpRequestApi {
     worker_to_http_response_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
-    api_definition_service: Arc<dyn RegisterApiDefinitionRepo<Namespace> + Sync + Send>,
+    api_definition_service: Arc<dyn RegisterApiDefinitionRepo<CommonNamespace> + Sync + Send>,
 }
 
-impl<Namespace> CustomHttpRequestApi<Namespace> {
+impl CustomHttpRequestApi {
     pub fn new(
         worker_to_http_response_service: Arc<
             dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send,
         >,
-        api_definition_service: Arc<dyn RegisterApiDefinitionRepo<Namespace> + Sync + Send>,
+        api_definition_service: Arc<dyn RegisterApiDefinitionRepo<CommonNamespace> + Sync + Send>,
     ) -> Self {
         Self {
             worker_to_http_response_service,
@@ -186,7 +186,7 @@ fn get_header_value(headers: &HeaderMap, header_name: &str) -> Result<String, St
 }
 
 #[async_trait]
-impl<Namespace> Endpoint for CustomHttpRequestApi<Namespace> {
+impl Endpoint for CustomHttpRequestApi {
     type Output = Response;
 
     async fn call(&self, req: Request) -> poem::Result<Self::Output> {

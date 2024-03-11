@@ -57,7 +57,7 @@ impl AuthService<AuthNoop, CommonNamespace> for AuthServiceNoop {
     async fn is_authorized(
         &self,
         _permission: Permission,
-        _ctx: &(),
+        _ctx: &AuthNoop,
     ) -> Result<CommonNamespace, Box<dyn Error>> {
         Ok(CommonNamespace::default())
     }
