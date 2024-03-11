@@ -156,6 +156,10 @@ impl RoutingTable {
     pub fn remove_pod(&mut self, pod: &Pod) {
         self.shard_assignments.remove(pod);
     }
+
+    pub fn has_pod(&self, pod: &Pod) -> bool {
+        self.shard_assignments.contains_key(pod)
+    }
 }
 
 impl From<RoutingTable> for golem::shardmanager::RoutingTable {

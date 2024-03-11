@@ -116,12 +116,11 @@ impl Rebalance {
                     println!("Target count: {}..{}", lower_threshold, upper_threshold);
                     let current_target_len = routing_table_entries[target_idx].shard_ids.len();
                     if current_target_len < lower_threshold {
-                        let shard_id = routing_table_entries[source_idx]
+                        let shard_id = *routing_table_entries[source_idx]
                             .shard_ids
                             .iter()
                             .next()
-                            .unwrap()
-                            .clone();
+                            .unwrap();
                         println!(
                             "Moving first shard from {} to {}: {}",
                             source_idx, target_idx, shard_id
@@ -129,17 +128,10 @@ impl Rebalance {
                         routing_table_entries[source_idx]
                             .shard_ids
                             .remove(&shard_id);
-                        routing_table_entries[target_idx]
-                            .shard_ids
-                            .insert(shard_id.clone());
-                        assignments.assign(
-                            routing_table_entries[target_idx].pod.clone(),
-                            shard_id.clone(),
-                        );
-                        unassignments.unassign(
-                            routing_table_entries[source_idx].pod.clone(),
-                            shard_id.clone(),
-                        );
+                        routing_table_entries[target_idx].shard_ids.insert(shard_id);
+                        assignments.assign(routing_table_entries[target_idx].pod.clone(), shard_id);
+                        unassignments
+                            .unassign(routing_table_entries[source_idx].pod.clone(), shard_id);
 
                         source_idx = (source_idx + 1) % pod_count;
                         while (source_idx == target_idx) || (empty_pods.contains(&source_idx)) {
@@ -209,6 +201,17 @@ impl Rebalance {
         for unassigned_shard_ids in &mut self.unassignments.unassignments.values_mut() {
             unassigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
         }
+    }
+
+    pub fn add_assignments(&mut self, pod: &Pod, mut shard_ids: BTreeSet<ShardId>) {
+        let empty = BTreeSet::new();
+        let unassignments = self.unassignments.unassignments.get(pod).unwrap_or(&empty);
+        shard_ids.retain(|shard_id| !unassignments.contains(shard_id));
+        self.assignments
+            .assignments
+            .entry(pod.clone())
+            .or_default()
+            .append(&mut shard_ids);
     }
 }
 

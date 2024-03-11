@@ -1,10 +1,17 @@
+use crate::error::ShardManagerError;
 use crate::model::{Pod, RoutingTable};
+use crate::persistence::PersistenceService;
 use crate::rebalancing::Rebalance;
+use crate::worker_executor::{
+    assign_shards, get_unhealthy_pods, revoke_shards, WorkerExecutorService,
+};
 use async_rwlock::RwLock;
 use std::collections::HashSet;
+use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
+use tracing::info;
 
 #[derive(Clone)]
 pub struct ShardManagement {
@@ -17,15 +24,37 @@ pub struct ShardManagement {
 
 impl ShardManagement {
     /// Initializes the shard management with an initial routing table and optionally
-    /// a pending rebalance.
-    pub async fn new(routing_table: RoutingTable, pending_rebalance: Rebalance) -> Self {
+    /// a pending rebalance, both read from the persistence service.
+    pub async fn new(
+        persistence_service: Arc<dyn PersistenceService + Send + Sync>,
+        worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
+    ) -> Result<Self, ShardManagerError> {
+        let (routing_table, mut pending_rebalance) = persistence_service.read().await.unwrap();
         let routing_table = Arc::new(RwLock::new(routing_table));
 
         if !pending_rebalance.is_empty() {
-            // TODO: persist rebalance plan
-            // TODO: execute rebalance
+            info!("Conducting health check of pods involved in rebalance");
+            let pods = routing_table.read().await.get_pods();
+            let unhealthy_pods = get_unhealthy_pods(worker_executors.clone(), &pods).await;
+            pending_rebalance.remove_pods(&unhealthy_pods);
+            info!("The following pods were found to be unhealthy and have been removed from rebalance: {:?}", unhealthy_pods);
+
+            info!(
+                "Writing planned rebalance: {} to persistent storage",
+                pending_rebalance
+            );
+            persistence_service
+                .write(routing_table.read().await.deref(), &pending_rebalance)
+                .await?;
+            info!("Planned rebalance written to persistent storage");
+
+            Self::execute_rebalance(worker_executors.clone(), &mut pending_rebalance).await?;
+
             routing_table.write().await.rebalance(pending_rebalance);
-            // TODO: persist new routing table
+            persistence_service
+                .write(&routing_table.read().await.clone(), &Rebalance::empty())
+                .await
+                .expect("Failed to persist routing table");
         }
 
         let change = Arc::new(Notify::new());
@@ -36,25 +65,34 @@ impl ShardManagement {
         let updates_clone = updates.clone();
 
         let worker_handle = Arc::new(WorkerHandle::new(tokio::spawn(async move {
-            Self::worker(routing_table_clone, notify_clone, updates_clone).await
+            Self::worker(
+                routing_table_clone,
+                notify_clone,
+                updates_clone,
+                persistence_service,
+                worker_executors,
+            )
+            .await
         })));
 
-        ShardManagement {
+        Ok(ShardManagement {
             routing_table,
             change,
             worker_handle,
             updates,
-        }
+        })
     }
 
     /// Registers a new pod to be added
     pub async fn register_pod(&self, pod: Pod) {
         self.updates.lock().await.add_new_pod(pod);
+        self.change.notify_one();
     }
 
     /// Marks a pod to be removed
     pub async fn unregister_pod(&self, pod: Pod) {
         self.updates.lock().await.remove_pod(pod);
+        self.change.notify_one();
     }
 
     /// Gets the current snapshot of the routing table
@@ -66,6 +104,8 @@ impl ShardManagement {
         routing_table: Arc<RwLock<RoutingTable>>,
         change: Arc<Notify>,
         updates: Arc<Mutex<ShardManagementChanges>>,
+        persistence_service: Arc<dyn PersistenceService + Send + Sync>,
+        worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     ) {
         loop {
             change.notified().await;
@@ -76,16 +116,73 @@ impl ShardManagement {
                 current_routing_table.remove_pod(&pod);
             }
 
+            let mut send_full_assignment = Vec::new();
             for pod in new_pods {
-                current_routing_table.add_pod(&pod);
-            }
-            let rebalance = Rebalance::from_routing_table(&current_routing_table, 0.0); // TODO: configurable threshold
+                if current_routing_table.has_pod(&pod) {
+                    // This pod has already an assignment - we have to send the full list of assigned shards to it
+                    send_full_assignment.push(pod.clone());
 
-            // TODO: persist rebalance plan
-            // TODO: execute rebalance
+                    info!("Registered worker executor returned: {pod}")
+                } else {
+                    // New pod, adding with empty assignment
+                    current_routing_table.add_pod(&pod);
+
+                    info!("Registered new worker executor: {pod}")
+                }
+            }
+            let mut rebalance = Rebalance::from_routing_table(&current_routing_table, 0.0); // TODO: configurable threshold
+
+            for pod in send_full_assignment {
+                let assignments = current_routing_table.get_shards(&pod).unwrap_or_default();
+                rebalance.add_assignments(&pod, assignments);
+            }
+
+            // Panicking in case any of the rebalancing steps fail (after some internal retries within those steps).
+            // This causes the shard manager to get restarted and have and retry the rebalance on next startup.
+
+            persistence_service
+                .write(&routing_table.read().await.clone(), &rebalance)
+                .await
+                .expect("Failed to persist routing table");
+
+            Self::execute_rebalance(worker_executors.clone(), &mut rebalance)
+                .await
+                .expect("Failed to execute rebalance");
+
             routing_table.write().await.rebalance(rebalance);
-            // TODO: persist new routing table
+            persistence_service
+                .write(&routing_table.read().await.clone(), &Rebalance::empty())
+                .await
+                .expect("Failed to persist routing table");
         }
+    }
+
+    async fn execute_rebalance(
+        worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
+        rebalance: &mut Rebalance,
+    ) -> Result<(), ShardManagerError> {
+        info!("Shard manager beginning rebalance...");
+
+        info!(
+            "Executing shard unassignments: {}",
+            rebalance.get_unassignments()
+        );
+        let failed_unassignments =
+            revoke_shards(worker_executors.clone(), rebalance.get_unassignments()).await;
+        let failed_shards = failed_unassignments
+            .iter()
+            .flat_map(|(_, shard_ids)| shard_ids.clone())
+            .collect();
+        rebalance.remove_shards(&failed_shards);
+        info!("The following shards could not be unassigned and have been removed from rebalance: {:?}", failed_shards);
+
+        info!(
+            "Executing shard assignments: {}",
+            rebalance.get_assignments()
+        );
+        assign_shards(worker_executors.clone(), rebalance.get_assignments()).await;
+
+        Ok(())
     }
 }
 
