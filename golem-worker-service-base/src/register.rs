@@ -82,7 +82,9 @@ impl<Namespace> Default for InMemoryRegistry<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: Display + Clone + Send> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace> {
+impl<Namespace: Display + Clone + Send> RegisterApiDefinitionRepo<Namespace>
+    for InMemoryRegistry<Namespace>
+{
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -94,7 +96,9 @@ impl<Namespace: Display + Clone + Send> RegisterApiDefinitionRepo<Namespace> for
             e.insert(definition.clone());
             Ok(())
         } else {
-            Err(ApiRegistrationRepoError::AlreadyExists(key.with_namespace_displayed()))
+            Err(ApiRegistrationRepoError::AlreadyExists(
+                key.with_namespace_displayed(),
+            ))
         }
     }
 
@@ -140,9 +144,7 @@ pub struct RedisApiRegistry {
 }
 
 impl RedisApiRegistry {
-    pub async fn new(
-        config: &RedisConfig,
-    ) -> Result<RedisApiRegistry, ApiRegistrationRepoError> {
+    pub async fn new(config: &RedisConfig) -> Result<RedisApiRegistry, ApiRegistrationRepoError> {
         let pool_result = RedisPool::configured(config)
             .await
             .map_err(|err| ApiRegistrationRepoError::InternalError(err.to_string()))?;
@@ -177,7 +179,10 @@ impl<Namespace: Display + Sync> RegisterApiDefinitionRepo<Namespace> for RedisAp
         // TODO: Bring back version
         let definition_key = get_api_definition_redis_key(&key.namespace, &key.id);
 
-        let definition_value = self.pool.serialize(definition).map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+        let definition_value = self
+            .pool
+            .serialize(definition)
+            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
 
         self.pool
             .with("persistence", "register_definition")
@@ -313,7 +318,11 @@ impl<Namespace: Display + Sync> RegisterApiDefinitionRepo<Namespace> for RedisAp
         Ok(definitions)
     }
 
-    async fn get_all_versions(&self, api_id: &ApiDefinitionId, namespace: &Namespace) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError> {
+    async fn get_all_versions(
+        &self,
+        api_id: &ApiDefinitionId,
+        namespace: &Namespace,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError> {
         todo!()
     }
 }

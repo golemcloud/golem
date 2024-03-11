@@ -5,15 +5,15 @@ pub mod register_definition;
 
 use crate::api_definition::ResponseMapping;
 use crate::app_config::WorkerServiceConfig;
+use crate::auth::{AuthNoop, AuthServiceNoop, CommonNamespace};
 use crate::register::{InMemoryRegistry, RedisApiRegistry, RegisterApiDefinitionRepo};
+use crate::service::register_definition::{RegisterApiDefinition, RegisterApiDefinitionDefault};
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
 use crate::worker_request_to_response::WorkerRequestToResponse;
+use futures_util::TryFutureExt;
 use poem::Response;
 use std::sync::Arc;
-use futures_util::TryFutureExt;
 use tracing::error;
-use crate::auth::{AuthNoop, AuthServiceNoop, CommonNamespace};
-use crate::service::register_definition::{RegisterApiDefinition, RegisterApiDefinitionDefault};
 
 #[derive(Clone)]
 pub struct Services {
@@ -24,7 +24,6 @@ pub struct Services {
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
 }
-
 
 impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> Result<Services, String> {
@@ -56,20 +55,18 @@ impl Services {
                 routing_table_service.clone(),
             ));
 
-        let definition_repo: Arc<dyn RegisterApiDefinitionRepo<CommonNamespace> + Sync + Send>  =
-            Arc::new(RedisApiRegistry::new(&config.redis))?.await.map_err(|e| {
+        let definition_repo: Arc<dyn RegisterApiDefinitionRepo<CommonNamespace> + Sync + Send> =
+            Arc::new(RedisApiRegistry::new(&config.redis).await.map_err(|e| {
                 error!("RedisApiRegistry - init error: {}", e);
                 format!("RedisApiRegistry - init error: {}", e)
-            });
+            })?);
 
-        let definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send> =
-            Arc::new(RegisterApiDefinitionDefault::new(
-                Arc::new(AuthServiceNoop {}),
-                Arc::new(RedisApiRegistry::new(&config.redis))?.await.map_err(|e| {
-                    error!("RedisApiRegistry - init error: {}", e);
-                    format!("RedisApiRegistry - init error: {}", e)
-                }))
-            );
+        let definition_service: Arc<
+            dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send,
+        > = Arc::new(RegisterApiDefinitionDefault::new(
+            Arc::new(AuthServiceNoop {}),
+            definition_repo.clone(),
+        ));
 
         let worker_to_http_service: Arc<
             dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send,
@@ -84,7 +81,7 @@ impl Services {
         Ok(Services {
             worker_service,
             definition_service,
-            definition_repo
+            definition_repo,
             worker_to_http_service,
             template_service,
         })
@@ -105,12 +102,13 @@ impl Services {
         let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
             Arc::new(worker::WorkerServiceNoOp {});
 
-        let definition_repo: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send> =
-            Arc::new(InMemoryRegistry::default());
+        let definition_repo: Arc<
+            dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send,
+        > = Arc::new(InMemoryRegistry::default());
 
         let definition_service = Arc::new(RegisterApiDefinitionDefault::new(
             Arc::new(AuthServiceNoop {}),
-            Arc::new(InMemoryRegistry::default())
+            Arc::new(InMemoryRegistry::default()),
         ));
 
         let worker_to_http_service: Arc<

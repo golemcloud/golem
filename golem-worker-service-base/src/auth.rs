@@ -43,6 +43,7 @@ impl Display for CommonNamespace {
     }
 }
 
+#[async_trait]
 impl AuthService<AuthNoop, CommonNamespace> for AuthServiceNoop {
     async fn is_authorized(
         &self,

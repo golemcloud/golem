@@ -32,10 +32,7 @@ pub trait RegisterApiDefinition<Namespace, AuthCtx> {
         auth_ctx: AuthCtx,
     ) -> Result<bool, ApiRegistrationError>;
 
-    async fn get_all(
-        &self,
-        auth_ctx: AuthCtx,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
+    async fn get_all(&self, auth_ctx: AuthCtx) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
 
     async fn get_all_versions(
         &self,
@@ -56,7 +53,7 @@ pub struct ApiDefinitionKey<Namespace> {
 }
 
 impl<Namespace: Display> ApiDefinitionKey<Namespace> {
-   pub fn with_namespace_displayed(&self) -> ApiDefinitionKey<String> {
+    pub fn with_namespace_displayed(&self) -> ApiDefinitionKey<String> {
         ApiDefinitionKey {
             namespace: self.namespace.to_string(),
             id: self.id.clone(),
@@ -92,7 +89,7 @@ impl<Namespace: for<'a> TryFrom<&'a str>> TryFrom<&str> for ApiDefinitionKey<Nam
 pub enum ApiRegistrationError {
     AlreadyExists(ApiDefinitionKey<String>),
     InternalError(String),
-    AuthenticationError(String)
+    AuthenticationError(String),
 }
 
 impl From<ApiRegistrationRepoError> for ApiRegistrationError {
@@ -109,7 +106,9 @@ impl From<ApiRegistrationRepoError> for ApiRegistrationError {
 impl Display for ApiRegistrationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ApiRegistrationError::AuthenticationError(msg) => write!(f, "AuthenticationError: {}", msg),
+            ApiRegistrationError::AuthenticationError(msg) => {
+                write!(f, "AuthenticationError: {}", msg)
+            }
             ApiRegistrationError::InternalError(msg) => write!(f, "InternalError: {}", msg),
             ApiRegistrationError::AlreadyExists(api_definition_key) => {
                 write!(
@@ -137,7 +136,6 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
             register_repo,
         }
     }
-
 }
 
 impl<Namespace: Clone, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
@@ -146,25 +144,26 @@ impl<Namespace: Clone, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx>
         permission: Permission,
         auth_ctx: &AuthCtx,
     ) -> Result<Namespace, ApiRegistrationError> {
-        self
-            .auth_service
+        self.auth_service
             .is_authorized(permission, auth_ctx)
             .await
             .map_err(|err| ApiRegistrationError::InternalError(err.to_string()))
     }
 
-    pub async fn register_api(&self, api_definition: &ApiDefinition, key: &ApiDefinitionKey<Namespace>) -> Result<(), ApiRegistrationError> {
-        self
-            .register_repo
+    pub async fn register_api(
+        &self,
+        api_definition: &ApiDefinition,
+        key: &ApiDefinitionKey<Namespace>,
+    ) -> Result<(), ApiRegistrationError> {
+        self.register_repo
             .register(api_definition, key)
             .await
             .map_err(|err| ApiRegistrationError::from(err))
     }
-
 }
 
 #[async_trait]
-impl<Namespace: Clone, AuthCtx : Send> RegisterApiDefinition<Namespace, AuthCtx>
+impl<Namespace: Clone, AuthCtx: Send> RegisterApiDefinition<Namespace, AuthCtx>
     for RegisterApiDefinitionDefault<Namespace, AuthCtx>
 {
     async fn register(
@@ -197,8 +196,7 @@ impl<Namespace: Clone, AuthCtx : Send> RegisterApiDefinition<Namespace, AuthCtx>
             version: version.clone(),
         };
 
-        self
-            .register_repo
+        self.register_repo
             .get(&key)
             .await
             .map_err(|err| ApiRegistrationError::from(err))
@@ -218,21 +216,16 @@ impl<Namespace: Clone, AuthCtx : Send> RegisterApiDefinition<Namespace, AuthCtx>
             version: version.clone(),
         };
 
-        self
-            .register_repo
+        self.register_repo
             .delete(&key)
             .await
             .map_err(|err| ApiRegistrationError::from(err))
     }
 
-    async fn get_all(
-        &self,
-        auth_ctx: AuthCtx,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+    async fn get_all(&self, auth_ctx: AuthCtx) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::View, &auth_ctx).await?;
 
-        self
-            .register_repo
+        self.register_repo
             .get_all(&namespace)
             .await
             .map_err(|err| ApiRegistrationError::from(err))
@@ -243,11 +236,9 @@ impl<Namespace: Clone, AuthCtx : Send> RegisterApiDefinition<Namespace, AuthCtx>
         api_id: &ApiDefinitionId,
         auth_ctx: AuthCtx,
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
-
         let namespace = self.is_authorized(Permission::View, &auth_ctx).await?;
 
-        self
-            .register_repo
+        self.register_repo
             .get_all_versions(api_id, &namespace)
             .await
             .map_err(|err| ApiRegistrationError::from(err))
