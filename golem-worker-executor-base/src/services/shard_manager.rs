@@ -93,13 +93,11 @@ impl ShardManagerService for ShardManagerServiceGrpc {
                         shardmanager::RegisterResponse {
                             result:
                                 Some(shardmanager::register_response::Result::Success(
-                                    shardmanager::RegisterSuccess {
-                                        number_of_shards
-                                    },
+                                    shardmanager::RegisterSuccess { number_of_shards },
                                 )),
                         } => Ok(ShardAssignment {
                             number_of_shards: number_of_shards as usize,
-                            shard_ids: HashSet::new()
+                            shard_ids: HashSet::new(),
                         }),
                         shardmanager::RegisterResponse {
                             result: Some(shardmanager::register_response::Result::Failure(failure)),
