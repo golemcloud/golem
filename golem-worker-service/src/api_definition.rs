@@ -445,19 +445,11 @@ mod tests {
     }
 
     fn test_string_expr_parse_and_encode(input: &str) {
-        let parsed_expr = Expr::from_primitive_string(input);
+        let parsed_expr1 = Expr::from_primitive_string(input).unwrap();
+        let encoded_expr = parsed_expr1.to_string().unwrap();
+        let parsed_expr2 = Expr::from_primitive_string(encoded_expr.as_str()).unwrap();
 
-        assert!(parsed_expr.is_ok());
-
-        let encoded_expr = parsed_expr.unwrap().to_json_value();
-
-        assert!(encoded_expr.is_ok());
-
-        if let Value::String(encoded) = encoded_expr.unwrap() {
-            assert_eq!(encoded, input);
-        } else {
-            panic!("The encoded value is not a string")
-        }
+        assert_eq!(parsed_expr1, parsed_expr2);
     }
 
     #[test]
@@ -477,7 +469,7 @@ mod tests {
 
     #[test]
     fn expression_with_predicate1() {
-        test_string_expr_parse_and_encode("${request.path.user-id}>${request.path.id}");
+        test_string_expr_parse_and_encode("${request.path.user-id > request.path.id}");
     }
 
     #[test]
@@ -620,7 +612,6 @@ mod tests {
         fn test_encode_decode(path_pattern: &str, worker_id: &str, function_params: &str) {
             let yaml = get_api_spec(path_pattern, worker_id, function_params);
             let original: ApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
-
             let encoded = serialization::serialize(&original).unwrap();
             let decoded: ApiDefinition = serialization::deserialize(&encoded).unwrap();
 
@@ -650,32 +641,11 @@ mod tests {
             "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
             "[ \"data\"]",
         );
-    }
 
-    #[test]
-    fn test_expr_get_vars() {
-        fn test_get_vars(input: &str, expected: HashSet<String>) {
-            let json = serde_json::Value::from_str(input).expect("Not a valid json value");
-            let parsed_expr = Expr::from_json_value(&json);
-            assert!(parsed_expr.is_ok());
-            let expr = parsed_expr.unwrap();
-            // println!("{:?}", expr);
-            let paths = expr.get_vars();
-            assert_eq!(paths, expected);
-        }
-
-        test_get_vars("[]", HashSet::new());
-        test_get_vars(
-            "[\"${request.path.user-id}\"]",
-            HashSet::from(["request.path.user-id".to_string()]),
-        );
-        test_get_vars(
-            "[\"${request.body.item[0]}\"]",
-            HashSet::from(["request.body.item[0]".to_string()]),
-        );
-        test_get_vars(
-            "[\"${if (${request.path.user-id}>100) then 1 else 0}\"]",
-            HashSet::from(["request.path.user-id".to_string()]),
+        test_encode_decode(
+            "foo",
+            "match worker.response { ok(value) => 1, error => 0 }",
+            "[ \"data\"]",
         );
     }
 }

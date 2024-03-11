@@ -6,11 +6,11 @@
     "title": "Sample API",
     "version": "1.0.1"
   },
-    "servers": [
-        {
-        "url": "http://169.254.141.101:9006"
-        }
-    ],
+  "servers": [
+    {
+      "url": "http://169.254.141.101:9006"
+    }
+  ],
   "paths": {
     "/{user-id}/get-cart-contents": {
       "x-golem-worker-bridge": {

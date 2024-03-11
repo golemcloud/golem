@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use crate::expr::InnerNumber;
 use serde_json::Value;
 
 // More of a typed serde_json::Value but typed for its primitives
@@ -311,5 +312,13 @@ impl ValueTyped {
 
         // If parsing as a number fails, treat it as a string
         ValueTyped::String(input.to_string())
+    }
+
+    pub fn from_number_expr(number: InnerNumber) -> ValueTyped {
+        match number {
+            InnerNumber::Float(f) => ValueTyped::Float(f),
+            InnerNumber::UnsignedInteger(u) => ValueTyped::U64(u),
+            InnerNumber::Integer(i) => ValueTyped::I64(i),
+        }
     }
 }

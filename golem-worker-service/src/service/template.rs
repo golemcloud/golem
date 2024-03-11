@@ -5,8 +5,7 @@ use crate::UriBackConversion;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
 use golem_api_grpc::proto::golem::template::{
-    get_latest_template_version_response, get_template_metadata_response,
-    GetLatestTemplateVersionRequest, GetVersionedTemplateRequest,
+    get_template_metadata_response, GetLatestTemplateRequest, GetVersionedTemplateRequest,
 };
 use golem_common::config::RetryConfig;
 use golem_common::model::TemplateId;
@@ -24,7 +23,7 @@ pub trait TemplateService {
         version: i32,
     ) -> Result<Option<Template>, TemplateError>;
 
-    async fn get_latest_version(&self, template_id: &TemplateId) -> Result<i32, TemplateError>;
+    async fn get_latest(&self, template_id: &TemplateId) -> Result<Template, TemplateError>;
 }
 
 #[derive(Clone)]
@@ -44,33 +43,48 @@ impl TemplateServiceDefault {
 
 #[async_trait]
 impl TemplateService for TemplateServiceDefault {
-    async fn get_latest_version(&self, template_id: &TemplateId) -> Result<i32, TemplateError> {
+    async fn get_latest(&self, template_id: &TemplateId) -> Result<Template, TemplateError> {
         let desc = format!("Getting latest version of template: {}", template_id);
         info!("{}", &desc);
         with_retries(
             &desc,
             "template",
-            "get_latest_version",
+            "get_latest",
             &self.retry_config,
             &(self.uri.clone(), template_id.clone()),
             |(uri, id)| {
                 Box::pin(async move {
                     let mut client = TemplateServiceClient::connect(uri.as_http_02()).await?;
-                    let request = GetLatestTemplateVersionRequest {
+                    let request = GetLatestTemplateRequest {
                         template_id: Some(id.clone().into()),
                     };
 
                     let response = client
-                        .get_latest_template_version(request)
+                        .get_latest_template_metadata(request)
                         .await?
                         .into_inner();
 
                     match response.result {
                         None => Err("Empty response".to_string().into()),
-                        Some(get_latest_template_version_response::Result::Success(response)) => {
-                            Ok(response)
+                        Some(get_template_metadata_response::Result::Success(response)) => {
+                            let template_view: Result<
+                                golem_service_base::model::Template,
+                                TemplateError,
+                            > = match response.template {
+                                Some(template) => {
+                                    let template: golem_service_base::model::Template =
+                                        template.clone().try_into().map_err(|_| {
+                                            TemplateError::Other(
+                                                "Response conversion error".to_string(),
+                                            )
+                                        })?;
+                                    Ok(template)
+                                }
+                                None => Err("Empty response".to_string().into()),
+                            };
+                            Ok(template_view?)
                         }
-                        Some(get_latest_template_version_response::Result::Error(error)) => {
+                        Some(get_template_metadata_response::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }
@@ -112,7 +126,11 @@ impl TemplateService for TemplateServiceDefault {
                             > = match response.template {
                                 Some(template) => {
                                     let template: golem_service_base::model::Template =
-                                        template.clone().try_into().unwrap();
+                                        template.clone().try_into().map_err(|_| {
+                                            TemplateError::Other(
+                                                "Response conversion error".to_string(),
+                                            )
+                                        })?;
                                     Ok(Some(template))
                                 }
                                 None => Err("Empty response".to_string().into()),
@@ -241,7 +259,7 @@ impl TemplateService for TemplateServiceNoop {
         Ok(None)
     }
 
-    async fn get_latest_version(&self, _template_id: &TemplateId) -> Result<i32, TemplateError> {
-        Ok(0)
+    async fn get_latest(&self, _template_id: &TemplateId) -> Result<Template, TemplateError> {
+        Err(TemplateError::Other("Not implemented".to_string()))
     }
 }

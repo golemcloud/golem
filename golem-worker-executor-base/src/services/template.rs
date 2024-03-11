@@ -21,8 +21,8 @@ use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
 use golem_api_grpc::proto::golem::template::TemplateError;
 use golem_api_grpc::proto::golem::template::{
-    download_template_response, get_latest_template_version_response, DownloadTemplateRequest,
-    GetLatestTemplateVersionRequest,
+    download_template_response, get_template_metadata_response, DownloadTemplateRequest,
+    GetLatestTemplateRequest,
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::RetryConfig;
@@ -314,24 +314,31 @@ async fn get_latest_version_via_grpc(
                 let mut client = TemplateServiceClient::connect(endpoint.as_http_02()).await?;
 
                 let request = authorised_grpc_request(
-                    GetLatestTemplateVersionRequest {
+                    GetLatestTemplateRequest {
                         template_id: Some(template_id.clone().into()),
                     },
                     access_token,
                 );
 
                 let response = client
-                    .get_latest_template_version(request)
+                    .get_latest_template_metadata(request)
                     .await?
                     .into_inner();
 
                 let len = response.encoded_len();
                 let version = match response.result {
                     None => Err("Empty response".to_string().into()),
-                    Some(get_latest_template_version_response::Result::Success(version)) => {
+                    Some(get_template_metadata_response::Result::Success(response)) => {
+                        let version = response
+                            .template
+                            .and_then(|template| template.versioned_template_id)
+                            .map(|id| id.version)
+                            .ok_or(GrpcError::Unexpected(
+                                "Undefined template version".to_string(),
+                            ))?;
                         Ok(version)
                     }
-                    Some(get_latest_template_version_response::Result::Error(error)) => {
+                    Some(get_template_metadata_response::Result::Error(error)) => {
                         Err(GrpcError::Domain(error))
                     }
                 }?;
