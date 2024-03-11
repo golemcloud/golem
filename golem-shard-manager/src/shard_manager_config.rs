@@ -22,11 +22,12 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize)]
 pub struct ShardManagerConfig {
     pub redis: RedisConfig,
-    pub instance_server_service: WorkerExecutorServiceConfig,
+    pub worker_executors: WorkerExecutorServiceConfig,
     pub health_check: HealthCheckConfig,
     pub enable_json_log: bool,
     pub http_port: u16,
     pub number_of_shards: usize,
+    pub rebalance_threshold: f64,
 }
 
 impl ShardManagerConfig {

@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem;
@@ -26,7 +27,7 @@ use tonic_health::pb::HealthCheckRequest;
 use tracing::{debug, info, warn};
 
 use crate::error::ShardManagerError;
-use crate::model::Pod;
+use crate::model::{Assignments, Pod, Unassignments};
 use crate::shard_manager_config::WorkerExecutorServiceConfig;
 
 #[async_trait]
@@ -34,7 +35,7 @@ pub trait WorkerExecutorService {
     async fn assign_shards(
         &self,
         pod: &Pod,
-        shard_ids: &HashSet<ShardId>,
+        shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError>;
 
     async fn health_check(&self, pod: &Pod) -> bool;
@@ -42,8 +43,82 @@ pub trait WorkerExecutorService {
     async fn revoke_shards(
         &self,
         pod: &Pod,
-        shard_ids: &HashSet<ShardId>,
+        shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError>;
+}
+
+/// Executes healthcheck on all the given worker executors, and returns a set of unhealthy ones
+pub async fn get_unhealthy_pods(
+    worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
+    pods: &HashSet<Pod>,
+) -> HashSet<Pod> {
+    let futures: Vec<_> = pods
+        .iter()
+        .map(|pod| {
+            let worker_executor = worker_executors.clone();
+            Box::pin(async move {
+                match worker_executor.health_check(pod).await {
+                    true => None,
+                    false => Some(pod.clone()),
+                }
+            })
+        })
+        .collect();
+    futures::future::join_all(futures)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Sends revoke requests to all worker executors based on an `Unassignments` plan
+pub async fn revoke_shards(
+    worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
+    unassignments: &Unassignments,
+) -> Vec<(Pod, BTreeSet<ShardId>)> {
+    let futures: Vec<_> = unassignments
+        .unassignments
+        .iter()
+        .map(|(pod, shard_ids)| {
+            let worker_executor = worker_executors.clone();
+            Box::pin(async move {
+                match worker_executor.revoke_shards(pod, shard_ids).await {
+                    Ok(_) => None,
+                    Err(_) => Some((pod.clone(), shard_ids.clone())),
+                }
+            })
+        })
+        .collect();
+    futures::future::join_all(futures)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Sends assign requests to all worker executors based on an `Assignments` plan
+pub async fn assign_shards(
+    worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
+    assignments: &Assignments,
+) -> Vec<(Pod, BTreeSet<ShardId>)> {
+    let futures: Vec<_> = assignments
+        .assignments
+        .iter()
+        .map(|(pod, shard_ids)| {
+            let instance_server_service = worker_executors.clone();
+            Box::pin(async move {
+                match instance_server_service.assign_shards(pod, shard_ids).await {
+                    Ok(_) => None,
+                    Err(_) => Some((pod.clone(), shard_ids.clone())),
+                }
+            })
+        })
+        .collect();
+    futures::future::join_all(futures)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 pub struct WorkerExecutorServiceDefault {
@@ -55,7 +130,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
     async fn assign_shards(
         &self,
         pod: &Pod,
-        shard_ids: &HashSet<ShardId>,
+        shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!("Assigning shards {:?} to pod {:?}", shard_ids, pod);
 
@@ -110,7 +185,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
     async fn revoke_shards(
         &self,
         pod: &Pod,
-        shard_ids: &HashSet<ShardId>,
+        shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!("Revoking shards {:?} from pod {:?}", shard_ids, pod);
 
@@ -146,7 +221,7 @@ impl WorkerExecutorServiceDefault {
     async fn assign_shards_internal(
         &self,
         pod: &Pod,
-        shard_ids: &HashSet<ShardId>,
+        shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         let assign_shards_request = golem::workerexecutor::AssignShardsRequest {
             shard_ids: shard_ids
@@ -231,7 +306,7 @@ impl WorkerExecutorServiceDefault {
     async fn revoke_shards_internal(
         &self,
         pod: &Pod,
-        shard_ids: &HashSet<ShardId>,
+        shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         let revoke_shards_request = golem::workerexecutor::RevokeShardsRequest {
             shard_ids: shard_ids
