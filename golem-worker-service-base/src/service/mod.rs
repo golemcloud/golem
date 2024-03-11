@@ -5,9 +5,11 @@ pub mod register_definition;
 
 use crate::api_definition::ResponseMapping;
 use crate::app_config::WorkerServiceConfig;
-use crate::auth::{EmptyAuthCtx, AuthService, AuthServiceNoop, CommonNamespace};
+use crate::auth::{AuthService, AuthServiceNoop, CommonNamespace, EmptyAuthCtx};
 use crate::register::{InMemoryRegistry, RedisApiRegistry, RegisterApiDefinitionRepo};
-use crate::service::register_definition::{RegisterApiDefinition, RegisterApiDefinitionDefault, RegisterApiDefinitionNoop};
+use crate::service::register_definition::{
+    RegisterApiDefinition, RegisterApiDefinitionDefault, RegisterApiDefinitionNoop,
+};
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
 use crate::worker_request_to_response::WorkerRequestToResponse;
 use futures_util::TryFutureExt;
@@ -18,7 +20,8 @@ use tracing::error;
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
-    pub definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
+    pub definition_service:
+        Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
     pub definition_repo: Arc<dyn RegisterApiDefinitionRepo<CommonNamespace> + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
@@ -88,7 +91,7 @@ impl Services {
             definition_repo,
             worker_to_http_service,
             template_service,
-            auth_service
+            auth_service,
         })
     }
 
@@ -125,7 +128,6 @@ impl Services {
             ),
         ));
 
-
         let auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send> =
             Arc::new(AuthServiceNoop {});
 
@@ -135,7 +137,7 @@ impl Services {
             definition_repo,
             worker_to_http_service,
             template_service,
-            auth_service
+            auth_service,
         }
     }
 }

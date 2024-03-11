@@ -63,28 +63,13 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> ApiDefinitionKe
     }
 }
 
-impl<Namespace: Display + Eq + Hash + PartialEq + Clone + Debug> Display for ApiDefinitionKey<Namespace> {
+impl<Namespace: Display + Eq + Hash + PartialEq + Clone + Debug> Display
+    for ApiDefinitionKey<Namespace>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}:{}", self.namespace, self.id, self.version.0)
     }
 }
-
-// impl<Namespace: for<'a> TryFrom<&'a str> + Eq + Hash + PartialEq + Clone + Debug> TryFrom<&str> for ApiDefinitionKey<Namespace> {
-//     type Error = String;
-//
-//     fn try_from(value: &str) -> Result<Self, Self::Error> {
-//         let parts: Vec<&str> = value.split(':').collect();
-//         if parts.len() != 3 {
-//             Err(format!("Invalid ApiDefinitionKey string: {}", value))
-//         } else {
-//             Ok(ApiDefinitionKey {
-//                 namespace: Namespace::try_from(parts[0])?,
-//                 id: ApiDefinitionId(parts[1].to_string()),
-//                 version: Version(parts[2].to_string()),
-//             })
-//         }
-//     }
-// }
 
 #[derive(Debug, Clone)]
 pub enum ApiRegistrationError {
@@ -99,7 +84,9 @@ impl From<ApiRegistrationRepoError> for ApiRegistrationError {
             ApiRegistrationRepoError::InternalError(error) => {
                 ApiRegistrationError::InternalError(error)
             }
-            ApiRegistrationRepoError::AlreadyExists(key) => ApiRegistrationError::AlreadyExists(key),
+            ApiRegistrationRepoError::AlreadyExists(key) => {
+                ApiRegistrationError::AlreadyExists(key)
+            }
         }
     }
 }
@@ -139,7 +126,9 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     }
 }
 
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx>
+    RegisterApiDefinitionDefault<Namespace, AuthCtx>
+{
     pub async fn is_authorized(
         &self,
         permission: Permission,
@@ -164,7 +153,10 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx> Regist
 }
 
 #[async_trait]
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync, AuthCtx: Send + Sync> RegisterApiDefinition<Namespace, AuthCtx>
+impl<
+        Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync,
+        AuthCtx: Send + Sync,
+    > RegisterApiDefinition<Namespace, AuthCtx>
     for RegisterApiDefinitionDefault<Namespace, AuthCtx>
 {
     async fn register(
@@ -246,18 +238,19 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync, A
     }
 }
 
-pub struct RegisterApiDefinitionNoop{}
+pub struct RegisterApiDefinitionNoop {}
 
 #[async_trait]
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync> RegisterApiDefinition<Namespace, EmptyAuthCtx> for RegisterApiDefinitionNoop {
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync>
+    RegisterApiDefinition<Namespace, EmptyAuthCtx> for RegisterApiDefinitionNoop
+{
     async fn register(
         &self,
         _definition: &ApiDefinition,
         _auth_ctx: EmptyAuthCtx,
-    ) -> Result<(), ApiRegistrationError>{
+    ) -> Result<(), ApiRegistrationError> {
         Ok(())
     }
-
 
     async fn get(
         &self,
@@ -277,7 +270,10 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync> R
         Ok(false)
     }
 
-    async fn get_all(&self, _auth_ctx: EmptyAuthCtx) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+    async fn get_all(
+        &self,
+        _auth_ctx: EmptyAuthCtx,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         Ok(vec![])
     }
 

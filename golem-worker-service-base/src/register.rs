@@ -74,7 +74,9 @@ pub struct InMemoryRegistry<Namespace: Eq + Hash + PartialEq + Clone + Debug + D
     registry: Mutex<HashMap<ApiDefinitionKey<Namespace>, ApiDefinition>>,
 }
 
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> Default for InMemoryRegistry<Namespace> {
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> Default
+    for InMemoryRegistry<Namespace>
+{
     fn default() -> Self {
         InMemoryRegistry {
             registry: Mutex::new(HashMap::new()),
@@ -83,8 +85,8 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> Default for InM
 }
 
 #[async_trait]
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync> RegisterApiDefinitionRepo<Namespace>
-    for InMemoryRegistry<Namespace>
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync>
+    RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace>
 {
     async fn register(
         &self,
@@ -161,12 +163,16 @@ fn get_api_definition_redis_key<Namespace: Eq + Hash + PartialEq + Clone + Debug
     format!("{}:definition:{}:{}", "apidefinition", namespace, api_id)
 }
 
-fn get_namespace_redis_key<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display>(namespace: &Namespace) -> String {
+fn get_namespace_redis_key<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display>(
+    namespace: &Namespace,
+) -> String {
     format!("{}:definition:{}", "apidefinition", namespace)
 }
 
 #[async_trait]
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Sync> RegisterApiDefinitionRepo<Namespace> for RedisApiRegistry {
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Sync>
+    RegisterApiDefinitionRepo<Namespace> for RedisApiRegistry
+{
     async fn register(
         &self,
         definition: &ApiDefinition,
