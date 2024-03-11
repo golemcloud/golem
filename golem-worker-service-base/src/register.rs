@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::error::Error;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
+use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
@@ -13,7 +14,7 @@ use golem_common::redis::RedisPool;
 use tracing::{debug, info};
 
 #[async_trait]
-pub trait RegisterApiDefinitionRepo<Namespace> {
+pub trait RegisterApiDefinitionRepo<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -69,11 +70,11 @@ impl Display for ApiRegistrationRepoError {
     }
 }
 
-pub struct InMemoryRegistry<Namespace> {
+pub struct InMemoryRegistry<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> {
     registry: Mutex<HashMap<ApiDefinitionKey<Namespace>, ApiDefinition>>,
 }
 
-impl<Namespace> Default for InMemoryRegistry<Namespace> {
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> Default for InMemoryRegistry<Namespace> {
     fn default() -> Self {
         InMemoryRegistry {
             registry: Mutex::new(HashMap::new()),
@@ -82,7 +83,7 @@ impl<Namespace> Default for InMemoryRegistry<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: Display + Clone + Send> RegisterApiDefinitionRepo<Namespace>
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync> RegisterApiDefinitionRepo<Namespace>
     for InMemoryRegistry<Namespace>
 {
     async fn register(
@@ -153,19 +154,19 @@ impl RedisApiRegistry {
     }
 }
 
-fn get_api_definition_redis_key<Namespace: Display>(
+fn get_api_definition_redis_key<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display>(
     namespace: &Namespace,
     api_id: &ApiDefinitionId,
 ) -> String {
     format!("{}:definition:{}:{}", "apidefinition", namespace, api_id)
 }
 
-fn get_namespace_redis_key<Namespace: Display>(namespace: &Namespace) -> String {
+fn get_namespace_redis_key<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display>(namespace: &Namespace) -> String {
     format!("{}:definition:{}", "apidefinition", namespace)
 }
 
 #[async_trait]
-impl<Namespace: Display + Sync> RegisterApiDefinitionRepo<Namespace> for RedisApiRegistry {
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Sync> RegisterApiDefinitionRepo<Namespace> for RedisApiRegistry {
     async fn register(
         &self,
         definition: &ApiDefinition,

@@ -1,4 +1,5 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
+use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
@@ -46,13 +47,13 @@ pub trait RegisterApiDefinition<Namespace, AuthCtx> {
 // as a constant string or unit.
 // A namespace is not pre-tied to any other parts of original ApiDefinitionId to keep the ApiDefinition part simple, reusable.
 #[derive(Eq, Hash, PartialEq, Clone, Debug)]
-pub struct ApiDefinitionKey<Namespace> {
+pub struct ApiDefinitionKey<Namespace: Eq + Hash + PartialEq + Clone + Debug> {
     pub namespace: Namespace,
     pub id: ApiDefinitionId,
     pub version: Version,
 }
 
-impl<Namespace: Display> ApiDefinitionKey<Namespace> {
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> ApiDefinitionKey<Namespace> {
     pub fn with_namespace_displayed(&self) -> ApiDefinitionKey<String> {
         ApiDefinitionKey {
             namespace: self.namespace.to_string(),
@@ -62,13 +63,13 @@ impl<Namespace: Display> ApiDefinitionKey<Namespace> {
     }
 }
 
-impl<Namespace: Display> Display for ApiDefinitionKey<Namespace> {
+impl<Namespace: Display + Eq + Hash + PartialEq + Clone + Debug> Display for ApiDefinitionKey<Namespace> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}:{}", self.namespace, self.id, self.version.0)
     }
 }
 
-impl<Namespace: for<'a> TryFrom<&'a str>> TryFrom<&str> for ApiDefinitionKey<Namespace> {
+impl<Namespace: for<'a> TryFrom<&'a str> + Eq + Hash + PartialEq + Clone + Debug> TryFrom<&str> for ApiDefinitionKey<Namespace> {
     type Error = String;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
@@ -138,7 +139,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     }
 }
 
-impl<Namespace: Clone, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub async fn is_authorized(
         &self,
         permission: Permission,
@@ -163,7 +164,7 @@ impl<Namespace: Clone, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx>
 }
 
 #[async_trait]
-impl<Namespace: Clone, AuthCtx: Send> RegisterApiDefinition<Namespace, AuthCtx>
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx: Send> RegisterApiDefinition<Namespace, AuthCtx>
     for RegisterApiDefinitionDefault<Namespace, AuthCtx>
 {
     async fn register(
