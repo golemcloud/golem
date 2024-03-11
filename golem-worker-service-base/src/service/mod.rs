@@ -5,7 +5,7 @@ pub mod register_definition;
 
 use crate::api_definition::ResponseMapping;
 use crate::app_config::WorkerServiceConfig;
-use crate::auth::{AuthNoop, AuthServiceNoop, CommonNamespace};
+use crate::auth::{AuthNoop, AuthService, AuthServiceNoop, CommonNamespace};
 use crate::register::{InMemoryRegistry, RedisApiRegistry, RegisterApiDefinitionRepo};
 use crate::service::register_definition::{RegisterApiDefinition, RegisterApiDefinitionDefault};
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
@@ -23,6 +23,7 @@ pub struct Services {
     pub worker_to_http_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService<AuthNoop, CommonNamespace> + Sync + Send>,
 }
 
 impl Services {
