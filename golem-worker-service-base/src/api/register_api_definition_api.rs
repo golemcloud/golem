@@ -12,20 +12,20 @@ use tracing::{error, info};
 use crate::api::common::ApiEndpointError;
 use crate::api_definition;
 use crate::api_definition::{ApiDefinitionId, MethodPattern, Version};
-use crate::auth::AuthService;
+use crate::auth::{AuthNoop, AuthService, CommonNamespace};
 use crate::expr::Expr;
 use crate::oas_worker_bridge::*;
-use crate::register::{ApiDefinitionKey, ApiRegistrationError, RegisterApiDefinition};
 use golem_service_base::api_tags::ApiTags;
+use crate::service::register_definition::{ApiRegistrationError, RegisterApiDefinition};
 
 pub struct RegisterApiDefinitionApi {
-    pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
-    pub auth_service: Arc<dyn AuthService<()> + Sync + Send>,
+    pub definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService<AuthNoop, CommonNamespace> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
-    pub fn new(definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>) -> Self {
+    pub fn new(definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send>) -> Self {
         Self { definition_service }
     }
 
@@ -41,14 +41,9 @@ impl RegisterApiDefinitionApi {
 
         register_api(self.definition_service.clone(), &definition).await?;
 
-        let api_definition_key = ApiDefinitionKey {
-            id: definition.id,
-            version: definition.version,
-        };
-
         let data = self
             .definition_service
-            .get(&api_definition_key)
+            .get(&definition.id, &definition.version, AuthNoop{})
             .await
             .map_err(ApiEndpointError::internal)?;
 
@@ -65,12 +60,7 @@ impl RegisterApiDefinitionApi {
         &self,
         payload: Json<ApiDefinition>,
     ) -> Result<Json<ApiDefinition>, ApiEndpointError> {
-        let api_definition_key = ApiDefinitionKey {
-            id: payload.id.clone(),
-            version: payload.version.clone(),
-        };
-
-        info!("Save API definition - id: {}", &api_definition_key.id);
+        info!("Save API definition - id: {}", &payload.id);
 
         let definition: api_definition::ApiDefinition = payload
             .0
@@ -82,7 +72,7 @@ impl RegisterApiDefinitionApi {
 
         let data = self
             .definition_service
-            .get(&api_definition_key)
+            .get(&payload.id, &payload.version, AuthNoop{})
             .await
             .map_err(ApiEndpointError::internal)?;
 
@@ -100,23 +90,18 @@ impl RegisterApiDefinitionApi {
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
         #[oai(name = "version")] api_definition_id_version: Query<Version>,
     ) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
-        let api_definition_id_optional = api_definition_id_query.0;
+        let api_definition_id = api_definition_id_query.0;
 
         let api_version = api_definition_id_version.0;
 
-        let api_definition_key = ApiDefinitionKey {
-            id: api_definition_id_optional,
-            version: api_version,
-        };
-
         info!(
             "Get API definition - id: {}, version: {}",
-            &api_definition_key.id, &api_definition_key.version
+            &api_definition_id, &api_version
         );
 
         let data = self
             .definition_service
-            .get(&api_definition_key)
+            .get(&api_definition_id, &api_version, AuthNoop{})
             .await
             .map_err(ApiEndpointError::internal)?;
 
@@ -140,22 +125,17 @@ impl RegisterApiDefinitionApi {
         let api_definition_id = api_definition_id_query.0;
         let api_definition_version = api_definition_version_query.0;
 
-        let api_definition_key = ApiDefinitionKey {
-            id: api_definition_id.clone(),
-            version: api_definition_version,
-        };
-
         info!("Delete API definition - id: {}", &api_definition_id);
 
         let data = self
             .definition_service
-            .get(&api_definition_key)
+            .get(&api_definition_id, &api_definition_version, AuthNoop{})
             .await
             .map_err(ApiEndpointError::internal)?;
 
         if data.is_some() {
             self.definition_service
-                .delete(&api_definition_key)
+                .delete(&api_definition_id, &api_definition_version, AuthNoop{})
                 .await
                 .map_err(ApiEndpointError::internal)?;
 
@@ -169,7 +149,7 @@ impl RegisterApiDefinitionApi {
     async fn get_all(&self) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
         let data = self
             .definition_service
-            .get_all()
+            .get_all(AuthNoop{})
             .await
             .map_err(ApiEndpointError::internal)?;
 
@@ -184,11 +164,11 @@ impl RegisterApiDefinitionApi {
 }
 
 async fn register_api(
-    definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
+    definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send>,
     definition: &api_definition::ApiDefinition,
 ) -> Result<(), ApiEndpointError> {
     definition_service
-        .register(definition)
+        .register(definition,  AuthNoop{})
         .await
         .map_err(|reg_error| {
             error!(
@@ -199,8 +179,9 @@ async fn register_api(
             match reg_error {
                 ApiRegistrationError::AlreadyExists(_) => {
                     ApiEndpointError::already_exists(reg_error)
-                }
+                },
                 ApiRegistrationError::InternalError(_) => ApiEndpointError::bad_request(reg_error),
+                ApiRegistrationError::AuthenticationError(msg) => ApiEndpointError::unauthorized(msg)
             }
         })
 }

@@ -5,17 +5,19 @@ pub mod register_definition;
 
 use crate::api_definition::ResponseMapping;
 use crate::app_config::WorkerServiceConfig;
-use crate::register::{InMemoryRegistry, RedisApiRegistry, RegisterApiDefinition};
+use crate::register::{InMemoryRegistry, RedisApiRegistry};
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
 use crate::worker_request_to_response::WorkerRequestToResponse;
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
+use crate::auth::{AuthNoop, CommonNamespace};
+use crate::service::register_definition::RegisterApiDefinition;
 
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
-    pub definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
+    pub definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
@@ -91,7 +93,7 @@ impl Services {
         let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
             Arc::new(worker::WorkerServiceNoOp {});
 
-        let definition_service: Arc<dyn RegisterApiDefinition + Sync + Send> =
+        let definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send> =
             Arc::new(InMemoryRegistry::default());
 
         let worker_to_http_service: Arc<

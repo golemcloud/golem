@@ -37,6 +37,8 @@ impl AuthService<(), ()> for AuthServiceNoop {
     }
 }
 
+pub struct AuthNoop {}
+
 pub struct CommonNamespace(String);
 
 impl Default for CommonNamespace {
@@ -51,7 +53,7 @@ impl Display for CommonNamespace {
     }
 }
 
-impl AuthService<(), CommonNamespace> for AuthServiceNoop {
+impl AuthService<AuthNoop, CommonNamespace> for AuthServiceNoop {
     async fn is_authorized(
         &self,
         _permission: Permission,

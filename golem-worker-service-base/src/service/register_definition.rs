@@ -15,21 +15,20 @@ pub trait RegisterApiDefinition<Namespace, AuthCtx> {
     async fn register(
         &self,
         definition: &ApiDefinition,
-        version: Version,
         auth_ctx: AuthCtx,
     ) -> Result<(), ApiRegistrationError>;
 
     async fn get(
         &self,
         api_definition_id: &ApiDefinitionId,
-        version: Version,
+        version: &Version,
         auth_ctx: AuthCtx,
     ) -> Result<Option<ApiDefinition>, ApiRegistrationError>;
 
     async fn delete(
         &self,
         api_definition_id: &ApiDefinitionId,
-        version: Version,
+        version: &Version,
         auth_ctx: AuthCtx,
     ) -> Result<bool, ApiRegistrationError>;
 
@@ -156,7 +155,6 @@ impl<Namespace, AuthCtx> RegisterApiDefinition<Namespace, AuthCtx>
     async fn register(
         &self,
         definition: &ApiDefinition,
-        version: Version,
         auth_ctx: AuthCtx,
     ) -> Result<(), ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::Create, &auth_ctx).await?;
@@ -173,7 +171,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinition<Namespace, AuthCtx>
     async fn get(
         &self,
         api_definition_id: &ApiDefinitionId,
-        version: Version,
+        version: &Version,
         auth_ctx: AuthCtx,
     ) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::View, &auth_ctx).await?;
@@ -194,7 +192,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinition<Namespace, AuthCtx>
     async fn delete(
         &self,
         api_definition_id: &ApiDefinitionId,
-        version: Version,
+        version: &Version,
         auth_ctx: AuthCtx,
     ) -> Result<bool, ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::Delete, &auth_ctx).await?;
