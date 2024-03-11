@@ -25,8 +25,10 @@ pub trait AuthService<AuthCtx, Namespace> {
 }
 
 pub struct AuthServiceNoop {}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AuthNoop {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CommonNamespace(String);
 
 impl Default for CommonNamespace {

@@ -82,7 +82,7 @@ impl<Namespace> Default for InMemoryRegistry<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: Clone + Send> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace> {
+impl<Namespace: Display + Clone + Send> RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace> {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -94,7 +94,7 @@ impl<Namespace: Clone + Send> RegisterApiDefinitionRepo<Namespace> for InMemoryR
             e.insert(definition.clone());
             Ok(())
         } else {
-            Err(ApiRegistrationRepoError::AlreadyExists(key.clone()))
+            Err(ApiRegistrationRepoError::AlreadyExists(key.with_namespace_displayed()))
         }
     }
 

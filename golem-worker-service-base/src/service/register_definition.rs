@@ -48,7 +48,7 @@ pub trait RegisterApiDefinition<Namespace, AuthCtx> {
 // A namespace here can be for example: account, project, production, dev or a composite value, or infact as simple
 // as a constant string or unit.
 // A namespace is not pre-tied to any other parts of original ApiDefinitionId to keep the ApiDefinition part simple, reusable.
-#[derive(Eq, Hash, PartialEq)]
+#[derive(Eq, Hash, PartialEq, Clone, Debug)]
 pub struct ApiDefinitionKey<Namespace> {
     pub namespace: Namespace,
     pub id: ApiDefinitionId,
@@ -56,7 +56,7 @@ pub struct ApiDefinitionKey<Namespace> {
 }
 
 impl<Namespace: Display> ApiDefinitionKey<Namespace> {
-    fn with_namespace_displayed(&self) -> ApiDefinitionKey<String> {
+   pub fn with_namespace_displayed(&self) -> ApiDefinitionKey<String> {
         ApiDefinitionKey {
             namespace: self.namespace.to_string(),
             id: self.id.clone(),
@@ -124,13 +124,13 @@ impl Display for ApiRegistrationError {
 
 pub struct RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
-    pub register_repo: Arc<dyn RegisterApiDefinitionRepo<Namespace>>,
+    pub register_repo: Arc<dyn RegisterApiDefinitionRepo<Namespace> + Sync + Send>,
 }
 
 impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub fn new(
         auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
-        register_repo: Arc<dyn RegisterApiDefinitionRepo<Namespace>>,
+        register_repo: Arc<dyn RegisterApiDefinitionRepo<Namespace> + Sync + Send>,
     ) -> Self {
         Self {
             auth_service,
@@ -140,7 +140,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
 
 }
 
-impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
+impl<Namespace: Clone, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub async fn is_authorized(
         &self,
         permission: Permission,
@@ -164,7 +164,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
 }
 
 #[async_trait]
-impl<Namespace, AuthCtx> RegisterApiDefinition<Namespace, AuthCtx>
+impl<Namespace: Clone, AuthCtx : Send> RegisterApiDefinition<Namespace, AuthCtx>
     for RegisterApiDefinitionDefault<Namespace, AuthCtx>
 {
     async fn register(
@@ -192,7 +192,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinition<Namespace, AuthCtx>
         let namespace = self.is_authorized(Permission::View, &auth_ctx).await?;
 
         let key = ApiDefinitionKey {
-            namespace: &namespace,
+            namespace: namespace.clone(),
             id: api_definition_id.clone(),
             version: version.clone(),
         };
@@ -213,7 +213,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinition<Namespace, AuthCtx>
         let namespace = self.is_authorized(Permission::Delete, &auth_ctx).await?;
 
         let key = ApiDefinitionKey {
-            namespace: &namespace,
+            namespace: namespace.clone(),
             id: api_definition_id.clone(),
             version: version.clone(),
         };
@@ -233,7 +233,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinition<Namespace, AuthCtx>
 
         self
             .register_repo
-            .get_all(namespace)
+            .get_all(&namespace)
             .await
             .map_err(|err| ApiRegistrationError::from(err))
     }
@@ -248,7 +248,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinition<Namespace, AuthCtx>
 
         self
             .register_repo
-            .get_all_versions(namespace, api_id)
+            .get_all_versions(api_id, &namespace)
             .await
             .map_err(|err| ApiRegistrationError::from(err))
     }
