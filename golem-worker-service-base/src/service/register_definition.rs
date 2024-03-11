@@ -139,6 +139,8 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     }
 
 }
+
+#[async_trait]
 impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     async fn is_authorized(
         &self,
@@ -161,6 +163,8 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     }
 
 }
+
+#[async_trait]
 impl<Namespace, AuthCtx> RegisterApiDefinition<Namespace, AuthCtx>
     for RegisterApiDefinitionDefault<Namespace, AuthCtx>
 {

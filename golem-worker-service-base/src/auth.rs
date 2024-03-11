@@ -25,18 +25,6 @@ pub trait AuthService<AuthCtx, Namespace> {
 }
 
 pub struct AuthServiceNoop {}
-
-#[async_trait]
-impl AuthService<(), ()> for AuthServiceNoop {
-    async fn is_authorized(
-        &self,
-        _permission: Permission,
-        _ctx: &(),
-    ) -> Result<(), Box<dyn Error>> {
-        Ok(())
-    }
-}
-
 pub struct AuthNoop {}
 
 pub struct CommonNamespace(String);

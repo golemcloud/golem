@@ -12,7 +12,7 @@ use poem::Response;
 use std::sync::Arc;
 use futures_util::TryFutureExt;
 use tracing::error;
-use crate::auth::{AuthNoop, CommonNamespace};
+use crate::auth::{AuthNoop, AuthServiceNoop, CommonNamespace};
 use crate::service::register_definition::{RegisterApiDefinition, RegisterApiDefinitionDefault};
 
 #[derive(Clone)]
@@ -57,12 +57,12 @@ impl Services {
 
         let definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send> =
             Arc::new(RegisterApiDefinitionDefault::new(
-                Arc::new(AuthNoop {}),
-                RedisApiRegistry::new(&config.redis)),
-            ).map_err(|e| {
-                error!("RedisApiRegistry - init error: {}", e);
-                format!("RedisApiRegistry - init error: {}", e)
-            })?;
+                Arc::new(AuthServiceNoop {}),
+                RedisApiRegistry::new(&config.redis))?.await.map_err(|e| {
+                    error!("RedisApiRegistry - init error: {}", e);
+                    format!("RedisApiRegistry - init error: {}", e)
+                })?
+            );
 
         let worker_to_http_service: Arc<
             dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send,
