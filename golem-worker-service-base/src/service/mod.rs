@@ -5,7 +5,7 @@ pub mod register_definition;
 
 use crate::api_definition::ResponseMapping;
 use crate::app_config::WorkerServiceConfig;
-use crate::auth::{AuthNoop, AuthService, AuthServiceNoop, CommonNamespace};
+use crate::auth::{EmptyAuthCtx, AuthService, AuthServiceNoop, CommonNamespace};
 use crate::register::{InMemoryRegistry, RedisApiRegistry, RegisterApiDefinitionRepo};
 use crate::service::register_definition::{RegisterApiDefinition, RegisterApiDefinitionDefault, RegisterApiDefinitionNoop};
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
@@ -18,12 +18,12 @@ use tracing::error;
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
-    pub definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send>,
+    pub definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
     pub definition_repo: Arc<dyn RegisterApiDefinitionRepo<CommonNamespace> + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
-    pub auth_service: Arc<dyn AuthService<AuthNoop, CommonNamespace> + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
 }
 
 impl Services {
@@ -31,6 +31,9 @@ impl Services {
         let template_service: Arc<dyn template::TemplateService + Sync + Send> = Arc::new(
             template::TemplateServiceDefault::new(&config.template_service),
         );
+
+        let auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send> =
+            Arc::new(AuthServiceNoop {});
 
         let routing_table_service: Arc<
             dyn golem_service_base::routing_table::RoutingTableService + Send + Sync,
@@ -63,7 +66,7 @@ impl Services {
             })?);
 
         let definition_service: Arc<
-            dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send,
+            dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send,
         > = Arc::new(RegisterApiDefinitionDefault::new(
             Arc::new(AuthServiceNoop {}),
             definition_repo.clone(),
@@ -85,6 +88,7 @@ impl Services {
             definition_repo,
             worker_to_http_service,
             template_service,
+            auth_service
         })
     }
 
@@ -104,7 +108,7 @@ impl Services {
             Arc::new(worker::WorkerServiceNoOp {});
 
         let definition_repo: Arc<
-            dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send,
+            dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send,
         > = Arc::new(RegisterApiDefinitionNoop{});
 
         let definition_service = Arc::new(RegisterApiDefinitionDefault::new(
@@ -122,12 +126,17 @@ impl Services {
             ),
         ));
 
+
+        let auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send> =
+            Arc::new(AuthServiceNoop {});
+
         Services {
             worker_service,
             definition_service,
             definition_repo,
             worker_to_http_service,
             template_service,
+            auth_service
         }
     }
 }

@@ -26,7 +26,7 @@ pub trait AuthService<AuthCtx, Namespace> {
 
 pub struct AuthServiceNoop {}
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AuthNoop {}
+pub struct EmptyAuthCtx {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CommonNamespace(String);
@@ -44,11 +44,11 @@ impl Display for CommonNamespace {
 }
 
 #[async_trait]
-impl AuthService<AuthNoop, CommonNamespace> for AuthServiceNoop {
+impl AuthService<EmptyAuthCtx, CommonNamespace> for AuthServiceNoop {
     async fn is_authorized(
         &self,
         _permission: Permission,
-        _ctx: &AuthNoop,
+        _ctx: &EmptyAuthCtx,
     ) -> Result<CommonNamespace, Box<dyn Error>> {
         Ok(CommonNamespace::default())
     }

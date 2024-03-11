@@ -12,22 +12,22 @@ use tracing::{error, info};
 use crate::api::common::ApiEndpointError;
 use crate::api_definition;
 use crate::api_definition::{ApiDefinitionId, MethodPattern, Version};
-use crate::auth::{AuthNoop, AuthService, CommonNamespace};
+use crate::auth::{EmptyAuthCtx, AuthService, CommonNamespace};
 use crate::expr::Expr;
 use crate::oas_worker_bridge::*;
 use crate::service::register_definition::{ApiRegistrationError, RegisterApiDefinition};
 use golem_service_base::api_tags::ApiTags;
 
 pub struct RegisterApiDefinitionApi {
-    pub definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send>,
-    pub auth_service: Arc<dyn AuthService<AuthNoop, CommonNamespace> + Sync + Send>,
+    pub definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
     pub fn new(
-        definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send>,
-        auth_service: Arc<dyn AuthService<AuthNoop, CommonNamespace> + Sync + Send>,
+        definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
+        auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
     ) -> Self {
         Self {
             definition_service,
@@ -49,7 +49,7 @@ impl RegisterApiDefinitionApi {
 
         let data = self
             .definition_service
-            .get(&definition.id, &definition.version, AuthNoop {})
+            .get(&definition.id, &definition.version, EmptyAuthCtx {})
             .await
             .map_err(ApiEndpointError::internal)?;
 
@@ -78,7 +78,7 @@ impl RegisterApiDefinitionApi {
 
         let data = self
             .definition_service
-            .get(&payload.id, &payload.version, AuthNoop {})
+            .get(&payload.id, &payload.version, EmptyAuthCtx {})
             .await
             .map_err(ApiEndpointError::internal)?;
 
@@ -107,7 +107,7 @@ impl RegisterApiDefinitionApi {
 
         let data = self
             .definition_service
-            .get(&api_definition_id, &api_version, AuthNoop {})
+            .get(&api_definition_id, &api_version, EmptyAuthCtx {})
             .await
             .map_err(ApiEndpointError::internal)?;
 
@@ -135,13 +135,13 @@ impl RegisterApiDefinitionApi {
 
         let data = self
             .definition_service
-            .get(&api_definition_id, &api_definition_version, AuthNoop {})
+            .get(&api_definition_id, &api_definition_version, EmptyAuthCtx {})
             .await
             .map_err(ApiEndpointError::internal)?;
 
         if data.is_some() {
             self.definition_service
-                .delete(&api_definition_id, &api_definition_version, AuthNoop {})
+                .delete(&api_definition_id, &api_definition_version, EmptyAuthCtx {})
                 .await
                 .map_err(ApiEndpointError::internal)?;
 
@@ -155,7 +155,7 @@ impl RegisterApiDefinitionApi {
     async fn get_all(&self) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
         let data = self
             .definition_service
-            .get_all(AuthNoop {})
+            .get_all(EmptyAuthCtx {})
             .await
             .map_err(ApiEndpointError::internal)?;
 
@@ -170,11 +170,11 @@ impl RegisterApiDefinitionApi {
 }
 
 async fn register_api(
-    definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send>,
+    definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
     definition: &api_definition::ApiDefinition,
 ) -> Result<(), ApiEndpointError> {
     definition_service
-        .register(definition, AuthNoop {})
+        .register(definition, EmptyAuthCtx {})
         .await
         .map_err(|reg_error| {
             error!(
