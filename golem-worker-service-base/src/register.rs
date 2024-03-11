@@ -163,7 +163,7 @@ fn get_namespace_redis_key<Namespace: Display>(namespace: &Namespace) -> String 
 }
 
 #[async_trait]
-impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegistry {
+impl<Namespace: Display + Sync> RegisterApiDefinitionRepo<Namespace> for RedisApiRegistry {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -177,7 +177,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
         // TODO: Bring back version
         let definition_key = get_api_definition_redis_key(&key.namespace, &key.id);
 
-        let definition_value = self.pool.serialize(definition).map_err(|e| e.to_string())?;
+        let definition_value = self.pool.serialize(definition).map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
 
         self.pool
             .with("persistence", "register_definition")
@@ -208,7 +208,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
             "Get from namespace: {}, id: {}",
             api_id.namespace, api_id.id
         );
-        let key = get_api_definition_redis_key(&api_id.namespace, api_id);
+        let key = get_api_definition_redis_key(&api_id.namespace, &api_id.id);
         let value: Option<Bytes> = self
             .pool
             .with("persistence", "get_definition")
@@ -235,7 +235,7 @@ impl<Namespace: Display> RegisterApiDefinitionRepo<Namespace> for RedisApiRegist
     ) -> Result<bool, ApiRegistrationRepoError> {
         debug!(
             "Delete from namespace: {}, id: {}",
-            api_id.namespace, api_id.id
+            &api_id.namespace, &api_id.id
         );
         let definition_key = get_api_definition_redis_key(&api_id.namespace, &api_id.id);
 

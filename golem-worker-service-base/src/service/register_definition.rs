@@ -48,7 +48,7 @@ pub trait RegisterApiDefinition<Namespace, AuthCtx> {
 // A namespace here can be for example: account, project, production, dev or a composite value, or infact as simple
 // as a constant string or unit.
 // A namespace is not pre-tied to any other parts of original ApiDefinitionId to keep the ApiDefinition part simple, reusable.
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+#[derive(Eq, Hash, PartialEq)]
 pub struct ApiDefinitionKey<Namespace> {
     pub namespace: Namespace,
     pub id: ApiDefinitionId,
@@ -140,9 +140,8 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
 
 }
 
-#[async_trait]
 impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
-    async fn is_authorized(
+    pub async fn is_authorized(
         &self,
         permission: Permission,
         auth_ctx: &AuthCtx,
@@ -154,7 +153,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
             .map_err(|err| ApiRegistrationError::InternalError(err.to_string()))
     }
 
-    async fn register_api(&self, api_definition: &ApiDefinition, key: &ApiDefinitionKey<Namespace>) -> Result<(), ApiRegistrationError> {
+    pub async fn register_api(&self, api_definition: &ApiDefinition, key: &ApiDefinitionKey<Namespace>) -> Result<(), ApiRegistrationError> {
         self
             .register_repo
             .register(api_definition, key)

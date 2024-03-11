@@ -58,10 +58,10 @@ impl Services {
         let definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send> =
             Arc::new(RegisterApiDefinitionDefault::new(
                 Arc::new(AuthServiceNoop {}),
-                RedisApiRegistry::new(&config.redis))?.await.map_err(|e| {
+                Arc::new(RedisApiRegistry::new(&config.redis))?.await.map_err(|e| {
                     error!("RedisApiRegistry - init error: {}", e);
                     format!("RedisApiRegistry - init error: {}", e)
-                })?
+                })?)
             );
 
         let worker_to_http_service: Arc<
