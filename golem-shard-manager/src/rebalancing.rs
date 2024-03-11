@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use tracing::trace;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Rebalance {
@@ -59,7 +60,7 @@ impl Rebalance {
         for unassigned_shard in unassigned_shards {
             if initial_target_pods.is_empty() {
                 // No more initial empty pods, distribute shards among all pods
-                println!("Assigning shard: {} to {}", unassigned_shard, idx);
+                trace!("Assigning shard: {} to {}", unassigned_shard, idx);
                 let routing_table_entry = &mut routing_table_entries[idx];
                 assignments.assign(routing_table_entry.pod.clone(), unassigned_shard);
                 routing_table_entry.shard_ids.insert(unassigned_shard);
@@ -68,9 +69,10 @@ impl Rebalance {
                 let target_idx = initial_target_pods[idx];
                 let routing_table_entry = &mut routing_table_entries[target_idx];
 
-                println!(
+                trace!(
                     "Assigning shard to originally empty pod: {} to {}",
-                    unassigned_shard, target_idx
+                    unassigned_shard,
+                    target_idx
                 );
                 assignments.assign(routing_table_entry.pod.clone(), unassigned_shard);
                 routing_table_entry.shard_ids.insert(unassigned_shard);
@@ -100,20 +102,19 @@ impl Rebalance {
         // We also apply a threshold to the optimal count, to reduce the number of shard reassignments.
         loop {
             for (idx, entry) in routing_table_entries.iter().enumerate() {
-                println!("Pod {} has {} shards", idx, entry.shard_ids.len());
+                trace!("Pod {} has {} shards", idx, entry.shard_ids.len());
             }
-            println!("===");
 
             if let Some((target_idx, _)) = routing_table_entries
                 .iter()
                 .enumerate()
                 .find(|(_, entry)| entry.shard_ids.len() < lower_threshold)
             {
-                println!("Found a pod with too few shards: {}", target_idx);
+                trace!("Found a pod with too few shards: {}", target_idx);
                 let mut source_idx = if target_idx == 0 { 1 } else { 0 };
 
                 loop {
-                    println!("Target count: {}..{}", lower_threshold, upper_threshold);
+                    trace!("Target count: {}..{}", lower_threshold, upper_threshold);
                     let current_target_len = routing_table_entries[target_idx].shard_ids.len();
                     if current_target_len < lower_threshold {
                         let shard_id = *routing_table_entries[source_idx]
@@ -121,9 +122,11 @@ impl Rebalance {
                             .iter()
                             .next()
                             .unwrap();
-                        println!(
+                        trace!(
                             "Moving first shard from {} to {}: {}",
-                            source_idx, target_idx, shard_id
+                            source_idx,
+                            target_idx,
+                            shard_id
                         );
                         routing_table_entries[source_idx]
                             .shard_ids
@@ -138,13 +141,13 @@ impl Rebalance {
                             source_idx = (source_idx + 1) % pod_count;
                         }
                     } else {
-                        println!("Target reached a balanced state");
+                        trace!("Target reached a balanced state");
                         // target reached a balanced state
                         break;
                     }
                 }
             } else {
-                println!("All pods are balanced");
+                trace!("All pods are balanced");
                 break;
             }
         }
@@ -592,14 +595,20 @@ mod tests {
         let unassigned_ids_3 = get_unassigned_ids(&rebalance, &pod3);
         let unassigned_ids_4 = get_unassigned_ids(&rebalance, &pod4);
 
-        println!("Assigned ids 1: {:?}", assigned_ids_1);
-        println!("Assigned ids 2: {:?}", assigned_ids_2);
-        println!("Assigned ids 3: {:?}", assigned_ids_3);
-        println!("Assigned ids 4: {:?}", assigned_ids_4);
+        assert_eq!(assigned_ids_1, vec![ShardId::new(7)]);
+        assert_eq!(assigned_ids_2, vec![]);
+        assert_eq!(
+            assigned_ids_3,
+            vec![ShardId::new(0), ShardId::new(4), ShardId::new(6)]
+        );
+        assert_eq!(
+            assigned_ids_4,
+            vec![ShardId::new(1), ShardId::new(5), ShardId::new(11)]
+        );
 
-        println!("Unassigned ids 1: {:?}", unassigned_ids_1);
-        println!("Unassigned ids 2: {:?}", unassigned_ids_2);
-        println!("Unassigned ids 3: {:?}", unassigned_ids_3);
-        println!("Unassigned ids 4: {:?}", unassigned_ids_4);
+        assert_eq!(unassigned_ids_1, vec![ShardId::new(0), ShardId::new(1)]);
+        assert_eq!(unassigned_ids_2, vec![ShardId::new(7)]);
+        assert_eq!(unassigned_ids_3, vec![]);
+        assert_eq!(unassigned_ids_4, vec![]);
     }
 }
