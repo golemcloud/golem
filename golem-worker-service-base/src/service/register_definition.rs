@@ -69,22 +69,22 @@ impl<Namespace: Display + Eq + Hash + PartialEq + Clone + Debug> Display for Api
     }
 }
 
-impl<Namespace: for<'a> TryFrom<&'a str> + Eq + Hash + PartialEq + Clone + Debug> TryFrom<&str> for ApiDefinitionKey<Namespace> {
-    type Error = String;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let parts: Vec<&str> = value.split(':').collect();
-        if parts.len() != 3 {
-            Err(format!("Invalid ApiDefinitionKey string: {}", value))
-        } else {
-            Ok(ApiDefinitionKey {
-                namespace: Namespace::try_from(parts[0])?,
-                id: ApiDefinitionId(parts[1].to_string()),
-                version: Version(parts[2].to_string()),
-            })
-        }
-    }
-}
+// impl<Namespace: for<'a> TryFrom<&'a str> + Eq + Hash + PartialEq + Clone + Debug> TryFrom<&str> for ApiDefinitionKey<Namespace> {
+//     type Error = String;
+//
+//     fn try_from(value: &str) -> Result<Self, Self::Error> {
+//         let parts: Vec<&str> = value.split(':').collect();
+//         if parts.len() != 3 {
+//             Err(format!("Invalid ApiDefinitionKey string: {}", value))
+//         } else {
+//             Ok(ApiDefinitionKey {
+//                 namespace: Namespace::try_from(parts[0])?,
+//                 id: ApiDefinitionId(parts[1].to_string()),
+//                 version: Version(parts[2].to_string()),
+//             })
+//         }
+//     }
+// }
 
 #[derive(Debug, Clone)]
 pub enum ApiRegistrationError {
@@ -99,7 +99,7 @@ impl From<ApiRegistrationRepoError> for ApiRegistrationError {
             ApiRegistrationRepoError::InternalError(error) => {
                 ApiRegistrationError::InternalError(error)
             }
-            ApiRegistrationError::AlreadyExists(key) => ApiRegistrationError::AlreadyExists(key),
+            ApiRegistrationRepoError::AlreadyExists(key) => ApiRegistrationError::AlreadyExists(key),
         }
     }
 }
@@ -175,7 +175,7 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx: Send> 
         let namespace = self.is_authorized(Permission::Create, &auth_ctx).await?;
 
         let key = ApiDefinitionKey {
-            namespace: &namespace,
+            namespace: namespace.clone(),
             id: definition.id.clone(),
             version: definition.version.clone(),
         };
@@ -243,5 +243,49 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx: Send> 
             .get_all_versions(api_id, &namespace)
             .await
             .map_err(|err| ApiRegistrationError::from(err))
+    }
+}
+
+pub struct RegisterApiDefinitionNoop{}
+
+#[async_trait]
+impl<Namespace, AuthCtx: Send> RegisterApiDefinition<Namespace, AuthCtx> for RegisterApiDefinitionNoop {
+    async fn register(
+        &self,
+        definition: &ApiDefinition,
+        auth_ctx: AuthCtx,
+    ) -> Result<(), ApiRegistrationError>{
+        Ok(())
+    }
+
+
+    async fn get(
+        &self,
+        api_definition_id: &ApiDefinitionId,
+        version: &Version,
+        auth_ctx: AuthCtx,
+    ) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
+        Ok(None)
+    }
+
+    async fn delete(
+        &self,
+        api_definition_id: &ApiDefinitionId,
+        version: &Version,
+        auth_ctx: AuthCtx,
+    ) -> Result<bool, ApiRegistrationError> {
+        Ok(false)
+    }
+
+    async fn get_all(&self, auth_ctx: AuthCtx) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+        Ok(vec![])
+    }
+
+    async fn get_all_versions(
+        &self,
+        api_id: &ApiDefinitionId,
+        auth_ctx: AuthCtx,
+    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+        Ok(vec![])
     }
 }

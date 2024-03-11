@@ -7,7 +7,7 @@ use crate::api_definition::ResponseMapping;
 use crate::app_config::WorkerServiceConfig;
 use crate::auth::{AuthNoop, AuthService, AuthServiceNoop, CommonNamespace};
 use crate::register::{InMemoryRegistry, RedisApiRegistry, RegisterApiDefinitionRepo};
-use crate::service::register_definition::{RegisterApiDefinition, RegisterApiDefinitionDefault};
+use crate::service::register_definition::{RegisterApiDefinition, RegisterApiDefinitionDefault, RegisterApiDefinitionNoop};
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
 use crate::worker_request_to_response::WorkerRequestToResponse;
 use futures_util::TryFutureExt;
@@ -105,7 +105,7 @@ impl Services {
 
         let definition_repo: Arc<
             dyn RegisterApiDefinition<CommonNamespace, AuthNoop> + Sync + Send,
-        > = Arc::new(InMemoryRegistry::default());
+        > = Arc::new(RegisterApiDefinitionNoop{});
 
         let definition_service = Arc::new(RegisterApiDefinitionDefault::new(
             Arc::new(AuthServiceNoop {}),
