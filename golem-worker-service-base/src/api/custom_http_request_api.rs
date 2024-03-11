@@ -9,12 +9,14 @@ use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
 use crate::api_request_route_resolver::RouteResolver;
+use crate::auth::CommonNamespace;
 use crate::http_request::{ApiInputPath, InputHttpRequest};
 use crate::oas_worker_bridge::{GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION};
-use crate::register::{ApiDefinitionKey, RegisterApiDefinition, RegisterApiDefinitionRepo};
+use crate::register::{ApiDefinitionKey, RegisterApiDefinitionRepo};
 use crate::service::register_definition::RegisterApiDefinition;
 use crate::worker_request::WorkerRequest;
 use crate::worker_request_to_response::WorkerRequestToResponse;
+use crate::service::register_definition::ApiDefinitionKey;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 #[derive(Clone)]
@@ -99,6 +101,7 @@ impl<Namespace> CustomHttpRequestApi<Namespace> {
         };
 
         let api_key = ApiDefinitionKey {
+            namespace: CommonNamespace::default(),
             id: api_definition_id.clone(),
             version,
         };
@@ -183,7 +186,7 @@ fn get_header_value(headers: &HeaderMap, header_name: &str) -> Result<String, St
 }
 
 #[async_trait]
-impl Endpoint for CustomHttpRequestApi {
+impl<Namespace> Endpoint for CustomHttpRequestApi<Namespace> {
     type Output = Response;
 
     async fn call(&self, req: Request) -> poem::Result<Self::Output> {

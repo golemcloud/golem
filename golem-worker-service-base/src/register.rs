@@ -48,7 +48,7 @@ pub enum ApiRegistrationRepoError {
     InternalError(String),
 }
 
-impl<Namespace: Display> Display for ApiRegistrationRepoError {
+impl Display for ApiRegistrationRepoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ApiRegistrationRepoError::InternalError(msg) => write!(f, "InternalError: {}", msg),
@@ -125,7 +125,7 @@ pub struct RedisApiRegistry {
     pool: RedisPool,
 }
 
-impl<Namespace> RedisApiRegistry {
+impl RedisApiRegistry {
     pub async fn new(
         config: &RedisConfig,
     ) -> Result<RedisApiRegistry, ApiRegistrationRepoError> {

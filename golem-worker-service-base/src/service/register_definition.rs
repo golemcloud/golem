@@ -71,7 +71,7 @@ impl<Namespace: Display> Display for ApiDefinitionKey<Namespace> {
     }
 }
 
-impl<Namespace: TryFrom<&str>> TryFrom<&str> for ApiDefinitionKey<Namespace> {
+impl<Namespace: for<'a> TryFrom<&'a str>> TryFrom<&str> for ApiDefinitionKey<Namespace> {
     type Error = String;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
@@ -80,7 +80,7 @@ impl<Namespace: TryFrom<&str>> TryFrom<&str> for ApiDefinitionKey<Namespace> {
             Err(format!("Invalid ApiDefinitionKey string: {}", value))
         } else {
             Ok(ApiDefinitionKey {
-                namespace: Namespace::try_from(parts[0]),
+                namespace: Namespace::try_from(parts[0])?,
                 id: ApiDefinitionId(parts[1].to_string()),
                 version: Version(parts[2].to_string()),
             })
@@ -95,7 +95,7 @@ pub enum ApiRegistrationError {
     AuthenticationError(String)
 }
 
-impl<Namespace> From<ApiRegistrationRepoError> for ApiRegistrationError {
+impl From<ApiRegistrationRepoError> for ApiRegistrationError {
     fn from(value: ApiRegistrationRepoError) -> Self {
         match value {
             ApiRegistrationRepoError::InternalError(error) => {
@@ -106,7 +106,7 @@ impl<Namespace> From<ApiRegistrationRepoError> for ApiRegistrationError {
     }
 }
 
-impl<Namespace: Display> Display for ApiRegistrationError {
+impl Display for ApiRegistrationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ApiRegistrationError::AuthenticationError(msg) => write!(f, "AuthenticationError: {}", msg),
