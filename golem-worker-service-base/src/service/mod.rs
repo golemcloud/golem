@@ -107,9 +107,8 @@ impl Services {
         let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
             Arc::new(worker::WorkerServiceNoOp {});
 
-        let definition_repo: Arc<
-            dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send,
-        > = Arc::new(RegisterApiDefinitionNoop{});
+        let definition_repo: Arc<dyn RegisterApiDefinitionRepo<CommonNamespace> + Sync + Send> =
+            Arc::new(InMemoryRegistry::default());
 
         let definition_service = Arc::new(RegisterApiDefinitionDefault::new(
             Arc::new(AuthServiceNoop {}),

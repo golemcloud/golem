@@ -58,7 +58,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             },
             register_api_definition_api::RegisterApiDefinitionApi::new(
                 services.definition_service.clone(),
-                services.au.clone()
+                services.auth_service.clone()
             ),
             healthcheck::HealthcheckApi,
         ),

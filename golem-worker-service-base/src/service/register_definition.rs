@@ -3,7 +3,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
-use crate::auth::{AuthService, Permission};
+use crate::auth::{AuthService, EmptyAuthCtx, Permission};
 use crate::register::{ApiRegistrationRepoError, RegisterApiDefinitionRepo};
 use async_trait::async_trait;
 use tonic::codegen::Body;
@@ -164,7 +164,7 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx> Regist
 }
 
 #[async_trait]
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx: Send> RegisterApiDefinition<Namespace, AuthCtx>
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync, AuthCtx: Send + Sync> RegisterApiDefinition<Namespace, AuthCtx>
     for RegisterApiDefinitionDefault<Namespace, AuthCtx>
 {
     async fn register(
@@ -249,11 +249,11 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx: Send> 
 pub struct RegisterApiDefinitionNoop{}
 
 #[async_trait]
-impl<Namespace, AuthCtx: Send> RegisterApiDefinition<Namespace, AuthCtx> for RegisterApiDefinitionNoop {
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync> RegisterApiDefinition<Namespace, EmptyAuthCtx> for RegisterApiDefinitionNoop {
     async fn register(
         &self,
-        definition: &ApiDefinition,
-        auth_ctx: AuthCtx,
+        _definition: &ApiDefinition,
+        _auth_ctx: EmptyAuthCtx,
     ) -> Result<(), ApiRegistrationError>{
         Ok(())
     }
@@ -261,30 +261,30 @@ impl<Namespace, AuthCtx: Send> RegisterApiDefinition<Namespace, AuthCtx> for Reg
 
     async fn get(
         &self,
-        api_definition_id: &ApiDefinitionId,
-        version: &Version,
-        auth_ctx: AuthCtx,
+        _api_definition_id: &ApiDefinitionId,
+        _version: &Version,
+        _auth_ctx: EmptyAuthCtx,
     ) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
         Ok(None)
     }
 
     async fn delete(
         &self,
-        api_definition_id: &ApiDefinitionId,
-        version: &Version,
-        auth_ctx: AuthCtx,
+        _api_definition_id: &ApiDefinitionId,
+        _version: &Version,
+        _auth_ctx: EmptyAuthCtx,
     ) -> Result<bool, ApiRegistrationError> {
         Ok(false)
     }
 
-    async fn get_all(&self, auth_ctx: AuthCtx) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+    async fn get_all(&self, _auth_ctx: EmptyAuthCtx) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         Ok(vec![])
     }
 
     async fn get_all_versions(
         &self,
-        api_id: &ApiDefinitionId,
-        auth_ctx: AuthCtx,
+        _api_id: &ApiDefinitionId,
+        _auth_ctx: EmptyAuthCtx,
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
         Ok(vec![])
     }
