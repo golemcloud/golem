@@ -5,9 +5,9 @@ use std::{
     sync::Arc,
 };
 
-use crate::service::compile_service::CompilationServiceDefault;
+use crate::service::compile_service::TemplateCompilationServiceImpl;
 use config::ServerConfig;
-use golem_api_grpc::proto::golem::compilationserver::compilation_server_server::CompilationServerServer;
+use golem_api_grpc::proto::golem::templatecompilation::template_compilation_service_server::TemplateCompilationServiceServer;
 use golem_worker_executor_base::services::compiled_template;
 use tracing_subscriber::EnvFilter;
 
@@ -50,7 +50,7 @@ async fn run(config: ServerConfig) {
     let compiled_template = compiled_template::configured(&config.compiled_template_service).await;
     let engine = wasmtime::Engine::new(&create_wasmtime_config()).expect("Failed to create engine");
 
-    let compilation_service = CompilationServiceDefault::new(
+    let compilation_service = TemplateCompilationServiceImpl::new(
         config.upload_worker,
         config.compile_worker,
         config.template_service,
@@ -77,14 +77,14 @@ async fn start_grpc_server(
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
 
     health_reporter
-        .set_serving::<CompilationServerServer<CompileGrpcService>>()
+        .set_serving::<TemplateCompilationServiceServer<CompileGrpcService>>()
         .await;
 
     tonic::transport::Server::builder()
         .add_service(health_service)
-        .add_service(CompilationServerServer::new(CompileGrpcService::new(
-            service,
-        )))
+        .add_service(TemplateCompilationServiceServer::new(
+            CompileGrpcService::new(service),
+        ))
         .serve(addr)
         .await
 }

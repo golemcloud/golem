@@ -18,11 +18,11 @@ pub trait CompilationService {
 }
 
 #[derive(Clone)]
-pub struct CompilationServiceDefault {
+pub struct TemplateCompilationServiceImpl {
     queue: mpsc::Sender<CompilationRequest>,
 }
 
-impl CompilationServiceDefault {
+impl TemplateCompilationServiceImpl {
     pub fn new(
         upload_worker: UploadWorkerConfig,
         compile_worker: CompileWorkerConfig,
@@ -52,7 +52,7 @@ impl CompilationServiceDefault {
 }
 
 #[async_trait]
-impl CompilationService for CompilationServiceDefault {
+impl CompilationService for TemplateCompilationServiceImpl {
     async fn enqueue_compilation(
         &self,
         template_id: TemplateId,

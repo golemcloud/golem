@@ -4,12 +4,12 @@ use crate::service::CompilationService;
 
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_api_grpc::proto::golem::compilationserver::compilation_server_server::CompilationServer as GrpcCompilationServer;
-use golem_api_grpc::proto::golem::compilationserver::{
-    compilation_error, compilation_response, CompilationError, CompilationRequest,
-    CompilationResponse,
-};
 use golem_api_grpc::proto::golem::template;
+use golem_api_grpc::proto::golem::templatecompilation::template_compilation_service_server::TemplateCompilationService as GrpcCompilationServer;
+use golem_api_grpc::proto::golem::templatecompilation::{
+    template_compilation_error, template_compilation_response, TemplateCompilationError,
+    TemplateCompilationRequest, TemplateCompilationResponse,
+};
 use golem_common::model::TemplateId;
 use tonic::{Request, Response, Status};
 
@@ -28,14 +28,14 @@ impl CompileGrpcService {
 impl GrpcCompilationServer for CompileGrpcService {
     async fn enqueue_compilation(
         &self,
-        request: Request<CompilationRequest>,
-    ) -> Result<tonic::Response<CompilationResponse>, Status> {
+        request: Request<TemplateCompilationRequest>,
+    ) -> Result<tonic::Response<TemplateCompilationResponse>, Status> {
         let response = match self.enqueue_compilation_impl(request.into_inner()).await {
-            Ok(_) => compilation_response::Result::Success(Empty {}),
-            Err(e) => compilation_response::Result::Failure(e),
+            Ok(_) => template_compilation_response::Result::Success(Empty {}),
+            Err(e) => template_compilation_response::Result::Failure(e),
         };
 
-        Ok(Response::new(CompilationResponse {
+        Ok(Response::new(TemplateCompilationResponse {
             result: Some(response),
         }))
     }
@@ -44,8 +44,8 @@ impl GrpcCompilationServer for CompileGrpcService {
 impl CompileGrpcService {
     async fn enqueue_compilation_impl(
         &self,
-        request: CompilationRequest,
-    ) -> Result<(), CompilationError> {
+        request: TemplateCompilationRequest,
+    ) -> Result<(), TemplateCompilationError> {
         let template_id = make_template_id(request.template_id)?;
         let template_version = request.template_version;
         self.service
@@ -55,7 +55,7 @@ impl CompileGrpcService {
     }
 }
 
-impl From<crate::model::CompilationError> for CompilationError {
+impl From<crate::model::CompilationError> for TemplateCompilationError {
     fn from(value: crate::model::CompilationError) -> Self {
         let body = ErrorBody {
             error: value.to_string(),
@@ -63,21 +63,23 @@ impl From<crate::model::CompilationError> for CompilationError {
 
         let error = match value {
             crate::model::CompilationError::TemplateNotFound(_) => {
-                compilation_error::Error::NotFound(body)
+                template_compilation_error::Error::NotFound(body)
             }
             crate::model::CompilationError::CompileFailure(_)
             | crate::model::CompilationError::TemplateDownloadFailed(_)
             | crate::model::CompilationError::TemplateUploadFailed(_)
             | crate::model::CompilationError::Unexpected(_) => {
-                compilation_error::Error::InternalError(body)
+                template_compilation_error::Error::InternalError(body)
             }
         };
 
-        CompilationError { error: Some(error) }
+        TemplateCompilationError { error: Some(error) }
     }
 }
 
-fn make_template_id(id: Option<template::TemplateId>) -> Result<TemplateId, CompilationError> {
+fn make_template_id(
+    id: Option<template::TemplateId>,
+) -> Result<TemplateId, TemplateCompilationError> {
     let id = id.ok_or_else(|| bad_request_error("Missing template id"))?;
     let id: TemplateId = id
         .try_into()
@@ -85,9 +87,9 @@ fn make_template_id(id: Option<template::TemplateId>) -> Result<TemplateId, Comp
     Ok(id)
 }
 
-fn bad_request_error(error: impl Into<String>) -> CompilationError {
-    CompilationError {
-        error: Some(compilation_error::Error::BadRequest(ErrorsBody {
+fn bad_request_error(error: impl Into<String>) -> TemplateCompilationError {
+    TemplateCompilationError {
+        error: Some(template_compilation_error::Error::BadRequest(ErrorsBody {
             errors: vec![error.into()],
         })),
     }
