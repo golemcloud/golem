@@ -326,8 +326,8 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Sync>
 
     async fn get_all_versions(
         &self,
-        api_id: &ApiDefinitionId,
-        namespace: &Namespace,
+        _api_id: &ApiDefinitionId,
+        _namespace: &Namespace,
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError> {
         todo!()
     }
