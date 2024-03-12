@@ -147,7 +147,7 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx>
         self.register_repo
             .register(api_definition, key)
             .await
-            .map_err(|err| ApiRegistrationError::from(err))
+            .map_err(ApiRegistrationError::from)
     }
 }
 
@@ -191,7 +191,7 @@ impl<
         self.register_repo
             .get(&key)
             .await
-            .map_err(|err| ApiRegistrationError::from(err))
+            .map_err(ApiRegistrationError::from)
     }
 
     async fn delete(
@@ -211,7 +211,7 @@ impl<
         self.register_repo
             .delete(&key)
             .await
-            .map_err(|err| ApiRegistrationError::from(err))
+            .map_err(ApiRegistrationError::from)
     }
 
     async fn get_all(&self, auth_ctx: AuthCtx) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
@@ -220,7 +220,7 @@ impl<
         self.register_repo
             .get_all(&namespace)
             .await
-            .map_err(|err| ApiRegistrationError::from(err))
+            .map_err(ApiRegistrationError::from)
     }
 
     async fn get_all_versions(
@@ -233,7 +233,7 @@ impl<
         self.register_repo
             .get_all_versions(api_id, &namespace)
             .await
-            .map_err(|err| ApiRegistrationError::from(err))
+            .map_err(ApiRegistrationError::from)
     }
 }
 
