@@ -2,10 +2,9 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
-use crate::auth::AuthService;
+use crate::api_definition::{ApiDefinition, ApiDefinitionId};
 use crate::service::register_definition::ApiDefinitionKey;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -135,8 +134,8 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync>
 
     async fn get_all_versions(
         &self,
-        api_id: &ApiDefinitionId,
-        namespace: &Namespace,
+        _api_id: &ApiDefinitionId,
+        _namespace: &Namespace,
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError> {
         todo!()
     }
@@ -337,6 +336,7 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Sync>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api_definition::Version;
     use crate::auth::AuthServiceNoop;
     use golem_common::config::RedisConfig;
     use std::fmt::Formatter;

@@ -14,7 +14,6 @@ use crate::http_request::{ApiInputPath, InputHttpRequest};
 use crate::oas_worker_bridge::{GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION};
 use crate::register::RegisterApiDefinitionRepo;
 use crate::service::register_definition::ApiDefinitionKey;
-use crate::service::register_definition::RegisterApiDefinition;
 use crate::worker_request::WorkerRequest;
 use crate::worker_request_to_response::WorkerRequestToResponse;
 

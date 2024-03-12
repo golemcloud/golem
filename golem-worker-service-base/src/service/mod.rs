@@ -7,12 +7,9 @@ use crate::api_definition::ResponseMapping;
 use crate::app_config::WorkerServiceConfig;
 use crate::auth::{AuthService, AuthServiceNoop, CommonNamespace, EmptyAuthCtx};
 use crate::register::{InMemoryRegistry, RedisApiRegistry, RegisterApiDefinitionRepo};
-use crate::service::register_definition::{
-    RegisterApiDefinition, RegisterApiDefinitionDefault, RegisterApiDefinitionNoop,
-};
+use crate::service::register_definition::{RegisterApiDefinition, RegisterApiDefinitionDefault};
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
 use crate::worker_request_to_response::WorkerRequestToResponse;
-use futures_util::TryFutureExt;
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;

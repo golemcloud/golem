@@ -3,10 +3,9 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
-use crate::auth::{AuthService, EmptyAuthCtx, Permission};
+use crate::auth::{AuthService, CommonNamespace, EmptyAuthCtx, Permission};
 use crate::register::{ApiRegistrationRepoError, RegisterApiDefinitionRepo};
 use async_trait::async_trait;
-use tonic::codegen::Body;
 
 // A namespace here can be example: (account, project) etc.
 // Ideally a repo service and its implementation with a different service impl that takes care of
@@ -241,9 +240,7 @@ impl<
 pub struct RegisterApiDefinitionNoop {}
 
 #[async_trait]
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync>
-    RegisterApiDefinition<Namespace, EmptyAuthCtx> for RegisterApiDefinitionNoop
-{
+impl RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> for RegisterApiDefinitionNoop {
     async fn register(
         &self,
         _definition: &ApiDefinition,
