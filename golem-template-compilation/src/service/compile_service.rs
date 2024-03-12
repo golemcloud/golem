@@ -65,6 +65,7 @@ impl CompilationService for TemplateCompilationServiceImpl {
             },
         };
         self.queue.send(request).await?;
+        crate::metrics::increment_queue_length();
         Ok(())
     }
 }

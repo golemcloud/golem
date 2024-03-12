@@ -1,4 +1,5 @@
 use grpc::CompileGrpcService;
+use prometheus::Registry;
 use service::CompilationService;
 use std::{
     net::{Ipv4Addr, SocketAddr},
@@ -8,16 +9,17 @@ use std::{
 use crate::service::compile_service::TemplateCompilationServiceImpl;
 use config::ServerConfig;
 use golem_api_grpc::proto::golem::templatecompilation::template_compilation_service_server::TemplateCompilationServiceServer;
-use golem_worker_executor_base::services::compiled_template;
+use golem_worker_executor_base::{http_server::HttpServerImpl, services::compiled_template};
 use tracing_subscriber::EnvFilter;
 
 mod config;
 mod grpc;
+mod metrics;
 mod model;
 mod service;
 
 fn main() {
-    // TODO: Custom metrics?
+    let prometheus = metrics::register_all();
     let config = crate::config::ServerConfig::new();
 
     if config.enable_tracing_console {
@@ -43,12 +45,20 @@ fn main() {
             .build()
             .unwrap(),
     );
-    runtime.block_on(run(config))
+    runtime.block_on(run(config, prometheus))
 }
 
-async fn run(config: ServerConfig) {
+async fn run(config: ServerConfig, prometheus: Registry) {
     let compiled_template = compiled_template::configured(&config.compiled_template_service).await;
     let engine = wasmtime::Engine::new(&create_wasmtime_config()).expect("Failed to create engine");
+
+    // Start metrics and healthcheck server.
+    let address = config.http_addr().expect("Invalid HTTP address");
+    let http_server = HttpServerImpl::new(
+        address,
+        prometheus,
+        "Template Compilation Service is running",
+    );
 
     let compilation_service = TemplateCompilationServiceImpl::new(
         config.upload_worker,
@@ -63,11 +73,11 @@ async fn run(config: ServerConfig) {
     let ipv4_address: Ipv4Addr = config.grpc_host.parse().expect("Invalid IP address");
     let address = SocketAddr::new(ipv4_address.into(), config.grpc_port);
 
-    tokio::spawn(async move {
-        start_grpc_server(address, compilation_service)
-            .await
-            .expect("gRPC server failed");
-    });
+    start_grpc_server(address, compilation_service)
+        .await
+        .expect("gRPC server failed");
+
+    drop(http_server)
 }
 
 async fn start_grpc_server(

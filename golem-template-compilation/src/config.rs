@@ -1,3 +1,5 @@
+use std::net::{Ipv4Addr, SocketAddrV4};
+
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use golem_common::config::RetryConfig;
@@ -22,6 +24,10 @@ pub struct ServerConfig {
     pub enable_json_log: bool,
     pub grpc_port: u16,
     pub grpc_host: String,
+
+    // Metrics and healthcheck.
+    pub http_address: String,
+    pub http_port: u16,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -68,6 +74,11 @@ impl ServerConfig {
             .merge(Env::prefixed("GOLEM__").split("__"))
             .extract()
             .expect("Failed to parse config")
+    }
+
+    pub fn http_addr(&self) -> Option<SocketAddrV4> {
+        let address = self.http_address.parse::<Ipv4Addr>().ok()?;
+        Some(SocketAddrV4::new(address, self.http_port))
     }
 }
 

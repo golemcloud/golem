@@ -58,6 +58,7 @@ impl CompileWorker {
 
         tokio::spawn(async move {
             while let Some(request) = recv.recv().await {
+                crate::metrics::decrement_queue_length();
                 let result = worker.compile_template(&request.template).await;
                 match result {
                     Err(_) => {}
