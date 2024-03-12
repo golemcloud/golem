@@ -25,6 +25,19 @@ pub struct TemplatesConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum TemplateCompilationConfig {
+    Enabled(TemplateCompilationEnabledConfig),
+    Disabled,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct TemplateCompilationEnabledConfig {
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct DbSqliteConfig {
     pub database: String,
     pub max_connections: u32,
@@ -45,6 +58,7 @@ pub struct CloudServiceConfig {
     pub grpc_port: u16,
     pub db: DbConfig,
     pub templates: TemplatesConfig,
+    pub compilation: TemplateCompilationConfig,
     pub routing_table: RoutingTableConfig,
     pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
@@ -91,12 +105,18 @@ mod tests {
         std::env::set_var("GOLEM__DB__CONFIG__PASSWORD", "postgres");
         std::env::set_var("GOLEM__ROUTING_TABLE__HOST", "localhost");
         std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
+
         std::env::set_var("GOLEM__TEMPLATES__STORE__TYPE", "Local");
         std::env::set_var(
             "GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH",
             "template_store",
         );
         std::env::set_var("GOLEM__TEMPLATES__STORE__CONFIG__OBJECT_PREFIX", "");
+
+        std::env::set_var("GOLEM__COMPILATION__TYPE", "Enabled");
+        std::env::set_var("GOLEM__COMPILATION__CONFIG__HOST", "localhost");
+        std::env::set_var("GOLEM__COMPILATION__CONFIG__PORT", "1234");
+
         std::env::set_var("GOLEM__HTTP_PORT", "9001");
         std::env::set_var("GOLEM__GRPC_PORT", "9002");
 

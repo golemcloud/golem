@@ -13,15 +13,21 @@
 // limitations under the License.
 
 pub mod template;
+pub mod template_compilation;
 pub mod worker;
 
 use golem_service_base::config::TemplateStoreConfig;
 use golem_service_base::service::template_object_store;
 use std::sync::Arc;
 
-use crate::config::{CloudServiceConfig, DbConfig};
+use crate::config::{CloudServiceConfig, DbConfig, TemplateCompilationConfig};
 use crate::db;
 use crate::repo::template::{DbTemplateRepo, TemplateRepo};
+
+use self::template_compilation::{
+    TemplateCompilationService, TemplateCompilationServiceDefault,
+    TemplateCompilationServiceDisabled,
+};
 
 #[derive(Clone)]
 pub struct Services {
@@ -56,9 +62,20 @@ impl Services {
                 }
             };
 
-        let template_service: Arc<dyn template::TemplateService + Sync + Send> = Arc::new(
-            template::TemplateServiceDefault::new(template_repo.clone(), object_store.clone()),
-        );
+        let compilation_service: Arc<dyn TemplateCompilationService + Sync + Send> =
+            match config.compilation.clone() {
+                TemplateCompilationConfig::Enabled(config) => Arc::new(
+                    TemplateCompilationServiceDefault::new(config.host, config.port),
+                ),
+                TemplateCompilationConfig::Disabled => Arc::new(TemplateCompilationServiceDisabled),
+            };
+
+        let template_service: Arc<dyn template::TemplateService + Sync + Send> =
+            Arc::new(template::TemplateServiceDefault::new(
+                template_repo.clone(),
+                object_store.clone(),
+                compilation_service.clone(),
+            ));
 
         let routing_table_service: Arc<
             dyn golem_service_base::routing_table::RoutingTableService + Send + Sync,

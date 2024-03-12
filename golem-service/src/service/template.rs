@@ -27,6 +27,7 @@ use tracing::{error, info};
 
 use crate::repo::template::TemplateRepo;
 use crate::repo::RepoError;
+use crate::service::template_compilation::TemplateCompilationService;
 use crate::service::template_object_store::TemplateObjectStore;
 use golem_service_base::model::*;
 
@@ -121,16 +122,19 @@ pub trait TemplateService {
 pub struct TemplateServiceDefault {
     template_repo: Arc<dyn TemplateRepo + Sync + Send>,
     object_store: Arc<dyn TemplateObjectStore + Sync + Send>,
+    template_compilation: Arc<dyn TemplateCompilationService + Sync + Send>,
 }
 
 impl TemplateServiceDefault {
     pub fn new(
         template_repo: Arc<dyn TemplateRepo + Sync + Send>,
         object_store: Arc<dyn TemplateObjectStore + Sync + Send>,
+        template_compilation: Arc<dyn TemplateCompilationService + Sync + Send>,
     ) -> Self {
         TemplateServiceDefault {
             template_repo,
             object_store,
+            template_compilation,
         }
     }
 }
@@ -188,6 +192,10 @@ impl TemplateService for TemplateServiceDefault {
 
         self.template_repo.upsert(&template.clone().into()).await?;
 
+        self.template_compilation
+            .enqueue_compilation(&template.versioned_template_id.template_id, 0)
+            .await;
+
         Ok(template)
     }
 
@@ -229,6 +237,10 @@ impl TemplateService for TemplateServiceDefault {
         };
 
         self.template_repo.upsert(&template.clone().into()).await?;
+
+        self.template_compilation
+            .enqueue_compilation(&template_id, template.versioned_template_id.version)
+            .await;
 
         Ok(template)
     }
