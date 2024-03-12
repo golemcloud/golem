@@ -17,6 +17,7 @@ use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::HealthCheckRequest;
 
 pub struct WorkerExecutor<'docker_client> {
+    pub shard_id: u16,
     host: String,
     port: u16,
     inner: WorkerExecutorInner<'docker_client>,
@@ -81,6 +82,7 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         worker: &GolemWorkerServiceInfo,
         template: &GolemTemplateServiceInfo,
         shard_manager: &ShardManagerInfo,
+        wait_for_health: bool,
     ) -> Result<WorkerExecutor<'docker_client>, Failed> {
         if env_config.local_golem {
             WorkerExecutor::start_process(
@@ -90,6 +92,7 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
                 worker,
                 template,
                 shard_manager,
+                wait_for_health,
             )
         } else {
             WorkerExecutor::start_docker(
@@ -135,6 +138,7 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         let node = docker.run(image);
 
         Ok(WorkerExecutor {
+            shard_id,
             host: name,
             port,
             inner: WorkerExecutorInner::Docker(node),
@@ -193,6 +197,7 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         worker: &GolemWorkerServiceInfo,
         template: &GolemTemplateServiceInfo,
         shard_manager: &ShardManagerInfo,
+        wait_for_health: bool,
     ) -> Result<WorkerExecutor<'docker_client>, Failed> {
         let port = 9000 + shard_id;
         let http_port = 9100 + shard_id;
@@ -259,11 +264,14 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
             }
         });
 
-        WorkerExecutor::wait_for_health_check(port);
+        if wait_for_health {
+            WorkerExecutor::wait_for_health_check(port);
+        }
 
         println!("Worker Executor {shard_id} online");
 
         Ok(WorkerExecutor {
+            shard_id,
             host: "localhost".to_string(),
             port,
             inner: WorkerExecutorInner::Process(child),
@@ -365,7 +373,7 @@ impl Drop for WorkerExecutor<'_> {
 }
 
 pub struct WorkerExecutors<'docker_client> {
-    worker_executors: Vec<WorkerExecutor<'docker_client>>,
+    pub worker_executors: Vec<WorkerExecutor<'docker_client>>,
 }
 
 impl<'docker_client> WorkerExecutors<'docker_client> {
@@ -377,7 +385,7 @@ impl<'docker_client> WorkerExecutors<'docker_client> {
         template: &GolemTemplateServiceInfo,
         shard_manager: &ShardManagerInfo,
     ) -> Result<WorkerExecutors<'docker_client>, Failed> {
-        let shards = 3;
+        let shards = env_config.n_worker_executors;
 
         let mut worker_executors = Vec::with_capacity(shards);
 
@@ -390,6 +398,7 @@ impl<'docker_client> WorkerExecutors<'docker_client> {
                 worker,
                 template,
                 shard_manager,
+                true,
             )?)
         }
 
