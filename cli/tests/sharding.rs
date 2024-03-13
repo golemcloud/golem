@@ -9,8 +9,8 @@ use libtest_mimic::{Arguments, Conclusion, Failed, Trial};
 use rand::prelude::*;
 use serde_json::Value;
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::time::Duration;
 use testcontainers::clients;
 
@@ -31,7 +31,6 @@ fn run(context: ContextInfo) -> Conclusion {
 
 fn main() -> Result<(), Failed> {
     env_logger::init();
-
 
     let (tx, rx) = std::sync::mpsc::channel();
     let (stop_tx, stop_rx) = std::sync::mpsc::channel();
@@ -218,11 +217,7 @@ fn get_invocation_key_with_retry(
     cli: &CliLive,
 ) -> Result<InvocationKey, Failed> {
     loop {
-        match get_invocation_key(
-            template_id,
-            worker_name,
-            cli,
-        ) {
+        match get_invocation_key(template_id, worker_name, cli) {
             Ok(key) => return Ok(key),
             Err(_) => {
                 std::thread::sleep(Duration::from_secs(1));
@@ -266,14 +261,7 @@ fn invoke_and_await_result_with_retry(
     cli: &CliLive,
 ) -> Result<Value, Failed> {
     loop {
-        match invoke_and_await_result(
-            template_id,
-            worker_name,
-            function,
-            params,
-            key,
-            cli,
-        ) {
+        match invoke_and_await_result(template_id, worker_name, function, params, key, cli) {
             Ok(res) => return Ok(res),
             Err(e) => {
                 if e.message()
@@ -303,14 +291,8 @@ fn get_invocation_key_invoke_and_await_with_retry(
     cli: &CliLive,
 ) -> Result<Value, Failed> {
     let key = get_invocation_key_with_retry(&template_id, &worker_name, &cli)?;
-    let res = invoke_and_await_result_with_retry(
-        template_id,
-        worker_name,
-        function,
-        params,
-        &key,
-        cli,
-    );
+    let res =
+        invoke_and_await_result_with_retry(template_id, worker_name, function, params, &key, cli);
     println!("*** WORKER {worker_name} INVOKED ***");
     res
 }
@@ -327,7 +309,12 @@ fn service_is_responsive_to_shard_changes(
         "add",
         &cfg.arg('t', "template-name"),
         &template_name,
-        context.env.wasm_root.join("option-service.wasm").to_str().unwrap(),
+        context
+            .env
+            .wasm_root
+            .join("option-service.wasm")
+            .to_str()
+            .unwrap(),
     ])?;
 
     let mut workers_with_names = Vec::new();
@@ -335,11 +322,7 @@ fn service_is_responsive_to_shard_changes(
     for n in 1..=4 {
         println!("*** WORKER {n} STARTING ***");
         let worker_name = format!("echo-service-{n}");
-        let worker_id = upload_and_start_worker(
-            &template,
-            &worker_name,
-            &cli,
-        )?;
+        let worker_id = upload_and_start_worker(&template, &worker_name, &cli)?;
         println!("*** WORKER {n} STARTED ***");
         workers_with_names.push((worker_id, worker_name))
     }
