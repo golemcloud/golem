@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
 use crate::api_definition_repo::ApiDefinitionRepo;
 use crate::auth::{CommonNamespace};
@@ -10,23 +11,26 @@ use std::sync::Arc;
 use tracing::error;
 
 #[async_trait]
-trait ApiDefinitionLookupService {
+pub trait CustomRequestDefinitionLookup {
     async fn get(
         &self,
         input_http_request: InputHttpRequest<'_>,
     ) -> Result<ApiDefinition, ApiDefinitionLookupError>;
 }
 
-enum ApiDefinitionLookupError {
-    NotFound(String),
-    InternalServerError(String),
+struct ApiDefinitionLookupError(String);
+
+impl Display for ApiDefinitionLookupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ApiDefinitionLookupError: {}", self.0)
+    }
 }
 
-struct ApiDefinitionLookupServiceDefault {
+pub struct CustomRequestDefinitionLookupDefault {
     register_api_definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send>,
 }
 
-impl ApiDefinitionLookupServiceDefault {
+impl CustomRequestDefinitionLookupDefault {
     pub fn new(
         register_api_definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send>,
     ) -> Self {
@@ -37,7 +41,7 @@ impl ApiDefinitionLookupServiceDefault {
 }
 
 #[async_trait]
-impl ApiDefinitionLookupService for ApiDefinitionLookupServiceDefault {
+impl CustomRequestDefinitionLookup for CustomRequestDefinitionLookupDefault {
     async fn get(
         &self,
         input_http_request: InputHttpRequest<'_>,
@@ -47,7 +51,7 @@ impl ApiDefinitionLookupService for ApiDefinitionLookupServiceDefault {
             GOLEM_API_DEFINITION_ID_EXTENSION,
         ) {
             Ok(api_definition_id) => Ok(ApiDefinitionId(api_definition_id.to_string())),
-            Err(err) => Err(ApiDefinitionLookupError::NotFound(format!(
+            Err(err) => Err(ApiDefinitionLookupError(format!(
                 "{} not found in the request headers. Error: {}",
                 GOLEM_API_DEFINITION_ID_EXTENSION, err
             ))),
@@ -56,7 +60,7 @@ impl ApiDefinitionLookupService for ApiDefinitionLookupServiceDefault {
         let version =
             match get_header_value(&input_http_request.headers, GOLEM_API_DEFINITION_VERSION) {
                 Ok(version) => Ok(Version(version)),
-                Err(err) => Err(ApiDefinitionLookupError::NotFound(format!(
+                Err(err) => Err(ApiDefinitionLookupError(format!(
                     "{} not found in the request headers. Error: {}",
                     GOLEM_API_DEFINITION_VERSION, err
                 ))),
@@ -74,13 +78,13 @@ impl ApiDefinitionLookupService for ApiDefinitionLookupServiceDefault {
             .await
             .map_err(|err| {
                 error!("Error getting api definition from the repo: {}", err);
-                ApiDefinitionLookupError::InternalServerError(format!(
+                ApiDefinitionLookupError(format!(
                     "Error getting api definition from the repo: {}",
                     err
                 ))
             })?;
 
-        value.ok_or(ApiDefinitionLookupError::NotFound(format!(
+        value.ok_or(ApiDefinitionLookupError(format!(
             "Api definition with id: {} and version: {} not found",
             &api_definition_id, &version
         )))

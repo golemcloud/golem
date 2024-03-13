@@ -3,7 +3,7 @@ pub mod worker;
 
 pub mod register_definition;
 
-pub mod api_definition_lookup_service;
+pub mod custom_request_definition_lookup;
 
 use crate::api_definition::ResponseMapping;
 use crate::api_definition_repo::{ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry};
@@ -15,13 +15,14 @@ use crate::worker_request_to_response::WorkerRequestToResponse;
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
+use crate::service::custom_request_definition_lookup::CustomRequestDefinitionLookup;
 
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
     pub definition_service:
         Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
-    pub definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send>,
+    pub definition_lookup_service: Arc<dyn CustomRequestDefinitionLookup + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
@@ -67,6 +68,11 @@ impl Services {
                 format!("RedisApiRegistry - init error: {}", e)
             })?);
 
+        let definition_lookup_service = Arc::new(custom_request_definition_lookup::CustomRequestDefinitionLookupDefault::new(
+            definition_repo.clone(),
+        ));
+
+
         let definition_service: Arc<
             dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send,
         > = Arc::new(RegisterApiDefinitionDefault::new(
@@ -87,7 +93,7 @@ impl Services {
         Ok(Services {
             worker_service,
             definition_service,
-            definition_repo,
+            definition_lookup_service,
             worker_to_http_service,
             template_service,
             auth_service,
@@ -112,6 +118,11 @@ impl Services {
         let definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send> =
             Arc::new(InMemoryRegistry::default());
 
+        let definition_lookup_service: Arc<dyn CustomRequestDefinitionLookup + Sync + Send>  =
+            Arc::new(custom_request_definition_lookup::CustomRequestDefinitionLookupDefault::new(
+                definition_repo.clone(),
+            ));
+
         let definition_service = Arc::new(RegisterApiDefinitionDefault::new(
             Arc::new(AuthServiceNoop {}),
             Arc::new(InMemoryRegistry::default()),
@@ -133,7 +144,7 @@ impl Services {
         Services {
             worker_service,
             definition_service,
-            definition_repo,
+            definition_lookup_service,
             worker_to_http_service,
             template_service,
             auth_service,
