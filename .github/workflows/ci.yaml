@@ -371,7 +371,17 @@ jobs:
           mkdir -p ./.cargo
           echo 'paths = ["../golem-client"]' > ./.cargo/config.toml
           cargo build
-          RUST_LOG=info cargo test
+          RUST_LOG=info cargo test --test integration
+      - name: Sharding tests
+        working-directory: golem-cli
+        env:
+          CI: true
+        run: |
+          mkdir -p ./.cargo
+          echo 'paths = ["../golem-client"]' > ./.cargo/config.toml
+          cargo build
+          RUST_LOG=info cargo test --test sharding
+        timeout-minutes: 10
   publish:
     needs: [unit-tests, worker-tests, integration-tests]
     if: "startsWith(github.ref, 'refs/tags/v')"
