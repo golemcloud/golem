@@ -82,7 +82,6 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         worker: &GolemWorkerServiceInfo,
         template: &GolemTemplateServiceInfo,
         shard_manager: &ShardManagerInfo,
-        wait_for_health: bool,
     ) -> Result<WorkerExecutor<'docker_client>, Failed> {
         if env_config.local_golem {
             WorkerExecutor::start_process(
@@ -92,7 +91,6 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
                 worker,
                 template,
                 shard_manager,
-                wait_for_health,
             )
         } else {
             WorkerExecutor::start_docker(
@@ -197,7 +195,6 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         worker: &GolemWorkerServiceInfo,
         template: &GolemTemplateServiceInfo,
         shard_manager: &ShardManagerInfo,
-        wait_for_health: bool,
     ) -> Result<WorkerExecutor<'docker_client>, Failed> {
         let port = 9000 + shard_id;
         let http_port = 9100 + shard_id;
@@ -264,9 +261,7 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
             }
         });
 
-        if wait_for_health {
-            WorkerExecutor::wait_for_health_check(port);
-        }
+        WorkerExecutor::wait_for_health_check(port);
 
         println!("Worker Executor {shard_id} online");
 
@@ -398,7 +393,6 @@ impl<'docker_client> WorkerExecutors<'docker_client> {
                 worker,
                 template,
                 shard_manager,
-                true,
             )?)
         }
 
