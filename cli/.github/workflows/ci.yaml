@@ -44,13 +44,21 @@ jobs:
         run: cargo clippy -- -Dwarnings
       - name: Build
         run: cargo build
-      - name: Tests
+      - name: Integration tests
         env:
           GOLEM_DOCKER_SERVICES: true
           GOLEM_TEST_TEMPLATES: ./test-templates
           RUST_LOG: info
           CI: true
-        run: cargo test
+        run: cargo test --test integration
+      - name: Sharding tests
+        env:
+          GOLEM_DOCKER_SERVICES: true
+          GOLEM_TEST_TEMPLATES: ./test-templates
+          RUST_LOG: info
+          CI: true
+        run: cargo test --test sharding
+        timeout-minutes: 10
   publish:
     needs: [build]
     if: "startsWith(github.ref, 'refs/tags/v')"
