@@ -1,4 +1,4 @@
-use crate::context::Context;
+use crate::context::{Context, EnvConfig};
 use libtest_mimic::{Arguments, Conclusion, Failed};
 use std::sync::Arc;
 use testcontainers::clients;
@@ -25,7 +25,7 @@ fn main() -> Result<(), Failed> {
     env_logger::init();
 
     let docker = clients::Cli::default();
-    let context = Context::start(&docker)?;
+    let context = Context::start(&docker, EnvConfig::from_env())?;
 
     let res = run(&context);
 

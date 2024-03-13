@@ -17,6 +17,7 @@ use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::HealthCheckRequest;
 
 pub struct WorkerExecutor<'docker_client> {
+    pub shard_id: u16,
     host: String,
     port: u16,
     inner: WorkerExecutorInner<'docker_client>,
@@ -135,6 +136,7 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         let node = docker.run(image);
 
         Ok(WorkerExecutor {
+            shard_id,
             host: name,
             port,
             inner: WorkerExecutorInner::Docker(node),
@@ -264,6 +266,7 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
         println!("Worker Executor {shard_id} online");
 
         Ok(WorkerExecutor {
+            shard_id,
             host: "localhost".to_string(),
             port,
             inner: WorkerExecutorInner::Process(child),
@@ -365,7 +368,7 @@ impl Drop for WorkerExecutor<'_> {
 }
 
 pub struct WorkerExecutors<'docker_client> {
-    worker_executors: Vec<WorkerExecutor<'docker_client>>,
+    pub worker_executors: Vec<WorkerExecutor<'docker_client>>,
 }
 
 impl<'docker_client> WorkerExecutors<'docker_client> {
@@ -377,7 +380,7 @@ impl<'docker_client> WorkerExecutors<'docker_client> {
         template: &GolemTemplateServiceInfo,
         shard_manager: &ShardManagerInfo,
     ) -> Result<WorkerExecutors<'docker_client>, Failed> {
-        let shards = 3;
+        let shards = env_config.n_worker_executors;
 
         let mut worker_executors = Vec::with_capacity(shards);
 

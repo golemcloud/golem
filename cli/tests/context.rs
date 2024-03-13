@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use testcontainers::clients;
 
 const NETWORK: &str = "golem_test_network";
-const TAG: &str = "v0.0.63";
+const TAG: &str = "v0.0.67";
 
 #[derive(Debug, Clone)]
 pub struct EnvConfig {
@@ -27,6 +27,7 @@ pub struct EnvConfig {
     pub wasm_root: PathBuf,
     pub local_golem: bool,
     pub db_type: DbType,
+    pub n_worker_executors: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -49,7 +50,7 @@ impl DbType {
 }
 
 impl EnvConfig {
-    pub fn from_env() -> EnvConfig {
+    pub fn from_env_with_shards(shards: usize) -> EnvConfig {
         EnvConfig {
             verbose: std::env::var("CI").is_err(),
             on_ci: std::env::var("CI").is_ok(),
@@ -60,24 +61,28 @@ impl EnvConfig {
             ),
             local_golem: std::env::var("GOLEM_DOCKER_SERVICES").is_err(),
             db_type: DbType::from_env(),
+            n_worker_executors: shards,
         }
+    }
+
+    pub fn from_env() -> EnvConfig {
+        Self::from_env_with_shards(3)
     }
 }
 
 pub struct Context<'docker_client> {
-    env: EnvConfig,
-    db: Db<'docker_client>,
-    redis: Redis<'docker_client>,
-    shard_manager: ShardManager<'docker_client>,
-    golem_template_service: GolemTemplateService<'docker_client>,
-    golem_worker_service: GolemWorkerService<'docker_client>,
-    worker_executors: WorkerExecutors<'docker_client>,
+    pub docker: &'docker_client clients::Cli,
+    pub env: EnvConfig,
+    pub db: Db<'docker_client>,
+    pub redis: Redis<'docker_client>,
+    pub shard_manager: Option<ShardManager<'docker_client>>,
+    pub golem_template_service: GolemTemplateService<'docker_client>,
+    pub golem_worker_service: GolemWorkerService<'docker_client>,
+    pub worker_executors: WorkerExecutors<'docker_client>,
 }
 
 impl Context<'_> {
-    pub fn start(docker: &clients::Cli) -> Result<Context, Failed> {
-        let env_config = EnvConfig::from_env();
-
+    pub fn start(docker: &clients::Cli, env_config: EnvConfig) -> Result<Context, Failed> {
         println!("Starting context with env config: {env_config:?}");
 
         let db = Db::start(docker, &env_config)?;
@@ -105,10 +110,11 @@ impl Context<'_> {
         )?;
 
         Ok(Context {
+            docker,
             env: env_config,
             db,
             redis,
-            shard_manager,
+            shard_manager: Some(shard_manager),
             golem_template_service,
             golem_worker_service,
             worker_executors,
@@ -120,7 +126,7 @@ impl Context<'_> {
             env: self.env.clone(),
             db: self.db.info(),
             redis: self.redis.info(),
-            shard_manager: self.shard_manager.info(),
+            shard_manager: self.shard_manager.as_ref().unwrap().info(),
             golem_template_service: self.golem_template_service.info(),
             golem_worker_service: self.golem_worker_service.info(),
             worker_executors: self.worker_executors.info(),
