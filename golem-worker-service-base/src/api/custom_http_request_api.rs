@@ -8,11 +8,11 @@ use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
+use crate::api_definition_repo::ApiDefinitionRepo;
 use crate::api_request_route_resolver::RouteResolver;
 use crate::auth::CommonNamespace;
 use crate::http_request::{ApiInputPath, InputHttpRequest};
 use crate::oas_worker_bridge::{GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION};
-use crate::register::RegisterApiDefinitionRepo;
 use crate::service::register_definition::ApiDefinitionKey;
 use crate::worker_request::WorkerRequest;
 use crate::worker_request_to_response::WorkerRequestToResponse;
@@ -22,7 +22,7 @@ use crate::worker_request_to_response::WorkerRequestToResponse;
 pub struct CustomHttpRequestApi {
     worker_to_http_response_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
-    api_definition_service: Arc<dyn RegisterApiDefinitionRepo<CommonNamespace> + Sync + Send>,
+    api_definition_service: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
@@ -30,7 +30,7 @@ impl CustomHttpRequestApi {
         worker_to_http_response_service: Arc<
             dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send,
         >,
-        api_definition_service: Arc<dyn RegisterApiDefinitionRepo<CommonNamespace> + Sync + Send>,
+        api_definition_service: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send>,
     ) -> Self {
         Self {
             worker_to_http_response_service,

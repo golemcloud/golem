@@ -199,15 +199,24 @@ async fn register_api(
 
 #[cfg(test)]
 mod test {
+    use crate::auth::AuthServiceNoop;
     use poem::test::TestClient;
 
-    use crate::register::InMemoryRegistry;
+    use crate::api_definition_repo::InMemoryRegistry;
+    use crate::service::register_definition::RegisterApiDefinitionDefault;
 
     use super::*;
 
     fn make_route() -> poem::Route {
-        let definition_service = Arc::new(InMemoryRegistry::default());
-        let endpoint = RegisterApiDefinitionApi::new(definition_service);
+        let definition_service = RegisterApiDefinitionDefault::new(
+            Arc::new(AuthServiceNoop {}),
+            Arc::new(InMemoryRegistry::default()),
+        );
+
+        let endpoint = RegisterApiDefinitionApi::new(
+            Arc::new(definition_service),
+            Arc::new(AuthServiceNoop {}),
+        );
 
         poem::Route::new().nest("", OpenApiService::new(endpoint, "test", "1.0"))
     }

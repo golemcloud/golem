@@ -3,10 +3,12 @@ pub mod worker;
 
 pub mod register_definition;
 
+pub mod api_definition_lookup_service;
+
 use crate::api_definition::ResponseMapping;
+use crate::api_definition_repo::{ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry};
 use crate::app_config::WorkerServiceConfig;
 use crate::auth::{AuthService, AuthServiceNoop, CommonNamespace, EmptyAuthCtx};
-use crate::register::{InMemoryRegistry, RedisApiRegistry, RegisterApiDefinitionRepo};
 use crate::service::register_definition::{RegisterApiDefinition, RegisterApiDefinitionDefault};
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
 use crate::worker_request_to_response::WorkerRequestToResponse;
@@ -19,7 +21,7 @@ pub struct Services {
     pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
     pub definition_service:
         Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
-    pub definition_repo: Arc<dyn RegisterApiDefinitionRepo<CommonNamespace> + Sync + Send>,
+    pub definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
@@ -59,7 +61,7 @@ impl Services {
                 routing_table_service.clone(),
             ));
 
-        let definition_repo: Arc<dyn RegisterApiDefinitionRepo<CommonNamespace> + Sync + Send> =
+        let definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send> =
             Arc::new(RedisApiRegistry::new(&config.redis).await.map_err(|e| {
                 error!("RedisApiRegistry - init error: {}", e);
                 format!("RedisApiRegistry - init error: {}", e)
@@ -107,7 +109,7 @@ impl Services {
         let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
             Arc::new(worker::WorkerServiceNoOp {});
 
-        let definition_repo: Arc<dyn RegisterApiDefinitionRepo<CommonNamespace> + Sync + Send> =
+        let definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send> =
             Arc::new(InMemoryRegistry::default());
 
         let definition_service = Arc::new(RegisterApiDefinitionDefault::new(

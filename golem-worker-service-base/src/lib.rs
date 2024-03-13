@@ -1,5 +1,6 @@
 pub mod api;
 pub mod api_definition;
+pub mod api_definition_repo;
 pub mod api_request_route_resolver;
 pub mod app_config;
 pub mod auth;
@@ -10,7 +11,6 @@ mod http_request;
 pub mod metrics;
 pub mod oas_worker_bridge;
 pub mod parser;
-pub mod register;
 pub mod resolved_variables;
 pub mod service;
 pub mod tokeniser;

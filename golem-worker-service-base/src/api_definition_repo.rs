@@ -13,7 +13,7 @@ use golem_common::redis::RedisPool;
 use tracing::{debug, info};
 
 #[async_trait]
-pub trait RegisterApiDefinitionRepo<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> {
+pub trait ApiDefinitionRepo<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -85,7 +85,7 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> Default
 
 #[async_trait]
 impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync>
-    RegisterApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace>
+    ApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace>
 {
     async fn register(
         &self,
@@ -169,8 +169,8 @@ fn get_namespace_redis_key<Namespace: Eq + Hash + PartialEq + Clone + Debug + Di
 }
 
 #[async_trait]
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Sync>
-    RegisterApiDefinitionRepo<Namespace> for RedisApiRegistry
+impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Sync> ApiDefinitionRepo<Namespace>
+    for RedisApiRegistry
 {
     async fn register(
         &self,
@@ -341,11 +341,11 @@ mod tests {
     use golem_common::config::RedisConfig;
     use std::fmt::Formatter;
 
-    use crate::register::{
-        ApiDefinitionKey, InMemoryRegistry, RedisApiRegistry, RegisterApiDefinitionRepo,
+    use crate::api_definition_repo::{
+        ApiDefinitionKey, ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry,
     };
 
-    #[derive(Clone)]
+    #[derive(Clone, Eq, PartialEq, Debug, Hash)]
     struct CommonNamespace(String);
 
     impl CommonNamespace {
@@ -394,7 +394,7 @@ mod tests {
         let namespace = CommonNamespace::default();
 
         let api_id1 = ApiDefinitionKey {
-            namespace,
+            namespace: namespace.clone(),
             id,
             version,
         };
@@ -410,7 +410,7 @@ mod tests {
         let namespace = CommonNamespace::default();
 
         let api_id2 = ApiDefinitionKey {
-            namespace,
+            namespace: namespace.clone(),
             id: id2,
             version,
         };
@@ -421,9 +421,9 @@ mod tests {
             "cart-${path.cart-id}",
         );
 
-        registry.register(&api_definition1, &()).await.unwrap();
+        registry.register(&api_definition1, &api_id1).await.unwrap();
 
-        registry.register(&api_definition2, &()).await.unwrap();
+        registry.register(&api_definition2, &api_id2).await.unwrap();
 
         let api_definition1_result1 = registry.get(&api_id1).await.unwrap_or(None);
 
@@ -474,7 +474,7 @@ mod tests {
         let namespace = CommonNamespace::default();
 
         let api_id1 = ApiDefinitionKey {
-            namespace,
+            namespace: namespace.clone(),
             id: id1,
             version,
         };
@@ -490,7 +490,7 @@ mod tests {
         let namespace = CommonNamespace::default();
 
         let api_id2 = ApiDefinitionKey {
-            namespace,
+            namespace: namespace.clone(),
             id: id2,
             version,
         };
@@ -503,7 +503,7 @@ mod tests {
 
         registry.register(&api_definition1, &api_id1).await.unwrap();
 
-        registry.register(&api_definition2, &()).await.unwrap();
+        registry.register(&api_definition2, &api_id2).await.unwrap();
 
         let api_definition1_result1 = registry.get(&api_id1).await.unwrap_or(None);
 
@@ -534,23 +534,5 @@ mod tests {
         assert!(api_definition2_result3.is_none());
         assert_eq!(api_definition_result3[0], api_definition2);
         assert!(api_definition_result4.is_empty());
-    }
-
-    #[test]
-    pub fn test_get_api_definition_redis_key() {
-        let id = ApiDefinitionId("api1".to_string());
-        let version = Version("0.0.1".to_string());
-        let namespace = CommonNamespace::default();
-
-        let api_id = ApiDefinitionKey {
-            namespace,
-            id,
-            version,
-        };
-
-        assert_eq!(
-            api_id.get_api_definition_redis_key(),
-            "apidefinition:definition:common:api1"
-        );
     }
 }

@@ -3,8 +3,8 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
+use crate::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 use crate::auth::{AuthService, CommonNamespace, EmptyAuthCtx, Permission};
-use crate::register::{ApiRegistrationRepoError, RegisterApiDefinitionRepo};
 use async_trait::async_trait;
 
 // A namespace here can be example: (account, project) etc.
@@ -110,13 +110,13 @@ impl Display for ApiRegistrationError {
 
 pub struct RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
-    pub register_repo: Arc<dyn RegisterApiDefinitionRepo<Namespace> + Sync + Send>,
+    pub register_repo: Arc<dyn ApiDefinitionRepo<Namespace> + Sync + Send>,
 }
 
 impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub fn new(
         auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
-        register_repo: Arc<dyn RegisterApiDefinitionRepo<Namespace> + Sync + Send>,
+        register_repo: Arc<dyn ApiDefinitionRepo<Namespace> + Sync + Send>,
     ) -> Self {
         Self {
             auth_service,
