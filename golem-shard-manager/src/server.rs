@@ -57,9 +57,12 @@ impl ShardManagerServiceImpl {
         worker_executor_service: Arc<dyn WorkerExecutorService + Send + Sync>,
         shard_manager_config: Arc<ShardManagerConfig>,
     ) -> Result<ShardManagerServiceImpl, ShardManagerError> {
-        let shard_management =
-            ShardManagement::new(persistence_service.clone(), worker_executor_service.clone())
-                .await?;
+        let shard_management = ShardManagement::new(
+            persistence_service.clone(),
+            worker_executor_service.clone(),
+            shard_manager_config.rebalance_threshold,
+        )
+        .await?;
 
         let shard_manager_service = ShardManagerServiceImpl {
             shard_management,

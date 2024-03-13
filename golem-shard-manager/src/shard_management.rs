@@ -28,6 +28,7 @@ impl ShardManagement {
     pub async fn new(
         persistence_service: Arc<dyn PersistenceService + Send + Sync>,
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
+        threshold: f64,
     ) -> Result<Self, ShardManagerError> {
         let (routing_table, mut pending_rebalance) = persistence_service.read().await.unwrap();
         let routing_table = Arc::new(RwLock::new(routing_table));
@@ -71,6 +72,7 @@ impl ShardManagement {
                 updates_clone,
                 persistence_service,
                 worker_executors,
+                threshold,
             )
             .await
         })));
@@ -106,6 +108,7 @@ impl ShardManagement {
         updates: Arc<Mutex<ShardManagementChanges>>,
         persistence_service: Arc<dyn PersistenceService + Send + Sync>,
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
+        threshold: f64,
     ) {
         loop {
             change.notified().await;
@@ -130,30 +133,34 @@ impl ShardManagement {
                     info!("Registered new worker executor: {pod}")
                 }
             }
-            let mut rebalance = Rebalance::from_routing_table(&current_routing_table, 0.0); // TODO: configurable threshold
+            let mut rebalance = Rebalance::from_routing_table(&current_routing_table, threshold);
 
             for pod in send_full_assignment {
                 let assignments = current_routing_table.get_shards(&pod).unwrap_or_default();
                 rebalance.add_assignments(&pod, assignments);
             }
 
-            // Panicking in case any of the rebalancing steps fail (after some internal retries within those steps).
-            // This causes the shard manager to get restarted and have and retry the rebalance on next startup.
+            if !rebalance.is_empty() {
+                // Panicking in case any of the rebalancing steps fail (after some internal retries within those steps).
+                // This causes the shard manager to get restarted and have and retry the rebalance on next startup.
 
-            persistence_service
-                .write(&routing_table.read().await.clone(), &rebalance)
-                .await
-                .expect("Failed to persist routing table");
+                persistence_service
+                    .write(&routing_table.read().await.clone(), &rebalance)
+                    .await
+                    .expect("Failed to persist routing table");
 
-            Self::execute_rebalance(worker_executors.clone(), &mut rebalance)
-                .await
-                .expect("Failed to execute rebalance");
+                Self::execute_rebalance(worker_executors.clone(), &mut rebalance)
+                    .await
+                    .expect("Failed to execute rebalance");
 
-            routing_table.write().await.rebalance(rebalance);
-            persistence_service
-                .write(&routing_table.read().await.clone(), &Rebalance::empty())
-                .await
-                .expect("Failed to persist routing table");
+                routing_table.write().await.rebalance(rebalance);
+                persistence_service
+                    .write(&routing_table.read().await.clone(), &Rebalance::empty())
+                    .await
+                    .expect("Failed to persist routing table");
+            } else {
+                info!("No rebalance necessary");
+            }
         }
     }
 

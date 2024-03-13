@@ -100,55 +100,66 @@ impl Rebalance {
         // We redistribute shards from each entry having more than the optimal count
         // to the last one until it becomes balanced, and repeat if we have more than one unbalanced entry.
         // We also apply a threshold to the optimal count, to reduce the number of shard reassignments.
-        loop {
+        for target_idx in 0..routing_table_entries.len() {
             for (idx, entry) in routing_table_entries.iter().enumerate() {
-                trace!("Pod {} has {} shards", idx, entry.shard_ids.len());
+                trace!(
+                    "Pod {} has {} shards: {:?}",
+                    idx,
+                    entry.shard_ids.len(),
+                    entry.shard_ids
+                );
             }
 
-            if let Some((target_idx, _)) = routing_table_entries
-                .iter()
-                .enumerate()
-                .find(|(_, entry)| entry.shard_ids.len() < lower_threshold)
-            {
+            if routing_table_entries[target_idx].shard_ids.len() < lower_threshold {
                 trace!("Found a pod with too few shards: {}", target_idx);
-                let mut source_idx = if target_idx == 0 { 1 } else { 0 };
 
                 loop {
                     trace!("Target count: {}..{}", lower_threshold, upper_threshold);
                     let current_target_len = routing_table_entries[target_idx].shard_ids.len();
                     if current_target_len < lower_threshold {
-                        let shard_id = *routing_table_entries[source_idx]
-                            .shard_ids
+                        // Finding a source pod which has more than enough shards
+                        if let Some((source_idx, _)) = routing_table_entries
                             .iter()
-                            .next()
-                            .unwrap();
-                        trace!(
-                            "Moving first shard from {} to {}: {}",
-                            source_idx,
-                            target_idx,
-                            shard_id
-                        );
-                        routing_table_entries[source_idx]
-                            .shard_ids
-                            .remove(&shard_id);
-                        routing_table_entries[target_idx].shard_ids.insert(shard_id);
-                        assignments.assign(routing_table_entries[target_idx].pod.clone(), shard_id);
-                        unassignments
-                            .unassign(routing_table_entries[source_idx].pod.clone(), shard_id);
+                            .enumerate()
+                            .filter(|(idx, entry)| {
+                                *idx != target_idx && // we need a different source
+                                    entry.shard_ids.len() > lower_threshold
+                            })
+                            .max_by(|(_, a), (_, b)| a.shard_ids.len().cmp(&b.shard_ids.len()))
+                        {
+                            let shard_id = *routing_table_entries[source_idx]
+                                .shard_ids
+                                .iter()
+                                .next()
+                                .unwrap();
+                            // this is guaranteed by check (**)
+                            trace!(
+                                "Moving first shard from {} to {}: {}",
+                                source_idx,
+                                target_idx,
+                                shard_id
+                            );
+                            routing_table_entries[source_idx]
+                                .shard_ids
+                                .remove(&shard_id);
 
-                        source_idx = (source_idx + 1) % pod_count;
-                        while (source_idx == target_idx) || (empty_pods.contains(&source_idx)) {
-                            source_idx = (source_idx + 1) % pod_count;
+                            routing_table_entries[target_idx].shard_ids.insert(shard_id);
+                            assignments
+                                .assign(routing_table_entries[target_idx].pod.clone(), shard_id);
+                            unassignments
+                                .unassign(routing_table_entries[source_idx].pod.clone(), shard_id);
+                            assignments
+                                .unassign(routing_table_entries[source_idx].pod.clone(), shard_id);
+                        } else {
+                            trace!("Target reached a balanced state");
+                            // target reached a balanced state
+                            break;
                         }
                     } else {
-                        trace!("Target reached a balanced state");
-                        // target reached a balanced state
+                        trace!("No more possible rebalance steps");
                         break;
                     }
                 }
-            } else {
-                trace!("All pods are balanced");
-                break;
             }
         }
 
@@ -233,6 +244,7 @@ mod tests {
     use crate::model::{Pod, RoutingTable};
     use crate::rebalancing::Rebalance;
     use golem_common::model::ShardId;
+    use tracing_test::traced_test;
 
     fn assign_shard(routing_table: &mut RoutingTable, pod: &Pod, shard_id: i64) {
         routing_table
@@ -271,6 +283,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn rebalance_empty_table() {
         let routing_table = RoutingTable::new(1000);
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
@@ -278,6 +291,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn rebalance_single_pod_no_unassigned() {
         let pod1 = Pod::new("pod1".to_string(), 9000);
         let mut routing_table = RoutingTable::new(4);
@@ -293,6 +307,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn rebalance_single_pod_unassigned() {
         let pod1 = Pod::new("pod1".to_string(), 9000);
         let mut routing_table = RoutingTable::new(6);
@@ -305,8 +320,7 @@ mod tests {
 
         assert!(rebalance.get_unassignments().is_empty());
 
-        let mut assigned_ids = get_assigned_ids(&rebalance, &pod1);
-        assigned_ids.sort();
+        let assigned_ids = get_assigned_ids(&rebalance, &pod1);
         assert_eq!(
             assigned_ids,
             vec![
@@ -319,6 +333,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn rebalance_three_balanced_pods_no_unassigned() {
         let pod1 = Pod::new("pod1".to_string(), 9000);
         let pod2 = Pod::new("pod2".to_string(), 9001);
@@ -344,6 +359,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn rebalance_three_balanced_pods_unassigned() {
         let pod1 = Pod::new("pod1".to_string(), 9000);
         let pod2 = Pod::new("pod2".to_string(), 9001);
@@ -373,6 +389,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn rebalance_one_new_pod() {
         let pod1 = Pod::new("pod1".to_string(), 9000);
         let pod2 = Pod::new("pod2".to_string(), 9001);
@@ -403,19 +420,20 @@ mod tests {
         let unassigned_ids_2 = get_unassigned_ids(&rebalance, &pod2);
         let unassigned_ids_3 = get_unassigned_ids(&rebalance, &pod3);
 
-        assert_eq!(assigned_ids_1, vec![ShardId::new(5)]);
+        assert_eq!(assigned_ids_1, vec![]);
         assert_eq!(assigned_ids_2, vec![]);
         assert_eq!(
             assigned_ids_3,
-            vec![ShardId::new(0), ShardId::new(1), ShardId::new(4)]
+            vec![ShardId::new(0), ShardId::new(4), ShardId::new(5)]
         );
 
-        assert_eq!(unassigned_ids_1, vec![ShardId::new(0), ShardId::new(1)]);
+        assert_eq!(unassigned_ids_1, vec![ShardId::new(0)]);
         assert_eq!(unassigned_ids_2, vec![ShardId::new(4), ShardId::new(5)]);
         assert_eq!(unassigned_ids_3, vec![]);
     }
 
     #[test]
+    #[traced_test]
     fn rebalance_one_new_pod_with_threshold() {
         let pod1 = Pod::new("pod1".to_string(), 9000);
         let pod2 = Pod::new("pod2".to_string(), 9001);
@@ -448,14 +466,15 @@ mod tests {
 
         assert_eq!(assigned_ids_1, vec![]);
         assert_eq!(assigned_ids_2, vec![]);
-        assert_eq!(assigned_ids_3, vec![ShardId::new(0), ShardId::new(4)]);
+        assert_eq!(assigned_ids_3, vec![ShardId::new(4), ShardId::new(5)]);
 
-        assert_eq!(unassigned_ids_1, vec![ShardId::new(0)]);
-        assert_eq!(unassigned_ids_2, vec![ShardId::new(4)]);
+        assert_eq!(unassigned_ids_1, vec![]);
+        assert_eq!(unassigned_ids_2, vec![ShardId::new(4), ShardId::new(5)]);
         assert_eq!(unassigned_ids_3, vec![]);
     }
 
     #[test]
+    #[traced_test]
     fn rebalance_one_new_pod_after_removing_two() {
         let pod1 = Pod::new("pod1".to_string(), 9000);
         let pod2 = Pod::new("pod2".to_string(), 9001);
@@ -503,6 +522,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn rebalance_two_new_pods() {
         let pod1 = Pod::new("pod1".to_string(), 9000);
         let pod2 = Pod::new("pod2".to_string(), 9001);
@@ -559,6 +579,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn rebalance_two_new_pods_after_removing_one() {
         let pod1 = Pod::new("pod1".to_string(), 9000);
         let pod2 = Pod::new("pod2".to_string(), 9001);
@@ -595,20 +616,57 @@ mod tests {
         let unassigned_ids_3 = get_unassigned_ids(&rebalance, &pod3);
         let unassigned_ids_4 = get_unassigned_ids(&rebalance, &pod4);
 
-        assert_eq!(assigned_ids_1, vec![ShardId::new(7)]);
+        assert_eq!(assigned_ids_1, vec![]);
         assert_eq!(assigned_ids_2, vec![]);
         assert_eq!(
             assigned_ids_3,
-            vec![ShardId::new(0), ShardId::new(4), ShardId::new(6)]
+            vec![ShardId::new(4), ShardId::new(6), ShardId::new(7)]
         );
         assert_eq!(
             assigned_ids_4,
-            vec![ShardId::new(1), ShardId::new(5), ShardId::new(11)]
+            vec![ShardId::new(0), ShardId::new(5), ShardId::new(11)]
         );
 
-        assert_eq!(unassigned_ids_1, vec![ShardId::new(0), ShardId::new(1)]);
+        assert_eq!(unassigned_ids_1, vec![ShardId::new(0)]);
         assert_eq!(unassigned_ids_2, vec![ShardId::new(7)]);
         assert_eq!(unassigned_ids_3, vec![]);
         assert_eq!(unassigned_ids_4, vec![]);
+    }
+
+    #[test]
+    #[traced_test]
+    fn two_empty_pods_one_filled() {
+        let pod1 = Pod::new("pod1".to_string(), 9000);
+        let pod2 = Pod::new("pod2".to_string(), 9001);
+        let pod3 = Pod::new("pod3".to_string(), 9002);
+
+        let mut routing_table = RoutingTable::new(9);
+        routing_table.add_pod(&pod1);
+        routing_table.add_pod(&pod2);
+        routing_table.add_pod(&pod3);
+
+        assign_shard(&mut routing_table, &pod1, 3);
+        assign_shard(&mut routing_table, &pod1, 4);
+        assign_shard(&mut routing_table, &pod1, 5);
+
+        // pod2 is empty
+        // pod3 is new and empty
+
+        let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
+
+        println!("{rebalance:?}");
+
+        let assigned_ids_1 = get_assigned_ids(&rebalance, &pod1);
+        let assigned_ids_2 = get_assigned_ids(&rebalance, &pod2);
+        let assigned_ids_3 = get_assigned_ids(&rebalance, &pod3);
+        assert_eq!(assigned_ids_1, vec![]);
+        assert_eq!(
+            assigned_ids_2,
+            vec![ShardId::new(2), ShardId::new(7), ShardId::new(8)]
+        );
+        assert_eq!(
+            assigned_ids_3,
+            vec![ShardId::new(0), ShardId::new(1), ShardId::new(6)]
+        );
     }
 }

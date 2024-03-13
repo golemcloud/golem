@@ -164,7 +164,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &shard_assignment.shard_ids,
         );
 
-        info!("Registered worker executor as {:?}", shard_assignment);
+        info!("Registered worker executor, waiting for shard assignment...");
 
         Ctx::on_shard_assignment_changed(&worker_executor).await?;
 
@@ -583,8 +583,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::RevokeShardsRequest,
     ) -> Result<(), GolemError> {
-        info!("revoke_shards: {:?}", request);
-
         let proto_shard_ids = request.shard_ids;
 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
@@ -610,8 +608,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::AssignShardsRequest,
     ) -> Result<(), GolemError> {
-        info!("assign_shards: {:?}", request);
-
         let proto_shard_ids = request.shard_ids;
 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();

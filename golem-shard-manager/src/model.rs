@@ -268,6 +268,10 @@ impl Assignments {
         self.assignments.entry(pod).or_default().insert(shard_id);
     }
 
+    pub fn unassign(&mut self, pod: Pod, shard_id: ShardId) {
+        self.assignments.entry(pod).or_default().remove(&shard_id);
+    }
+
     pub fn new() -> Self {
         Self {
             assignments: BTreeMap::new(),
