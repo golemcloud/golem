@@ -11,7 +11,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
-use tracing::info;
+use tracing::{debug, info};
 
 #[derive(Clone)]
 pub struct ShardManagement {
@@ -28,6 +28,7 @@ impl ShardManagement {
     pub async fn new(
         persistence_service: Arc<dyn PersistenceService + Send + Sync>,
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
+        threshold: f64,
     ) -> Result<Self, ShardManagerError> {
         let (routing_table, mut pending_rebalance) = persistence_service.read().await.unwrap();
         let routing_table = Arc::new(RwLock::new(routing_table));
@@ -71,6 +72,7 @@ impl ShardManagement {
                 updates_clone,
                 persistence_service,
                 worker_executors,
+                threshold,
             )
             .await
         })));
@@ -85,12 +87,14 @@ impl ShardManagement {
 
     /// Registers a new pod to be added
     pub async fn register_pod(&self, pod: Pod) {
+        debug!("Registering pod: {pod}");
         self.updates.lock().await.add_new_pod(pod);
         self.change.notify_one();
     }
 
     /// Marks a pod to be removed
     pub async fn unregister_pod(&self, pod: Pod) {
+        debug!("Unregistering pod: {pod}");
         self.updates.lock().await.remove_pod(pod);
         self.change.notify_one();
     }
@@ -106,10 +110,15 @@ impl ShardManagement {
         updates: Arc<Mutex<ShardManagementChanges>>,
         persistence_service: Arc<dyn PersistenceService + Send + Sync>,
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
+        threshold: f64,
     ) {
         loop {
+            debug!("Shard management loop awaiting changes");
             change.notified().await;
+
             let (new_pods, removed_pods) = updates.lock().await.reset();
+            debug!("Shard management loop woken up by change; new pods: {new_pods:?}, removed pods: {removed_pods:?}");
+
             let mut current_routing_table = routing_table.read().await.clone();
 
             for pod in removed_pods {
@@ -130,12 +139,14 @@ impl ShardManagement {
                     info!("Registered new worker executor: {pod}")
                 }
             }
-            let mut rebalance = Rebalance::from_routing_table(&current_routing_table, 0.0); // TODO: configurable threshold
+            let mut rebalance = Rebalance::from_routing_table(&current_routing_table, threshold);
 
             for pod in send_full_assignment {
                 let assignments = current_routing_table.get_shards(&pod).unwrap_or_default();
                 rebalance.add_assignments(&pod, assignments);
             }
+
+            debug!("Applying rebalance plan: {rebalance}");
 
             // Panicking in case any of the rebalancing steps fail (after some internal retries within those steps).
             // This causes the shard manager to get restarted and have and retry the rebalance on next startup.
