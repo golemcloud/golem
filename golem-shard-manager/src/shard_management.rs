@@ -11,7 +11,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
-use tracing::info;
+use tracing::{debug, info};
 
 #[derive(Clone)]
 pub struct ShardManagement {
@@ -87,12 +87,14 @@ impl ShardManagement {
 
     /// Registers a new pod to be added
     pub async fn register_pod(&self, pod: Pod) {
+        debug!("Registering pod: {pod}");
         self.updates.lock().await.add_new_pod(pod);
         self.change.notify_one();
     }
 
     /// Marks a pod to be removed
     pub async fn unregister_pod(&self, pod: Pod) {
+        debug!("Unregistering pod: {pod}");
         self.updates.lock().await.remove_pod(pod);
         self.change.notify_one();
     }
@@ -111,8 +113,12 @@ impl ShardManagement {
         threshold: f64,
     ) {
         loop {
+            debug!("Shard management loop awaiting changes");
             change.notified().await;
+
             let (new_pods, removed_pods) = updates.lock().await.reset();
+            debug!("Shard management loop woken up by change; new pods: {new_pods:?}, removed pods: {removed_pods:?}");
+
             let mut current_routing_table = routing_table.read().await.clone();
 
             for pod in removed_pods {
@@ -140,27 +146,25 @@ impl ShardManagement {
                 rebalance.add_assignments(&pod, assignments);
             }
 
-            if !rebalance.is_empty() {
-                // Panicking in case any of the rebalancing steps fail (after some internal retries within those steps).
-                // This causes the shard manager to get restarted and have and retry the rebalance on next startup.
+            debug!("Applying rebalance plan: {rebalance}");
 
-                persistence_service
-                    .write(&routing_table.read().await.clone(), &rebalance)
-                    .await
-                    .expect("Failed to persist routing table");
+            // Panicking in case any of the rebalancing steps fail (after some internal retries within those steps).
+            // This causes the shard manager to get restarted and have and retry the rebalance on next startup.
 
-                Self::execute_rebalance(worker_executors.clone(), &mut rebalance)
-                    .await
-                    .expect("Failed to execute rebalance");
+            persistence_service
+                .write(&routing_table.read().await.clone(), &rebalance)
+                .await
+                .expect("Failed to persist routing table");
 
-                routing_table.write().await.rebalance(rebalance);
-                persistence_service
-                    .write(&routing_table.read().await.clone(), &Rebalance::empty())
-                    .await
-                    .expect("Failed to persist routing table");
-            } else {
-                info!("No rebalance necessary");
-            }
+            Self::execute_rebalance(worker_executors.clone(), &mut rebalance)
+                .await
+                .expect("Failed to execute rebalance");
+
+            routing_table.write().await.rebalance(rebalance);
+            persistence_service
+                .write(&routing_table.read().await.clone(), &Rebalance::empty())
+                .await
+                .expect("Failed to persist routing table");
         }
     }
 
