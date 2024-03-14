@@ -68,6 +68,7 @@ impl ShardManagerService for ShardManagerServiceGrpc {
             &(host, port),
             |(host, port)| {
                 let uri = uri.clone();
+                let pod_name = pod_name.clone();
                 Box::pin(async move {
                     let mut shard_manager_client =
                         shard_manager_service_client::ShardManagerServiceClient::connect(
@@ -84,7 +85,7 @@ impl ShardManagerService for ShardManagerServiceGrpc {
                         .register(shardmanager::RegisterRequest {
                             host: host.clone(),
                             port: *port as i32,
-                            pod_name,
+                            pod_name: pod_name.clone(),
                         })
                         .await
                         .map_err(|err| {

@@ -133,17 +133,17 @@ pub mod kubernetes {
 
             match &pod.pod_name {
                 Some(pod_name) => {
-                    match pods.get_opt(&pod_name).await {
+                    match pods.get_opt(pod_name).await {
                         Ok(Some(k8s_pod)) => match k8s_pod.status {
                             Some(status) => {
-                                let is_ready = status
-                                    .conditions
-                                    .unwrap_or_default()
-                                    .iter()
-                                    .find(|&condition| {
-                                        condition.type_ == "Ready" && condition.status == "True"
-                                    })
-                                    .is_some();
+                                let is_ready =
+                                    status
+                                        .conditions
+                                        .unwrap_or_default()
+                                        .iter()
+                                        .any(|condition| {
+                                            condition.type_ == "Ready" && condition.status == "True"
+                                        });
                                 if !is_ready {
                                     info!("Pod {pod} is not ready, marking as unhealthy");
                                 }
