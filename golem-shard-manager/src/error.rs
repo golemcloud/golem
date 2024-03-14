@@ -103,3 +103,15 @@ impl Error for ShardManagerError {
         }
     }
 }
+
+impl From<tonic::transport::Error> for ShardManagerError {
+    fn from(value: tonic::transport::Error) -> Self {
+        ShardManagerError::Unknown(format!("{value}"))
+    }
+}
+
+impl From<std::io::Error> for ShardManagerError {
+    fn from(value: std::io::Error) -> Self {
+        ShardManagerError::Unknown(format!("{value}"))
+    }
+}

@@ -17,9 +17,11 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
+use std::net::ToSocketAddrs;
 
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use tonic::transport::Endpoint;
 
 use golem_api_grpc::proto::golem;
 use golem_common::model::ShardId;
@@ -33,28 +35,49 @@ use crate::rebalancing::Rebalance;
 pub struct Pod {
     host: String,
     port: u16,
+    pub pod_name: Option<String>,
 }
 
 impl Pod {
+    #[cfg(test)]
     pub fn new(host: String, port: u16) -> Self {
-        Self { host, port }
+        Self {
+            host,
+            port,
+            pod_name: None,
+        }
     }
 
-    pub fn address(&self) -> String {
-        format!("http://{}:{}", self.host, self.port)
+    pub fn address(&self) -> Result<Endpoint, tonic::transport::Error> {
+        Endpoint::try_from(format!("{}:{}", self.host, self.port))
     }
 
     pub fn from_register_request(
         request: tonic::Request<golem::shardmanager::RegisterRequest>,
     ) -> Result<Self, ShardManagerError> {
-        let host = request
+        let registration_addr = request
             .remote_addr()
-            .ok_or(ShardManagerError::invalid_request("missing host"))?
-            .ip()
-            .to_string();
-        let port = request.into_inner().port as u16;
-        let pod = Pod::new(host, port);
-        Ok(pod)
+            .ok_or(ShardManagerError::invalid_request("missing host"))?;
+        let request = request.into_inner();
+        let pod = Pod {
+            host: request.host,
+            port: request.port as u16,
+            pod_name: request.pod_name,
+        };
+
+        let endpoint: Endpoint = pod.address()?;
+        let resolved = endpoint
+            .uri()
+            .to_string()
+            .to_socket_addrs()?
+            .collect::<Vec<_>>();
+        if !resolved.contains(&registration_addr) {
+            Err(ShardManagerError::invalid_request(
+                "Host mismatch between registration message and resolved message source",
+            ))
+        } else {
+            Ok(pod)
+        }
     }
 }
 
@@ -63,6 +86,7 @@ impl From<Pod> for golem::shardmanager::Pod {
         golem::shardmanager::Pod {
             host: value.host,
             port: value.port as u32,
+            pod_name: value.pod_name,
         }
     }
 }
@@ -72,13 +96,17 @@ impl From<golem::shardmanager::Pod> for Pod {
         Self {
             host: proto.host,
             port: proto.port as u16,
+            pod_name: proto.pod_name,
         }
     }
 }
 
 impl Display for Pod {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}:{}", self.host, self.port)
+        match &self.pod_name {
+            Some(name) => write!(f, "{}", name),
+            None => write!(f, "{}:{}", self.host, self.port),
+        }
     }
 }
 

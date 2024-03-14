@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -20,7 +20,6 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::ShardId;
 use tokio::time::timeout;
-use tonic::transport::Uri;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::HealthCheckRequest;
@@ -45,30 +44,6 @@ pub trait WorkerExecutorService {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError>;
-}
-
-/// Executes healthcheck on all the given worker executors, and returns a set of unhealthy ones
-pub async fn get_unhealthy_pods(
-    worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
-    pods: &HashSet<Pod>,
-) -> HashSet<Pod> {
-    let futures: Vec<_> = pods
-        .iter()
-        .map(|pod| {
-            let worker_executor = worker_executors.clone();
-            Box::pin(async move {
-                match worker_executor.health_check(pod).await {
-                    true => None,
-                    false => Some(pod.clone()),
-                }
-            })
-        })
-        .collect();
-    futures::future::join_all(futures)
-        .await
-        .into_iter()
-        .flatten()
-        .collect()
 }
 
 /// Sends revoke requests to all worker executors based on an `Unassignments` plan
@@ -157,31 +132,6 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         }
     }
 
-    async fn health_check(&self, pod: &Pod) -> bool {
-        let retry_max_attempts = self.config.retries.max_attempts;
-        let retry_min_delay = self.config.retries.min_delay;
-        let retry_max_delay = self.config.retries.max_delay;
-        let retry_multiplier = self.config.retries.multiplier;
-
-        let mut attempts = 0;
-        let mut delay = retry_min_delay;
-
-        loop {
-            match self.health_check_pod(pod).await {
-                true => return true,
-                false => {
-                    if attempts >= retry_max_attempts {
-                        debug!("Health check for {pod} failed {attempts}, marking as unhealthy");
-                        return false;
-                    }
-                    tokio::time::sleep(delay).await;
-                    attempts += 1;
-                    delay = std::cmp::min(delay * retry_multiplier, retry_max_delay);
-                }
-            }
-        }
-    }
-
     async fn revoke_shards(
         &self,
         pod: &Pod,
@@ -211,64 +161,12 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             }
         }
     }
-}
 
-impl WorkerExecutorServiceDefault {
-    pub fn new(config: WorkerExecutorServiceConfig) -> Self {
-        Self { config }
-    }
-
-    async fn assign_shards_internal(
-        &self,
-        pod: &Pod,
-        shard_ids: &BTreeSet<ShardId>,
-    ) -> Result<(), ShardManagerError> {
-        let assign_shards_request = golem::workerexecutor::AssignShardsRequest {
-            shard_ids: shard_ids
-                .clone()
-                .into_iter()
-                .map(|shard_id| shard_id.into())
-                .collect(),
-        };
-
-        let mut worker_executor_client = WorkerExecutorClient::connect(pod.address())
-            .await
-            .map_err(|e| ShardManagerError::unknown(e.to_string()))?;
-
-        let assign_shards_response = timeout(
-            self.config.assign_shards_timeout,
-            worker_executor_client.assign_shards(assign_shards_request),
-        )
-        .await
-        .map_err(|e| ShardManagerError::unknown(e.to_string()))?
-        .map_err(|_| ShardManagerError::timeout("assign_shards"))?;
-
-        match assign_shards_response.into_inner() {
-            golem::workerexecutor::AssignShardsResponse {
-                result: Some(golem::workerexecutor::assign_shards_response::Result::Success(_)),
-            } => Ok(()),
-            golem::workerexecutor::AssignShardsResponse {
-                result:
-                    Some(golem::workerexecutor::assign_shards_response::Result::Failure(failure)),
-            } => Err(ShardManagerError::unknown(format!(
-                "unknown : {:#?}",
-                failure
-            ))),
-            golem::workerexecutor::AssignShardsResponse { result: None } => {
-                Err(ShardManagerError::unknown("unknown"))
-            }
-        }
-    }
-
-    async fn health_check_pod(&self, pod: &Pod) -> bool {
+    async fn health_check(&self, pod: &Pod) -> bool {
         debug!("Health checking pod {pod}");
-        match pod.address().parse::<Uri>() {
-            Ok(uri) => {
-                let conn = timeout(
-                    self.config.health_check_timeout,
-                    tonic::transport::Endpoint::from(uri).connect(),
-                )
-                .await;
+        match pod.address() {
+            Ok(endpoint) => {
+                let conn = timeout(self.config.health_check_timeout, endpoint.connect()).await;
                 match conn {
                     Ok(conn) => match conn {
                         Ok(conn) => {
@@ -302,6 +200,52 @@ impl WorkerExecutorServiceDefault {
             }
         }
     }
+}
+
+impl WorkerExecutorServiceDefault {
+    pub fn new(config: WorkerExecutorServiceConfig) -> Self {
+        Self { config }
+    }
+
+    async fn assign_shards_internal(
+        &self,
+        pod: &Pod,
+        shard_ids: &BTreeSet<ShardId>,
+    ) -> Result<(), ShardManagerError> {
+        let assign_shards_request = golem::workerexecutor::AssignShardsRequest {
+            shard_ids: shard_ids
+                .clone()
+                .into_iter()
+                .map(|shard_id| shard_id.into())
+                .collect(),
+        };
+
+        let mut worker_executor_client = WorkerExecutorClient::new(pod.address()?.connect().await?);
+
+        let assign_shards_response = timeout(
+            self.config.assign_shards_timeout,
+            worker_executor_client.assign_shards(assign_shards_request),
+        )
+        .await
+        .map_err(|e| ShardManagerError::unknown(e.to_string()))?
+        .map_err(|_| ShardManagerError::timeout("assign_shards"))?;
+
+        match assign_shards_response.into_inner() {
+            golem::workerexecutor::AssignShardsResponse {
+                result: Some(golem::workerexecutor::assign_shards_response::Result::Success(_)),
+            } => Ok(()),
+            golem::workerexecutor::AssignShardsResponse {
+                result:
+                    Some(golem::workerexecutor::assign_shards_response::Result::Failure(failure)),
+            } => Err(ShardManagerError::unknown(format!(
+                "unknown : {:#?}",
+                failure
+            ))),
+            golem::workerexecutor::AssignShardsResponse { result: None } => {
+                Err(ShardManagerError::unknown("unknown"))
+            }
+        }
+    }
 
     async fn revoke_shards_internal(
         &self,
@@ -316,9 +260,7 @@ impl WorkerExecutorServiceDefault {
                 .collect(),
         };
 
-        let mut worker_executor_client = WorkerExecutorClient::connect(pod.address())
-            .await
-            .map_err(|e| ShardManagerError::unknown(e.to_string()))?;
+        let mut worker_executor_client = WorkerExecutorClient::new(pod.address()?.connect().await?);
 
         let revoke_shards_response = timeout(
             self.config.revoke_shards_timeout,

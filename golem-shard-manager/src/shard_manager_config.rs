@@ -55,6 +55,17 @@ pub struct WorkerExecutorServiceConfig {
 pub struct HealthCheckConfig {
     #[serde(with = "humantime_serde")]
     pub delay: Duration,
+    pub mode: HealthCheckMode,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum HealthCheckMode {
+    Grpc,
+    #[cfg(feature = "kubernetes")]
+    K8s {
+        namespace: String,
+    },
 }
 
 #[cfg(test)]

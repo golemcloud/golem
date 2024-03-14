@@ -32,3 +32,10 @@ multiplier = 2
 
 [health_check]
 delay = "10s"
+
+[health_check.mode]
+type = "Grpc"
+#type = "K8s"
+#
+#[health_check.mode.config]
+#namespace = "default"
