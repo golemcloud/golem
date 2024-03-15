@@ -1,10 +1,9 @@
 use crate::error::ShardManagerError;
+use crate::healthcheck::{get_unhealthy_pods, HealthCheck};
 use crate::model::{Pod, RoutingTable};
 use crate::persistence::PersistenceService;
 use crate::rebalancing::Rebalance;
-use crate::worker_executor::{
-    assign_shards, get_unhealthy_pods, revoke_shards, WorkerExecutorService,
-};
+use crate::worker_executor::{assign_shards, revoke_shards, WorkerExecutorService};
 use async_rwlock::RwLock;
 use std::collections::HashSet;
 use std::ops::Deref;
@@ -28,6 +27,7 @@ impl ShardManagement {
     pub async fn new(
         persistence_service: Arc<dyn PersistenceService + Send + Sync>,
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
+        health_check: Arc<dyn HealthCheck + Send + Sync>,
         threshold: f64,
     ) -> Result<Self, ShardManagerError> {
         let (routing_table, mut pending_rebalance) = persistence_service.read().await.unwrap();
@@ -36,7 +36,7 @@ impl ShardManagement {
         if !pending_rebalance.is_empty() {
             info!("Conducting health check of pods involved in rebalance");
             let pods = routing_table.read().await.get_pods();
-            let unhealthy_pods = get_unhealthy_pods(worker_executors.clone(), &pods).await;
+            let unhealthy_pods = get_unhealthy_pods(health_check, &pods).await;
             pending_rebalance.remove_pods(&unhealthy_pods);
             info!("The following pods were found to be unhealthy and have been removed from rebalance: {:?}", unhealthy_pods);
 

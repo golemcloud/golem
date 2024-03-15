@@ -24,6 +24,7 @@ message GetRoutingTableResponse {
 message RegisterRequest {
   string host = 1;
   int32 port = 2;
+  optional string pod_name = 3;
 }
 
 message RegisterResponse {

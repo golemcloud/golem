@@ -441,7 +441,7 @@ mod tests {
 
         ResolvedVariables::from_http_request(
             &request_body,
-            &header_map,
+            header_map,
             HashMap::new(),
             vec![],
             &HashMap::new(),

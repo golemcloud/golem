@@ -6,4 +6,5 @@ package golem.shardmanager;
 message Pod {
   string host = 1;
   uint32 port = 2;
+  optional string pod_name = 3;
 }

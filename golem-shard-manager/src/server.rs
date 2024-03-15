@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod error;
+mod healthcheck;
 mod http_server;
 mod model;
 mod persistence;
@@ -25,6 +26,7 @@ use std::env;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
+use crate::healthcheck::{get_unhealthy_pods, GrpcHealthCheck, HealthCheck};
 use error::ShardManagerError;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem;
@@ -43,12 +45,12 @@ use tracing_subscriber::EnvFilter;
 use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
 
 use crate::http_server::HttpServerImpl;
-use crate::worker_executor::get_unhealthy_pods;
+use crate::shard_manager_config::HealthCheckMode;
 
 pub struct ShardManagerServiceImpl {
     shard_management: ShardManagement,
-    worker_executor_service: Arc<dyn WorkerExecutorService + Send + Sync>,
     shard_manager_config: Arc<ShardManagerConfig>,
+    health_check: Arc<dyn HealthCheck + Send + Sync>,
 }
 
 impl ShardManagerServiceImpl {
@@ -56,18 +58,20 @@ impl ShardManagerServiceImpl {
         persistence_service: Arc<dyn PersistenceService + Send + Sync>,
         worker_executor_service: Arc<dyn WorkerExecutorService + Send + Sync>,
         shard_manager_config: Arc<ShardManagerConfig>,
+        health_check: Arc<dyn HealthCheck + Send + Sync>,
     ) -> Result<ShardManagerServiceImpl, ShardManagerError> {
         let shard_management = ShardManagement::new(
             persistence_service.clone(),
-            worker_executor_service.clone(),
+            worker_executor_service,
+            health_check.clone(),
             shard_manager_config.rebalance_threshold,
         )
         .await?;
 
         let shard_manager_service = ShardManagerServiceImpl {
             shard_management,
-            worker_executor_service,
             shard_manager_config,
+            health_check,
         };
 
         info!("Starting health check process...");
@@ -96,24 +100,24 @@ impl ShardManagerServiceImpl {
     fn start_health_check(&self) {
         let delay = self.shard_manager_config.health_check.delay;
         let shard_management = self.shard_management.clone();
-        let worker_executor_service = self.worker_executor_service.clone();
+        let health_check = self.health_check.clone();
+
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(delay).await;
-                Self::health_check(shard_management.clone(), worker_executor_service.clone()).await
+                Self::health_check(shard_management.clone(), health_check.clone()).await
             }
         });
     }
 
     async fn health_check(
         shard_management: ShardManagement,
-        worker_executor_service: Arc<dyn WorkerExecutorService + Send + Sync>,
+        health_check: Arc<dyn HealthCheck + Send + Sync>,
     ) {
         debug!("Shard Manager scheduled to conduct health check");
         let routing_table = shard_management.current_snapshot().await;
         debug!("Shard Manager checking health of registered pods...");
-        let failed_pods =
-            get_unhealthy_pods(worker_executor_service.clone(), &routing_table.get_pods()).await;
+        let failed_pods = get_unhealthy_pods(health_check, &routing_table.get_pods()).await;
         if failed_pods.is_empty() {
             debug!("All registered pods are healthy")
         } else {
@@ -228,7 +232,7 @@ async fn async_main(
         &pool,
         &shard_manager_config.number_of_shards,
     ));
-    let instance_server_service = Arc::new(WorkerExecutorServiceDefault::new(
+    let worker_executors = Arc::new(WorkerExecutorServiceDefault::new(
         shard_manager_config.worker_executors.clone(),
     ));
 
@@ -241,10 +245,28 @@ async fn async_main(
 
     let addr = shard_manager_addr.parse()?;
 
+    let health_check: Arc<dyn HealthCheck + Send + Sync> =
+        match &shard_manager_config.health_check.mode {
+            HealthCheckMode::Grpc => Arc::new(GrpcHealthCheck::new(
+                worker_executors.clone(),
+                shard_manager_config.worker_executors.retries.clone(),
+            )),
+            #[cfg(feature = "kubernetes")]
+            HealthCheckMode::K8s { namespace } => Arc::new(
+                crate::healthcheck::kubernetes::KubernetesHealthCheck::new(
+                    namespace.clone(),
+                    shard_manager_config.worker_executors.retries.clone(),
+                )
+                .await
+                .expect("Failed to initialize K8s health checker"),
+            ),
+        };
+
     let shard_manager = ShardManagerServiceImpl::new(
         persistence_service,
-        instance_server_service,
+        worker_executors,
         shard_manager_config,
+        health_check,
     )
     .await?;
 

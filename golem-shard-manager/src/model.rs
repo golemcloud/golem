@@ -14,12 +14,15 @@
 
 use core::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::{fmt, vec};
 
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use tonic::transport::Endpoint;
+use tracing::{debug, warn};
 
 use golem_api_grpc::proto::golem;
 use golem_common::model::ShardId;
@@ -32,28 +35,53 @@ use crate::rebalancing::Rebalance;
 )]
 pub struct Pod {
     host: String,
+    ip: IpAddr,
     port: u16,
+    pub pod_name: Option<String>,
 }
 
 impl Pod {
+    #[cfg(test)]
     pub fn new(host: String, port: u16) -> Self {
-        Self { host, port }
+        Self {
+            host,
+            port,
+            pod_name: None,
+            ip: IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        }
     }
 
-    pub fn address(&self) -> String {
-        format!("http://{}:{}", self.host, self.port)
+    pub fn endpoint(&self) -> Result<Endpoint, tonic::transport::Error> {
+        let e = Endpoint::try_from(format!("http://{}:{}", self.ip, self.port));
+        debug!("Pod.address: http://{}:{} => {:?}", self.ip, self.port, e);
+        e
+    }
+
+    pub fn address(&self) -> Result<vec::IntoIter<SocketAddr>, std::io::Error> {
+        format!("{}:{}", self.ip, self.port).to_socket_addrs()
     }
 
     pub fn from_register_request(
         request: tonic::Request<golem::shardmanager::RegisterRequest>,
     ) -> Result<Self, ShardManagerError> {
-        let host = request
+        let source_ip = request
             .remote_addr()
-            .ok_or(ShardManagerError::invalid_request("missing host"))?
-            .ip()
-            .to_string();
-        let port = request.into_inner().port as u16;
-        let pod = Pod::new(host, port);
+            .ok_or(ShardManagerError::invalid_request(
+                "could not get source IP",
+            ))?
+            .ip();
+        let request = request.into_inner();
+        let pod = Pod {
+            host: request.host,
+            port: request.port as u16,
+            pod_name: request.pod_name,
+            ip: source_ip,
+        };
+
+        let resolved = pod.address()?.map(|sa| sa.ip()).collect::<Vec<_>>();
+        if !resolved.contains(&source_ip) {
+            warn!("Host mismatch between registration message and resolved message source. Provided: {resolved:?}; source: {source_ip:?}");
+        }
         Ok(pod)
     }
 }
@@ -61,24 +89,19 @@ impl Pod {
 impl From<Pod> for golem::shardmanager::Pod {
     fn from(value: Pod) -> golem::shardmanager::Pod {
         golem::shardmanager::Pod {
-            host: value.host,
+            host: value.ip.to_string(),
             port: value.port as u32,
-        }
-    }
-}
-
-impl From<golem::shardmanager::Pod> for Pod {
-    fn from(proto: golem::shardmanager::Pod) -> Self {
-        Self {
-            host: proto.host,
-            port: proto.port as u16,
+            pod_name: value.pod_name,
         }
     }
 }
 
 impl Display for Pod {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}:{}", self.host, self.port)
+        match &self.pod_name {
+            Some(name) => write!(f, "{}", name),
+            None => write!(f, "{}:{} ({})", self.host, self.port, self.ip),
+        }
     }
 }
 
@@ -179,21 +202,6 @@ impl From<RoutingTable> for golem::shardmanager::RoutingTable {
                     shard_id: Some(shard_id.into()),
                 })
                 .collect(),
-        }
-    }
-}
-
-impl From<golem::shardmanager::RoutingTable> for RoutingTable {
-    fn from(routing_table: golem::shardmanager::RoutingTable) -> Self {
-        let mut shard_assignments: BTreeMap<Pod, BTreeSet<ShardId>> = BTreeMap::new();
-        for entry in routing_table.shard_assignments {
-            let pod = entry.pod.unwrap().into();
-            let shard_id = entry.shard_id.unwrap().into();
-            shard_assignments.entry(pod).or_default().insert(shard_id);
-        }
-        Self {
-            number_of_shards: routing_table.number_of_shards as usize,
-            shard_assignments,
         }
     }
 }
