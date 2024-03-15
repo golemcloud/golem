@@ -204,11 +204,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let addr = golem_config.grpc_addr()?;
         let worker_executor =
-            WorkerExecutorImpl::<Ctx, All<Ctx>>::new(services, lazy_worker_activator, addr).await?;
+            WorkerExecutorImpl::<Ctx, All<Ctx>>::new(services, lazy_worker_activator, addr.port())
+                .await?;
 
         let service = WorkerExecutorServer::new(worker_executor);
 
-        info!("Starting gRPC server on port {}", golem_config.port);
+        info!("Starting gRPC server on port {}", addr.port());
         Server::builder()
             .concurrency_limit_per_connection(golem_config.limits.concurrency_limit_per_connection)
             .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))

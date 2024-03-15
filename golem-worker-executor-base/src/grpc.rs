@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use gethostname::gethostname;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
@@ -136,7 +137,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     pub async fn new(
         services: Svcs,
         lazy_worker_activator: Arc<LazyWorkerActivator>,
-        addr: SocketAddr,
+        port: u16,
     ) -> Result<Self, Error> {
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
@@ -145,12 +146,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker_activator = Arc::new(DefaultWorkerActivator::new(services));
         lazy_worker_activator.set(worker_activator);
 
-        let host = match addr.ip() {
-            IpAddr::V4(ipv4) => ipv4.to_string(),
-            IpAddr::V6(ipv6) => ipv6.to_string(),
-        };
-
-        let port = addr.port();
+        let host = gethostname().to_string_lossy().to_string();
 
         info!("Registering worker executor as {}:{}", host, port);
 

@@ -22,6 +22,7 @@ use std::net::ToSocketAddrs;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use tonic::transport::Endpoint;
+use tracing::warn;
 
 use golem_api_grpc::proto::golem;
 use golem_common::model::ShardId;
@@ -57,7 +58,8 @@ impl Pod {
     ) -> Result<Self, ShardManagerError> {
         let registration_addr = request
             .remote_addr()
-            .ok_or(ShardManagerError::invalid_request("missing host"))?;
+            .ok_or(ShardManagerError::invalid_request("missing host"))?
+            .ip();
         let request = request.into_inner();
         let pod = Pod {
             host: request.host,
@@ -70,14 +72,14 @@ impl Pod {
             .uri()
             .to_string()
             .to_socket_addrs()?
+            .map(|sa| sa.ip())
             .collect::<Vec<_>>();
         if !resolved.contains(&registration_addr) {
-            Err(ShardManagerError::invalid_request(
-                "Host mismatch between registration message and resolved message source",
-            ))
-        } else {
-            Ok(pod)
+            warn!("Host mismatch between registration message and resolved message source. Provided: {:?}; source: {:?}",
+                    resolved,
+                    registration_addr);
         }
+        Ok(pod)
     }
 }
 
