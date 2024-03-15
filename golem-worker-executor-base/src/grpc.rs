@@ -16,7 +16,7 @@ use gethostname::gethostname;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
-use std::net::{IpAddr, SocketAddr};
+
 use std::sync::Arc;
 
 use golem_api_grpc::proto::golem;

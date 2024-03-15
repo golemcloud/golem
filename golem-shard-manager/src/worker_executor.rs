@@ -164,7 +164,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
 
     async fn health_check(&self, pod: &Pod) -> bool {
         debug!("Health checking pod {pod}");
-        match pod.address() {
+        match pod.endpoint() {
             Ok(endpoint) => {
                 let conn = timeout(self.config.health_check_timeout, endpoint.connect()).await;
                 match conn {
@@ -220,7 +220,8 @@ impl WorkerExecutorServiceDefault {
                 .collect(),
         };
 
-        let mut worker_executor_client = WorkerExecutorClient::new(pod.address()?.connect().await?);
+        let mut worker_executor_client =
+            WorkerExecutorClient::new(pod.endpoint()?.connect().await?);
 
         let assign_shards_response = timeout(
             self.config.assign_shards_timeout,
@@ -260,7 +261,8 @@ impl WorkerExecutorServiceDefault {
                 .collect(),
         };
 
-        let mut worker_executor_client = WorkerExecutorClient::new(pod.address()?.connect().await?);
+        let mut worker_executor_client =
+            WorkerExecutorClient::new(pod.endpoint()?.connect().await?);
 
         let revoke_shards_response = timeout(
             self.config.revoke_shards_timeout,
