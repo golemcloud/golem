@@ -9,4 +9,5 @@ echo "Running in environment ${ENVIRONMENT}"
 source <(chamber env golem-app/infra-outputs/${ENVIRONMENT})
 # Custom names
 export GOLEM__REDIS__HOST=$REDIS_HOST
+export GOLEM__HEALTH_CHECK__MODE__CONFIG__NAMESPACE=$POD_NAMESPACE
 ./golem-shard-manager
