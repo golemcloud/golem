@@ -13,18 +13,21 @@
 // limitations under the License.
 
 pub mod template;
+pub mod template_compilation;
 
 use golem_service_base::config::TemplateStoreConfig;
 use golem_service_base::service::template_object_store;
 use std::sync::Arc;
 
-use crate::config::{DbConfig, TemplateServiceConfig};
+use crate::config::{DbConfig, TemplateCompilationConfig, TemplateServiceConfig};
 use crate::db;
 use crate::repo::template::{DbTemplateRepo, TemplateRepo};
 
 #[derive(Clone)]
 pub struct Services {
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
+    pub compilation_service:
+        Arc<dyn template_compilation::TemplateCompilationService + Sync + Send>,
 }
 
 impl Services {
@@ -54,17 +57,44 @@ impl Services {
                 }
             };
 
-        let template_service: Arc<dyn template::TemplateService + Sync + Send> = Arc::new(
-            template::TemplateServiceDefault::new(template_repo.clone(), object_store.clone()),
-        );
+        let compilation_service: Arc<
+            dyn template_compilation::TemplateCompilationService + Sync + Send,
+        > = match config.compilation.clone() {
+            TemplateCompilationConfig::Enabled(config) => Arc::new(
+                template_compilation::TemplateCompilationServiceDefault::new(
+                    config.host,
+                    config.port,
+                ),
+            ),
+            TemplateCompilationConfig::Disabled => {
+                Arc::new(template_compilation::TemplateCompilationServiceDisabled)
+            }
+        };
 
-        Ok(Services { template_service })
+        let template_service: Arc<dyn template::TemplateService + Sync + Send> =
+            Arc::new(template::TemplateServiceDefault::new(
+                template_repo.clone(),
+                object_store.clone(),
+                compilation_service.clone(),
+            ));
+
+        Ok(Services {
+            template_service,
+            compilation_service,
+        })
     }
 
     pub fn noop() -> Self {
         let template_service: Arc<dyn template::TemplateService + Sync + Send> =
             Arc::new(template::TemplateServiceNoOp::default());
 
-        Services { template_service }
+        let compilation_service: Arc<
+            dyn template_compilation::TemplateCompilationService + Sync + Send,
+        > = Arc::new(template_compilation::TemplateCompilationServiceDisabled);
+
+        Services {
+            template_service,
+            compilation_service,
+        }
     }
 }

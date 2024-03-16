@@ -39,6 +39,7 @@ pub struct TemplateServiceConfig {
     pub grpc_port: u16,
     pub db: DbConfig,
     pub template_store: TemplateStoreConfig,
+    pub compilation: TemplateCompilationConfig,
     pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
 
@@ -58,6 +59,19 @@ pub struct DbPostgresConfig {
     pub port: u16,
     pub max_connections: u32,
     pub schema: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum TemplateCompilationConfig {
+    Enabled(TemplateCompilationEnabledConfig),
+    Disabled,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct TemplateCompilationEnabledConfig {
+    pub host: String,
+    pub port: u16,
 }
 
 impl TemplateServiceConfig {

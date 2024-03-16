@@ -46,3 +46,5 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 humantime-serde = { workspace = true }
+http_02 = { package = "http", version = "0.2.11" }
+
