@@ -1,12 +1,12 @@
-use std::fmt::Display;
 use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
 use crate::api_definition_repo::ApiDefinitionRepo;
-use crate::auth::{CommonNamespace};
+use crate::auth::CommonNamespace;
 use crate::http_request::InputHttpRequest;
 use crate::oas_worker_bridge::{GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION};
-use crate::service::register_definition::{ApiDefinitionKey};
+use crate::service::register_definition::ApiDefinitionKey;
 use async_trait::async_trait;
 use http::HeaderMap;
+use std::fmt::Display;
 use std::sync::Arc;
 use tracing::error;
 

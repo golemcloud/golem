@@ -82,7 +82,7 @@ impl CustomHttpRequestApi {
                 error!("API request host: {} - error: {}", host, err);
                 return Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from_string("Internal error".to_string()))
+                    .body(Body::from_string("Internal error".to_string()));
             }
         };
 
