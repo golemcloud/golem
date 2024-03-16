@@ -2082,6 +2082,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-template-compilation-service"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "console-subscriber",
+ "figment",
+ "futures",
+ "futures-util",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-worker-executor-base",
+ "http 0.2.11",
+ "http 1.0.0",
+ "lazy_static",
+ "prometheus",
+ "serde",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tonic-health",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wasmtime",
+]
+
+[[package]]
 name = "golem-template-service"
 version = "0.1.0"
 dependencies = [
@@ -2094,6 +2121,7 @@ dependencies = [
  "golem-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "http 0.2.11",
  "humantime-serde",
  "lazy_static",
  "mappable-rc",

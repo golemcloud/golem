@@ -67,6 +67,9 @@ services:
       - GOLEM__TEMPLATE_STORE__TYPE="Local"
       - GOLEM__TEMPLATE_STORE__CONFIG__OBJECT_PREFIX=""
       - GOLEM__TEMPLATE_STORE__CONFIG__ROOT_PATH=/template_store
+      - GOLEM__COMPILATION__TYPE="Enabled"
+      - GOLEM__COMPILATION__CONFIG__HOST=golem-template-compilation-service
+      - GOLEM__COMPILATION__CONFIG__PORT=${TEMPLATE_COMPILATION_SERVICE_GRPC_PORT}
       - GOLEM__DB__TYPE=Postgres
       - GOLEM__DB__CONFIG__DATABASE=golem_db
       - GOLEM__DB__CONFIG__MAX_CONNECTIONS=10
@@ -109,6 +112,26 @@ services:
       - "${WORKER_SERVICE_GRPC_PORT}:${WORKER_SERVICE_GRPC_PORT}"
     depends_on:
       - redis
+  
+  golem-template-compilation-service:
+    build:
+      context: .
+      dockerfile: golem-template-compilation-service/docker/Dockerfile
+    environment: 
+      - RUST_BACKTRACE=1
+      - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
+      - GOLEM__TEMPLATE_SERVICE__HOST=golem-template-service
+      - GOLEM__TEMPLATE_SERVICE__PORT=${TEMPLATE_SERVICE_GRPC_PORT}
+      - GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN="5C832D93-FF85-4A8F-9803-513950FDFDB1"
+      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT="data/templates"
+      - GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE="Local"
+      - GOLEM__HTTP_PORT=${TEMPLATE_COMPILATION_SERVICE_HTTP_PORT}
+      - GOLEM__GRPC_PORT=${TEMPLATE_COMPILATION_SERVICE_GRPC_PORT}
+    ports:
+      - "${TEMPLATE_COMPILATION_SERVICE_HTTP_PORT}:${TEMPLATE_COMPILATION_SERVICE_HTTP_PORT}"
+      - "${TEMPLATE_COMPILATION_SERVICE_GRPC_PORT}:${TEMPLATE_COMPILATION_SERVICE_GRPC_PORT}"
+    depends_on:
+      - golem-template-service
 
   golem-worker-executor:
     build:

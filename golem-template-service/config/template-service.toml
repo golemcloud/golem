@@ -23,3 +23,6 @@ object_prefix = ""
 max_capacity = 1000
 time_to_idle = "4h"
 
+
+[compilation]
+type = "Disabled"
