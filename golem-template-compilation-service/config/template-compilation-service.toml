@@ -2,7 +2,7 @@ enable_tracing_console = false
 enable_json_log = false
 
 grpc_host = "0.0.0.0"
-grpc_port = 50051
+grpc_port = 8080
 
 http_host= "0.0.0.0"
 http_port = 9090
