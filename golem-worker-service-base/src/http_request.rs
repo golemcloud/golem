@@ -67,7 +67,7 @@ mod tests {
     use crate::api_definition::ApiDefinition;
     use crate::worker_request::WorkerRequest;
 
-    use crate::api_request_route_resolver::RouteResolver;
+    use crate::api_request_route_resolver::WorkerBindingResolver;
     use golem_common::model::TemplateId;
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
 

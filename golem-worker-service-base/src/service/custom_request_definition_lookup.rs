@@ -14,11 +14,11 @@ use tracing::error;
 pub trait CustomRequestDefinitionLookup {
     async fn get(
         &self,
-        input_http_request: InputHttpRequest<'_>,
+        input_http_request: &InputHttpRequest<'_>,
     ) -> Result<ApiDefinition, ApiDefinitionLookupError>;
 }
 
-struct ApiDefinitionLookupError(String);
+pub struct ApiDefinitionLookupError(String);
 
 impl Display for ApiDefinitionLookupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -44,10 +44,10 @@ impl CustomRequestDefinitionLookupDefault {
 impl CustomRequestDefinitionLookup for CustomRequestDefinitionLookupDefault {
     async fn get(
         &self,
-        input_http_request: InputHttpRequest<'_>,
+        input_http_request: &InputHttpRequest<'_>,
     ) -> Result<ApiDefinition, ApiDefinitionLookupError> {
         let api_definition_id = match get_header_value(
-            &input_http_request.headers,
+            input_http_request.headers,
             GOLEM_API_DEFINITION_ID_EXTENSION,
         ) {
             Ok(api_definition_id) => Ok(ApiDefinitionId(api_definition_id.to_string())),
@@ -58,7 +58,7 @@ impl CustomRequestDefinitionLookup for CustomRequestDefinitionLookupDefault {
         }?;
 
         let version =
-            match get_header_value(&input_http_request.headers, GOLEM_API_DEFINITION_VERSION) {
+            match get_header_value(input_http_request.headers, GOLEM_API_DEFINITION_VERSION) {
                 Ok(version) => Ok(Version(version)),
                 Err(err) => Err(ApiDefinitionLookupError(format!(
                     "{} not found in the request headers. Error: {}",

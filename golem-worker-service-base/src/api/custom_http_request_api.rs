@@ -1,15 +1,13 @@
 use std::sync::Arc;
 
-use crate::api_definition::{ApiDefinitionId, ResponseMapping, Version};
+use crate::api_definition::ResponseMapping;
 use async_trait::async_trait;
-use http::HeaderMap;
 use hyper::header::HOST;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
-use crate::api_definition_repo::ApiDefinitionRepo;
-use crate::api_request_route_resolver::RouteResolver;
+use crate::api_request_route_resolver::WorkerBindingResolver;
 use crate::http_request::{ApiInputPath, InputHttpRequest};
 use crate::service::custom_request_definition_lookup::CustomRequestDefinitionLookup;
 use crate::worker_request::WorkerRequest;
@@ -18,9 +16,9 @@ use crate::worker_request_to_response::WorkerRequestToResponse;
 // Executes custom request with the help of worker_request_executor and definition_service
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
-    worker_to_http_response_service:
+    pub worker_to_http_response_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
-    api_definition_lookup_service: Arc<dyn CustomRequestDefinitionLookup + Sync + Send>,
+    pub api_definition_lookup_service: Arc<dyn CustomRequestDefinitionLookup + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
@@ -76,7 +74,7 @@ impl CustomHttpRequestApi {
             req_body: json_request_body,
         };
 
-        let api_definition = match self.api_definition_lookup_service.get(api_request).await {
+        let api_definition = match self.api_definition_lookup_service.get(&api_request).await {
             Ok(api_definition) => api_definition,
             Err(err) => {
                 error!("API request host: {} - error: {}", host, err);
@@ -108,7 +106,7 @@ impl CustomHttpRequestApi {
                 self.worker_to_http_response_service
                     .execute(
                         resolved_worker_request.clone(),
-                        &resolved_route.route_definition.binding.response,
+                        &resolved_route.resolved_worker_binding_template.response,
                         &resolved_route.resolved_variables,
                     )
                     .await
