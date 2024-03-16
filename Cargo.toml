@@ -118,6 +118,7 @@ tracing-subscriber = { version = "0.3.17", features = [
 url = "2.5.0"
 uuid = { version = "1.7.0", features = ["serde", "v4"] }
 warp = "0.3.6"
+webpki-roots = { version = "0.26.0" }
 
 [patch.crates-io]
 wasmtime = { path = "wasmtime/crates/wasmtime" }
