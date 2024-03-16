@@ -4892,6 +4892,7 @@ dependencies = [
  "golem-worker-executor-base",
  "http 0.2.11",
  "http 1.0.0",
+ "lazy_static",
  "prometheus",
  "serde",
  "thiserror",
