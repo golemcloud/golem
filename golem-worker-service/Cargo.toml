@@ -21,6 +21,7 @@ path = "src/openapi_yaml.rs"
 golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
+golem-worker-service-base = {path = "../golem-worker-service-base"}
 golem-wasm-rpc = { path = "../wasm-rpc/wasm-rpc", default-features = false, features = [
     "host",
 ] }
