@@ -266,15 +266,4 @@ mod tests {
 
         assert_eq!(result, Some("foo".to_string()))
     }
-
-    #[test]
-    fn test_something() {
-        let string = "foo' } }''";
-        let tokens = Tokenizer::new(string).run().value;
-        dbg!("tokens", tokens.clone());
-        let mut cursor = TokenCursor::new(tokens.clone());
-        let result = cursor.capture_string_until(vec![], &Token::Quote);
-        dbg!("cursor", result);
-        assert_eq!(1, 1)
-    }
 }
