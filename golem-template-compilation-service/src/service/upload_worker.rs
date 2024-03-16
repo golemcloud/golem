@@ -44,7 +44,9 @@ impl UploadWorker {
             .map_err(|err| CompilationError::TemplateUploadFailed(err.to_string()));
 
         if let Err(ref err) = upload_result {
-            tracing::warn!("Failed to upload compiled template {template:?}: {err:?}");
+            tracing::warn!("Failed to upload compiled template {template}: {err:?}");
+        } else {
+            tracing::info!("Successfully uploaded compiled template {template}");
         }
     }
 }

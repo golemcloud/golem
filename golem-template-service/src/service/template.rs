@@ -239,7 +239,7 @@ impl TemplateService for TemplateServiceDefault {
         self.template_repo.upsert(&template.clone().into()).await?;
 
         self.template_compilation
-            .enqueue_compilation(&template_id, template.versioned_template_id.version)
+            .enqueue_compilation(template_id, template.versioned_template_id.version)
             .await;
 
         Ok(template)

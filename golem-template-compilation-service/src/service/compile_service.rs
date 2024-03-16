@@ -58,6 +58,11 @@ impl CompilationService for TemplateCompilationServiceImpl {
         template_id: TemplateId,
         template_version: i32,
     ) -> Result<(), CompilationError> {
+        tracing::info!(
+            "Enqueueing compilation for template {}@{}",
+            template_id,
+            template_version
+        );
         let request = CompilationRequest {
             template: TemplateWithVersion {
                 id: template_id,

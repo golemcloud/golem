@@ -12,7 +12,6 @@ use uuid::Uuid;
 pub struct ServerConfig {
     // Services.
     pub template_service: TemplateServiceConfig,
-    pub worker_service: WorkerServiceGrpcConfig,
     pub compiled_template_service: CompiledTemplateServiceConfig,
 
     // Workers.
@@ -88,13 +87,6 @@ fn config_load() {
     std::env::set_var("GOLEM__TEMPLATE_SERVICE__PORT", "9001");
     std::env::set_var(
         "GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN",
-        "6778f06f-43ac-4e45-b501-6adb3253edf2",
-    );
-
-    std::env::set_var("GOLEM__WORKER_SERVICE__HOST", "0.0.0.0");
-    std::env::set_var("GOLEM__WORKER_SERVICE__PORT", "9001");
-    std::env::set_var(
-        "GOLEM__WORKER_SERVICE__ACCESS_TOKEN",
         "6778f06f-43ac-4e45-b501-6adb3253edf2",
     );
 

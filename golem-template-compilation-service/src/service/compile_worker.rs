@@ -63,6 +63,7 @@ impl CompileWorker {
                 match result {
                     Err(_) => {}
                     Ok(component) => {
+                        tracing::info!("Compiled template {}", request.template);
                         let send_result = sender
                             .send(CompiledTemplate {
                                 template: request.template,
