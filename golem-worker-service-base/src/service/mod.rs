@@ -7,7 +7,7 @@ pub mod custom_request_definition_lookup;
 
 use crate::api_definition::ResponseMapping;
 use crate::api_definition_repo::{ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry};
-use crate::app_config::WorkerServiceConfig;
+use crate::app_config::WorkerServiceBaseConfig;
 use crate::auth::{AuthService, AuthServiceNoop, CommonNamespace, EmptyAuthCtx};
 use crate::service::custom_request_definition_lookup::CustomRequestDefinitionLookup;
 use crate::service::register_definition::{RegisterApiDefinition, RegisterApiDefinitionDefault};
@@ -30,7 +30,7 @@ pub struct Services {
 }
 
 impl Services {
-    pub async fn new(config: &WorkerServiceConfig) -> Result<Services, String> {
+    pub async fn new(config: &WorkerServiceBaseConfig) -> Result<Services, String> {
         let template_service: Arc<dyn template::TemplateService + Sync + Send> = Arc::new(
             template::TemplateServiceDefault::new(&config.template_service),
         );
