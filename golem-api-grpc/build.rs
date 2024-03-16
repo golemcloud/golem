@@ -58,6 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/shardmanager/shard_id.proto",
                 "proto/golem/shardmanager/shard_manager_error.proto",
                 "proto/golem/shardmanager/shard_manager_service.proto",
+                "proto/golem/templatecompilation/template_compilation_service.proto",
             ],
             &["../wasm-rpc/wasm-rpc/proto", "proto"],
         )

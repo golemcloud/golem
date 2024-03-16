@@ -27,10 +27,9 @@ use tracing::{error, info};
 
 use crate::repo::template::TemplateRepo;
 use crate::repo::RepoError;
+use crate::service::template_compilation::TemplateCompilationService;
 use crate::service::template_object_store::TemplateObjectStore;
 use golem_service_base::model::*;
-
-use crate::service::template_compilation::TemplateCompilationService;
 
 #[derive(Debug, Clone)]
 pub enum TemplateError {

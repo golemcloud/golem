@@ -125,4 +125,3 @@ message UpdateTemplateResponse {
     golem.template.TemplateError error = 2;
   }
 }
-

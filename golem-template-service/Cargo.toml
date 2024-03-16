@@ -17,7 +17,9 @@ path = "src/openapi_yaml.rs"
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-service-base = { path = "../golem-service-base" }
-golem-wasm-rpc = { path = "../wasm-rpc/wasm-rpc", default-features = false, features = ["host"] }
+golem-wasm-rpc = { path = "../wasm-rpc/wasm-rpc", default-features = false, features = [
+    "host",
+] }
 
 async-trait = { workspace = true }
 console-subscriber = { workspace = true }
@@ -34,7 +36,14 @@ opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "postgres", "uuid" , "migrate", "chrono"] }
+sqlx = { version = "0.7", features = [
+    "runtime-tokio",
+    "sqlite",
+    "postgres",
+    "uuid",
+    "migrate",
+    "chrono",
+] }
 tap = "1.0.1"
 tonic = { workspace = true }
 tonic-health = { workspace = true }
@@ -47,4 +56,3 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 humantime-serde = { workspace = true }
 http_02 = { package = "http", version = "0.2.11" }
-
