@@ -26,7 +26,7 @@ pub struct ServerConfig {
     pub grpc_host: String,
 
     // Metrics and healthcheck.
-    pub http_address: String,
+    pub http_host: String,
     pub http_port: u16,
 }
 
@@ -70,14 +70,14 @@ pub struct CompileWorkerConfig {
 impl ServerConfig {
     pub fn new() -> Self {
         Figment::new()
-            .merge(Toml::file("config/compilation-server.toml"))
+            .merge(Toml::file("config/template-compilation-service.toml"))
             .merge(Env::prefixed("GOLEM__").split("__"))
             .extract()
             .expect("Failed to parse config")
     }
 
     pub fn http_addr(&self) -> Option<SocketAddrV4> {
-        let address = self.http_address.parse::<Ipv4Addr>().ok()?;
+        let address = self.http_host.parse::<Ipv4Addr>().ok()?;
         Some(SocketAddrV4::new(address, self.http_port))
     }
 }

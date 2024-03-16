@@ -10,7 +10,7 @@ members = [
     "golem-template-service",
     "golem-shard-manager",
     "golem-worker-service",
-    "golem-template-compilation"
+    "golem-template-compilation-service"
 ]
 
 exclude = [
