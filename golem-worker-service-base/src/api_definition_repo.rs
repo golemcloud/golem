@@ -337,7 +337,6 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Sync> ApiDefin
 mod tests {
     use super::*;
     use crate::api_definition::Version;
-    use crate::auth::AuthServiceNoop;
     use golem_common::config::RedisConfig;
     use std::fmt::Formatter;
 
@@ -464,8 +463,6 @@ mod tests {
             database: 1,
             ..Default::default()
         };
-
-        let auth_context = AuthServiceNoop {};
 
         let registry = RedisApiRegistry::new(&config).await.unwrap();
 
