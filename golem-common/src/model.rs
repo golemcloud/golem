@@ -734,6 +734,7 @@ impl Display for AccountId {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub enum OplogEntry {
+    /// The worker invoked a host function
     ImportedFunctionInvoked {
         timestamp: Timestamp,
         function_name: String,
@@ -771,6 +772,10 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         message: String,
     },
+    // Jump {
+    //     timestamp: Timestamp,
+    //     oplog_idx: u64,
+    // },
 }
 
 impl OplogEntry {

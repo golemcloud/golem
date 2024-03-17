@@ -5,6 +5,6 @@ interface api {
 }
 
 world runtime-service {
-  import golem:api/host;
+  import golem:api/host@0.2.0;
   export api;
 }
