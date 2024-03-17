@@ -41,7 +41,7 @@ pub trait WorkerService {
 
     async fn enumerate(&self) -> Vec<WorkerMetadata>;
 
-    async fn update_status(&self, worker_id: &WorkerId, status: WorkerStatus, oplog_idx: i32);
+    async fn update_status(&self, worker_id: &WorkerId, status: WorkerStatus, oplog_idx: u64);
 }
 
 pub fn configured(
@@ -325,7 +325,7 @@ impl WorkerService for WorkerServiceRedis {
         self.enum_workers_at_key(key).await
     }
 
-    async fn update_status(&self, worker_id: &WorkerId, status: WorkerStatus, oplog_idx: i32) {
+    async fn update_status(&self, worker_id: &WorkerId, status: WorkerStatus, oplog_idx: u64) {
         record_worker_call("update_status");
 
         let status_key = get_worker_status_redis_key(worker_id);
@@ -458,7 +458,7 @@ impl WorkerService for WorkerServiceInMemory {
         self.workers.iter().map(|i| i.clone()).collect()
     }
 
-    async fn update_status(&self, worker_id: &WorkerId, status: WorkerStatus, oplog_idx: i32) {
+    async fn update_status(&self, worker_id: &WorkerId, status: WorkerStatus, oplog_idx: u64) {
         self.workers.entry(worker_id.clone()).and_modify(|worker| {
             worker.last_known_status = WorkerStatusRecord { status, oplog_idx }
         });
@@ -505,7 +505,7 @@ impl WorkerService for WorkerServiceMock {
         unimplemented!()
     }
 
-    async fn update_status(&self, _worker_id: &WorkerId, _status: WorkerStatus, _oplog_idx: i32) {
+    async fn update_status(&self, _worker_id: &WorkerId, _status: WorkerStatus, _oplog_idx: u64) {
         unimplemented!()
     }
 }

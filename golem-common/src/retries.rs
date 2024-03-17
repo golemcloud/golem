@@ -26,14 +26,14 @@ use crate::metrics::external_calls::{
 /// Returns the delay to be waited before the next retry attempt.
 /// To be called after a failed attempt, with the number of attempts so far.
 /// Returns None if the maximum number of attempts has been reached.
-pub fn get_delay(config: &RetryConfig, attempts: u32) -> Option<Duration> {
+pub fn get_delay(config: &RetryConfig, attempts: u64) -> Option<Duration> {
     // Exponential backoff algorithm inspired by fred::pool::ReconnectPolicy::Exponential
-    if attempts >= config.max_attempts {
+    if attempts >= (config.max_attempts as u64) {
         return None;
     }
 
     let base_delay = (config.multiplier as u64)
-        .saturating_pow(attempts - 1)
+        .saturating_pow(attempts.checked_sub(1).unwrap_or(0).try_into().unwrap_or(0))
         .saturating_mul(config.min_delay.as_millis() as u64);
 
     let delay = Duration::from_millis(std::cmp::min(
@@ -130,7 +130,7 @@ mod tests {
         )
     }
 
-    fn capture_delays(config: &RetryConfig, attempts: &mut u32, delays: &mut Vec<Duration>) {
+    fn capture_delays(config: &RetryConfig, attempts: &mut u64, delays: &mut Vec<Duration>) {
         loop {
             *attempts += 1;
             let delay = super::get_delay(config, *attempts);

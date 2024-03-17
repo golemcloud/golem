@@ -295,7 +295,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         DurableWorkerCtxWasiHttpView(self)
     }
 
-    pub async fn create_promise(&self, oplog_idx: i32) -> PromiseId {
+    pub async fn create_promise(&self, oplog_idx: u64) -> PromiseId {
         self.public_state
             .promise_service
             .create(&self.worker_id.worker_id, oplog_idx)
@@ -853,7 +853,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     async fn get_worker_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> u32 {
+    ) -> u64 {
         trailing_error_count(this, worker_id).await
     }
 
@@ -991,11 +991,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     }
 }
 
-async fn last_oplog_idx<T: HasOplogService>(this: &T, worker_id: &WorkerId) -> i32 {
+async fn last_oplog_idx<T: HasOplogService>(this: &T, worker_id: &WorkerId) -> u64 {
     this.oplog_service().get_size(worker_id).await
 }
 
-async fn trailing_error_count<T: HasOplogService>(this: &T, worker_id: &WorkerId) -> u32 {
+async fn trailing_error_count<T: HasOplogService>(this: &T, worker_id: &WorkerId) -> u64 {
     let mut idx = this.oplog_service().get_size(worker_id).await;
     let mut count = 0;
     if idx == 0 {
@@ -1022,8 +1022,8 @@ async fn trailing_error_count<T: HasOplogService>(this: &T, worker_id: &WorkerId
 
 pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     buffer: VecDeque<OplogEntry>,
-    oplog_idx: i32,
-    oplog_size: i32,
+    oplog_idx: u64,
+    oplog_size: u64,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
@@ -1053,11 +1053,11 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         self.oplog_service.append(worker_id, &arrays).await
     }
 
-    pub async fn get_oplog_size(&mut self) -> i32 {
+    pub async fn get_oplog_size(&mut self) -> u64 {
         self.oplog_service.get_size(&self.worker_id).await
     }
 
-    pub async fn read_oplog(&self, idx: i32, n: i32) -> Vec<OplogEntry> {
+    pub async fn read_oplog(&self, idx: u64, n: u64) -> Vec<OplogEntry> {
         self.oplog_service.read(&self.worker_id, idx, n).await
     }
 
@@ -1275,7 +1275,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     }
 
     /// Counts the number of Error entries that are at the end of the oplog. This equals to the number of retries that have been attempted.
-    pub async fn trailing_error_count(&self) -> u32 {
+    pub async fn trailing_error_count(&self) -> u64 {
         trailing_error_count(self, &self.worker_id).await
     }
 }

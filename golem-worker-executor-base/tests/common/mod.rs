@@ -986,7 +986,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     async fn get_worker_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> u32 {
+    ) -> u64 {
         DurableWorkerCtx::<TestWorkerCtx>::get_worker_retry_count(this, worker_id).await
     }
 

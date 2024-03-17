@@ -238,7 +238,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
 pub struct PromiseId {
     #[serde(rename = "instance_id")]
     pub worker_id: WorkerId,
-    pub oplog_idx: i32,
+    pub oplog_idx: u64,
 }
 
 impl PromiseId {
@@ -524,7 +524,7 @@ impl WorkerMetadata {
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
-    pub oplog_idx: i32,
+    pub oplog_idx: u64,
 }
 
 impl Default for WorkerStatusRecord {
@@ -624,7 +624,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
             account_id: value.account_id.ok_or("Missing account_id")?.into(),
             last_known_status: WorkerStatusRecord {
                 status: value.status.try_into()?,
-                oplog_idx: -1,
+                oplog_idx: 0
             },
         })
     }

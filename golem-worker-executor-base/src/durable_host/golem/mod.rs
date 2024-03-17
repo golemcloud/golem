@@ -23,6 +23,7 @@ use crate::model::InterruptKind;
 use crate::preview2::golem;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::{PromiseId, TemplateId, WorkerId};
+use crate::preview2::golem::api::host::OplogIndex;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
@@ -81,6 +82,14 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             Some(&function_name),
         );
         Ok(golem::rpc::types::Uri { value: uri.value })
+    }
+
+    async fn get_oplog_index(&mut self) -> anyhow::Result<OplogIndex> {
+        Ok(self.private_state.oplog_idx)
+    }
+
+    async fn set_oplog_index(&mut self, oplog_idx: OplogIndex) -> anyhow::Result<()> {
+        todo!()
     }
 }
 
