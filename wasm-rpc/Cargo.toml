@@ -23,6 +23,7 @@ serde = { version = "1.0.113", optional = true }
 serde_json = { version = "1.0.113", optional = true }
 prost = { version = "0.12.3", optional = true }
 wasmtime = { version = "=17.0.0", features = ["component-model"], optional = true }
+wasm-wave = { version = "=0.4.0", optional = true }
 
 [dev-dependencies]
 proptest = "1.4.0"
@@ -33,13 +34,14 @@ prost-build = "0.12.3"
 
 [features]
 default = ["host"]
-host = ["arbitrary", "bincode", "json", "protobuf", "serde", "typeinfo", "wasmtime"]
+host = ["arbitrary", "bincode", "json", "protobuf", "serde", "text", "typeinfo", "wasmtime"]
 arbitrary = ["dep:arbitrary"]
 bincode = ["dep:bincode"]
 json = ["dep:serde", "dep:serde_json", "dep:bigdecimal", "typeinfo"]
 protobuf = ["dep:bincode", "dep:serde", "dep:prost"]
 serde = ["dep:serde"]
 stub = []
+text = ["wasmtime", "dep:wasm-wave"]
 typeinfo = ["dep:golem-wasm-ast"]
 wasmtime = ["dep:wasmtime", "typeinfo"]
 

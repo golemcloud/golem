@@ -39,6 +39,9 @@ pub mod protobuf;
 #[cfg(feature = "serde")]
 pub mod serde;
 
+#[cfg(feature = "text")]
+mod text;
+
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
 

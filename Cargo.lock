@@ -1498,6 +1498,7 @@ dependencies = [
  "prost-build 0.12.3",
  "serde",
  "serde_json",
+ "wasm-wave",
  "wasmtime",
  "wit-bindgen",
 ]
@@ -4200,6 +4201,19 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "wasm-wave"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "132211e87e40f5470a159f6f44aa87c37f0e24321c42cb1d957d18de1ff576cd"
+dependencies = [
+ "indexmap 2.2.3",
+ "logos",
+ "thiserror",
+ "wasmtime",
+ "wit-parser 0.13.2",
 ]
 
 [[package]]
