@@ -624,7 +624,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
             account_id: value.account_id.ok_or("Missing account_id")?.into(),
             last_known_status: WorkerStatusRecord {
                 status: value.status.try_into()?,
-                oplog_idx: 0
+                oplog_idx: 0,
             },
         })
     }

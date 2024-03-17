@@ -21,9 +21,9 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
+use crate::preview2::golem::api::host::OplogIndex;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::{PromiseId, TemplateId, WorkerId};
-use crate::preview2::golem::api::host::OplogIndex;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {

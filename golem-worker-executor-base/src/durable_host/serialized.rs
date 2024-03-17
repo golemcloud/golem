@@ -592,7 +592,6 @@ mod tests {
             template_id,
             worker_name,
         })
-
     }
 
     fn promiseid_strat() -> impl Strategy<Value = PromiseId> {
