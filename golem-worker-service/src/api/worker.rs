@@ -8,7 +8,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tap::TapFallible;
 
-use crate::service::template::{TemplateService};
+use crate::service::template::TemplateService;
 use crate::service::worker::WorkerService;
 use golem_service_base::model::*;
 use golem_worker_service_base::api::error::WorkerApiBaseError;

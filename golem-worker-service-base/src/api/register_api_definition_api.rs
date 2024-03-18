@@ -14,14 +14,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-struct ApiDefinition {
+pub struct ApiDefinition {
     pub id: ApiDefinitionId,
     pub version: Version,
     pub routes: Vec<Route>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-struct Route {
+pub struct Route {
     pub method: MethodPattern,
     pub path: String,
     pub binding: GolemWorkerBinding,
@@ -30,7 +30,7 @@ struct Route {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-struct GolemWorkerBinding {
+pub struct GolemWorkerBinding {
     pub template: TemplateId,
     pub worker_id: serde_json::value::Value,
     pub function_name: String,
@@ -39,7 +39,7 @@ struct GolemWorkerBinding {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-struct ResponseMapping {
+pub struct ResponseMapping {
     pub body: serde_json::value::Value,
     // ${function.return}
     pub status: serde_json::value::Value,

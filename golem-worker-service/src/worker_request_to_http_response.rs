@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::error::Error;
 
 use async_trait::async_trait;
@@ -9,9 +8,8 @@ use golem_worker_service_base::resolved_variables::ResolvedVariables;
 use golem_worker_service_base::worker_request::WorkerRequest;
 use golem_worker_service_base::worker_request_to_response::WorkerRequestToResponse;
 use golem_worker_service_base::worker_response::WorkerResponse;
-use http::{HeaderMap, StatusCode};
-use poem::{Body, ResponseParts};
-use serde_json::{json, Value};
+use http::StatusCode;
+use poem::Body;
 use tracing::info;
 
 use crate::service::worker::{WorkerService, WorkerServiceDefault};

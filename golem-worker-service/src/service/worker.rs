@@ -28,9 +28,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, GetInvocationKeyRequest,
     InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, InvokeWorkerRequest, ResumeWorkerRequest,
 };
-use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, ShardId, TemplateId, WorkerStatus,
-};
+use golem_common::model::{CallingConvention, InvocationKey, ShardId, WorkerStatus};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use serde_json::Value;
@@ -40,9 +38,9 @@ use tonic::transport::Channel;
 use tonic::{Status, Streaming};
 use tracing::{debug, info};
 
-use crate::service::template::{TemplateService};
+use crate::service::template::TemplateService;
 use golem_service_base::model::*;
-use golem_service_base::routing_table::{RoutingTableService};
+use golem_service_base::routing_table::RoutingTableService;
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::worker_executor_clients::WorkerExecutorClients;
 use golem_worker_service_base::service::error::WorkerServiceBaseError;
@@ -114,7 +112,10 @@ impl Drop for ConnectWorkerStream {
 
 #[async_trait]
 pub trait WorkerService {
-    async fn get_by_id(&self, worker_id: &WorkerId) -> Result<VersionedWorkerId, WorkerServiceBaseError>;
+    async fn get_by_id(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<VersionedWorkerId, WorkerServiceBaseError>;
 
     async fn create(
         &self,
@@ -124,11 +125,17 @@ pub trait WorkerService {
         environment_variables: HashMap<String, String>,
     ) -> Result<VersionedWorkerId, WorkerServiceBaseError>;
 
-    async fn connect(&self, worker_id: &WorkerId) -> Result<ConnectWorkerStream, WorkerServiceBaseError>;
+    async fn connect(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<ConnectWorkerStream, WorkerServiceBaseError>;
 
     async fn delete(&self, worker_id: &WorkerId) -> Result<(), WorkerServiceBaseError>;
 
-    async fn get_invocation_key(&self, worker_id: &WorkerId) -> Result<InvocationKey, WorkerServiceBaseError>;
+    async fn get_invocation_key(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<InvocationKey, WorkerServiceBaseError>;
 
     async fn invoke_and_await_function(
         &self,
@@ -175,7 +182,10 @@ pub trait WorkerService {
         recover_immediately: bool,
     ) -> Result<(), WorkerServiceBaseError>;
 
-    async fn get_metadata(&self, worker_id: &WorkerId) -> Result<WorkerMetadata, WorkerServiceBaseError>;
+    async fn get_metadata(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<WorkerMetadata, WorkerServiceBaseError>;
 
     async fn resume(&self, worker_id: &WorkerId) -> Result<(), WorkerServiceBaseError>;
 }
@@ -328,7 +338,10 @@ impl WorkerServiceDefault {
 
 #[async_trait]
 impl WorkerService for WorkerServiceDefault {
-    async fn get_by_id(&self, worker_id: &WorkerId) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
+    async fn get_by_id(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
         Ok(VersionedWorkerId {
             worker_id: worker_id.clone(),
             template_version_used: 0,
@@ -389,7 +402,10 @@ impl WorkerService for WorkerServiceDefault {
         })
     }
 
-    async fn connect(&self, worker_id: &WorkerId) -> Result<ConnectWorkerStream, WorkerServiceBaseError> {
+    async fn connect(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<ConnectWorkerStream, WorkerServiceBaseError> {
         match self.get_worker_executor_client(worker_id).await? {
             Some(mut worker_executor_client) => {
                 let response = match worker_executor_client
@@ -407,7 +423,9 @@ impl WorkerService for WorkerServiceDefault {
                         if status.code() == tonic::Code::NotFound {
                             Err(WorkerServiceBaseError::WorkerNotFound(worker_id.clone()))
                         } else {
-                            Err(WorkerServiceBaseError::Internal(status.message().to_string()))
+                            Err(WorkerServiceBaseError::Internal(
+                                status.message().to_string(),
+                            ))
                         }
                     }
                 }?;
@@ -453,7 +471,10 @@ impl WorkerService for WorkerServiceDefault {
         Ok(())
     }
 
-    async fn get_invocation_key(&self, worker_id: &WorkerId) -> Result<InvocationKey, WorkerServiceBaseError> {
+    async fn get_invocation_key(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<InvocationKey, WorkerServiceBaseError> {
         let invocation_key = self
             .retry_on_invalid_shard_id(worker_id, worker_id, |worker_executor_client, worker_id| {
                 Box::pin(async move {
@@ -805,7 +826,10 @@ impl WorkerService for WorkerServiceDefault {
         Ok(())
     }
 
-    async fn get_metadata(&self, worker_id: &WorkerId) -> Result<WorkerMetadata, WorkerServiceBaseError> {
+    async fn get_metadata(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<WorkerMetadata, WorkerServiceBaseError> {
         let metadata = self.retry_on_invalid_shard_id(
             worker_id,
             worker_id,
@@ -881,7 +905,10 @@ pub struct WorkerServiceNoOp {}
 
 #[async_trait]
 impl WorkerService for WorkerServiceNoOp {
-    async fn get_by_id(&self, worker_id: &WorkerId) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
+    async fn get_by_id(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
         Ok(VersionedWorkerId {
             worker_id: worker_id.clone(),
             template_version_used: 0,
@@ -901,8 +928,13 @@ impl WorkerService for WorkerServiceNoOp {
         })
     }
 
-    async fn connect(&self, _worker_id: &WorkerId) -> Result<ConnectWorkerStream, WorkerServiceBaseError> {
-        Err(WorkerServiceBaseError::Internal("Not supported".to_string()))
+    async fn connect(
+        &self,
+        _worker_id: &WorkerId,
+    ) -> Result<ConnectWorkerStream, WorkerServiceBaseError> {
+        Err(WorkerServiceBaseError::Internal(
+            "Not supported".to_string(),
+        ))
     }
 
     async fn delete(&self, _worker_id: &WorkerId) -> Result<(), WorkerServiceBaseError> {
@@ -975,7 +1007,10 @@ impl WorkerService for WorkerServiceNoOp {
         Ok(())
     }
 
-    async fn get_metadata(&self, worker_id: &WorkerId) -> Result<WorkerMetadata, WorkerServiceBaseError> {
+    async fn get_metadata(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<WorkerMetadata, WorkerServiceBaseError> {
         Ok(WorkerMetadata {
             worker_id: worker_id.clone(),
             args: vec![],

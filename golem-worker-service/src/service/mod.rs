@@ -1,6 +1,7 @@
 pub mod template;
 pub mod worker;
 
+use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
 use async_trait::async_trait;
 use golem_worker_service_base::api_definition::{
     ApiDefinition, ApiDefinitionId, ResponseMapping, Version,
@@ -12,6 +13,7 @@ use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use golem_worker_service_base::auth::{
     AuthService, AuthServiceNoop, CommonNamespace, EmptyAuthCtx,
 };
+use golem_worker_service_base::http_request::InputHttpRequest;
 use golem_worker_service_base::oas_worker_bridge::{
     GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION,
 };
@@ -26,7 +28,6 @@ use http::HeaderMap;
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
-use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
 
 #[derive(Clone)]
 pub struct Services {

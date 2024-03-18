@@ -6,7 +6,7 @@ pub mod app_config;
 pub mod auth;
 pub mod evaluator;
 pub mod expr;
-mod http_request;
+pub mod http_request;
 pub mod metrics;
 pub mod oas_worker_bridge;
 pub mod parser;
@@ -17,7 +17,6 @@ pub mod value_typed;
 pub mod worker_request;
 pub mod worker_request_to_response;
 pub mod worker_response;
-
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;
 }

@@ -1,6 +1,6 @@
-use crate::grpcapi;
 use golem_worker_service::api;
 use golem_worker_service::service::Services;
+use golem_worker_service::{config, grpcapi};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use golem_worker_service_base::metrics;
 use opentelemetry::global;
@@ -17,7 +17,8 @@ use tokio::select;
 async fn main() -> std::io::Result<()> {
     let prometheus = metrics::register_all();
 
-    let config = WorkerServiceBaseConfig::default();
+    let config: WorkerServiceBaseConfig = config::get_config();
+
     app(&config, prometheus).await
 }
 

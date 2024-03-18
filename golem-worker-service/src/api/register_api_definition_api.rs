@@ -8,15 +8,13 @@ use tracing::{error, info};
 
 use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::api::common::ApiEndpointError;
+use golem_worker_service_base::api::register_api_definition_api::ApiDefinition;
 use golem_worker_service_base::api_definition;
-use golem_worker_service_base::api_definition::{ApiDefinition, ApiDefinitionId, Version};
-use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
-use golem_worker_service_base::auth::{
-    AuthService, AuthServiceNoop, CommonNamespace, EmptyAuthCtx,
-};
+use golem_worker_service_base::api_definition::{ApiDefinitionId, Version};
+use golem_worker_service_base::auth::{AuthService, CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::oas_worker_bridge::*;
 use golem_worker_service_base::service::register_definition::{
-    ApiRegistrationError, RegisterApiDefinition, RegisterApiDefinitionDefault,
+    ApiRegistrationError, RegisterApiDefinition,
 };
 
 pub struct RegisterApiDefinitionApi {
@@ -200,11 +198,11 @@ async fn register_api(
 
 #[cfg(test)]
 mod test {
-    use crate::auth::AuthServiceNoop;
+    use golem_worker_service_base::auth::AuthServiceNoop;
     use poem::test::TestClient;
 
-    use crate::api_definition_repo::InMemoryRegistry;
-    use crate::service::register_definition::RegisterApiDefinitionDefault;
+    use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
+    use golem_worker_service_base::service::register_definition::RegisterApiDefinitionDefault;
 
     use super::*;
 

@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
 use golem_api_grpc::proto::golem::template::{
@@ -13,7 +11,6 @@ use golem_worker_service_base::app_config::TemplateServiceConfig;
 use golem_worker_service_base::service::error::TemplateServiceBaseError;
 use golem_worker_service_base::UriBackConversion;
 use http::Uri;
-use tonic::Status;
 use tracing::info;
 
 #[async_trait]
