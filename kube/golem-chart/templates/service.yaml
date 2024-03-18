@@ -88,3 +88,26 @@ spec:
       name: grpc
       port: {{ .Values.templateService.ports.grpc }}
       targetPort: {{ .Values.templateService.ports.grpc }}
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-template-compilation-service-{{.Values.env}}
+  labels:
+    app: template-compilation-service-app-{{.Values.env}}
+    env: {{.Values.env}}
+spec:
+  type: {{ .Values.templateCompilationService.service.type }}
+  selector:
+    app: template-compilation-service-app-{{.Values.env}}
+  ports:
+    - protocol: TCP
+      name: http
+      port: {{ .Values.templateCompilationService.ports.http }}
+      targetPort: {{ .Values.templateCompilationService.ports.http }}
+    - protocol: TCP
+      name: grpc
+      port: {{ .Values.templateCompilationService.ports.grpc }}
+      targetPort: {{ .Values.templateCompilationService.ports.grpc }}
