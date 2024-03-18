@@ -13,13 +13,13 @@ use golem_worker_service_base::api_definition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, Version};
 use golem_worker_service_base::auth::{AuthService, CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::oas_worker_bridge::*;
-use golem_worker_service_base::service::register_definition::{
-    ApiRegistrationError, RegisterApiDefinition,
+use golem_worker_service_base::service::api_definition_service::{
+    ApiDefinitionService, ApiRegistrationError,
 };
 
 pub struct RegisterApiDefinitionApi {
     pub definition_service:
-        Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
+        Arc<dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
     pub auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
 }
 
@@ -27,7 +27,7 @@ pub struct RegisterApiDefinitionApi {
 impl RegisterApiDefinitionApi {
     pub fn new(
         definition_service: Arc<
-            dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send,
+            dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send,
         >,
         auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
     ) -> Self {
@@ -172,7 +172,7 @@ impl RegisterApiDefinitionApi {
 }
 
 async fn register_api(
-    definition_service: Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
+    definition_service: Arc<dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
     definition: &api_definition::ApiDefinition,
 ) -> Result<(), ApiEndpointError> {
     definition_service
@@ -202,7 +202,7 @@ mod test {
     use poem::test::TestClient;
 
     use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
-    use golem_worker_service_base::service::register_definition::RegisterApiDefinitionDefault;
+    use golem_worker_service_base::service::api_definition_service::RegisterApiDefinitionDefault;
 
     use super::*;
 

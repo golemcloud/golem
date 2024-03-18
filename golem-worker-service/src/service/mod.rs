@@ -17,11 +17,11 @@ use golem_worker_service_base::http_request::InputHttpRequest;
 use golem_worker_service_base::oas_worker_bridge::{
     GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION,
 };
-use golem_worker_service_base::service::custom_request_definition_lookup::{
-    ApiDefinitionLookupError, CustomRequestDefinitionLookup,
+use golem_worker_service_base::service::api_definition_service::{
+    ApiDefinitionKey, ApiDefinitionService, RegisterApiDefinitionDefault,
 };
-use golem_worker_service_base::service::register_definition::{
-    ApiDefinitionKey, RegisterApiDefinition, RegisterApiDefinitionDefault,
+use golem_worker_service_base::service::http_request_definition_lookup::{
+    ApiDefinitionLookupError, HttpRequestDefinitionLookup,
 };
 use golem_worker_service_base::worker_request_to_response::WorkerRequestToResponse;
 use http::HeaderMap;
@@ -33,8 +33,8 @@ use tracing::error;
 pub struct Services {
     pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
     pub definition_service:
-        Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
-    pub definition_lookup_service: Arc<dyn CustomRequestDefinitionLookup + Sync + Send>,
+        Arc<dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
+    pub definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
@@ -85,7 +85,7 @@ impl Services {
         ));
 
         let definition_service: Arc<
-            dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send,
+            dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send,
         > = Arc::new(RegisterApiDefinitionDefault::new(
             Arc::new(AuthServiceNoop {}),
             definition_repo.clone(),
@@ -129,7 +129,7 @@ impl Services {
         let definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send> =
             Arc::new(InMemoryRegistry::default());
 
-        let definition_lookup_service: Arc<dyn CustomRequestDefinitionLookup + Sync + Send> =
+        let definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send> =
             Arc::new(CustomRequestDefinitionLookupDefault::new(
                 definition_repo.clone(),
             ));
@@ -178,7 +178,7 @@ impl CustomRequestDefinitionLookupDefault {
 }
 
 #[async_trait]
-impl CustomRequestDefinitionLookup for CustomRequestDefinitionLookupDefault {
+impl HttpRequestDefinitionLookup for CustomRequestDefinitionLookupDefault {
     async fn get(
         &self,
         input_http_request: &InputHttpRequest<'_>,

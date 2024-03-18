@@ -9,7 +9,7 @@ use tracing::{error, info};
 
 use crate::api_request_route_resolver::WorkerBindingResolver;
 use crate::http_request::{ApiInputPath, InputHttpRequest};
-use crate::service::custom_request_definition_lookup::CustomRequestDefinitionLookup;
+use crate::service::http_request_definition_lookup::HttpRequestDefinitionLookup;
 use crate::worker_request::WorkerRequest;
 use crate::worker_request_to_response::WorkerRequestToResponse;
 
@@ -19,7 +19,7 @@ use crate::worker_request_to_response::WorkerRequestToResponse;
 pub struct CustomHttpRequestApi {
     pub worker_to_http_response_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
-    pub api_definition_lookup_service: Arc<dyn CustomRequestDefinitionLookup + Sync + Send>,
+    pub api_definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
@@ -27,7 +27,7 @@ impl CustomHttpRequestApi {
         worker_to_http_response_service: Arc<
             dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send,
         >,
-        api_definition_lookup_service: Arc<dyn CustomRequestDefinitionLookup + Sync + Send>,
+        api_definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
     ) -> Self {
         Self {
             worker_to_http_response_service,

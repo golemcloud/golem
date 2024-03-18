@@ -11,7 +11,7 @@ use async_trait::async_trait;
 // Ideally a repo service and its implementation with a different service impl that takes care of
 // validations, authorisations etc is the right approach. However we are keeping it simple for now.
 #[async_trait]
-pub trait RegisterApiDefinition<Namespace, AuthCtx> {
+pub trait ApiDefinitionService<Namespace, AuthCtx> {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -155,7 +155,7 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx>
 impl<
         Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync,
         AuthCtx: Send + Sync,
-    > RegisterApiDefinition<Namespace, AuthCtx>
+    > ApiDefinitionService<Namespace, AuthCtx>
     for RegisterApiDefinitionDefault<Namespace, AuthCtx>
 {
     async fn register(
@@ -240,7 +240,7 @@ impl<
 pub struct RegisterApiDefinitionNoop {}
 
 #[async_trait]
-impl RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> for RegisterApiDefinitionNoop {
+impl ApiDefinitionService<CommonNamespace, EmptyAuthCtx> for RegisterApiDefinitionNoop {
     async fn register(
         &self,
         _definition: &ApiDefinition,

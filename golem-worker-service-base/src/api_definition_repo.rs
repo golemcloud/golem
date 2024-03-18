@@ -5,7 +5,7 @@ use std::hash::Hash;
 use std::sync::Mutex;
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId};
-use crate::service::register_definition::ApiDefinitionKey;
+use crate::service::api_definition_service::ApiDefinitionKey;
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;

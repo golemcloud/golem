@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use std::fmt::Display;
 
 #[async_trait]
-pub trait CustomRequestDefinitionLookup {
+pub trait HttpRequestDefinitionLookup {
     async fn get(
         &self,
         input_http_request: &InputHttpRequest<'_>,
