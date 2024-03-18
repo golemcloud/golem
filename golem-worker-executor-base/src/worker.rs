@@ -595,8 +595,9 @@ pub async fn invoke_and_await<Ctx: WorkerCtx, T>(
 where
     T: HasInvocationKeyService,
 {
+    let worker_id = worker.metadata.worker_id.worker_id.clone();
     match invoke(
-        worker.clone(),
+        worker,
         this,
         invocation_key.clone(),
         calling_convention,
@@ -608,14 +609,13 @@ where
         Some(Ok(output)) => Ok(output),
         Some(Err(err)) => Err(err),
         None => {
-            let worker_id = &worker.metadata.worker_id.worker_id;
             let invocation_key =
                 invocation_key.expect("missing invocation key for invoke-and-await");
 
             debug!("Waiting for invocation key {} to complete", invocation_key);
             let result = this
                 .invocation_key_service()
-                .wait_for_confirmation(worker_id, &invocation_key)
+                .wait_for_confirmation(&worker_id, &invocation_key)
                 .await;
 
             debug!(

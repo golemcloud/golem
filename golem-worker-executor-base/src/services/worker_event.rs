@@ -85,6 +85,8 @@ pub struct WorkerEventServiceDefault {
 
 impl WorkerEventServiceDefault {
     pub fn new(channel_capacity: usize, ring_capacity: usize) -> WorkerEventServiceDefault {
+        warn!("WorkerEventServiceDefault NEW");
+
         let (tx, _) = channel(channel_capacity);
         let ring = HeapRb::new(ring_capacity);
         // ring.sub
@@ -94,6 +96,7 @@ impl WorkerEventServiceDefault {
 
 impl Drop for WorkerEventServiceDefault {
     fn drop(&mut self) {
+        warn!("WorkerEventServiceDefault DROP");
         self.emit_event(WorkerEvent::Close);
     }
 }

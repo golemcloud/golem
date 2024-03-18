@@ -49,13 +49,11 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
 
     let worker_id = store.data().worker_id().clone();
-    debug!("invoke_worker_impl: {worker_id}/{full_function_name}");
+    debug!("invoke_worker: {worker_id}/{full_function_name}");
 
     if let Some(invocation_key) = &store.data().get_current_invocation_key().await {
         store.data_mut().resume_invocation_key(invocation_key).await
     }
-
-    debug!("invoke_worker_impl_or_fail: {worker_id}/{full_function_name}");
 
     let result = invoke_or_fail(
         &worker_id,
@@ -69,7 +67,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     .await;
 
     debug!(
-        "invoke_worker_impl_or_fail: {worker_id}/{full_function_name} resulted in {:?}",
+        "invoke_or_fail: {worker_id}/{full_function_name} resulted in {:?}",
         result
     );
 
