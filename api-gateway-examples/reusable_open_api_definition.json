@@ -21,10 +21,13 @@
         "function-name": "golem:it/api/get-cart-contents",
         "function-params": [],
         "template-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-
         "response" : {
           "status": "200",
-          "body": "${worker.response}",
+          "body": {
+            "name" : "${worker.response[0][0].name}",
+            "price" : "${worker.response[0][0].price}",
+            "quantity" : "${worker.response[0][0].quantity}"
+          },
           "headers": {}
         }
       },
