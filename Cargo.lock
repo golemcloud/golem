@@ -2088,6 +2088,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-template-compilation-service"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "console-subscriber",
+ "figment",
+ "futures",
+ "futures-util",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-worker-executor-base",
+ "http 0.2.11",
+ "http 1.0.0",
+ "lazy_static",
+ "prometheus",
+ "serde",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tonic-health",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wasmtime",
+]
+
+[[package]]
 name = "golem-template-service"
 version = "0.1.0"
 dependencies = [
@@ -2100,6 +2127,7 @@ dependencies = [
  "golem-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "http 0.2.11",
  "humantime-serde",
  "lazy_static",
  "mappable-rc",
@@ -2258,6 +2286,55 @@ dependencies = [
 
 [[package]]
 name = "golem-worker-service"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bincode 2.0.0-rc.3",
+ "bytes 1.5.0",
+ "derive_more",
+ "figment",
+ "futures",
+ "futures-util",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-service-base",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "golem-worker-service-base",
+ "http 0.2.11",
+ "http 1.0.0",
+ "humantime-serde",
+ "hyper 1.1.0",
+ "lazy_static",
+ "nom",
+ "openapiv3",
+ "opentelemetry",
+ "opentelemetry-prometheus",
+ "opentelemetry_sdk",
+ "poem",
+ "poem-openapi",
+ "prometheus",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "strum",
+ "strum_macros",
+ "tap",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "golem-worker-service-base"
 version = "0.0.0"
 dependencies = [
  "async-trait",

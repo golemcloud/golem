@@ -1,10 +1,12 @@
-pub mod api_definition_endpoints;
-pub mod common;
-pub mod custom_request_endpoint;
-pub mod healthcheck;
+pub mod register_api_definition_api;
 pub mod worker;
+
 pub mod worker_connect;
 
+use crate::api::worker::WorkerApi;
+use crate::service::Services;
+use golem_worker_service_base::api::custom_http_request_api::CustomHttpRequestApi;
+use golem_worker_service_base::api::healthcheck;
 use poem::endpoint::PrometheusExporter;
 use poem::{get, EndpointExt, Route};
 use poem_openapi::OpenApiService;
@@ -12,11 +14,9 @@ use prometheus::Registry;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::service::Services;
-
 type ApiServices = (
-    worker::WorkerApi,
-    api_definition_endpoints::RegisterApiDefinitionApi,
+    WorkerApi,
+    register_api_definition_api::RegisterApiDefinitionApi,
     healthcheck::HealthcheckApi,
 );
 
@@ -41,9 +41,9 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
 }
 
 pub fn custom_request_route(services: Services) -> Route {
-    let custom_request_executor = custom_request_endpoint::CustomRequestApi::new(
+    let custom_request_executor = CustomHttpRequestApi::new(
         services.worker_to_http_service,
-        services.definition_service,
+        services.definition_lookup_service,
     );
 
     Route::new().nest("/", custom_request_executor)
@@ -56,8 +56,9 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
                 template_service: services.template_service.clone(),
                 worker_service: services.worker_service.clone(),
             },
-            api_definition_endpoints::RegisterApiDefinitionApi::new(
+            register_api_definition_api::RegisterApiDefinitionApi::new(
                 services.definition_service.clone(),
+                services.auth_service.clone(),
             ),
             healthcheck::HealthcheckApi,
         ),

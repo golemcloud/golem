@@ -28,9 +28,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, GetInvocationKeyRequest,
     InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, InvokeWorkerRequest, ResumeWorkerRequest,
 };
-use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, ShardId, TemplateId, WorkerStatus,
-};
+use golem_common::model::{CallingConvention, InvocationKey, ShardId, WorkerStatus};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use serde_json::Value;
@@ -40,11 +38,12 @@ use tonic::transport::Channel;
 use tonic::{Status, Streaming};
 use tracing::{debug, info};
 
-use crate::service::template::{TemplateError, TemplateService};
+use crate::service::template::TemplateService;
 use golem_service_base::model::*;
-use golem_service_base::routing_table::{RoutingTableError, RoutingTableService};
+use golem_service_base::routing_table::RoutingTableService;
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::worker_executor_clients::WorkerExecutorClients;
+use golem_worker_service_base::service::error::WorkerServiceBaseError;
 
 pub struct ConnectWorkerStream {
     stream: tokio_stream::wrappers::ReceiverStream<Result<LogEvent, Status>>,
@@ -111,62 +110,12 @@ impl Drop for ConnectWorkerStream {
     }
 }
 
-pub enum WorkerError {
-    Internal(String),
-    TypeCheckerError(String),
-    DelegatedTemplateServiceError(TemplateError),
-    VersionedTemplateIdNotFound(VersionedTemplateId),
-    TemplateNotFound(TemplateId),
-    AccountIdNotFound(AccountId),
-    // FIXME: Once worker is independent of account
-    WorkerNotFound(WorkerId),
-    Golem(GolemError),
-}
-
-impl std::fmt::Display for WorkerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            WorkerError::Internal(ref string) => write!(f, "Internal error: {}", string),
-            WorkerError::TypeCheckerError(ref string) => {
-                write!(f, "Type checker error: {}", string)
-            }
-            WorkerError::DelegatedTemplateServiceError(ref error) => {
-                write!(f, "Delegated template service error: {}", error)
-            }
-            WorkerError::VersionedTemplateIdNotFound(ref versioned_template_id) => write!(
-                f,
-                "Versioned template id not found: {}",
-                versioned_template_id
-            ),
-            WorkerError::TemplateNotFound(ref template_id) => {
-                write!(f, "Template not found: {}", template_id)
-            }
-            WorkerError::AccountIdNotFound(ref account_id) => {
-                write!(f, "Account id not found: {}", account_id)
-            }
-            WorkerError::WorkerNotFound(ref worker_id) => {
-                write!(f, "Worker not found: {}", worker_id)
-            }
-            WorkerError::Golem(ref error) => write!(f, "Golem error: {:?}", error),
-        }
-    }
-}
-
-impl From<RoutingTableError> for WorkerError {
-    fn from(error: RoutingTableError) -> Self {
-        WorkerError::Internal(format!("Unable to get routing table: {:?}", error))
-    }
-}
-
-impl From<TemplateError> for WorkerError {
-    fn from(error: TemplateError) -> Self {
-        WorkerError::DelegatedTemplateServiceError(error)
-    }
-}
-
 #[async_trait]
 pub trait WorkerService {
-    async fn get_by_id(&self, worker_id: &WorkerId) -> Result<VersionedWorkerId, WorkerError>;
+    async fn get_by_id(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<VersionedWorkerId, WorkerServiceBaseError>;
 
     async fn create(
         &self,
@@ -174,13 +123,19 @@ pub trait WorkerService {
         template_version: i32,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
-    ) -> Result<VersionedWorkerId, WorkerError>;
+    ) -> Result<VersionedWorkerId, WorkerServiceBaseError>;
 
-    async fn connect(&self, worker_id: &WorkerId) -> Result<ConnectWorkerStream, WorkerError>;
+    async fn connect(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<ConnectWorkerStream, WorkerServiceBaseError>;
 
-    async fn delete(&self, worker_id: &WorkerId) -> Result<(), WorkerError>;
+    async fn delete(&self, worker_id: &WorkerId) -> Result<(), WorkerServiceBaseError>;
 
-    async fn get_invocation_key(&self, worker_id: &WorkerId) -> Result<InvocationKey, WorkerError>;
+    async fn get_invocation_key(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<InvocationKey, WorkerServiceBaseError>;
 
     async fn invoke_and_await_function(
         &self,
@@ -189,7 +144,7 @@ pub trait WorkerService {
         invocation_key: &InvocationKey,
         params: Value,
         calling_convention: &CallingConvention,
-    ) -> Result<Value, WorkerError>;
+    ) -> Result<Value, WorkerServiceBaseError>;
 
     async fn invoke_and_await_function_proto(
         &self,
@@ -198,38 +153,41 @@ pub trait WorkerService {
         invocation_key: &InvocationKey,
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
-    ) -> Result<ProtoInvokeResult, WorkerError>;
+    ) -> Result<ProtoInvokeResult, WorkerServiceBaseError>;
 
     async fn invoke_function(
         &self,
         worker_id: &WorkerId,
         function_name: String,
         params: Value,
-    ) -> Result<(), WorkerError>;
+    ) -> Result<(), WorkerServiceBaseError>;
 
     async fn invoke_fn_proto(
         &self,
         worker_id: &WorkerId,
         function_name: String,
         params: Vec<ProtoVal>,
-    ) -> Result<(), WorkerError>;
+    ) -> Result<(), WorkerServiceBaseError>;
 
     async fn complete_promise(
         &self,
         worker_id: &WorkerId,
         oplog_id: u64,
         data: Vec<u8>,
-    ) -> Result<bool, WorkerError>;
+    ) -> Result<bool, WorkerServiceBaseError>;
 
     async fn interrupt(
         &self,
         worker_id: &WorkerId,
         recover_immediately: bool,
-    ) -> Result<(), WorkerError>;
+    ) -> Result<(), WorkerServiceBaseError>;
 
-    async fn get_metadata(&self, worker_id: &WorkerId) -> Result<WorkerMetadata, WorkerError>;
+    async fn get_metadata(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<WorkerMetadata, WorkerServiceBaseError>;
 
-    async fn resume(&self, worker_id: &WorkerId) -> Result<(), WorkerError>;
+    async fn resume(&self, worker_id: &WorkerId) -> Result<(), WorkerServiceBaseError>;
 }
 
 pub struct WorkerServiceDefault {
@@ -254,7 +212,7 @@ impl WorkerServiceDefault {
     async fn try_get_template_for_worker(
         &self,
         worker_id: &WorkerId,
-    ) -> Result<Template, WorkerError> {
+    ) -> Result<Template, WorkerServiceBaseError> {
         match self.get_metadata(worker_id).await {
             Ok(metadata) => {
                 let template_version = metadata.template_version;
@@ -263,7 +221,7 @@ impl WorkerServiceDefault {
                     .get_by_version(&worker_id.template_id, template_version)
                     .await?
                     .ok_or_else(|| {
-                        WorkerError::VersionedTemplateIdNotFound(VersionedTemplateId {
+                        WorkerServiceBaseError::VersionedTemplateIdNotFound(VersionedTemplateId {
                             template_id: worker_id.template_id.clone(),
                             version: template_version,
                         })
@@ -271,11 +229,11 @@ impl WorkerServiceDefault {
 
                 Ok(template_details)
             }
-            Err(WorkerError::WorkerNotFound(_)) => Ok(self
+            Err(WorkerServiceBaseError::WorkerNotFound(_)) => Ok(self
                 .template_service
                 .get_latest(&worker_id.template_id)
                 .await?),
-            Err(WorkerError::Golem(GolemError::WorkerNotFound(_))) => Ok(self
+            Err(WorkerServiceBaseError::Golem(GolemError::WorkerNotFound(_))) => Ok(self
                 .template_service
                 .get_latest(&worker_id.template_id)
                 .await?),
@@ -286,7 +244,7 @@ impl WorkerServiceDefault {
     async fn get_worker_executor_client(
         &self,
         worker_id: &WorkerId,
-    ) -> Result<Option<WorkerExecutorClient<Channel>>, WorkerError> {
+    ) -> Result<Option<WorkerExecutorClient<Channel>>, WorkerServiceBaseError> {
         let routing_table = self.routing_table_service.get_routing_table().await?;
         match routing_table.lookup(worker_id) {
             None => Ok(None),
@@ -296,7 +254,7 @@ impl WorkerServiceDefault {
                     .lookup(pod.clone())
                     .await
                     .map_err(|err| {
-                        WorkerError::Internal(format!(
+                        WorkerServiceBaseError::Internal(format!(
                             "No client for pod {:?} derived from ShardId {} of {:?}. {}",
                             pod,
                             ShardId::from_worker_id(
@@ -317,7 +275,7 @@ impl WorkerServiceDefault {
         worker_id: &WorkerId,
         i: &In,
         f: F,
-    ) -> Result<Out, WorkerError>
+    ) -> Result<Out, WorkerServiceBaseError>
     where
         F: for<'b> Fn(
             &'b mut WorkerExecutorClient<Channel>,
@@ -351,7 +309,7 @@ impl WorkerServiceDefault {
                         }
                         Err(other) => {
                             debug!("Got {:?}, not retrying", other);
-                            return Err(WorkerError::Golem(other));
+                            return Err(WorkerServiceBaseError::Golem(other));
                         }
                     }
                 }
@@ -361,7 +319,7 @@ impl WorkerServiceDefault {
                     self.routing_table_service.invalidate_routing_table().await;
                     sleep(Duration::from_secs(1)).await;
                 }
-                Err(WorkerError::Internal { 0: details })
+                Err(WorkerServiceBaseError::Internal { 0: details })
                     if details.contains("transport error") =>
                 {
                     info!("Shard manager unavailable");
@@ -380,7 +338,10 @@ impl WorkerServiceDefault {
 
 #[async_trait]
 impl WorkerService for WorkerServiceDefault {
-    async fn get_by_id(&self, worker_id: &WorkerId) -> Result<VersionedWorkerId, WorkerError> {
+    async fn get_by_id(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
         Ok(VersionedWorkerId {
             worker_id: worker_id.clone(),
             template_version_used: 0,
@@ -393,7 +354,7 @@ impl WorkerService for WorkerServiceDefault {
         template_version: i32,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
-    ) -> Result<VersionedWorkerId, WorkerError> {
+    ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
         self.retry_on_invalid_shard_id(
             &worker_id.clone(),
             &(worker_id.clone(), template_version, arguments, environment_variables),
@@ -441,7 +402,10 @@ impl WorkerService for WorkerServiceDefault {
         })
     }
 
-    async fn connect(&self, worker_id: &WorkerId) -> Result<ConnectWorkerStream, WorkerError> {
+    async fn connect(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<ConnectWorkerStream, WorkerServiceBaseError> {
         match self.get_worker_executor_client(worker_id).await? {
             Some(mut worker_executor_client) => {
                 let response = match worker_executor_client
@@ -457,19 +421,21 @@ impl WorkerService for WorkerServiceDefault {
                     Ok(response) => Ok(response),
                     Err(status) => {
                         if status.code() == tonic::Code::NotFound {
-                            Err(WorkerError::WorkerNotFound(worker_id.clone()))
+                            Err(WorkerServiceBaseError::WorkerNotFound(worker_id.clone()))
                         } else {
-                            Err(WorkerError::Internal(status.message().to_string()))
+                            Err(WorkerServiceBaseError::Internal(
+                                status.message().to_string(),
+                            ))
                         }
                     }
                 }?;
                 Ok(ConnectWorkerStream::new(response.into_inner()))
             }
-            None => Err(WorkerError::WorkerNotFound(worker_id.clone())),
+            None => Err(WorkerServiceBaseError::WorkerNotFound(worker_id.clone())),
         }
     }
 
-    async fn delete(&self, worker_id: &WorkerId) -> Result<(), WorkerError> {
+    async fn delete(&self, worker_id: &WorkerId) -> Result<(), WorkerServiceBaseError> {
         self.retry_on_invalid_shard_id(
             worker_id,
             worker_id,
@@ -505,7 +471,10 @@ impl WorkerService for WorkerServiceDefault {
         Ok(())
     }
 
-    async fn get_invocation_key(&self, worker_id: &WorkerId) -> Result<InvocationKey, WorkerError> {
+    async fn get_invocation_key(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<InvocationKey, WorkerServiceBaseError> {
         let invocation_key = self
             .retry_on_invalid_shard_id(worker_id, worker_id, |worker_executor_client, worker_id| {
                 Box::pin(async move {
@@ -551,14 +520,14 @@ impl WorkerService for WorkerServiceDefault {
         invocation_key: &InvocationKey,
         params: Value,
         calling_convention: &CallingConvention,
-    ) -> Result<Value, WorkerError> {
+    ) -> Result<Value, WorkerServiceBaseError> {
         let template_details = self.try_get_template_for_worker(worker_id).await?;
 
         let function_type = template_details
             .metadata
             .function_by_name(&function_name)
             .ok_or_else(|| {
-                WorkerError::TypeCheckerError("Failed to find the function".to_string())
+                WorkerServiceBaseError::TypeCheckerError("Failed to find the function".to_string())
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -569,7 +538,7 @@ impl WorkerService for WorkerServiceDefault {
                     .collect(),
                 calling_convention.clone(),
             )
-            .map_err(|err| WorkerError::TypeCheckerError(err.join(", ")))?;
+            .map_err(|err| WorkerServiceBaseError::TypeCheckerError(err.join(", ")))?;
         let results_val = self
             .invoke_and_await_function_proto(
                 worker_id,
@@ -589,7 +558,7 @@ impl WorkerService for WorkerServiceDefault {
         let invoke_response_json = results_val
             .result
             .validate_function_result(function_results, calling_convention.clone())
-            .map_err(|err| WorkerError::TypeCheckerError(err.join(", ")))?;
+            .map_err(|err| WorkerServiceBaseError::TypeCheckerError(err.join(", ")))?;
         Ok(invoke_response_json)
     }
 
@@ -600,13 +569,13 @@ impl WorkerService for WorkerServiceDefault {
         invocation_key: &InvocationKey,
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
-    ) -> Result<ProtoInvokeResult, WorkerError> {
+    ) -> Result<ProtoInvokeResult, WorkerServiceBaseError> {
         let template_details = self.try_get_template_for_worker(worker_id).await?;
         let function_type = template_details
             .metadata
             .function_by_name(&function_name)
             .ok_or_else(|| {
-                WorkerError::TypeCheckerError("Failed to find the function".to_string())
+                WorkerServiceBaseError::TypeCheckerError("Failed to find the function".to_string())
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -617,7 +586,7 @@ impl WorkerService for WorkerServiceDefault {
                     .collect(),
                 calling_convention.clone(),
             )
-            .map_err(|err| WorkerError::TypeCheckerError(err.join(", ")))?;
+            .map_err(|err| WorkerServiceBaseError::TypeCheckerError(err.join(", ")))?;
 
         let invoke_response = self.retry_on_invalid_shard_id(
             worker_id,
@@ -671,13 +640,13 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         function_name: String,
         params: Value,
-    ) -> Result<(), WorkerError> {
+    ) -> Result<(), WorkerServiceBaseError> {
         let template_details = self.try_get_template_for_worker(worker_id).await?;
         let function_type = template_details
             .metadata
             .function_by_name(&function_name)
             .ok_or_else(|| {
-                WorkerError::TypeCheckerError("Failed to find the function".to_string())
+                WorkerServiceBaseError::TypeCheckerError("Failed to find the function".to_string())
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -688,7 +657,7 @@ impl WorkerService for WorkerServiceDefault {
                     .collect(),
                 CallingConvention::Component,
             )
-            .map_err(|err| WorkerError::TypeCheckerError(err.join(", ")))?;
+            .map_err(|err| WorkerServiceBaseError::TypeCheckerError(err.join(", ")))?;
         self.invoke_fn_proto(worker_id, function_name.clone(), params_val)
             .await?;
         Ok(())
@@ -699,13 +668,13 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         function_name: String,
         params: Vec<ProtoVal>,
-    ) -> Result<(), WorkerError> {
+    ) -> Result<(), WorkerServiceBaseError> {
         let template_details = self.try_get_template_for_worker(worker_id).await?;
         let function_type = template_details
             .metadata
             .function_by_name(&function_name)
             .ok_or_else(|| {
-                WorkerError::TypeCheckerError("Failed to find the function".to_string())
+                WorkerServiceBaseError::TypeCheckerError("Failed to find the function".to_string())
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -716,7 +685,7 @@ impl WorkerService for WorkerServiceDefault {
                     .collect(),
                 CallingConvention::Component,
             )
-            .map_err(|err| WorkerError::TypeCheckerError(err.join(", ")))?;
+            .map_err(|err| WorkerServiceBaseError::TypeCheckerError(err.join(", ")))?;
         self.retry_on_invalid_shard_id(
             worker_id,
             &(
@@ -768,7 +737,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         oplog_id: u64,
         data: Vec<u8>,
-    ) -> Result<bool, WorkerError> {
+    ) -> Result<bool, WorkerServiceBaseError> {
         let promise_id = PromiseId {
             worker_id: worker_id.clone(),
             oplog_idx: oplog_id,
@@ -820,7 +789,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &WorkerId,
         recover_immediately: bool,
-    ) -> Result<(), WorkerError> {
+    ) -> Result<(), WorkerServiceBaseError> {
         self.retry_on_invalid_shard_id(
             worker_id,
             worker_id,
@@ -857,7 +826,10 @@ impl WorkerService for WorkerServiceDefault {
         Ok(())
     }
 
-    async fn get_metadata(&self, worker_id: &WorkerId) -> Result<WorkerMetadata, WorkerError> {
+    async fn get_metadata(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<WorkerMetadata, WorkerServiceBaseError> {
         let metadata = self.retry_on_invalid_shard_id(
             worker_id,
             worker_id,
@@ -891,7 +863,7 @@ impl WorkerService for WorkerServiceDefault {
         Ok(metadata)
     }
 
-    async fn resume(&self, worker_id: &WorkerId) -> Result<(), WorkerError> {
+    async fn resume(&self, worker_id: &WorkerId) -> Result<(), WorkerServiceBaseError> {
         self.retry_on_invalid_shard_id(
             worker_id,
             worker_id,
@@ -933,7 +905,10 @@ pub struct WorkerServiceNoOp {}
 
 #[async_trait]
 impl WorkerService for WorkerServiceNoOp {
-    async fn get_by_id(&self, worker_id: &WorkerId) -> Result<VersionedWorkerId, WorkerError> {
+    async fn get_by_id(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
         Ok(VersionedWorkerId {
             worker_id: worker_id.clone(),
             template_version_used: 0,
@@ -946,25 +921,30 @@ impl WorkerService for WorkerServiceNoOp {
         _template_version: i32,
         _arguments: Vec<String>,
         _environment_variables: HashMap<String, String>,
-    ) -> Result<VersionedWorkerId, WorkerError> {
+    ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
         Ok(VersionedWorkerId {
             worker_id: worker_id.clone(),
             template_version_used: 0,
         })
     }
 
-    async fn connect(&self, _worker_id: &WorkerId) -> Result<ConnectWorkerStream, WorkerError> {
-        Err(WorkerError::Internal("Not supported".to_string()))
+    async fn connect(
+        &self,
+        _worker_id: &WorkerId,
+    ) -> Result<ConnectWorkerStream, WorkerServiceBaseError> {
+        Err(WorkerServiceBaseError::Internal(
+            "Not supported".to_string(),
+        ))
     }
 
-    async fn delete(&self, _worker_id: &WorkerId) -> Result<(), WorkerError> {
+    async fn delete(&self, _worker_id: &WorkerId) -> Result<(), WorkerServiceBaseError> {
         Ok(())
     }
 
     async fn get_invocation_key(
         &self,
         _worker_id: &WorkerId,
-    ) -> Result<InvocationKey, WorkerError> {
+    ) -> Result<InvocationKey, WorkerServiceBaseError> {
         Ok(InvocationKey {
             value: "".to_string(),
         })
@@ -977,7 +957,7 @@ impl WorkerService for WorkerServiceNoOp {
         _invocation_key: &InvocationKey,
         _params: Value,
         _calling_convention: &CallingConvention,
-    ) -> Result<Value, WorkerError> {
+    ) -> Result<Value, WorkerServiceBaseError> {
         Ok(Value::Null)
     }
 
@@ -988,7 +968,7 @@ impl WorkerService for WorkerServiceNoOp {
         _invocation_key: &InvocationKey,
         _params: Vec<ProtoVal>,
         _calling_convention: &CallingConvention,
-    ) -> Result<ProtoInvokeResult, WorkerError> {
+    ) -> Result<ProtoInvokeResult, WorkerServiceBaseError> {
         Ok(ProtoInvokeResult { result: vec![] })
     }
 
@@ -997,7 +977,7 @@ impl WorkerService for WorkerServiceNoOp {
         _worker_id: &WorkerId,
         _function_name: String,
         _params: Value,
-    ) -> Result<(), WorkerError> {
+    ) -> Result<(), WorkerServiceBaseError> {
         Ok(())
     }
 
@@ -1006,7 +986,7 @@ impl WorkerService for WorkerServiceNoOp {
         _worker_id: &WorkerId,
         _function_name: String,
         _params: Vec<ProtoVal>,
-    ) -> Result<(), WorkerError> {
+    ) -> Result<(), WorkerServiceBaseError> {
         Ok(())
     }
 
@@ -1015,7 +995,7 @@ impl WorkerService for WorkerServiceNoOp {
         _worker_id: &WorkerId,
         _oplog_id: u64,
         _data: Vec<u8>,
-    ) -> Result<bool, WorkerError> {
+    ) -> Result<bool, WorkerServiceBaseError> {
         Ok(true)
     }
 
@@ -1023,11 +1003,14 @@ impl WorkerService for WorkerServiceNoOp {
         &self,
         _worker_id: &WorkerId,
         _recover_immediately: bool,
-    ) -> Result<(), WorkerError> {
+    ) -> Result<(), WorkerServiceBaseError> {
         Ok(())
     }
 
-    async fn get_metadata(&self, worker_id: &WorkerId) -> Result<WorkerMetadata, WorkerError> {
+    async fn get_metadata(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<WorkerMetadata, WorkerServiceBaseError> {
         Ok(WorkerMetadata {
             worker_id: worker_id.clone(),
             args: vec![],
@@ -1038,7 +1021,7 @@ impl WorkerService for WorkerServiceNoOp {
         })
     }
 
-    async fn resume(&self, _worker_id: &WorkerId) -> Result<(), WorkerError> {
+    async fn resume(&self, _worker_id: &WorkerId) -> Result<(), WorkerServiceBaseError> {
         Ok(())
     }
 }

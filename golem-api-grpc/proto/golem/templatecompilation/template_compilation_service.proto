@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+import "golem/common/empty.proto";
+import "golem/common/error_body.proto";
+import "golem/template/template_id.proto";
+
+package golem.templatecompilation;
+
+service TemplateCompilationService {
+    rpc EnqueueCompilation(TemplateCompilationRequest) returns (TemplateCompilationResponse);
+}
+
+message TemplateCompilationRequest {
+    golem.template.TemplateId template_id = 1;
+    int32 template_version = 2;
+}
+
+message TemplateCompilationResponse {
+    oneof result {
+        golem.common.Empty success = 1;
+        TemplateCompilationError failure = 2;
+    }
+}
+
+message TemplateCompilationError {
+    oneof error {
+        golem.common.ErrorsBody bad_request = 1;
+        golem.common.ErrorBody not_found = 2;
+        golem.common.ErrorBody internal_error = 3;
+    }
+}

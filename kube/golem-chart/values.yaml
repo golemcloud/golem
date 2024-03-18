@@ -83,6 +83,17 @@ templateService:
         key: password
 #  nodeSelector:
 
+templateCompilationService:
+  image: golemservices/golem-template-compilation-service:latest
+  imagePullPolicy: Always
+  replica: 1
+  ports:
+    http: 8084
+    grpc: 9091
+  service:
+    type: LoadBalancer
+#  nodeSelector:
+
 logging:
   json: false
 

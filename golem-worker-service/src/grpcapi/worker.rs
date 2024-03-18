@@ -35,8 +35,8 @@ use golem_api_grpc::proto::golem::worker::{
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
 
-use crate::service::template::{TemplateError, TemplateService};
-use crate::service::worker::{self, ConnectWorkerStream, WorkerService};
+use crate::service::template::TemplateService;
+use crate::service::worker::{ConnectWorkerStream, WorkerService};
 
 fn server_error<T>(error: T) -> GrpcWorkerError
 where
@@ -452,143 +452,6 @@ impl WorkerGrpcApi {
         let stream = self.worker_service.connect(&worker_id).await?;
 
         Ok(stream)
-    }
-}
-
-impl From<crate::service::worker::WorkerError> for GrpcWorkerError {
-    fn from(error: crate::service::worker::WorkerError) -> Self {
-        GrpcWorkerError {
-            error: Some(error.into()),
-        }
-    }
-}
-
-impl From<crate::service::worker::WorkerError> for worker_error::Error {
-    fn from(value: crate::service::worker::WorkerError) -> Self {
-        match value {
-            worker::WorkerError::TemplateNotFound(template_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Template not found: {template_id}"),
-                })
-            }
-            worker::WorkerError::AccountIdNotFound(account_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Account not found: {account_id}"),
-                })
-            }
-            worker::WorkerError::VersionedTemplateIdNotFound(template_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Versioned template not found: {template_id}"),
-                })
-            }
-            worker::WorkerError::WorkerNotFound(worker_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Worker not found: {worker_id}"),
-                })
-            }
-            worker::WorkerError::Internal(error) => worker_error::Error::InternalError(
-                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: error,
-                    })),
-                },
-            ),
-            worker::WorkerError::TypeCheckerError(error) => {
-                worker_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![error],
-                })
-            }
-            worker::WorkerError::DelegatedTemplateServiceError(_) => todo!(),
-            worker::WorkerError::Golem(worker_execution_error) => {
-                worker_error::Error::InternalError(worker_execution_error.into())
-            }
-        }
-    }
-}
-
-impl From<TemplateError> for GrpcWorkerError {
-    fn from(error: TemplateError) -> Self {
-        GrpcWorkerError {
-            error: Some(error.into()),
-        }
-    }
-}
-
-impl From<TemplateError> for worker_error::Error {
-    fn from(value: TemplateError) -> Self {
-        match value {
-            TemplateError::Connection(status) => worker_error::Error::InternalError(
-                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: format!("Connection error:  Status: {status}"),
-                    })),
-                },
-            ),
-            TemplateError::Transport(transport_error) => worker_error::Error::InternalError(
-                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: format!("Transport error: {transport_error}"),
-                    })),
-                },
-            ),
-            TemplateError::Server(template_error) => match template_error.error {
-                Some(
-                    golem_api_grpc::proto::golem::template::template_error::Error::AlreadyExists(
-                        error,
-                    ),
-                ) => worker_error::Error::AlreadyExists(error),
-
-                Some(
-                    golem_api_grpc::proto::golem::template::template_error::Error::BadRequest(
-                        errors,
-                    ),
-                ) => worker_error::Error::BadRequest(ErrorsBody {
-                    errors: errors.errors,
-                }),
-                Some(
-                    golem_api_grpc::proto::golem::template::template_error::Error::InternalError(
-                        error,
-                    ),
-                ) => {
-                    let error0 = error.error;
-
-                    worker_error::Error::InternalError(
-                        golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                            error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                                details: format!("Template Internal error: {error0}"),
-                            })),
-                        },
-                    )
-                }
-                Some(golem_api_grpc::proto::golem::template::template_error::Error::NotFound(
-                    error,
-                )) => worker_error::Error::NotFound(ErrorBody { error: error.error }),
-                Some(
-                    golem_api_grpc::proto::golem::template::template_error::Error::Unauthorized(
-                        error,
-                    ),
-                ) => worker_error::Error::Unauthorized(ErrorBody { error: error.error }),
-                Some(
-                    golem_api_grpc::proto::golem::template::template_error::Error::LimitExceeded(
-                        error,
-                    ),
-                ) => worker_error::Error::LimitExceeded(ErrorBody { error: error.error }),
-                None => worker_error::Error::InternalError(
-                    golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                        error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                            details: "Unknown error".to_string(),
-                        })),
-                    },
-                ),
-            },
-            TemplateError::Other(error) => worker_error::Error::InternalError(
-                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: format!("Unknown error: {error}"),
-                    })),
-                },
-            ),
-        }
     }
 }
 

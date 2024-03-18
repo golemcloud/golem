@@ -121,7 +121,11 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             .build()
             .unwrap();
 
-        let http_server = HttpServerImpl::new(golem_config.http_addr()?, prometheus_registry);
+        let http_server = HttpServerImpl::new(
+            golem_config.http_addr()?,
+            prometheus_registry,
+            "Worker executor is running",
+        );
 
         info!("Using Redis at {}", golem_config.redis.url());
         let pool = golem_common::redis::RedisPool::configured(&golem_config.redis).await?;

@@ -1,8 +1,9 @@
-version: '3.8'
+version: "3.8"
 
 services:
   router:
-    image: golemservices/golem-router:v0.0.67
+    image: golemservices/golem-router:latest
+    pull_policy: always
     ports:
       - "${GOLEM_ROUTER_PORT}:80"
     environment:
@@ -24,7 +25,8 @@ services:
       - "${REDIS_PORT}:${REDIS_PORT}"
 
   golem-shard-manager:
-    image: golemservices/golem-shard-manager:v0.0.67
+    image: golemservices/golem-shard-manager:latest
+    pull_policy: always
     environment:
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
@@ -37,7 +39,8 @@ services:
       - redis
 
   golem-template-service:
-    image: golemservices/golem-template-service:v0.0.67
+    image: golemservices/golem-template-service:latest
+    pull_policy: always
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1
@@ -46,6 +49,9 @@ services:
       - GOLEM__TEMPLATE_STORE__TYPE="Local"
       - GOLEM__TEMPLATE_STORE__CONFIG__OBJECT_PREFIX=""
       - GOLEM__TEMPLATE_STORE__CONFIG__ROOT_PATH=/template_store
+      - GOLEM__COMPILATION__TYPE="Enabled"
+      - GOLEM__COMPILATION__CONFIG__HOST=golem-template-compilation-service
+      - GOLEM__COMPILATION__CONFIG__PORT=${TEMPLATE_COMPILATION_SERVICE_GRPC_PORT}
       - GOLEM__DB__TYPE=Sqlite
       - GOLEM__DB__CONFIG__DATABASE=/app/golem_db/golem.sqlite
       - GOLEM__DB__CONFIG__MAX_CONNECTIONS=10
@@ -59,7 +65,7 @@ services:
       - "${TEMPLATE_SERVICE_GRPC_PORT}:${TEMPLATE_SERVICE_GRPC_PORT}"
 
   golem-worker-service:
-    image: golemservices/golem-worker-service:v0.0.67
+    image: golemservices/golem-worker-service:latest
     pull_policy: always
     environment:
       - RUST_BACKTRACE=1
@@ -83,8 +89,30 @@ services:
     depends_on:
       - redis
 
+  golem-template-compilation-service:
+    image: golemservices/golem-template-compilation-service:latest
+    pull_policy: always
+    environment:
+      - RUST_BACKTRACE=1
+      - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
+      - GOLEM__TEMPLATE_SERVICE__HOST=golem-template-service
+      - GOLEM__TEMPLATE_SERVICE__PORT=${TEMPLATE_SERVICE_GRPC_PORT}
+      - GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN="5C832D93-FF85-4A8F-9803-513950FDFDB1"
+      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT="/template_compiled_store"
+      - GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE="Local"
+      - GOLEM__HTTP_PORT=${TEMPLATE_COMPILATION_SERVICE_HTTP_PORT}
+      - GOLEM__GRPC_PORT=${TEMPLATE_COMPILATION_SERVICE_GRPC_PORT}
+    volumes:
+      - template_compiled_store:/template_compiled_store
+    ports:
+      - "${TEMPLATE_COMPILATION_SERVICE_HTTP_PORT}:${TEMPLATE_COMPILATION_SERVICE_HTTP_PORT}"
+      - "${TEMPLATE_COMPILATION_SERVICE_GRPC_PORT}:${TEMPLATE_COMPILATION_SERVICE_GRPC_PORT}"
+    depends_on:
+      - golem-template-service
+
   golem-worker-executor:
-    image: golemservices/golem-worker-executor:v0.0.67
+    image: golemservices/golem-worker-executor:latest
+    pull_policy: always
     environment:
       - ENVIRONMENT=local
       - WASMTIME_BACKTRACE_DETAILS=1
@@ -107,9 +135,11 @@ services:
       - GOLEM__PUBLIC_WORKER_API__PORT=${WORKER_SERVICE_GRPC_PORT}
       - GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
       - GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION=us-east-1
-      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT="data/templates"
+      - GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT="/template_compiled_store"
       - GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE="Local"
       - GOLEM__SHARD_MANAGER_SERVICE__TYPE="Grpc"
+    volumes:
+      - template_compiled_store:/template_compiled_store
     ports:
       - "${WORKER_EXECUTOR_HTTP_PORT}:${WORKER_EXECUTOR_HTTP_PORT}"
 
@@ -119,4 +149,6 @@ volumes:
   template_store:
     driver: local
   golem_db:
+    driver: local
+  template_compiled_store:
     driver: local

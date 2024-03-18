@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud"
-description = "Worker Bridge acts as a bridge between external API gateways and the worker's environment"
+description = "Golem Worker Service including API Gateway functionalities"
 
 
 [[bin]]
@@ -21,6 +21,7 @@ path = "src/openapi_yaml.rs"
 golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
+golem-worker-service-base = {path = "../golem-worker-service-base"}
 golem-wasm-rpc = { path = "../wasm-rpc/wasm-rpc", default-features = false, features = [
     "host",
 ] }

@@ -193,8 +193,8 @@ impl From<serde_json::Error> for ConnectError {
     }
 }
 
-impl From<crate::service::worker::WorkerError> for ConnectError {
-    fn from(error: crate::service::worker::WorkerError) -> Self {
+impl From<golem_worker_service_base::service::error::WorkerServiceBaseError> for ConnectError {
+    fn from(error: golem_worker_service_base::service::error::WorkerServiceBaseError) -> Self {
         ConnectError(error.to_string())
     }
 }
