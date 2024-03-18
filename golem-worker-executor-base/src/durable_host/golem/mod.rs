@@ -94,10 +94,6 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         } else {
             let _ = self.get_oplog_entry_marker().await?;
         }
-        debug!(
-            "[get-oplog-idx] oplog_idx: {}, oplog_size: {}",
-            self.private_state.oplog_idx, self.private_state.oplog_size
-        );
         Ok(result)
     }
 
@@ -110,11 +106,6 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                 "Attempted to jump forward in oplog to index {jump_target} from {jump_source}"
             ))
         } else {
-            debug!(
-                "[set-oplog-idx] oplog_idx: {}, oplog_size: {}",
-                self.private_state.oplog_idx, self.private_state.oplog_size
-            );
-
             // After jumping to the "past", when we reach that point during recovery we have to switch
             // back to live mode. This means we eventually reach the set_oplog_index call that initiated this
             // jump. In this case (second time we hit it) we need to ignore it and continue running to avoid

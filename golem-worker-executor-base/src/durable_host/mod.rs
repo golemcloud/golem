@@ -221,18 +221,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let oplog_size = oplog_service.get_size(&worker_id.worker_id).await;
 
-        // debug ==>
-        let oplog = oplog_service
-            .read(&worker_id.worker_id, 0, oplog_size)
-            .await;
-        debug!("Oplog for {}: {:?}", worker_id, oplog);
-        // <==
-
         let active_jumps = if oplog_size > 0 {
             let last_entry = &oplog_service
                 .read(&worker_id.worker_id, oplog_size - 1, 1)
                 .await[0];
-            debug!("Last oplog entry: {:?}", last_entry);
             ActiveJumps::from_oplog_entry(last_entry)
         } else {
             ActiveJumps::new()

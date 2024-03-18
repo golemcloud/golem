@@ -15,7 +15,6 @@
 use ringbuf::*;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::*;
-use tracing::warn;
 
 use crate::metrics::events::{record_broadcast_event, record_event};
 
@@ -85,8 +84,6 @@ pub struct WorkerEventServiceDefault {
 
 impl WorkerEventServiceDefault {
     pub fn new(channel_capacity: usize, ring_capacity: usize) -> WorkerEventServiceDefault {
-        warn!("WorkerEventServiceDefault NEW");
-
         let (tx, _) = channel(channel_capacity);
         let ring = HeapRb::new(ring_capacity);
         // ring.sub
@@ -96,7 +93,6 @@ impl WorkerEventServiceDefault {
 
 impl Drop for WorkerEventServiceDefault {
     fn drop(&mut self) {
-        warn!("WorkerEventServiceDefault DROP");
         self.emit_event(WorkerEvent::Close);
     }
 }
@@ -109,8 +105,6 @@ impl WorkerEventService for WorkerEventServiceDefault {
             record_broadcast_event(label(&event));
 
             let _ = self.sender.send(event.clone());
-        } else {
-            warn!("NO EVENT SUBSCRIBERS");
         }
         let _ = unsafe { Producer::new(&self.ring) }.push(event);
     }
