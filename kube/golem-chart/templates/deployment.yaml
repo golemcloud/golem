@@ -474,7 +474,7 @@ metadata:
   labels:
     env: {{.Values.env}}
 spec:
-  replicas: {{ .Values.workerExecutor.replica }}
+  replicas: {{ .Values.templateCompilationService.replica }}
   selector:
     matchLabels:
       app: template-compilation-service-app-{{.Values.env}}
