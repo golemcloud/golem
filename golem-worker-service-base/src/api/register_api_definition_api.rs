@@ -18,7 +18,6 @@ use crate::oas_worker_bridge::*;
 use crate::service::register_definition::{ApiRegistrationError, RegisterApiDefinition};
 use golem_service_base::api_tags::ApiTags;
 
-
 // Mostly this data structures that represents the actual incoming request
 // exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.
 // Consider them to be otherwise same

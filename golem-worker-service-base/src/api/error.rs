@@ -1,8 +1,8 @@
+use crate::service::error::TemplateError;
+use golem_service_base::model::*;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tonic::Status;
-use golem_service_base::model::*;
-use crate::service::error::TemplateError;
 
 #[derive(ApiResponse)]
 pub enum WorkerError {

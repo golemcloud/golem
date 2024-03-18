@@ -1,7 +1,7 @@
-use std::fmt::Display;
-use golem_common::model::AccountId;
+use golem_common::model::{AccountId, TemplateId};
 use golem_service_base::model::*;
 use golem_service_base::routing_table::RoutingTableError;
+use std::fmt::Display;
 use tonic::{Status, Streaming};
 
 pub enum WorkerError {
@@ -56,7 +56,6 @@ impl From<TemplateError> for WorkerError {
         WorkerError::DelegatedTemplateServiceError(error)
     }
 }
-
 
 #[derive(Debug)]
 pub enum TemplateError {
@@ -115,8 +114,8 @@ impl Display for TemplateError {
                     write!(f, "Internal server error: {}", error.error)
                 }
                 Some(golem_api_grpc::proto::golem::template::template_error::Error::NotFound(
-                         error,
-                     )) => {
+                    error,
+                )) => {
                     write!(f, "Template not found: {}", error.error)
                 }
                 Some(

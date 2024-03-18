@@ -4,13 +4,13 @@ use crate::api_definition::ResponseMapping;
 use crate::evaluator::{EvaluationError, Evaluator};
 use crate::expr::Expr;
 use crate::resolved_variables::ResolvedVariables;
+use crate::worker_request::WorkerRequest;
+use crate::worker_request_to_response::WorkerRequestToResponse;
 use async_trait::async_trait;
 use http::{HeaderMap, StatusCode};
 use poem::{Body, ResponseParts};
 use serde_json::{json, Value};
 use tracing::info;
-use crate::worker_request::WorkerRequest;
-use crate::worker_request_to_response::WorkerRequestToResponse;
 
 pub struct WorkerResponse {
     pub result: Value,
