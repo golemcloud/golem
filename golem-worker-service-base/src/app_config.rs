@@ -8,8 +8,11 @@ use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
 
+// The base configuration for the worker service
+// If there are extra cofigurations for custom services,
+// its preferred to reuse base config.
 #[derive(Clone, Debug, Deserialize)]
-pub struct WorkerServiceConfig {
+pub struct WorkerServiceBaseConfig {
     pub environment: String,
     pub redis: RedisConfig,
     pub template_service: TemplateServiceConfig,
@@ -29,13 +32,13 @@ pub struct WorkerExecutorClientCacheConfig {
     pub time_to_idle: Duration,
 }
 
-impl WorkerServiceConfig {
+impl WorkerServiceBaseConfig {
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"
     }
 }
 
-impl Default for WorkerServiceConfig {
+impl Default for WorkerServiceBaseConfig {
     fn default() -> Self {
         Figment::new()
             .merge(Toml::file("config/worker-service.toml"))
@@ -66,32 +69,5 @@ impl TemplateServiceConfig {
             .path_and_query("/")
             .build()
             .expect("Failed to build ComponentService URI")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    pub fn config_is_loadable() {
-        // The following settings are always coming through environment variables:
-        std::env::set_var("GOLEM__REDIS__HOST", "localhost");
-        std::env::set_var("GOLEM__REDIS__PORT", "1234");
-        std::env::set_var("GOLEM__REDIS__DATABASE", "1");
-        std::env::set_var("GOLEM__ENVIRONMENT", "dev");
-        std::env::set_var("GOLEM__WORKSPACE", "release");
-        std::env::set_var("GOLEM__TEMPLATE_SERVICE__HOST", "localhost");
-        std::env::set_var("GOLEM__TEMPLATE_SERVICE__PORT", "1234");
-        std::env::set_var("GOLEM__CUSTOM_REQUEST_PORT", "1234");
-        std::env::set_var(
-            "GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN",
-            "5C832D93-FF85-4A8F-9803-513950FDFDB1",
-        );
-        std::env::set_var("GOLEM__ROUTING_TABLE__HOST", "golem-shard-manager");
-        std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
-
-        // The rest can be loaded from the toml
-        let config = super::WorkerServiceConfig::default();
-
-        println!("config: {:?}", config);
     }
 }

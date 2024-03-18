@@ -1,19 +1,10 @@
 [package]
-name = "golem-worker-service"
+name = "golem-worker-service-base"
 version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud"
-description = "Golem Worker Service including API Gateway functionalities"
-
-
-[[bin]]
-name = "golem-worker-service"
-path = "src/main.rs"
-
-[[bin]]
-name = "golem-worker-service-yaml"
-path = "src/openapi_yaml.rs"
+description = "Base functionalities of Golem Worker Service"
 
 [lib]
 
@@ -21,7 +12,6 @@ path = "src/openapi_yaml.rs"
 golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
-golem-worker-service-base = {path = "../golem-worker-service-base"}
 golem-wasm-rpc = { path = "../wasm-rpc/wasm-rpc", default-features = false, features = [
     "host",
 ] }

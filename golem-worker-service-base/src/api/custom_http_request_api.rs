@@ -1,35 +1,37 @@
 use std::sync::Arc;
 
-use crate::api_definition::{ApiDefinitionId, Version};
+use crate::api_definition::ResponseMapping;
 use async_trait::async_trait;
-use http::HeaderMap;
 use hyper::header::HOST;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
-use crate::api_request_route_resolver::RouteResolver;
+use crate::api_request_route_resolver::WorkerBindingResolver;
 use crate::http_request::{ApiInputPath, InputHttpRequest};
-use crate::oas_worker_bridge::{GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION};
-use crate::register::{ApiDefinitionKey, RegisterApiDefinition};
-use crate::worker_request::ResolvedRouteAsWorkerRequest;
-use crate::worker_request_to_http::WorkerToHttpResponse;
+use crate::service::http_request_definition_lookup::HttpRequestDefinitionLookup;
+use crate::worker_request::WorkerRequest;
+use crate::worker_request_to_response::WorkerRequestToResponse;
 
 // Executes custom request with the help of worker_request_executor and definition_service
+// This is a common API projects can make use of, similar to healthcheck service
 #[derive(Clone)]
-pub struct CustomRequestApi {
-    worker_to_http_response_service: Arc<dyn WorkerToHttpResponse + Sync + Send>,
-    api_definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
+pub struct CustomHttpRequestApi {
+    pub worker_to_http_response_service:
+        Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
+    pub api_definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
 }
 
-impl CustomRequestApi {
+impl CustomHttpRequestApi {
     pub fn new(
-        worker_to_http_response_service: Arc<dyn WorkerToHttpResponse + Sync + Send>,
-        api_definition_service: Arc<dyn RegisterApiDefinition + Sync + Send>,
+        worker_to_http_response_service: Arc<
+            dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send,
+        >,
+        api_definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
     ) -> Self {
         Self {
             worker_to_http_response_service,
-            api_definition_service,
+            api_definition_lookup_service,
         }
     }
 
@@ -73,50 +75,10 @@ impl CustomRequestApi {
             req_body: json_request_body,
         };
 
-        let api_definition_id = match get_header_value(&headers, GOLEM_API_DEFINITION_ID_EXTENSION)
-        {
-            Ok(api_definition_id) => ApiDefinitionId(api_definition_id.to_string()),
+        let api_definition = match self.api_definition_lookup_service.get(&api_request).await {
+            Ok(api_definition) => api_definition,
             Err(err) => {
-                error!(err);
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from_string(err.to_string()));
-            }
-        };
-
-        let version = match get_header_value(&headers, GOLEM_API_DEFINITION_VERSION) {
-            Ok(version) => Version(version),
-            Err(err) => {
-                error!(err);
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from_string(err.to_string()));
-            }
-        };
-
-        let api_key = ApiDefinitionKey {
-            id: api_definition_id.clone(),
-            version,
-        };
-
-        // Get ApiSpec corresponding to the API Definition Id
-        let api_definition = match self.api_definition_service.get(&api_key).await {
-            Ok(Some(api_definition)) => api_definition,
-            Ok(None) => {
-                error!(
-                    "API request definition id {} with version {} not found",
-                    &api_key.id, &api_key.version
-                );
-
-                return Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::from_string(format!(
-                        "API request definition id {} with version {} not found",
-                        &api_key.id, &api_key.version
-                    )));
-            }
-            Err(err) => {
-                error!("API request id: {} - error: {}", &api_definition_id, err);
+                error!("API request host: {} - error: {}", host, err);
                 return Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
                     .body(Body::from_string("Internal error".to_string()));
@@ -125,14 +87,13 @@ impl CustomRequestApi {
 
         match api_request.resolve(&api_definition) {
             Some(resolved_route) => {
-                let worker_request_with_resolved_route =
-                    match ResolvedRouteAsWorkerRequest::from_resolved_route(resolved_route.clone())
-                    {
+                let resolved_worker_request =
+                    match WorkerRequest::from_resolved_route(resolved_route.clone()) {
                         Ok(golem_worker_request) => golem_worker_request,
                         Err(e) => {
                             error!(
                                 "API request id: {} - request error: {}",
-                                &api_definition_id, e
+                                &api_definition.id, e
                             );
                             return Response::builder()
                                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -145,8 +106,9 @@ impl CustomRequestApi {
                 // Execute the request using a executor
                 self.worker_to_http_response_service
                     .execute(
-                        worker_request_with_resolved_route.clone(),
-                        &resolved_route.route_definition.binding.response,
+                        resolved_worker_request.clone(),
+                        &resolved_route.resolved_worker_binding_template.response,
+                        &resolved_route.resolved_variables,
                     )
                     .await
             }
@@ -154,7 +116,7 @@ impl CustomRequestApi {
             None => {
                 error!(
                     "API request id: {} - request error: {}",
-                    &api_definition_id, "Unable to find a route"
+                    &api_definition.id, "Unable to find a route"
                 );
 
                 Response::builder()
@@ -165,21 +127,8 @@ impl CustomRequestApi {
     }
 }
 
-fn get_header_value(headers: &HeaderMap, header_name: &str) -> Result<String, String> {
-    let header_value = headers
-        .iter()
-        .find(|(key, _)| key.as_str().to_lowercase() == header_name)
-        .map(|(_, value)| value)
-        .ok_or(format!("Missing {} header", header_name))?;
-
-    header_value
-        .to_str()
-        .map(|x| x.to_string())
-        .map_err(|e| format!("Invalid value for the header {} error: {}", header_name, e))
-}
-
 #[async_trait]
-impl Endpoint for CustomRequestApi {
+impl Endpoint for CustomHttpRequestApi {
     type Output = Response;
 
     async fn call(&self, req: Request) -> poem::Result<Self::Output> {
