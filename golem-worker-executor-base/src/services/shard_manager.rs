@@ -56,7 +56,10 @@ impl ShardManagerServiceGrpc {
 impl ShardManagerService for ShardManagerServiceGrpc {
     async fn register(&self, host: String, port: u16) -> Result<ShardAssignment, GolemError> {
         let uri: hyper::Uri = self.config.url().to_string().parse().unwrap();
-        let desc = format!("Registering instance server with shard manager at {}", uri);
+        let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
+        let desc = format!(
+            "Registering worker executor with shard manager at {uri} using pod name {pod_name:?}"
+        );
         with_retries(
             &desc,
             "shard_manager",
@@ -65,6 +68,7 @@ impl ShardManagerService for ShardManagerServiceGrpc {
             &(host, port),
             |(host, port)| {
                 let uri = uri.clone();
+                let pod_name = pod_name.clone();
                 Box::pin(async move {
                     let mut shard_manager_client =
                         shard_manager_service_client::ShardManagerServiceClient::connect(
@@ -81,6 +85,7 @@ impl ShardManagerService for ShardManagerServiceGrpc {
                         .register(shardmanager::RegisterRequest {
                             host: host.clone(),
                             port: *port as i32,
+                            pod_name: pod_name.clone(),
                         })
                         .await
                         .map_err(|err| {
@@ -93,17 +98,11 @@ impl ShardManagerService for ShardManagerServiceGrpc {
                         shardmanager::RegisterResponse {
                             result:
                                 Some(shardmanager::register_response::Result::Success(
-                                    shardmanager::RegisterSuccess {
-                                        number_of_shards,
-                                        shard_ids,
-                                    },
+                                    shardmanager::RegisterSuccess { number_of_shards },
                                 )),
                         } => Ok(ShardAssignment {
                             number_of_shards: number_of_shards as usize,
-                            shard_ids: shard_ids
-                                .into_iter()
-                                .map(|shard_id| shard_id.into())
-                                .collect(),
+                            shard_ids: HashSet::new(),
                         }),
                         shardmanager::RegisterResponse {
                             result: Some(shardmanager::register_response::Result::Failure(failure)),

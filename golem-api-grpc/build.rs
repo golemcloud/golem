@@ -36,6 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/template/versioned_name.proto",
                 "proto/golem/template/versioned_template_id.proto",
                 "proto/golem/template/template_service.proto",
+                "proto/golem/templatecompilation/template_compilation_service.proto",
                 "proto/golem/worker/calling_convention.proto",
                 "proto/golem/worker/complete_parameters.proto",
                 "proto/golem/worker/invocation_key.proto",

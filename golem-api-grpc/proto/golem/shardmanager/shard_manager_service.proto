@@ -24,6 +24,7 @@ message GetRoutingTableResponse {
 message RegisterRequest {
   string host = 1;
   int32 port = 2;
+  optional string pod_name = 3;
 }
 
 message RegisterResponse {
@@ -35,5 +36,4 @@ message RegisterResponse {
 
 message RegisterSuccess {
   uint32 number_of_shards = 1;
-  repeated golem.shardmanager.ShardId shard_ids = 2;
 }

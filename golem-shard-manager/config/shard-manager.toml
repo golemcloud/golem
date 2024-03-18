@@ -3,6 +3,8 @@ enable_json_log = false
 number_of_shards = 1024
 http_port = 8080
 
+rebalance_threshold = 0.1
+
 [redis]
 # host
 # port
@@ -17,12 +19,12 @@ min_delay = "100ms"
 max_delay = "2s"
 multiplier = 2
 
-[instance_server_service]
+[worker_executors]
 assign_shards_timeout = "5s"
 health_check_timeout = "2s"
 revoke_shards_timeout = "5s"
 
-[instance_server_service.retries]
+[worker_executors.retries]
 max_attempts = 5
 min_delay = "100ms"
 max_delay = "2s"
@@ -30,3 +32,10 @@ multiplier = 2
 
 [health_check]
 delay = "10s"
+
+[health_check.mode]
+type = "Grpc"
+#type = "K8s"
+#
+#[health_check.mode.config]
+#namespace = "default"

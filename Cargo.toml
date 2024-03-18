@@ -11,6 +11,7 @@ members = [
     "golem-shard-manager",
     "golem-worker-service-base",
     "golem-worker-service",
+    "golem-template-compilation-service"
 ]
 
 exclude = [

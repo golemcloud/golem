@@ -13,45 +13,75 @@
 // limitations under the License.
 
 use core::cmp::Ordering;
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::fmt;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::{fmt, vec};
 
 use bincode::{Decode, Encode};
+use serde::{Deserialize, Serialize};
+use tonic::transport::Endpoint;
+use tracing::{debug, warn};
+
 use golem_api_grpc::proto::golem;
 use golem_common::model::ShardId;
-use serde::{Deserialize, Serialize};
 
 use crate::error::ShardManagerError;
+use crate::rebalancing::Rebalance;
 
 #[derive(
     Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
 )]
 pub struct Pod {
     host: String,
+    ip: IpAddr,
     port: u16,
+    pub pod_name: Option<String>,
 }
 
 impl Pod {
+    #[cfg(test)]
     pub fn new(host: String, port: u16) -> Self {
-        Self { host, port }
+        Self {
+            host,
+            port,
+            pod_name: None,
+            ip: IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        }
     }
 
-    pub fn address(&self) -> String {
-        format!("http://{}:{}", self.host, self.port)
+    pub fn endpoint(&self) -> Result<Endpoint, tonic::transport::Error> {
+        let e = Endpoint::try_from(format!("http://{}:{}", self.ip, self.port));
+        debug!("Pod.address: http://{}:{} => {:?}", self.ip, self.port, e);
+        e
+    }
+
+    pub fn address(&self) -> Result<vec::IntoIter<SocketAddr>, std::io::Error> {
+        format!("{}:{}", self.ip, self.port).to_socket_addrs()
     }
 
     pub fn from_register_request(
         request: tonic::Request<golem::shardmanager::RegisterRequest>,
     ) -> Result<Self, ShardManagerError> {
-        let host = request
+        let source_ip = request
             .remote_addr()
-            .ok_or(ShardManagerError::invalid_request("missing host"))?
-            .ip()
-            .to_string();
-        let port = request.into_inner().port as u16;
-        let pod = Pod::new(host, port);
+            .ok_or(ShardManagerError::invalid_request(
+                "could not get source IP",
+            ))?
+            .ip();
+        let request = request.into_inner();
+        let pod = Pod {
+            host: request.host,
+            port: request.port as u16,
+            pod_name: request.pod_name,
+            ip: source_ip,
+        };
+
+        let resolved = pod.address()?.map(|sa| sa.ip()).collect::<Vec<_>>();
+        if !resolved.contains(&source_ip) {
+            warn!("Host mismatch between registration message and resolved message source. Provided: {resolved:?}; source: {source_ip:?}");
+        }
         Ok(pod)
     }
 }
@@ -59,38 +89,33 @@ impl Pod {
 impl From<Pod> for golem::shardmanager::Pod {
     fn from(value: Pod) -> golem::shardmanager::Pod {
         golem::shardmanager::Pod {
-            host: value.host,
+            host: value.ip.to_string(),
             port: value.port as u32,
-        }
-    }
-}
-
-impl From<golem::shardmanager::Pod> for Pod {
-    fn from(proto: golem::shardmanager::Pod) -> Self {
-        Self {
-            host: proto.host,
-            port: proto.port as u16,
+            pod_name: value.pod_name,
         }
     }
 }
 
 impl Display for Pod {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}:{}", self.host, self.port)
+        match &self.pod_name {
+            Some(name) => write!(f, "{}", name),
+            None => write!(f, "{}:{} ({})", self.host, self.port, self.ip),
+        }
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RoutingTable {
     pub number_of_shards: usize,
-    pub shard_assignments: HashMap<Pod, HashSet<ShardId>>,
+    pub shard_assignments: BTreeMap<Pod, BTreeSet<ShardId>>,
 }
 
 impl RoutingTable {
     pub fn new(number_of_shards: usize) -> Self {
         Self {
             number_of_shards,
-            shard_assignments: HashMap::new(),
+            shard_assignments: BTreeMap::new(),
         }
     }
 
@@ -102,39 +127,44 @@ impl RoutingTable {
             .collect()
     }
 
+    pub fn get_entries_vec(&self) -> Vec<RoutingTableEntry> {
+        self.shard_assignments
+            .clone()
+            .into_iter()
+            .map(|(pod, shard_ids)| RoutingTableEntry::new(pod, shard_ids))
+            .collect()
+    }
+
     pub fn get_pods(&self) -> HashSet<Pod> {
         self.shard_assignments.clone().into_keys().collect()
     }
 
-    pub fn rebalance(&mut self, rebalance: &Rebalance) {
-        for (pod, shard_ids) in rebalance.assignments.assignments.clone() {
+    pub fn rebalance(&mut self, rebalance: Rebalance) {
+        for (pod, shard_ids) in &rebalance.get_assignments().assignments {
             self.shard_assignments
-                .get_mut(&pod)
-                .unwrap()
+                .entry(pod.clone())
+                .or_default()
                 .extend(shard_ids);
         }
-        for (pod, shard_ids) in rebalance.unassignments.unassignments.clone() {
+        for (pod, shard_ids) in &rebalance.get_unassignments().unassignments {
             self.shard_assignments
-                .get_mut(&pod)
-                .unwrap()
+                .entry(pod.clone())
+                .or_default()
                 .retain(|shard_id| !shard_ids.contains(shard_id));
         }
     }
 
-    pub fn get_unassigned_shards(&self) -> HashSet<ShardId> {
-        let mut unassigned_shards: HashSet<ShardId> = (0..self.number_of_shards)
+    pub fn get_unassigned_shards(&self) -> BTreeSet<ShardId> {
+        let mut unassigned_shards: BTreeSet<ShardId> = (0..self.number_of_shards)
             .map(|shard_id| ShardId::new(shard_id as i64))
             .collect();
         for assigned_shards in self.shard_assignments.values() {
-            unassigned_shards = unassigned_shards
-                .difference(assigned_shards)
-                .cloned()
-                .collect();
+            unassigned_shards.retain(|shard_id| !assigned_shards.contains(shard_id));
         }
         unassigned_shards
     }
 
-    pub fn get_shards(&self, pod: &Pod) -> Option<HashSet<ShardId>> {
+    pub fn get_shards(&self, pod: &Pod) -> Option<BTreeSet<ShardId>> {
         self.shard_assignments.get(pod).cloned()
     }
 
@@ -143,11 +173,15 @@ impl RoutingTable {
     }
 
     pub fn add_pod(&mut self, pod: &Pod) {
-        self.shard_assignments.insert(pod.clone(), HashSet::new());
+        self.shard_assignments.insert(pod.clone(), BTreeSet::new());
     }
 
     pub fn remove_pod(&mut self, pod: &Pod) {
         self.shard_assignments.remove(pod);
+    }
+
+    pub fn has_pod(&self, pod: &Pod) -> bool {
+        self.shard_assignments.contains_key(pod)
     }
 }
 
@@ -172,21 +206,6 @@ impl From<RoutingTable> for golem::shardmanager::RoutingTable {
     }
 }
 
-impl From<golem::shardmanager::RoutingTable> for RoutingTable {
-    fn from(routing_table: golem::shardmanager::RoutingTable) -> Self {
-        let mut shard_assignments: HashMap<Pod, HashSet<ShardId>> = HashMap::new();
-        for entry in routing_table.shard_assignments {
-            let pod = entry.pod.unwrap().into();
-            let shard_id = entry.shard_id.unwrap().into();
-            shard_assignments.entry(pod).or_default().insert(shard_id);
-        }
-        Self {
-            number_of_shards: routing_table.number_of_shards as usize,
-            shard_assignments,
-        }
-    }
-}
-
 impl Display for RoutingTable {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
@@ -200,11 +219,11 @@ impl Display for RoutingTable {
 
 pub struct RoutingTableEntry {
     pub pod: Pod,
-    pub shard_ids: HashSet<ShardId>,
+    pub shard_ids: BTreeSet<ShardId>,
 }
 
 impl RoutingTableEntry {
-    pub fn new(pod: Pod, shard_ids: HashSet<ShardId>) -> Self {
+    pub fn new(pod: Pod, shard_ids: BTreeSet<ShardId>) -> Self {
         Self { pod, shard_ids }
     }
     pub fn get_shard_count(&self) -> usize {
@@ -249,7 +268,7 @@ impl Display for RoutingTableEntry {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Assignments {
-    pub assignments: HashMap<Pod, HashSet<ShardId>>,
+    pub assignments: BTreeMap<Pod, BTreeSet<ShardId>>,
 }
 
 impl Assignments {
@@ -257,10 +276,18 @@ impl Assignments {
         self.assignments.entry(pod).or_default().insert(shard_id);
     }
 
+    pub fn unassign(&mut self, pod: Pod, shard_id: ShardId) {
+        self.assignments.entry(pod).or_default().remove(&shard_id);
+    }
+
     pub fn new() -> Self {
         Self {
-            assignments: HashMap::new(),
+            assignments: BTreeMap::new(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.assignments.is_empty()
     }
 }
 
@@ -282,7 +309,7 @@ impl Display for Assignments {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Unassignments {
-    pub unassignments: HashMap<Pod, HashSet<ShardId>>,
+    pub unassignments: BTreeMap<Pod, BTreeSet<ShardId>>,
 }
 
 impl Unassignments {
@@ -292,8 +319,12 @@ impl Unassignments {
 
     pub fn new() -> Self {
         Self {
-            unassignments: HashMap::new(),
+            unassignments: BTreeMap::new(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.unassignments.is_empty()
     }
 }
 
@@ -309,108 +340,6 @@ impl Display for Unassignments {
             f,
             "[{}]",
             shard_assignments_map_to_string(&self.unassignments)
-        )
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Rebalance {
-    pub assignments: Assignments,
-    pub unassignments: Unassignments,
-}
-
-impl Rebalance {
-    pub fn from_routing_table(routing_table: &RoutingTable) -> Self {
-        let mut assignments = Assignments::new();
-        let mut unassignments = Unassignments::new();
-        let pod_count = routing_table.get_pod_count();
-        if pod_count == 0 {
-            return Rebalance {
-                assignments,
-                unassignments,
-            };
-        }
-        let mut routing_table_entries = routing_table.get_entries();
-        let unassigned_shards = routing_table.get_unassigned_shards();
-        for unassigned_shard in unassigned_shards {
-            let mut routing_table_entry = routing_table_entries.pop_first().unwrap();
-            assignments.assign(routing_table_entry.pod.clone(), unassigned_shard);
-            routing_table_entry.shard_ids.insert(unassigned_shard);
-            routing_table_entries.insert(routing_table_entry);
-        }
-        if pod_count == 1 {
-            return Rebalance {
-                assignments,
-                unassignments,
-            };
-        };
-        loop {
-            let mut first = routing_table_entries.pop_first().unwrap();
-            let mut last = routing_table_entries.pop_last().unwrap();
-            if first.pod == last.pod || last.get_shard_count() - first.get_shard_count() <= 1 {
-                break;
-            }
-            let shard_id = *last.shard_ids.iter().next().unwrap();
-            first.shard_ids.insert(shard_id);
-            last.shard_ids.remove(&shard_id);
-            assignments.assign(first.pod.clone(), shard_id);
-            unassignments.unassign(last.pod.clone(), shard_id);
-            routing_table_entries.insert(first);
-            routing_table_entries.insert(last);
-        }
-        Rebalance {
-            assignments,
-            unassignments,
-        }
-    }
-
-    pub fn get_pods(&self) -> HashSet<Pod> {
-        let mut pods = HashSet::new();
-        for pod in self.assignments.assignments.keys() {
-            pods.insert(pod.clone());
-        }
-        for pod in self.unassignments.unassignments.keys() {
-            pods.insert(pod.clone());
-        }
-        pods
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.assignments.assignments.is_empty() && self.unassignments.unassignments.is_empty()
-    }
-
-    pub fn new() -> Self {
-        Rebalance {
-            assignments: Assignments::new(),
-            unassignments: Unassignments::new(),
-        }
-    }
-
-    pub fn remove_pods(&mut self, pods: &HashSet<Pod>) {
-        self.assignments
-            .assignments
-            .retain(|pod, _| !pods.contains(pod));
-        self.unassignments
-            .unassignments
-            .retain(|pod, _| !pods.contains(pod));
-    }
-
-    pub fn remove_shards(&mut self, shard_ids: &HashSet<ShardId>) {
-        for assigned_shard_ids in &mut self.assignments.assignments.values_mut() {
-            assigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
-        }
-        for unassigned_shard_ids in &mut self.unassignments.unassignments.values_mut() {
-            unassigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
-        }
-    }
-}
-
-impl Display for Rebalance {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{{ assignments: {}, unassignments: {} }}",
-            self.assignments, self.unassignments
         )
     }
 }
@@ -433,11 +362,11 @@ impl ShardManagerState {
             ));
         }
         let mut assignments: Vec<(Pod, Vec<ShardId>)> = Vec::new();
-        for (pod, shard_ids) in &rebalance.assignments.assignments {
+        for (pod, shard_ids) in &rebalance.get_assignments().assignments {
             assignments.push((pod.clone(), shard_ids.iter().cloned().collect()));
         }
         let mut unassignments: Vec<(Pod, Vec<ShardId>)> = Vec::new();
-        for (pod, shard_ids) in &rebalance.unassignments.unassignments {
+        for (pod, shard_ids) in &rebalance.get_unassignments().unassignments {
             unassignments.push((pod.clone(), shard_ids.iter().cloned().collect()));
         }
         ShardManagerState {
@@ -449,7 +378,7 @@ impl ShardManagerState {
     }
 
     pub fn get_routing_table(&self) -> RoutingTable {
-        let mut shard_assignments: HashMap<Pod, HashSet<ShardId>> = HashMap::new();
+        let mut shard_assignments: BTreeMap<Pod, BTreeSet<ShardId>> = BTreeMap::new();
         for (pod, shard_ids) in &self.shard_assignments {
             shard_assignments.insert(pod.clone(), shard_ids.iter().cloned().collect());
         }
@@ -472,10 +401,7 @@ impl ShardManagerState {
                 unassignments.unassign(pod.clone(), *shard_id);
             }
         }
-        Rebalance {
-            assignments,
-            unassignments,
-        }
+        Rebalance::new(assignments, unassignments)
     }
 }
 
@@ -507,7 +433,7 @@ fn shard_assignments_to_string(shard_assignments: &[(Pod, Vec<ShardId>)]) -> Str
     elements.join(", ")
 }
 
-fn shard_assignments_map_to_string(shard_assignments: &HashMap<Pod, HashSet<ShardId>>) -> String {
+fn shard_assignments_map_to_string(shard_assignments: &BTreeMap<Pod, BTreeSet<ShardId>>) -> String {
     let elements: Vec<String> = shard_assignments
         .iter()
         .map(|(pod, shard_ids)| {

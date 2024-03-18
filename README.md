@@ -8,6 +8,7 @@ See [Golem Cloud](https://golem.cloud) for more information.
 
 ## Getting Started
 
+It is possible to start using Golem locally by using our published Docker containers. For compiling it for yourself please check [the contribution guide](CONTRIBUTING.md).
 
 Firstly, spin up golem services using docker-compose in [docker-examples](docker-examples) folder. Please note that there is .env file consisting 
 of common port configurations. You can override these variables in .env file in your local if there are port conflicts. Consider these examples as a simple reference for you to spin up the OSS golem services quickly and try things out. You may have a different approach and a different practice on how to configure docker!
@@ -50,5 +51,5 @@ Therefore, you can see what's going on and troubleshoot things by inspecting doc
 ```
 
 
-## Contributing
-Find details [here](CONTRIBUTING.md)
+## Compiling Golem locally
+Find details in the [contribution guide](CONTRIBUTING.md) about how to compile the Golem services locally.

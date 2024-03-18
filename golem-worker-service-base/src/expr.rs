@@ -709,13 +709,13 @@ mod tests {
         let expr1_string = "${match worker.response { ok(x) => '${x.id}-foo', err(msg) => msg }}";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
         let value1 = expr1
-            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
             .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
         let value2 = expr2
-            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
             .unwrap();
 
         let expected = Value::String("afsal-foo".to_string());
@@ -729,13 +729,13 @@ mod tests {
         let expr1_string = "${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
         let value1 = expr1
-            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
             .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
         let value2 = expr2
-            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
             .unwrap();
 
         let expected = Value::String("error".to_string());
@@ -750,13 +750,13 @@ mod tests {
             "append-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
         let value1 = expr1
-            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
             .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
         let value2 = expr2
-            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
             .unwrap();
 
         let expected = Value::String("append-error".to_string());
@@ -771,13 +771,13 @@ mod tests {
             "prefix-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}-suffix";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
         let value1 = expr1
-            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
             .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
         let value2 = expr2
-            .evaluate(&ResolvedVariables::from_worker_response(&worker_response))
+            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
             .unwrap();
 
         let expected = Value::String("prefix-error-suffix".to_string());
