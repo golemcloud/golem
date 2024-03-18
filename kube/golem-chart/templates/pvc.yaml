@@ -6,7 +6,7 @@ metadata:
 spec:
   storageClassName: {{ .Values.templateStore.pvc.storageClassName }}
   accessModes:
-    - ReadWriteOnce
+    - {{ .Values.templateStore.pvc.accessMode }}
   resources:
     requests:
       storage: {{ .Values.templateStore.pvc.storageSize }}
@@ -22,7 +22,7 @@ metadata:
 spec:
   storageClassName: {{ .Values.templateCompiledStore.pvc.storageClassName }}
   accessModes:
-    - ReadWriteOnce
+    - {{ .Values.templateCompiledStore.pvc.accessMode }}
   resources:
     requests:
       storage: {{ .Values.templateCompiledStore.pvc.storageSize }}
@@ -38,7 +38,7 @@ metadata:
 spec:
   storageClassName: {{ .Values.workerBlobStore.pvc.storageClassName }}
   accessModes:
-    - ReadWriteOnce
+    - {{ .Values.workerBlobStore.pvc.accessMode }}
   resources:
     requests:
       storage: {{ .Values.workerBlobStore.pvc.storageSize }}
