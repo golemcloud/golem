@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use tracing::debug;
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::{ResourceTable, StreamError};
 
@@ -181,6 +182,8 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
             if is_live {
                 event_service.emit_stdout(contents.clone());
+            } else {
+                debug!("Replaying stdout: {}", String::from_utf8_lossy(&contents));
             }
             is_std = true;
         } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {

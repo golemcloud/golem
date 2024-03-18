@@ -47,8 +47,8 @@ use bincode::{Decode, Encode};
 use bytes::Bytes;
 use cap_std::ambient_authority;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, Jump, PromiseId, Timestamp, VersionedWorkerId,
-    WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
+    WorkerMetadata, WorkerStatus,
 };
 use golem_common::model::{OplogEntry, WrappedFunctionType};
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -119,10 +119,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub async fn commit_oplog(&mut self) {
         self.private_state.commit_oplog().await
-    }
-
-    async fn get_oplog_entry_jump(&mut self) -> Result<Vec<Jump>, GolemError> {
-        self.private_state.get_oplog_entry_jump().await
     }
 
     async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {
@@ -224,6 +220,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map_err(|e| GolemError::runtime(format!("Failed to open temporary directory: {e}")))?;
 
         let oplog_size = oplog_service.get_size(&worker_id.worker_id).await;
+
+        // debug ==>
+        let oplog = oplog_service
+            .read(&worker_id.worker_id, 0, oplog_size)
+            .await;
+        debug!("Oplog for {}: {:?}", worker_id, oplog);
+        // <==
 
         let active_jumps = if oplog_size > 0 {
             let last_entry = &oplog_service
@@ -1125,32 +1128,13 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 "Worker {} reached jump target {}, jumping to {} (oplog size: {})",
                 self.worker_id, self.oplog_idx, idx, self.oplog_size
             );
+            self.active_jumps.record_forward_jump(self.oplog_idx);
             self.oplog_idx = idx;
         } else {
             self.oplog_idx += 1;
         }
 
         oplog_entry
-    }
-
-    async fn get_oplog_entry_jump(&mut self) -> Result<Vec<Jump>, GolemError> {
-        loop {
-            let oplog_entry = self.get_oplog_entry().await;
-            match oplog_entry {
-                OplogEntry::Jump { jumps, .. } => {
-                    break Ok(jumps);
-                }
-                OplogEntry::Suspend { .. } => (),
-                OplogEntry::Error { .. } => (),
-                OplogEntry::Debug { message, .. } => debug!("Debug: {}", message),
-                _ => {
-                    break Err(GolemError::unexpected_oplog_entry(
-                        "Jump",
-                        format!("{:?}", oplog_entry),
-                    ));
-                }
-            }
-        }
     }
 
     async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {

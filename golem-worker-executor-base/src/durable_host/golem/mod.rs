@@ -87,6 +87,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
     async fn get_oplog_index(&mut self) -> anyhow::Result<OplogIndex> {
         record_host_function_call("golem::api", "get_oplog_index");
+        let result = self.private_state.oplog_idx;
         if self.is_live() {
             self.set_oplog_entry(OplogEntry::marker(Timestamp::now_utc()))
                 .await;
@@ -97,7 +98,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             "[get-oplog-idx] oplog_idx: {}, oplog_size: {}",
             self.private_state.oplog_idx, self.private_state.oplog_size
         );
-        Ok(self.private_state.oplog_idx - 1)
+        Ok(result)
     }
 
     async fn set_oplog_index(&mut self, oplog_idx: OplogIndex) -> anyhow::Result<()> {
@@ -109,34 +110,55 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                 "Attempted to jump forward in oplog to index {jump_target} from {jump_source}"
             ))
         } else {
-            let jump = Jump {
-                target_oplog_idx: jump_target,
-                source_oplog_idx: jump_source,
-            };
-
             debug!(
                 "[set-oplog-idx] oplog_idx: {}, oplog_size: {}",
                 self.private_state.oplog_idx, self.private_state.oplog_size
             );
 
+            // After jumping to the "past", when we reach that point during recovery we have to switch
+            // back to live mode. This means we eventually reach the set_oplog_index call that initiated this
+            // jump. In this case (second time we hit it) we need to ignore it and continue running to avoid
+            // an infinite jump-back loop.
+            //
+            // The problem is how do we know if it is the second time, when in both cases we are in live mode?
+            // We can't just look it up in active_jumps because the source oplog (the current) is different.
+            // But we record the (forward) jumps and then see if we can find a performed forward jump from the given
+            // target. If we can find one we ignore this operation but remove the jump record from the forward jump list.
+            // Otherwise it is a new jump and we have to write it to the oplog and restart the worker.
             if self.is_live() {
-                // We have to repeat all previous jumps so we add the new jump to the list of active jumps
-                // and write an oplog entry containing all of them
-                self.private_state.active_jumps.add_jump(jump);
-                self.set_oplog_entry(OplogEntry::jump(
-                    Timestamp::now_utc(),
-                    self.private_state.active_jumps.jumps().clone(),
-                ))
-                .await;
-                self.commit_oplog().await;
+                if self
+                    .private_state
+                    .active_jumps
+                    .try_match_forward_jump(jump_target)
+                {
+                    // If the jump is already in the active jumps, it means we have just reached the
+                    // restarted point of execution after a jump so we are not doing anything just continue running
+                    debug!("Ignoring live set_oplog_index as the jump was already performed");
+                    Ok(())
+                } else {
+                    let jump = Jump {
+                        target_oplog_idx: jump_target,
+                        source_oplog_idx: jump_source,
+                    };
 
-                debug!(
+                    // We have to repeat all previous jumps, so we add the new jump to the list of active jumps
+                    // and write an oplog entry containing all of them
+                    self.private_state.active_jumps.add_jump(jump);
+                    self.set_oplog_entry(OplogEntry::jump(
+                        Timestamp::now_utc(),
+                        self.private_state.active_jumps.jumps().clone(),
+                    ))
+                    .await;
+                    self.commit_oplog().await;
+
+                    debug!(
                     "Interrupting live execution for jumping from {jump_source} to {jump_target}"
                 );
-                Err(InterruptKind::Jump.into())
+                    Err(InterruptKind::Jump.into())
+                }
             } else {
-                // In replay mode this call is a no-op so we can get past through it
-                let _ = self.get_oplog_entry_jump().await?;
+                // In replay mode we never have to do anything here
+                debug!("Ignoring replayed set_oplog_index");
                 Ok(())
             }
         }

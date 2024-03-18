@@ -30,7 +30,7 @@ async fn jump() {
     check!(
         events
             == vec![
-                Some(common::stdout_event("started: 1\n")),
+                Some(common::stdout_event("started: 0\n")),
                 Some(common::stdout_event("second: 2\n")),
                 Some(common::stdout_event("second: 2\n")),
                 Some(common::stdout_event("third: 3\n")),

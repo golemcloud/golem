@@ -18,12 +18,16 @@ use std::fmt::{Display, Formatter};
 /// Structure holding all the active jumps for the current execution of a worker
 pub struct ActiveJumps {
     jumps: Vec<Jump>,
+    forward_jumps: Vec<u64>,
 }
 
 impl ActiveJumps {
     /// Constructs an empty set of active jumps
     pub fn new() -> Self {
-        Self { jumps: Vec::new() }
+        Self {
+            jumps: Vec::new(),
+            forward_jumps: Vec::new(),
+        }
     }
 
     /// Initializes active jumps from the an oplog entry. If it was a jump entry use information
@@ -32,6 +36,7 @@ impl ActiveJumps {
         match entry {
             OplogEntry::Jump { jumps, .. } => Self {
                 jumps: jumps.clone(),
+                forward_jumps: Vec::new(),
             },
             _ => Self::new(),
         }
@@ -53,10 +58,30 @@ impl ActiveJumps {
         // TODO: optimize this by introducing a map during construction
         for jump in &self.jumps {
             if jump.target_oplog_idx == at {
-                return Some(jump.source_oplog_idx);
+                return Some(jump.source_oplog_idx + 1);
             }
         }
         None
+    }
+
+    pub fn record_forward_jump(&mut self, target_oplog_index: u64) {
+        self.forward_jumps.push(target_oplog_index);
+    }
+
+    pub fn try_match_forward_jump(&mut self, target_oplog_idx: u64) -> bool {
+        match self
+            .forward_jumps
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, oplog_idx)| *oplog_idx == target_oplog_idx)
+        {
+            None => false,
+            Some((vec_idx, _)) => {
+                self.forward_jumps.remove(vec_idx);
+                true
+            }
+        }
     }
 }
 
