@@ -106,6 +106,7 @@ templateStore:
   pvc:
     storageClassName: hostpath
     storageSize: 5Gi
+    accessMode: ReadWriteMany
   s3:
     objectPrefix: ""
     bucket: ""
@@ -116,6 +117,7 @@ templateCompiledStore:
   pvc:
     storageClassName: hostpath
     storageSize: 5Gi
+    accessMode: ReadWriteMany
   s3:
     objectPrefix: ""
     bucket: ""
@@ -126,6 +128,7 @@ workerBlobStore:
   pvc:
     storageClassName: hostpath
     storageSize: 5Gi
+    accessMode: ReadWriteMany
   s3:
     bucketPrefix: ""
     region: "us-east-1"
