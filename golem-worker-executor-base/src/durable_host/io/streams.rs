@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use tracing::debug;
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::{ResourceTable, StreamError};
 

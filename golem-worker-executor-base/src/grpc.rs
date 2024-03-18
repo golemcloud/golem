@@ -852,6 +852,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 while let Ok(item) = receiver.recv().await {
                     match item {
                         worker_event::WorkerEvent::Close => {
+                            debug!("WORKER_EVENT_STREAM CLOSED");
                             break;
                         }
                         worker_event::WorkerEvent::StdOut(line) => {

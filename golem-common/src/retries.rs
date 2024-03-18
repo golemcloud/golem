@@ -33,7 +33,7 @@ pub fn get_delay(config: &RetryConfig, attempts: u64) -> Option<Duration> {
     }
 
     let base_delay = (config.multiplier as u64)
-        .saturating_pow(attempts.checked_sub(1).unwrap_or(0).try_into().unwrap_or(0))
+        .saturating_pow(attempts.saturating_sub(1).try_into().unwrap_or(0))
         .saturating_mul(config.min_delay.as_millis() as u64);
 
     let delay = Duration::from_millis(std::cmp::min(

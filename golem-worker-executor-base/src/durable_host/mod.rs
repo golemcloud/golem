@@ -949,6 +949,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         .await;
 
                         if !finished {
+                            // TODO: distinguish jump from error retries here and do not treat jumps as "failed to recover" error
                             break Err(GolemError::failed_to_resume_instance(
                                 worker_id.worker_id.clone(),
                             ));

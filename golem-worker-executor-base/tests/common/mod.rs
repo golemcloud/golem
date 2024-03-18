@@ -72,6 +72,7 @@ use golem_worker_executor_base::workerctx::{
 use golem_worker_executor_base::Bootstrap;
 use serde_json::Value as JsonValue;
 use tokio::runtime::Handle;
+use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 
@@ -497,6 +498,66 @@ impl TestWorkerExecutor {
         });
 
         rx
+    }
+
+    pub async fn capture_output_forever(
+        &self,
+        worker_id: &WorkerId,
+    ) -> (
+        UnboundedReceiver<Option<LogEvent>>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut cloned_client = self.client.clone();
+        let worker_id = worker_id.clone();
+        let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let mut abort = false;
+            while !abort {
+                let mut response = cloned_client
+                    .connect_worker(ConnectWorkerRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                        account_id: Some(
+                            AccountId {
+                                value: "test-account".to_string(),
+                            }
+                            .into(),
+                        ),
+                        account_limits: None,
+                    })
+                    .await
+                    .expect("Failed to connect worker")
+                    .into_inner();
+
+                loop {
+                    select! {
+                        msg = response.message() => {
+                            match msg {
+                                Ok(Some(event)) =>  {
+                                    debug!("Received event: {:?}", event);
+                                    tx.send(Some(event)).expect("Failed to send event");
+                                }
+                                Ok(None) => {
+                                    break;
+                                }
+                                Err(e) => {
+                                    panic!("Failed to get message: {:?}", e);
+                                }
+                            }
+                        }
+                        _ = (&mut abort_rx) => {
+                            abort = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            tx.send(None).expect("Failed to send event");
+            debug!("Finished receiving events");
+        });
+
+        (rx, abort_tx)
     }
 
     pub async fn capture_output_with_termination(
@@ -966,7 +1027,7 @@ impl FuelManagement for TestWorkerCtx {
 
     fn borrow_fuel_sync(&mut self) {}
 
-    async fn return_fuel(&mut self, current_level: i64) -> Result<i64, GolemError> {
+    async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, GolemError> {
         Ok(0)
     }
 }
