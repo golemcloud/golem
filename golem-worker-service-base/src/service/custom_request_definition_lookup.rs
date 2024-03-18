@@ -1,4 +1,4 @@
-use crate::api_definition::{ApiDefinition};
+use crate::api_definition::ApiDefinition;
 use crate::http_request::InputHttpRequest;
 use async_trait::async_trait;
 use std::fmt::Display;

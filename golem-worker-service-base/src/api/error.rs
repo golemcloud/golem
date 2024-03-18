@@ -57,26 +57,36 @@ impl From<crate::service::error::WorkerServiceBaseError> for WorkerApiBaseError 
         use crate::service::error::WorkerServiceBaseError as ServiceError;
 
         match value {
-            ServiceError::Internal(error) => WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
-            })),
-            ServiceError::TypeCheckerError(error) => WorkerApiBaseError::BadRequest(Json(ErrorsBody {
-                errors: vec![format!("Type checker error: {error}")],
-            })),
+            ServiceError::Internal(error) => {
+                WorkerApiBaseError::InternalError(Json(GolemErrorBody {
+                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
+                }))
+            }
+            ServiceError::TypeCheckerError(error) => {
+                WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                    errors: vec![format!("Type checker error: {error}")],
+                }))
+            }
             ServiceError::VersionedTemplateIdNotFound(template_id) => {
                 WorkerApiBaseError::NotFound(Json(ErrorBody {
                     error: format!("Template not found: {template_id}"),
                 }))
             }
-            ServiceError::TemplateNotFound(template_id) => WorkerApiBaseError::NotFound(Json(ErrorBody {
-                error: format!("Template not found: {template_id}"),
-            })),
-            ServiceError::AccountIdNotFound(account_id) => WorkerApiBaseError::NotFound(Json(ErrorBody {
-                error: format!("Account not found: {account_id}"),
-            })),
-            ServiceError::WorkerNotFound(worker_id) => WorkerApiBaseError::NotFound(Json(ErrorBody {
-                error: format!("Worker not found: {worker_id}"),
-            })),
+            ServiceError::TemplateNotFound(template_id) => {
+                WorkerApiBaseError::NotFound(Json(ErrorBody {
+                    error: format!("Template not found: {template_id}"),
+                }))
+            }
+            ServiceError::AccountIdNotFound(account_id) => {
+                WorkerApiBaseError::NotFound(Json(ErrorBody {
+                    error: format!("Account not found: {account_id}"),
+                }))
+            }
+            ServiceError::WorkerNotFound(worker_id) => {
+                WorkerApiBaseError::NotFound(Json(ErrorBody {
+                    error: format!("Worker not found: {worker_id}"),
+                }))
+            }
             ServiceError::Golem(golem_error) => {
                 WorkerApiBaseError::InternalError(Json(GolemErrorBody { golem_error }))
             }

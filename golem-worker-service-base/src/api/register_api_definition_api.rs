@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::result::Result;
 
-use golem_common::model::TemplateId;
-use poem_openapi::*;
-use serde::{Deserialize, Serialize};
 use crate::api_definition;
 use crate::api_definition::{ApiDefinitionId, MethodPattern, Version};
 use crate::expr::Expr;
+use golem_common::model::TemplateId;
+use poem_openapi::*;
+use serde::{Deserialize, Serialize};
 
 // Mostly this data structures that represents the actual incoming request
 // exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.

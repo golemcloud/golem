@@ -28,11 +28,13 @@ impl std::fmt::Display for WorkerServiceBaseError {
             WorkerServiceBaseError::DelegatedTemplateServiceError(ref error) => {
                 write!(f, "Delegated template service error: {}", error)
             }
-            WorkerServiceBaseError::VersionedTemplateIdNotFound(ref versioned_template_id) => write!(
-                f,
-                "Versioned template id not found: {}",
-                versioned_template_id
-            ),
+            WorkerServiceBaseError::VersionedTemplateIdNotFound(ref versioned_template_id) => {
+                write!(
+                    f,
+                    "Versioned template id not found: {}",
+                    versioned_template_id
+                )
+            }
             WorkerServiceBaseError::TemplateNotFound(ref template_id) => {
                 write!(f, "Template not found: {}", template_id)
             }
