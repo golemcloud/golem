@@ -2,22 +2,24 @@ use std::collections::HashMap;
 
 use hyper::http::Method;
 
-use crate::api_definition::{ApiDefinition, MethodPattern, Route};
+use crate::api_definition::{ApiDefinition, GolemWorkerBinding, MethodPattern};
 use crate::http_request::InputHttpRequest;
 use crate::resolved_variables::ResolvedVariables;
 
-pub trait RouteResolver {
-    fn resolve(&self, api_specification: &ApiDefinition) -> Option<ResolvedRoute>;
+// For any input request type, there should be a way to resolve the
+// worker binding template, which is then used to form the worker request
+pub trait WorkerBindingResolver {
+    fn resolve(&self, api_specification: &ApiDefinition) -> Option<ResolvedWorkerBinding>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ResolvedRoute {
-    pub route_definition: Route,
+pub struct ResolvedWorkerBinding {
+    pub resolved_worker_binding_template: GolemWorkerBinding,
     pub resolved_variables: ResolvedVariables,
 }
 
-impl<'a> RouteResolver for InputHttpRequest<'a> {
-    fn resolve(&self, api_definition: &ApiDefinition) -> Option<ResolvedRoute> {
+impl<'a> WorkerBindingResolver for InputHttpRequest<'a> {
+    fn resolve(&self, api_definition: &ApiDefinition) -> Option<ResolvedWorkerBinding> {
         let api_request = self;
         let routes = &api_definition.routes;
 
@@ -49,8 +51,8 @@ impl<'a> RouteResolver for InputHttpRequest<'a> {
                 )
                 .ok()?;
 
-                let resolved_binding = ResolvedRoute {
-                    route_definition: route.clone(),
+                let resolved_binding = ResolvedWorkerBinding {
+                    resolved_worker_binding_template: route.binding.clone(),
                     resolved_variables: { request_details },
                 };
                 return Some(resolved_binding);

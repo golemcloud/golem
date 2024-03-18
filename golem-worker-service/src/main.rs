@@ -1,8 +1,8 @@
 use golem_worker_service::api;
-use golem_worker_service::app_config::WorkerServiceConfig;
-use golem_worker_service::grpcapi;
-use golem_worker_service::metrics;
 use golem_worker_service::service::Services;
+use golem_worker_service::{config, grpcapi};
+use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
+use golem_worker_service_base::metrics;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProvider;
 use poem::listener::TcpListener;
@@ -17,12 +17,13 @@ use tokio::select;
 async fn main() -> std::io::Result<()> {
     let prometheus = metrics::register_all();
 
-    let config = WorkerServiceConfig::default();
+    let config: WorkerServiceBaseConfig = config::get_config();
+
     app(&config, prometheus).await
 }
 
 pub async fn app(
-    worker_config: &WorkerServiceConfig,
+    worker_config: &WorkerServiceBaseConfig,
     prometheus_registry: Registry,
 ) -> std::io::Result<()> {
     init_tracing_metrics();
