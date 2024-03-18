@@ -432,7 +432,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &WorkerId,
     ) -> Result<ConnectWorkerStream, WorkerServiceBaseError> {
-        self.retry_on_invalid_shard_id(&worker_id, &worker_id, |worker_executor_client, _| {
+        self.retry_on_invalid_shard_id(worker_id, &worker_id, |worker_executor_client, _| {
             Box::pin(async move {
                 let response = match worker_executor_client
                     .connect_worker(ConnectWorkerRequest {
