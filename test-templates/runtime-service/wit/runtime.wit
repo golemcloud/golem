@@ -2,6 +2,7 @@ package golem:it;
 
 interface api {
   get-self-uri: func(function-name: string) -> string;
+  jump: func() -> u64;
 }
 
 world runtime-service {

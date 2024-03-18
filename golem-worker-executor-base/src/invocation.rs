@@ -22,7 +22,7 @@ use tracing::{debug, error, warn};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 
-use crate::error::{is_interrupt, is_suspend, GolemError};
+use crate::error::{is_interrupt, is_jump, is_suspend, GolemError};
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::workerctx::{FuelManagement, WorkerCtx};
 
@@ -98,6 +98,10 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
             } else if is_suspend(&err) {
                 // this invocation was suspended and expected to be resumed by an external call or schedule
                 record_invocation(was_live_before, "suspended");
+                false
+            } else if is_jump(&err) {
+                // the worker needs to be restarted in order to jump to the past, but otherwise continues running
+                record_invocation(was_live_before, "jump");
                 false
             } else {
                 // this invocation failed it won't be retried later

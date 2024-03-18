@@ -15,6 +15,7 @@
 use ringbuf::*;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::*;
+use tracing::warn;
 
 use crate::metrics::events::{record_broadcast_event, record_event};
 
@@ -105,6 +106,8 @@ impl WorkerEventService for WorkerEventServiceDefault {
             record_broadcast_event(label(&event));
 
             let _ = self.sender.send(event.clone());
+        } else {
+            warn!("NO EVENT SUBSCRIBERS");
         }
         let _ = unsafe { Producer::new(&self.ring) }.push(event);
     }

@@ -24,7 +24,7 @@ use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::error::{is_interrupt, is_suspend, GolemError};
+use crate::error::{is_interrupt, is_jump, is_suspend, GolemError};
 use crate::invocation::invoke_worker;
 use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig};
 use crate::services::active_workers::ActiveWorkers;
@@ -47,8 +47,8 @@ use bincode::{Decode, Encode};
 use bytes::Bytes;
 use cap_std::ambient_authority;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
-    WorkerMetadata, WorkerStatus,
+    AccountId, CallingConvention, InvocationKey, Jump, PromiseId, Timestamp, VersionedWorkerId,
+    WorkerId, WorkerMetadata, WorkerStatus,
 };
 use golem_common::model::{OplogEntry, WrappedFunctionType};
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -65,6 +65,7 @@ use wasmtime_wasi_http::types::{
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
+use crate::durable_host::jumps::ActiveJumps;
 use crate::durable_host::wasm_rpc::UriExtensions;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::services::oplog::OplogService;
@@ -81,6 +82,7 @@ mod filesystem;
 mod golem;
 mod http;
 pub mod io;
+mod jumps;
 pub mod keyvalue;
 mod logging;
 mod random;
@@ -117,6 +119,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub async fn commit_oplog(&mut self) {
         self.private_state.commit_oplog().await
+    }
+
+    async fn get_oplog_entry_jump(&mut self) -> Result<Vec<Jump>, GolemError> {
+        self.private_state.get_oplog_entry_jump().await
+    }
+
+    async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {
+        self.private_state.get_oplog_entry_marker().await
     }
 
     async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
@@ -215,6 +225,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let oplog_size = oplog_service.get_size(&worker_id.worker_id).await;
 
+        let active_jumps = if oplog_size > 0 {
+            let last_entry = &oplog_service
+                .read(&worker_id.worker_id, oplog_size - 1, 1)
+                .await[0];
+            debug!("Last oplog entry: {:?}", last_entry);
+            ActiveJumps::from_oplog_entry(last_entry)
+        } else {
+            ActiveJumps::new()
+        };
+
+        debug!(
+            "Worker {} initialized with active jumps {}",
+            worker_id, active_jumps
+        );
+
         let stdio =
             ManagedStandardIo::new(worker_id.worker_id.clone(), invocation_key_service.clone());
         let stdin = ManagedStdIn::from_standard_io(stdio.clone()).await;
@@ -263,6 +288,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         rpc,
                         resources: HashMap::new(),
                         last_resource_id: 0,
+                        active_jumps,
                     },
                     temp_dir,
                     execution_status,
@@ -718,8 +744,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         let is_interrupt = is_interrupt(error);
         let is_suspend = is_suspend(error);
+        let is_jump = is_jump(error);
 
-        if is_live_after && !is_interrupt && !is_suspend {
+        if is_live_after && !is_interrupt && !is_suspend && !is_jump {
             self.set_oplog_entry(OplogEntry::Error {
                 timestamp: Timestamp::now_utc(),
             })
@@ -750,12 +777,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         let is_interrupt = is_interrupt(error);
         let is_suspend = is_suspend(error);
+        let is_jump = is_jump(error);
+
         match decision {
             RecoveryDecision::None => {
                 if is_interrupt {
                     Ok(WorkerStatus::Interrupted)
                 } else if is_suspend {
                     Ok(WorkerStatus::Suspended)
+                } else if is_jump {
+                    Ok(WorkerStatus::Running)
                 } else {
                     Ok(WorkerStatus::Failed)
                 }
@@ -1040,6 +1071,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     pub rpc: Arc<dyn Rpc + Send + Sync>,
     resources: HashMap<u64, ResourceAny>,
     last_resource_id: u64,
+    active_jumps: ActiveJumps,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -1083,10 +1115,61 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     pub async fn get_oplog_entry(&mut self) -> OplogEntry {
         assert!(self.is_replay());
+
         let oplog_entries = self.read_oplog(self.oplog_idx, 1).await;
         let oplog_entry = oplog_entries[0].clone();
-        self.oplog_idx += 1;
+
+        if let Some(idx) = self.active_jumps.has_active_jump(self.oplog_idx) {
+            debug!(
+                "Worker {} reached jump target {}, jumping to {} (oplog size: {})",
+                self.worker_id, self.oplog_idx, idx, self.oplog_size
+            );
+            self.oplog_idx = idx;
+        } else {
+            self.oplog_idx += 1;
+        }
+
         oplog_entry
+    }
+
+    async fn get_oplog_entry_jump(&mut self) -> Result<Vec<Jump>, GolemError> {
+        loop {
+            let oplog_entry = self.get_oplog_entry().await;
+            match oplog_entry {
+                OplogEntry::Jump { jumps, .. } => {
+                    break Ok(jumps);
+                }
+                OplogEntry::Suspend { .. } => (),
+                OplogEntry::Error { .. } => (),
+                OplogEntry::Debug { message, .. } => debug!("Debug: {}", message),
+                _ => {
+                    break Err(GolemError::unexpected_oplog_entry(
+                        "Jump",
+                        format!("{:?}", oplog_entry),
+                    ));
+                }
+            }
+        }
+    }
+
+    async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {
+        loop {
+            let oplog_entry = self.get_oplog_entry().await;
+            match oplog_entry {
+                OplogEntry::Marker { .. } => {
+                    break Ok(());
+                }
+                OplogEntry::Suspend { .. } => (),
+                OplogEntry::Error { .. } => (),
+                OplogEntry::Debug { message, .. } => debug!("Debug: {}", message),
+                _ => {
+                    break Err(GolemError::unexpected_oplog_entry(
+                        "Jump",
+                        format!("{:?}", oplog_entry),
+                    ));
+                }
+            }
+        }
     }
 
     async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
@@ -1212,7 +1295,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     }
 
     /// Consumes Suspend and Error entries which are hints for the server to decide whether to
-    /// keep workers in memory or allow them to rerun etc but contain no actionable information
+    /// keep workers in memory or allow them to rerun etc., but contain no actionable information
     /// during replay
     async fn consume_hint_entries(&mut self) {
         loop {

@@ -45,6 +45,7 @@ pub enum InterruptKind {
     Interrupt,
     Restart,
     Suspend,
+    Jump,
 }
 
 impl Display for InterruptKind {
@@ -53,6 +54,7 @@ impl Display for InterruptKind {
             InterruptKind::Interrupt => write!(f, "Interrupted via the Golem API"),
             InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
             InterruptKind::Suspend => write!(f, "Suspended"),
+            InterruptKind::Jump => write!(f, "Jumping back in time"),
         }
     }
 }

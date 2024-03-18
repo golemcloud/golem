@@ -78,7 +78,7 @@ impl FuelManagement for Context {
     fn borrow_fuel_sync(&mut self) {}
 
     async fn return_fuel(&mut self, current_level: i64) -> Result<i64, GolemError> {
-        Ok(current_level)
+        Ok(0)
     }
 }
 

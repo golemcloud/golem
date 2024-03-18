@@ -733,6 +733,12 @@ impl Display for AccountId {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
+pub struct Jump {
+    pub target_oplog_idx: u64,
+    pub source_oplog_idx: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub enum OplogEntry {
     /// The worker invoked a host function
     ImportedFunctionInvoked {
@@ -741,6 +747,7 @@ pub enum OplogEntry {
         response: Vec<u8>,
         wrapped_function_type: WrappedFunctionType,
     },
+    /// The worker has been invoked
     ExportedFunctionInvoked {
         timestamp: Timestamp,
         function_name: String,
@@ -748,34 +755,41 @@ pub enum OplogEntry {
         invocation_key: Option<InvocationKey>,
         calling_convention: Option<CallingConvention>,
     },
+    /// The worker has completed an invocation
     ExportedFunctionCompleted {
         timestamp: Timestamp,
         response: Vec<u8>,
         consumed_fuel: i64,
     },
+    /// Promise created
     CreatePromise {
         timestamp: Timestamp,
         promise_id: PromiseId,
     },
+    /// Promise completed
     CompletePromise {
         timestamp: Timestamp,
         promise_id: PromiseId,
         data: Vec<u8>,
     },
-    Suspend {
-        timestamp: Timestamp,
-    },
-    Error {
-        timestamp: Timestamp,
-    },
+    /// Worker suspended
+    Suspend { timestamp: Timestamp },
+    /// Worker failed
+    Error { timestamp: Timestamp },
+    /// Debug log entry
     Debug {
         timestamp: Timestamp,
         message: String,
     },
-    // Jump {
-    //     timestamp: Timestamp,
-    //     oplog_idx: u64,
-    // },
+    /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
+    /// more predictable.
+    Marker { timestamp: Timestamp },
+    /// The worker needs to recover up to the given target oplog index and continue running from
+    /// the source oplog index from there. There can be multiple active jumps during replay.
+    Jump {
+        timestamp: Timestamp,
+        jumps: Vec<Jump>,
+    },
 }
 
 impl OplogEntry {
@@ -907,6 +921,14 @@ impl OplogEntry {
                 Ok(Some(function_input))
             }
         }
+    }
+
+    pub fn jump(timestamp: Timestamp, jumps: Vec<Jump>) -> OplogEntry {
+        OplogEntry::Jump { timestamp, jumps }
+    }
+
+    pub fn marker(timestamp: Timestamp) -> OplogEntry {
+        OplogEntry::Marker { timestamp }
     }
 }
 

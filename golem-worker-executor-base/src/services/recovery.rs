@@ -287,6 +287,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             Some(InterruptKind::Interrupt) => RecoveryDecision::None,
             Some(InterruptKind::Suspend) => RecoveryDecision::None,
             Some(InterruptKind::Restart) => RecoveryDecision::Immediate,
+            Some(InterruptKind::Jump) => RecoveryDecision::Immediate,
             None => match Ctx::is_exit(current_error) {
                 Some(_) => RecoveryDecision::None,
                 None => match current_error.root_cause().downcast_ref::<Trap>() {

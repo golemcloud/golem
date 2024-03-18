@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use tracing::debug;
 use uuid::Uuid;
@@ -23,7 +24,7 @@ use crate::model::InterruptKind;
 use crate::preview2::golem;
 use crate::preview2::golem::api::host::OplogIndex;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::{PromiseId, TemplateId, WorkerId};
+use golem_common::model::{Jump, OplogEntry, PromiseId, TemplateId, Timestamp, WorkerId};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
@@ -85,11 +86,60 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_oplog_index(&mut self) -> anyhow::Result<OplogIndex> {
-        Ok(self.private_state.oplog_idx)
+        record_host_function_call("golem::api", "get_oplog_index");
+        if self.is_live() {
+            self.set_oplog_entry(OplogEntry::marker(Timestamp::now_utc()))
+                .await;
+        } else {
+            let _ = self.get_oplog_entry_marker().await?;
+        }
+        debug!(
+            "[get-oplog-idx] oplog_idx: {}, oplog_size: {}",
+            self.private_state.oplog_idx, self.private_state.oplog_size
+        );
+        Ok(self.private_state.oplog_idx - 1)
     }
 
     async fn set_oplog_index(&mut self, oplog_idx: OplogIndex) -> anyhow::Result<()> {
-        todo!()
+        record_host_function_call("golem::api", "set_oplog_index");
+        let jump_source = self.private_state.oplog_idx;
+        let jump_target = oplog_idx;
+        if jump_target > jump_source {
+            Err(anyhow!(
+                "Attempted to jump forward in oplog to index {jump_target} from {jump_source}"
+            ))
+        } else {
+            let jump = Jump {
+                target_oplog_idx: jump_target,
+                source_oplog_idx: jump_source,
+            };
+
+            debug!(
+                "[set-oplog-idx] oplog_idx: {}, oplog_size: {}",
+                self.private_state.oplog_idx, self.private_state.oplog_size
+            );
+
+            if self.is_live() {
+                // We have to repeat all previous jumps so we add the new jump to the list of active jumps
+                // and write an oplog entry containing all of them
+                self.private_state.active_jumps.add_jump(jump);
+                self.set_oplog_entry(OplogEntry::jump(
+                    Timestamp::now_utc(),
+                    self.private_state.active_jumps.jumps().clone(),
+                ))
+                .await;
+                self.commit_oplog().await;
+
+                debug!(
+                    "Interrupting live execution for jumping from {jump_source} to {jump_target}"
+                );
+                Err(InterruptKind::Jump.into())
+            } else {
+                // In replay mode this call is a no-op so we can get past through it
+                let _ = self.get_oplog_entry_jump().await?;
+                Ok(())
+            }
+        }
     }
 }
 
