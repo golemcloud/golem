@@ -3,16 +3,16 @@ pub mod worker;
 
 pub mod worker_connect;
 
+use crate::api::worker::WorkerApi;
+use crate::service::Services;
+use golem_worker_service_base::api::custom_http_request_api::CustomHttpRequestApi;
+use golem_worker_service_base::api::healthcheck;
 use poem::endpoint::PrometheusExporter;
 use poem::{get, EndpointExt, Route};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
 use std::ops::Deref;
 use std::sync::Arc;
-use golem_worker_service_base::api::custom_http_request_api::CustomHttpRequestApi;
-use golem_worker_service_base::api::healthcheck;
-use crate::api::worker::WorkerApi;
-use crate::service::Services;
 
 type ApiServices = (
     WorkerApi,

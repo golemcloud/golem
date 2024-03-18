@@ -1,4 +1,3 @@
-
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -8,9 +7,8 @@ use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tap::TapFallible;
-use tonic::Status;
 
-use crate::service::template::{TemplateServiceBaseError, TemplateService};
+use crate::service::template::{TemplateService};
 use crate::service::worker::WorkerService;
 use golem_service_base::model::*;
 use golem_worker_service_base::api::error::WorkerApiBaseError;
@@ -20,12 +18,14 @@ pub struct WorkerApi {
     pub worker_service: Arc<dyn WorkerService + Sync + Send>,
 }
 
+type Result<T> = std::result::Result<T, WorkerApiBaseError>;
+
 #[OpenApi(prefix_path = "/v2/templates", tag = ApiTags::Worker)]
 impl WorkerApi {
     #[oai(
-    path = "/workers/:worker_id",
-    method = "get",
-    operation_id = "get_worker_by_id"
+        path = "/workers/:worker_id",
+        method = "get",
+        operation_id = "get_worker_by_id"
     )]
     async fn get_worker_by_id(&self, worker_id: Path<String>) -> Result<Json<VersionedWorkerId>> {
         let worker_id: WorkerId = golem_common::model::WorkerId::from_str(&worker_id.0)?.into();
@@ -35,9 +35,9 @@ impl WorkerApi {
     }
 
     #[oai(
-    path = "/:template_id/workers",
-    method = "post",
-    operation_id = "launch_new_worker"
+        path = "/:template_id/workers",
+        method = "post",
+        operation_id = "launch_new_worker"
     )]
     async fn launch_new_worker(
         &self,
@@ -76,9 +76,9 @@ impl WorkerApi {
     }
 
     #[oai(
-    path = "/:template_id/workers/:worker_name",
-    method = "delete",
-    operation_id = "delete_worker"
+        path = "/:template_id/workers/:worker_name",
+        method = "delete",
+        operation_id = "delete_worker"
     )]
     async fn delete_worker(
         &self,
@@ -93,9 +93,9 @@ impl WorkerApi {
     }
 
     #[oai(
-    path = "/:template_id/workers/:worker_name/key",
-    method = "post",
-    operation_id = "get_invocation_key"
+        path = "/:template_id/workers/:worker_name/key",
+        method = "post",
+        operation_id = "get_invocation_key"
     )]
     async fn get_invocation_key(
         &self,
@@ -110,9 +110,9 @@ impl WorkerApi {
     }
 
     #[oai(
-    path = "/:template_id/workers/:worker_name/invoke-and-await",
-    method = "post",
-    operation_id = "invoke_and_await_function"
+        path = "/:template_id/workers/:worker_name/invoke-and-await",
+        method = "post",
+        operation_id = "invoke_and_await_function"
     )]
     async fn invoke_and_await_function(
         &self,
@@ -144,9 +144,9 @@ impl WorkerApi {
     }
 
     #[oai(
-    path = "/:template_id/workers/:worker_name/invoke",
-    method = "post",
-    operation_id = "invoke_function"
+        path = "/:template_id/workers/:worker_name/invoke",
+        method = "post",
+        operation_id = "invoke_function"
     )]
     async fn invoke_function(
         &self,
@@ -165,9 +165,9 @@ impl WorkerApi {
     }
 
     #[oai(
-    path = "/:template_id/workers/:worker_name/complete",
-    method = "post",
-    operation_id = "complete_promise"
+        path = "/:template_id/workers/:worker_name/complete",
+        method = "post",
+        operation_id = "complete_promise"
     )]
     async fn complete_promise(
         &self,
@@ -187,9 +187,9 @@ impl WorkerApi {
     }
 
     #[oai(
-    path = "/:template_id/workers/:worker_name/interrupt",
-    method = "post",
-    operation_id = "interrupt_worker"
+        path = "/:template_id/workers/:worker_name/interrupt",
+        method = "post",
+        operation_id = "interrupt_worker"
     )]
     async fn interrupt_worker(
         &self,
@@ -207,9 +207,9 @@ impl WorkerApi {
     }
 
     #[oai(
-    path = "/:template_id/workers/:worker_name",
-    method = "get",
-    operation_id = "get_worker_metadata"
+        path = "/:template_id/workers/:worker_name",
+        method = "get",
+        operation_id = "get_worker_metadata"
     )]
     async fn get_worker_metadata(
         &self,
@@ -223,9 +223,9 @@ impl WorkerApi {
     }
 
     #[oai(
-    path = "/:template_id/workers/:worker_name/resume",
-    method = "post",
-    operation_id = "resume_worker"
+        path = "/:template_id/workers/:worker_name/resume",
+        method = "post",
+        operation_id = "resume_worker"
     )]
     async fn resume_worker(
         &self,

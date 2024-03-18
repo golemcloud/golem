@@ -6,18 +6,22 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::{error, info};
 
+use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::api::common::ApiEndpointError;
 use golem_worker_service_base::api_definition;
 use golem_worker_service_base::api_definition::{ApiDefinition, ApiDefinitionId, Version};
-use golem_worker_service_base::auth::{AuthService, AuthServiceNoop, CommonNamespace, EmptyAuthCtx};
-use golem_worker_service_base::oas_worker_bridge::*;
-use golem_worker_service_base::service::register_definition::{ApiRegistrationError, RegisterApiDefinition, RegisterApiDefinitionDefault};
-use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
+use golem_worker_service_base::auth::{
+    AuthService, AuthServiceNoop, CommonNamespace, EmptyAuthCtx,
+};
+use golem_worker_service_base::oas_worker_bridge::*;
+use golem_worker_service_base::service::register_definition::{
+    ApiRegistrationError, RegisterApiDefinition, RegisterApiDefinitionDefault,
+};
 
 pub struct RegisterApiDefinitionApi {
     pub definition_service:
-    Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
+        Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
     pub auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
 }
 
@@ -193,7 +197,6 @@ async fn register_api(
             }
         })
 }
-
 
 #[cfg(test)]
 mod test {

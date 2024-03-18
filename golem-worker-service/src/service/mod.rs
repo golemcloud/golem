@@ -1,29 +1,41 @@
-pub mod worker;
 pub mod template;
+pub mod worker;
 
-use golem_worker_service_base::api_definition::{ApiDefinition, ApiDefinitionId, ResponseMapping, Version};
-use golem_worker_service_base::api_definition_repo::{ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry};
+use async_trait::async_trait;
+use golem_worker_service_base::api_definition::{
+    ApiDefinition, ApiDefinitionId, ResponseMapping, Version,
+};
+use golem_worker_service_base::api_definition_repo::{
+    ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry,
+};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::auth::{AuthService, AuthServiceNoop, CommonNamespace, EmptyAuthCtx};
-use golem_worker_service_base::service::custom_request_definition_lookup::{ApiDefinitionLookupError, CustomRequestDefinitionLookup};
-use golem_worker_service_base::service::register_definition::{ApiDefinitionKey, RegisterApiDefinition, RegisterApiDefinitionDefault};
-use golem_worker_service_base::worker_response::WorkerRequestToHttpResponse;
+use golem_worker_service_base::auth::{
+    AuthService, AuthServiceNoop, CommonNamespace, EmptyAuthCtx,
+};
+use golem_worker_service_base::oas_worker_bridge::{
+    GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION,
+};
+use golem_worker_service_base::service::custom_request_definition_lookup::{
+    ApiDefinitionLookupError, CustomRequestDefinitionLookup,
+};
+use golem_worker_service_base::service::register_definition::{
+    ApiDefinitionKey, RegisterApiDefinition, RegisterApiDefinitionDefault,
+};
 use golem_worker_service_base::worker_request_to_response::WorkerRequestToResponse;
+use http::HeaderMap;
 use poem::Response;
 use std::sync::Arc;
-use async_trait::async_trait;
-use http::HeaderMap;
 use tracing::error;
-use golem_worker_service_base::oas_worker_bridge::{GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION};
+use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
 
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
     pub definition_service:
-    Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
+        Arc<dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
     pub definition_lookup_service: Arc<dyn CustomRequestDefinitionLookup + Sync + Send>,
     pub worker_to_http_service:
-    Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
+        Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
     pub auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
 }
@@ -67,11 +79,9 @@ impl Services {
                 format!("RedisApiRegistry - init error: {}", e)
             })?);
 
-        let definition_lookup_service = Arc::new(
-            CustomRequestDefinitionLookupDefault::new(
-                definition_repo.clone(),
-            ),
-        );
+        let definition_lookup_service = Arc::new(CustomRequestDefinitionLookupDefault::new(
+            definition_repo.clone(),
+        ));
 
         let definition_service: Arc<
             dyn RegisterApiDefinition<CommonNamespace, EmptyAuthCtx> + Sync + Send,
@@ -119,11 +129,9 @@ impl Services {
             Arc::new(InMemoryRegistry::default());
 
         let definition_lookup_service: Arc<dyn CustomRequestDefinitionLookup + Sync + Send> =
-            Arc::new(
-                CustomRequestDefinitionLookupDefault::new(
-                    definition_repo.clone(),
-                ),
-            );
+            Arc::new(CustomRequestDefinitionLookupDefault::new(
+                definition_repo.clone(),
+            ));
 
         let definition_service = Arc::new(RegisterApiDefinitionDefault::new(
             Arc::new(AuthServiceNoop {}),
@@ -153,7 +161,6 @@ impl Services {
         }
     }
 }
-
 
 pub struct CustomRequestDefinitionLookupDefault {
     register_api_definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send>,

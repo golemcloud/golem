@@ -35,7 +35,7 @@ use golem_api_grpc::proto::golem::worker::{
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
 
-use crate::service::template::{TemplateServiceBaseError, TemplateService};
+use crate::service::template::{TemplateService};
 use crate::service::worker::{self, ConnectWorkerStream, WorkerService};
 
 fn server_error<T>(error: T) -> GrpcWorkerError
@@ -524,13 +524,15 @@ impl From<TemplateServiceBaseError> for worker_error::Error {
                     })),
                 },
             ),
-            TemplateServiceBaseError::Transport(transport_error) => worker_error::Error::InternalError(
-                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: format!("Transport error: {transport_error}"),
-                    })),
-                },
-            ),
+            TemplateServiceBaseError::Transport(transport_error) => {
+                worker_error::Error::InternalError(
+                    golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                        error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                            details: format!("Transport error: {transport_error}"),
+                        })),
+                    },
+                )
+            }
             TemplateServiceBaseError::Server(template_error) => match template_error.error {
                 Some(
                     golem_api_grpc::proto::golem::template::template_error::Error::AlreadyExists(

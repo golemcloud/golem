@@ -1,6 +1,5 @@
 use std::fmt::Display;
 
-use golem_worker_service_base::UriBackConversion;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
 use golem_api_grpc::proto::golem::template::{
@@ -10,11 +9,12 @@ use golem_common::config::RetryConfig;
 use golem_common::model::TemplateId;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Template;
+use golem_worker_service_base::app_config::TemplateServiceConfig;
+use golem_worker_service_base::service::error::TemplateServiceBaseError;
+use golem_worker_service_base::UriBackConversion;
 use http::Uri;
 use tonic::Status;
 use tracing::info;
-use golem_worker_service_base::app_config::TemplateServiceConfig;
-use golem_worker_service_base::service::error::TemplateServiceBaseError;
 
 #[async_trait]
 pub trait TemplateService {
@@ -24,7 +24,10 @@ pub trait TemplateService {
         version: i32,
     ) -> Result<Option<Template>, TemplateServiceBaseError>;
 
-    async fn get_latest(&self, template_id: &TemplateId) -> Result<Template, TemplateServiceBaseError>;
+    async fn get_latest(
+        &self,
+        template_id: &TemplateId,
+    ) -> Result<Template, TemplateServiceBaseError>;
 }
 
 #[derive(Clone)]
@@ -44,7 +47,10 @@ impl TemplateServiceDefault {
 
 #[async_trait]
 impl TemplateService for TemplateServiceDefault {
-    async fn get_latest(&self, template_id: &TemplateId) -> Result<Template, TemplateServiceBaseError> {
+    async fn get_latest(
+        &self,
+        template_id: &TemplateId,
+    ) -> Result<Template, TemplateServiceBaseError> {
         let desc = format!("Getting latest version of template: {}", template_id);
         info!("{}", &desc);
         with_retries(
@@ -93,7 +99,7 @@ impl TemplateService for TemplateServiceDefault {
             },
             TemplateServiceBaseError::is_retriable,
         )
-            .await
+        .await
     }
     async fn get_by_version(
         &self,
@@ -146,10 +152,9 @@ impl TemplateService for TemplateServiceDefault {
             },
             TemplateServiceBaseError::is_retriable,
         )
-            .await
+        .await
     }
 }
-
 
 pub struct TemplateServiceNoop {}
 
@@ -163,7 +168,12 @@ impl TemplateService for TemplateServiceNoop {
         Ok(None)
     }
 
-    async fn get_latest(&self, _template_id: &TemplateId) -> Result<Template, TemplateServiceBaseError> {
-        Err(TemplateServiceBaseError::Other("Not implemented".to_string()))
+    async fn get_latest(
+        &self,
+        _template_id: &TemplateId,
+    ) -> Result<Template, TemplateServiceBaseError> {
+        Err(TemplateServiceBaseError::Other(
+            "Not implemented".to_string(),
+        ))
     }
 }

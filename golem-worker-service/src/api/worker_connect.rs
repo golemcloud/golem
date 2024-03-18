@@ -144,9 +144,9 @@ async fn forward_worker_message<S, E>(
     message: Result<LogEvent, tonic::Status>,
     socket: &mut S,
 ) -> Result<(), ConnectError>
-    where
-        S: futures_util::Sink<Message, Error = E> + Unpin,
-        ConnectError: From<E>,
+where
+    S: futures_util::Sink<Message, Error = E> + Unpin,
+    ConnectError: From<E>,
 {
     let message = message?;
     let msg_json = serde_json::to_string(&message)?;
