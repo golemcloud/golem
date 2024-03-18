@@ -1,6 +1,5 @@
 use std::fmt::Display;
 
-use crate::app_config::TemplateServiceConfig;
 use crate::UriBackConversion;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
@@ -14,6 +13,8 @@ use golem_service_base::model::Template;
 use http::Uri;
 use tonic::Status;
 use tracing::info;
+use golem_worker_service_base::app_config::TemplateServiceConfig;
+use golem_worker_service_base::service::error::TemplateError;
 
 #[async_trait]
 pub trait TemplateService {
@@ -92,7 +93,7 @@ impl TemplateService for TemplateServiceDefault {
             },
             TemplateError::is_retriable,
         )
-        .await
+            .await
     }
     async fn get_by_version(
         &self,
@@ -145,107 +146,10 @@ impl TemplateService for TemplateServiceDefault {
             },
             TemplateError::is_retriable,
         )
-        .await
+            .await
     }
 }
 
-#[derive(Debug)]
-pub enum TemplateError {
-    Connection(Status),
-    Transport(tonic::transport::Error),
-    Server(golem_api_grpc::proto::golem::template::TemplateError),
-    Other(String),
-}
-
-impl TemplateError {
-    fn is_retriable(&self) -> bool {
-        matches!(self, TemplateError::Connection(_))
-    }
-}
-
-impl From<golem_api_grpc::proto::golem::template::TemplateError> for TemplateError {
-    fn from(value: golem_api_grpc::proto::golem::template::TemplateError) -> Self {
-        TemplateError::Server(value)
-    }
-}
-
-impl From<Status> for TemplateError {
-    fn from(value: Status) -> Self {
-        TemplateError::Connection(value)
-    }
-}
-
-impl From<tonic::transport::Error> for TemplateError {
-    fn from(value: tonic::transport::Error) -> Self {
-        TemplateError::Transport(value)
-    }
-}
-
-impl From<String> for TemplateError {
-    fn from(value: String) -> Self {
-        TemplateError::Other(value)
-    }
-}
-
-impl Display for TemplateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TemplateError::Server(err) => match &err.error {
-                Some(
-                    golem_api_grpc::proto::golem::template::template_error::Error::BadRequest(
-                        errors,
-                    ),
-                ) => {
-                    write!(f, "Invalid request: {:?}", errors.errors)
-                }
-                Some(
-                    golem_api_grpc::proto::golem::template::template_error::Error::InternalError(
-                        error,
-                    ),
-                ) => {
-                    write!(f, "Internal server error: {}", error.error)
-                }
-                Some(golem_api_grpc::proto::golem::template::template_error::Error::NotFound(
-                    error,
-                )) => {
-                    write!(f, "Template not found: {}", error.error)
-                }
-                Some(
-                    golem_api_grpc::proto::golem::template::template_error::Error::Unauthorized(
-                        error,
-                    ),
-                ) => {
-                    write!(f, "Unauthorized: {}", error.error)
-                }
-                Some(
-                    golem_api_grpc::proto::golem::template::template_error::Error::LimitExceeded(
-                        error,
-                    ),
-                ) => {
-                    write!(f, "Template limit reached: {}", error.error)
-                }
-                Some(
-                    golem_api_grpc::proto::golem::template::template_error::Error::AlreadyExists(
-                        error,
-                    ),
-                ) => {
-                    write!(f, "Template already exists: {}", error.error)
-                }
-                None => write!(f, "Empty error response"),
-            },
-            TemplateError::Connection(status) => write!(f, "Connection error: {status}"),
-            TemplateError::Transport(error) => write!(f, "Transport error: {error}"),
-            TemplateError::Other(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl std::error::Error for TemplateError {
-    // TODO
-    // fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-    //     Some(&self.source)
-    // }
-}
 
 pub struct TemplateServiceNoop {}
 

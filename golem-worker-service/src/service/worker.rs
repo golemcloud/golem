@@ -111,58 +111,6 @@ impl Drop for ConnectWorkerStream {
     }
 }
 
-pub enum WorkerError {
-    Internal(String),
-    TypeCheckerError(String),
-    DelegatedTemplateServiceError(TemplateError),
-    VersionedTemplateIdNotFound(VersionedTemplateId),
-    TemplateNotFound(TemplateId),
-    AccountIdNotFound(AccountId),
-    // FIXME: Once worker is independent of account
-    WorkerNotFound(WorkerId),
-    Golem(GolemError),
-}
-
-impl std::fmt::Display for WorkerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            WorkerError::Internal(ref string) => write!(f, "Internal error: {}", string),
-            WorkerError::TypeCheckerError(ref string) => {
-                write!(f, "Type checker error: {}", string)
-            }
-            WorkerError::DelegatedTemplateServiceError(ref error) => {
-                write!(f, "Delegated template service error: {}", error)
-            }
-            WorkerError::VersionedTemplateIdNotFound(ref versioned_template_id) => write!(
-                f,
-                "Versioned template id not found: {}",
-                versioned_template_id
-            ),
-            WorkerError::TemplateNotFound(ref template_id) => {
-                write!(f, "Template not found: {}", template_id)
-            }
-            WorkerError::AccountIdNotFound(ref account_id) => {
-                write!(f, "Account id not found: {}", account_id)
-            }
-            WorkerError::WorkerNotFound(ref worker_id) => {
-                write!(f, "Worker not found: {}", worker_id)
-            }
-            WorkerError::Golem(ref error) => write!(f, "Golem error: {:?}", error),
-        }
-    }
-}
-
-impl From<RoutingTableError> for WorkerError {
-    fn from(error: RoutingTableError) -> Self {
-        WorkerError::Internal(format!("Unable to get routing table: {:?}", error))
-    }
-}
-
-impl From<TemplateError> for WorkerError {
-    fn from(error: TemplateError) -> Self {
-        WorkerError::DelegatedTemplateServiceError(error)
-    }
-}
 
 #[async_trait]
 pub trait WorkerService {
@@ -318,12 +266,12 @@ impl WorkerServiceDefault {
         i: &In,
         f: F,
     ) -> Result<Out, WorkerError>
-    where
-        F: for<'b> Fn(
-            &'b mut WorkerExecutorClient<Channel>,
-            &'b In,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
+        where
+            F: for<'b> Fn(
+                &'b mut WorkerExecutorClient<Channel>,
+                &'b In,
+            )
+                -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
     {
         loop {
             match self.get_worker_executor_client(worker_id).await {
@@ -331,24 +279,24 @@ impl WorkerServiceDefault {
                     match f(&mut worker_executor_client, i).await {
                         Ok(result) => return Ok(result),
                         Err(GolemError::InvalidShardId(GolemErrorInvalidShardId {
-                            shard_id,
-                            shard_ids,
-                        })) => {
+                                                           shard_id,
+                                                           shard_ids,
+                                                       })) => {
                             info!("InvalidShardId: {} not in {:?}", shard_id, shard_ids);
                             info!("Invalidating routing table");
                             self.routing_table_service.invalidate_routing_table().await;
                             sleep(Duration::from_secs(1)).await;
                         }
                         Err(GolemError::RuntimeError(GolemErrorRuntimeError { details }))
-                            if details.contains("UNAVAILABLE")
-                                || details.contains("CHANNEL CLOSED")
-                                || details.contains("transport error") =>
-                        {
-                            info!("Worker executor unavailable");
-                            info!("Invalidating routing table");
-                            self.routing_table_service.invalidate_routing_table().await;
-                            sleep(Duration::from_secs(1)).await;
-                        }
+                        if details.contains("UNAVAILABLE")
+                            || details.contains("CHANNEL CLOSED")
+                            || details.contains("transport error") =>
+                            {
+                                info!("Worker executor unavailable");
+                                info!("Invalidating routing table");
+                                self.routing_table_service.invalidate_routing_table().await;
+                                sleep(Duration::from_secs(1)).await;
+                            }
                         Err(other) => {
                             debug!("Got {:?}, not retrying", other);
                             return Err(WorkerError::Golem(other));
@@ -362,13 +310,13 @@ impl WorkerServiceDefault {
                     sleep(Duration::from_secs(1)).await;
                 }
                 Err(WorkerError::Internal { 0: details })
-                    if details.contains("transport error") =>
-                {
-                    info!("Shard manager unavailable");
-                    info!("Invalidating routing table");
-                    self.routing_table_service.invalidate_routing_table().await;
-                    sleep(Duration::from_secs(1)).await;
-                }
+                if details.contains("transport error") =>
+                    {
+                        info!("Shard manager unavailable");
+                        info!("Invalidating routing table");
+                        self.routing_table_service.invalidate_routing_table().await;
+                        sleep(Duration::from_secs(1)).await;
+                    }
                 Err(other) => {
                     debug!("Got {}, not retrying", other);
                     return Err(other);
@@ -793,15 +741,15 @@ impl WorkerService for WorkerServiceDefault {
                         match response.into_inner() {
                             workerexecutor::CompletePromiseResponse {
                                 result:
-                                    Some(workerexecutor::complete_promise_response::Result::Success(
-                                        success,
-                                    )),
+                                Some(workerexecutor::complete_promise_response::Result::Success(
+                                         success,
+                                     )),
                             } => Ok(success.completed),
                             workerexecutor::CompletePromiseResponse {
                                 result:
-                                    Some(workerexecutor::complete_promise_response::Result::Failure(
-                                        err,
-                                    )),
+                                Some(workerexecutor::complete_promise_response::Result::Failure(
+                                         err,
+                                     )),
                             } => Err(err.try_into().unwrap()),
                             workerexecutor::CompletePromiseResponse { .. } => {
                                 Err(GolemError::Unknown(GolemErrorUnknown {

@@ -1,16 +1,19 @@
 {
   "openapi": "3.0.0",
-  "x-golem-api-definition-id": "shopping-cart-v2",
-  "x-golem-api-definition-version": "0.0.3",
+  "x-golem-worker-bridge-mount-info": {
+    "domain": "amazon.com",
+    "subdomain": "api",
+    "prefix" : "dev"
+  },
   "info": {
     "title": "Sample API",
-    "version": "1.0.1"
+    "version": "1.0.2"
   },
   "servers": [
     {
       "url": "http://169.254.141.101:9006"
     }
-  ],
+  ], //amazon.com/
   "paths": {
     "/{user-id}/get-cart-contents": {
       "x-golem-worker-bridge": {
@@ -18,13 +21,10 @@
         "function-name": "golem:it/api/get-cart-contents",
         "function-params": [],
         "template-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
+
         "response" : {
           "status": "200",
-          "body": {
-            "name" : "${worker.response[0][0].name}",
-            "price" : "${worker.response[0][0].price}",
-            "quantity" : "${worker.response[0][0].quantity}"
-          },
+          "body": "${worker.response}",
           "headers": {}
         }
       },

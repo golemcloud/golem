@@ -1,7 +1,6 @@
 use golem_worker_service::api;
-use golem_worker_service::app_config::WorkerServiceBaseConfig;
-use golem_worker_service::grpcapi;
-use golem_worker_service::metrics;
+use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
+use golem_worker_service_base::metrics;
 use golem_worker_service::service::Services;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProvider;
@@ -12,6 +11,7 @@ use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use tokio::select;
+use crate::grpcapi;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -45,10 +45,10 @@ pub async fn app(
             "0.0.0.0",
             config.custom_request_port,
         )))
-        .name("gateway")
-        .run(route)
-        .await
-        .expect("Custom Request server failed")
+            .name("gateway")
+            .run(route)
+            .await
+            .expect("Custom Request server failed")
     });
 
     let worker_server = tokio::spawn(async move {
@@ -68,8 +68,8 @@ pub async fn app(
             SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), config.worker_grpc_port).into(),
             &grpc_services,
         )
-        .await
-        .expect("gRPC server failed");
+            .await
+            .expect("gRPC server failed");
     });
 
     select! {

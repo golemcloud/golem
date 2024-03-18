@@ -14,6 +14,7 @@ use crate::worker_request::WorkerRequest;
 use crate::worker_request_to_response::WorkerRequestToResponse;
 
 // Executes custom request with the help of worker_request_executor and definition_service
+// This is a common API projects can make use of, similar to healthcheck service
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
     pub worker_to_http_response_service:

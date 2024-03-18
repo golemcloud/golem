@@ -144,9 +144,9 @@ async fn forward_worker_message<S, E>(
     message: Result<LogEvent, tonic::Status>,
     socket: &mut S,
 ) -> Result<(), ConnectError>
-where
-    S: futures_util::Sink<Message, Error = E> + Unpin,
-    ConnectError: From<E>,
+    where
+        S: futures_util::Sink<Message, Error = E> + Unpin,
+        ConnectError: From<E>,
 {
     let message = message?;
     let msg_json = serde_json::to_string(&message)?;
@@ -193,8 +193,8 @@ impl From<serde_json::Error> for ConnectError {
     }
 }
 
-impl From<crate::service::worker::WorkerError> for ConnectError {
-    fn from(error: crate::service::worker::WorkerError) -> Self {
+impl From<golem_worker_service_base::service::error::WorkerError> for ConnectError {
+    fn from(error: golem_worker_service_base::service::error::WorkerError) -> Self {
         ConnectError(error.to_string())
     }
 }
