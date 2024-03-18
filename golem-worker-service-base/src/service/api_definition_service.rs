@@ -23,7 +23,7 @@ pub trait ApiDefinitionService<Namespace, AuthCtx> {
         api_definition_id: &ApiDefinitionId,
         version: &Version,
         auth_ctx: AuthCtx,
-    ) -> Result<Option<ApiDefinitionIdAnnotated<Namespace>>, ApiRegistrationError>;
+    ) -> Result<Option<ApiDefinitionAnnotated<Namespace>>, ApiRegistrationError>;
 
     async fn delete(
         &self,
@@ -32,19 +32,23 @@ pub trait ApiDefinitionService<Namespace, AuthCtx> {
         auth_ctx: AuthCtx,
     ) -> Result<ApiDefinitionIdAnnotated<Namespace>, ApiRegistrationError>;
 
-    async fn get_all(&self, auth_ctx: AuthCtx) -> Result<Vec<ApiDefinitionIdAnnotated<Namespace>>, ApiRegistrationError>;
+    async fn get_all(&self, auth_ctx: AuthCtx) -> Result<Vec<ApiDefinitionAnnotated<Namespace>>, ApiRegistrationError>;
 
     async fn get_all_versions(
         &self,
         api_id: &ApiDefinitionId,
         auth_ctx: AuthCtx,
-    ) -> Result<Vec<ApiDefinitionIdAnnotated<Namespace>>, ApiRegistrationError>;
+    ) -> Result<Vec<ApiDefinitionAnnotated<Namespace>>, ApiRegistrationError>;
 }
 
 pub struct ApiDefinitionIdAnnotated<Namespace> {
     pub namespace: Namespace,
-    pub api_definition: ApiDefinitionId,
+    pub api_definition_id: ApiDefinitionId,
+}
 
+pub struct ApiDefinitionAnnotated<Namespace> {
+    pub namespace: Namespace,
+    pub api_definition: ApiDefinition
 }
 
 // An ApiDefinitionKey is just the original ApiDefinitionId with additional information of version and a possibility of namespace.
@@ -254,7 +258,7 @@ impl ApiDefinitionService<CommonNamespace, EmptyAuthCtx> for RegisterApiDefiniti
     ) -> Result<ApiDefinitionIdAnnotated<CommonNamespace>, ApiRegistrationError> {
         Ok(ApiDefinitionIdAnnotated {
             namespace: CommonNamespace::default(),
-            api_definition: definition.id.clone(),
+            api_definition_id: definition.id.clone(),
         })
     }
 
@@ -263,7 +267,7 @@ impl ApiDefinitionService<CommonNamespace, EmptyAuthCtx> for RegisterApiDefiniti
         _api_definition_id: &ApiDefinitionId,
         _version: &Version,
         _auth_ctx: EmptyAuthCtx,
-    ) -> Result<Option<ApiDefinitionIdAnnotated<CommonNamespace>>, ApiRegistrationError> {
+    ) -> Result<Option<ApiDefinitionAnnotated<CommonNamespace>>, ApiRegistrationError> {
         Ok(None)
     }
 
@@ -275,14 +279,14 @@ impl ApiDefinitionService<CommonNamespace, EmptyAuthCtx> for RegisterApiDefiniti
     ) -> Result<ApiDefinitionIdAnnotated<CommonNamespace>, ApiRegistrationError> {
         Ok(ApiDefinitionIdAnnotated {
             namespace: CommonNamespace::default(),
-            api_definition: api_definition_id.clone()
+            api_definition_id: api_definition_id.clone()
         })
     }
 
     async fn get_all(
         &self,
         _auth_ctx: EmptyAuthCtx,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+    ) -> Result<Vec<ApiDefinitionAnnotated<CommonNamespace>>, ApiRegistrationError> {
         Ok(vec![])
     }
 
@@ -290,7 +294,7 @@ impl ApiDefinitionService<CommonNamespace, EmptyAuthCtx> for RegisterApiDefiniti
         &self,
         _api_id: &ApiDefinitionId,
         _auth_ctx: EmptyAuthCtx,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+    ) -> Result<Vec<ApiDefinitionAnnotated<CommonNamespace>>, ApiRegistrationError> {
         Ok(vec![])
     }
 }
