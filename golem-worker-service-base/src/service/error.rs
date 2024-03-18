@@ -1,9 +1,11 @@
+use golem_api_grpc::proto::golem::worker::{
+    worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
+};
 use golem_common::model::{AccountId, TemplateId};
 use golem_service_base::model::*;
 use golem_service_base::routing_table::RoutingTableError;
 use std::fmt::Display;
 use tonic::Status;
-use golem_api_grpc::proto::golem::worker::{UnknownError, worker_error, WorkerError as GrpcWorkerError, worker_execution_error};
 // The dependents of golem-worker-service-base is expected
 // to have a worker service that can depend on this base error
 pub enum WorkerServiceBaseError {
@@ -227,9 +229,11 @@ impl From<TemplateServiceBaseError> for worker_error::Error {
                     golem_api_grpc::proto::golem::template::template_error::Error::BadRequest(
                         errors,
                     ),
-                ) => worker_error::Error::BadRequest(golem_api_grpc::proto::golem::common::ErrorsBody {
-                    errors: errors.errors,
-                }),
+                ) => worker_error::Error::BadRequest(
+                    golem_api_grpc::proto::golem::common::ErrorsBody {
+                        errors: errors.errors,
+                    },
+                ),
                 Some(
                     golem_api_grpc::proto::golem::template::template_error::Error::InternalError(
                         error,
@@ -246,18 +250,26 @@ impl From<TemplateServiceBaseError> for worker_error::Error {
                     )
                 }
                 Some(golem_api_grpc::proto::golem::template::template_error::Error::NotFound(
-                         error,
-                     )) => worker_error::Error::NotFound(golem_api_grpc::proto::golem::common::ErrorBody { error: error.error }),
+                    error,
+                )) => {
+                    worker_error::Error::NotFound(golem_api_grpc::proto::golem::common::ErrorBody {
+                        error: error.error,
+                    })
+                }
                 Some(
                     golem_api_grpc::proto::golem::template::template_error::Error::Unauthorized(
                         error,
                     ),
-                ) => worker_error::Error::Unauthorized(golem_api_grpc::proto::golem::common::ErrorBody { error: error.error }),
+                ) => worker_error::Error::Unauthorized(
+                    golem_api_grpc::proto::golem::common::ErrorBody { error: error.error },
+                ),
                 Some(
                     golem_api_grpc::proto::golem::template::template_error::Error::LimitExceeded(
                         error,
                     ),
-                ) => worker_error::Error::LimitExceeded(golem_api_grpc::proto::golem::common::ErrorBody { error: error.error }),
+                ) => worker_error::Error::LimitExceeded(
+                    golem_api_grpc::proto::golem::common::ErrorBody { error: error.error },
+                ),
                 None => worker_error::Error::InternalError(
                     golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                         error: Some(worker_execution_error::Error::Unknown(UnknownError {
@@ -284,7 +296,6 @@ impl std::error::Error for TemplateServiceBaseError {
     // }
 }
 
-
 impl From<WorkerServiceBaseError> for GrpcWorkerError {
     fn from(error: WorkerServiceBaseError) -> Self {
         GrpcWorkerError {
@@ -292,7 +303,6 @@ impl From<WorkerServiceBaseError> for GrpcWorkerError {
         }
     }
 }
-
 
 impl From<TemplateServiceBaseError> for GrpcWorkerError {
     fn from(error: TemplateServiceBaseError) -> Self {
