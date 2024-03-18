@@ -14,7 +14,7 @@ use http::Uri;
 use tonic::Status;
 use tracing::info;
 use golem_worker_service_base::app_config::TemplateServiceConfig;
-use golem_worker_service_base::service::error::TemplateError;
+use golem_worker_service_base::service::error::TemplateServiceBaseError;
 
 #[async_trait]
 pub trait TemplateService {
@@ -22,9 +22,9 @@ pub trait TemplateService {
         &self,
         template_id: &TemplateId,
         version: i32,
-    ) -> Result<Option<Template>, TemplateError>;
+    ) -> Result<Option<Template>, TemplateServiceBaseError>;
 
-    async fn get_latest(&self, template_id: &TemplateId) -> Result<Template, TemplateError>;
+    async fn get_latest(&self, template_id: &TemplateId) -> Result<Template, TemplateServiceBaseError>;
 }
 
 #[derive(Clone)]
@@ -44,7 +44,7 @@ impl TemplateServiceDefault {
 
 #[async_trait]
 impl TemplateService for TemplateServiceDefault {
-    async fn get_latest(&self, template_id: &TemplateId) -> Result<Template, TemplateError> {
+    async fn get_latest(&self, template_id: &TemplateId) -> Result<Template, TemplateServiceBaseError> {
         let desc = format!("Getting latest version of template: {}", template_id);
         info!("{}", &desc);
         with_retries(
@@ -70,12 +70,12 @@ impl TemplateService for TemplateServiceDefault {
                         Some(get_template_metadata_response::Result::Success(response)) => {
                             let template_view: Result<
                                 golem_service_base::model::Template,
-                                TemplateError,
+                                TemplateServiceBaseError,
                             > = match response.template {
                                 Some(template) => {
                                     let template: golem_service_base::model::Template =
                                         template.clone().try_into().map_err(|_| {
-                                            TemplateError::Other(
+                                            TemplateServiceBaseError::Other(
                                                 "Response conversion error".to_string(),
                                             )
                                         })?;
@@ -91,7 +91,7 @@ impl TemplateService for TemplateServiceDefault {
                     }
                 })
             },
-            TemplateError::is_retriable,
+            TemplateServiceBaseError::is_retriable,
         )
             .await
     }
@@ -99,7 +99,7 @@ impl TemplateService for TemplateServiceDefault {
         &self,
         template_id: &TemplateId,
         version: i32,
-    ) -> Result<Option<Template>, TemplateError> {
+    ) -> Result<Option<Template>, TemplateServiceBaseError> {
         let desc = format!("Getting template: {}", template_id);
         info!("{}", &desc);
         with_retries(
@@ -123,12 +123,12 @@ impl TemplateService for TemplateServiceDefault {
                         Some(get_template_metadata_response::Result::Success(response)) => {
                             let template_view: Result<
                                 Option<golem_service_base::model::Template>,
-                                TemplateError,
+                                TemplateServiceBaseError,
                             > = match response.template {
                                 Some(template) => {
                                     let template: golem_service_base::model::Template =
                                         template.clone().try_into().map_err(|_| {
-                                            TemplateError::Other(
+                                            TemplateServiceBaseError::Other(
                                                 "Response conversion error".to_string(),
                                             )
                                         })?;
@@ -144,7 +144,7 @@ impl TemplateService for TemplateServiceDefault {
                     }
                 })
             },
-            TemplateError::is_retriable,
+            TemplateServiceBaseError::is_retriable,
         )
             .await
     }
@@ -159,11 +159,11 @@ impl TemplateService for TemplateServiceNoop {
         &self,
         _template_id: &TemplateId,
         _version: i32,
-    ) -> Result<Option<Template>, TemplateError> {
+    ) -> Result<Option<Template>, TemplateServiceBaseError> {
         Ok(None)
     }
 
-    async fn get_latest(&self, _template_id: &TemplateId) -> Result<Template, TemplateError> {
-        Err(TemplateError::Other("Not implemented".to_string()))
+    async fn get_latest(&self, _template_id: &TemplateId) -> Result<Template, TemplateServiceBaseError> {
+        Err(TemplateServiceBaseError::Other("Not implemented".to_string()))
     }
 }

@@ -4,10 +4,12 @@ use golem_service_base::routing_table::RoutingTableError;
 use std::fmt::Display;
 use tonic::{Status, Streaming};
 
-pub enum WorkerError {
+// The dependents of golem-worker-service-base is expected
+// to have a worker service that can depend on this base error
+pub enum WorkerServiceBaseError {
     Internal(String),
     TypeCheckerError(String),
-    DelegatedTemplateServiceError(TemplateError),
+    DelegatedTemplateServiceError(TemplateServiceBaseError),
     VersionedTemplateIdNotFound(VersionedTemplateId),
     TemplateNotFound(TemplateId),
     AccountIdNotFound(AccountId),
@@ -16,89 +18,91 @@ pub enum WorkerError {
     Golem(GolemError),
 }
 
-impl std::fmt::Display for WorkerError {
+impl std::fmt::Display for WorkerServiceBaseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
-            WorkerError::Internal(ref string) => write!(f, "Internal error: {}", string),
-            WorkerError::TypeCheckerError(ref string) => {
+            WorkerServiceBaseError::Internal(ref string) => write!(f, "Internal error: {}", string),
+            WorkerServiceBaseError::TypeCheckerError(ref string) => {
                 write!(f, "Type checker error: {}", string)
             }
-            WorkerError::DelegatedTemplateServiceError(ref error) => {
+            WorkerServiceBaseError::DelegatedTemplateServiceError(ref error) => {
                 write!(f, "Delegated template service error: {}", error)
             }
-            WorkerError::VersionedTemplateIdNotFound(ref versioned_template_id) => write!(
+            WorkerServiceBaseError::VersionedTemplateIdNotFound(ref versioned_template_id) => write!(
                 f,
                 "Versioned template id not found: {}",
                 versioned_template_id
             ),
-            WorkerError::TemplateNotFound(ref template_id) => {
+            WorkerServiceBaseError::TemplateNotFound(ref template_id) => {
                 write!(f, "Template not found: {}", template_id)
             }
-            WorkerError::AccountIdNotFound(ref account_id) => {
+            WorkerServiceBaseError::AccountIdNotFound(ref account_id) => {
                 write!(f, "Account id not found: {}", account_id)
             }
-            WorkerError::WorkerNotFound(ref worker_id) => {
+            WorkerServiceBaseError::WorkerNotFound(ref worker_id) => {
                 write!(f, "Worker not found: {}", worker_id)
             }
-            WorkerError::Golem(ref error) => write!(f, "Golem error: {:?}", error),
+            WorkerServiceBaseError::Golem(ref error) => write!(f, "Golem error: {:?}", error),
         }
     }
 }
 
-impl From<RoutingTableError> for WorkerError {
+impl From<RoutingTableError> for WorkerServiceBaseError {
     fn from(error: RoutingTableError) -> Self {
-        WorkerError::Internal(format!("Unable to get routing table: {:?}", error))
+        WorkerServiceBaseError::Internal(format!("Unable to get routing table: {:?}", error))
     }
 }
 
-impl From<TemplateError> for WorkerError {
-    fn from(error: TemplateError) -> Self {
-        WorkerError::DelegatedTemplateServiceError(error)
+impl From<TemplateServiceBaseError> for WorkerServiceBaseError {
+    fn from(error: TemplateServiceBaseError) -> Self {
+        WorkerServiceBaseError::DelegatedTemplateServiceError(error)
     }
 }
 
+// The dependents of golem-worker-service-base is expected
+// to have a template service internally that can depend on this base error
 #[derive(Debug)]
-pub enum TemplateError {
+pub enum TemplateServiceBaseError {
     Connection(Status),
     Transport(tonic::transport::Error),
     Server(golem_api_grpc::proto::golem::template::TemplateError),
     Other(String),
 }
 
-impl TemplateError {
+impl TemplateServiceBaseError {
     fn is_retriable(&self) -> bool {
-        matches!(self, TemplateError::Connection(_))
+        matches!(self, TemplateServiceBaseError::Connection(_))
     }
 }
 
-impl From<golem_api_grpc::proto::golem::template::TemplateError> for TemplateError {
+impl From<golem_api_grpc::proto::golem::template::TemplateError> for TemplateServiceBaseError {
     fn from(value: golem_api_grpc::proto::golem::template::TemplateError) -> Self {
-        TemplateError::Server(value)
+        TemplateServiceBaseError::Server(value)
     }
 }
 
-impl From<Status> for TemplateError {
+impl From<Status> for TemplateServiceBaseError {
     fn from(value: Status) -> Self {
-        TemplateError::Connection(value)
+        TemplateServiceBaseError::Connection(value)
     }
 }
 
-impl From<tonic::transport::Error> for TemplateError {
+impl From<tonic::transport::Error> for TemplateServiceBaseError {
     fn from(value: tonic::transport::Error) -> Self {
-        TemplateError::Transport(value)
+        TemplateServiceBaseError::Transport(value)
     }
 }
 
-impl From<String> for TemplateError {
+impl From<String> for TemplateServiceBaseError {
     fn from(value: String) -> Self {
-        TemplateError::Other(value)
+        TemplateServiceBaseError::Other(value)
     }
 }
 
-impl Display for TemplateError {
+impl Display for TemplateServiceBaseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TemplateError::Server(err) => match &err.error {
+            TemplateServiceBaseError::Server(err) => match &err.error {
                 Some(
                     golem_api_grpc::proto::golem::template::template_error::Error::BadRequest(
                         errors,
@@ -141,14 +145,14 @@ impl Display for TemplateError {
                 }
                 None => write!(f, "Empty error response"),
             },
-            TemplateError::Connection(status) => write!(f, "Connection error: {status}"),
-            TemplateError::Transport(error) => write!(f, "Transport error: {error}"),
-            TemplateError::Other(error) => write!(f, "{error}"),
+            TemplateServiceBaseError::Connection(status) => write!(f, "Connection error: {status}"),
+            TemplateServiceBaseError::Transport(error) => write!(f, "Transport error: {error}"),
+            TemplateServiceBaseError::Other(error) => write!(f, "{error}"),
         }
     }
 }
 
-impl std::error::Error for TemplateError {
+impl std::error::Error for TemplateServiceBaseError {
     // TODO
     // fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
     //     Some(&self.source)

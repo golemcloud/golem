@@ -40,7 +40,7 @@ use tonic::transport::Channel;
 use tonic::{Status, Streaming};
 use tracing::{debug, info};
 
-use crate::service::template::{TemplateError, TemplateService};
+use crate::service::template::{TemplateServiceBaseError, TemplateService};
 use golem_service_base::model::*;
 use golem_service_base::routing_table::{RoutingTableError, RoutingTableService};
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};

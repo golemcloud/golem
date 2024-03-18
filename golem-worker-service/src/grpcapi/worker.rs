@@ -35,7 +35,7 @@ use golem_api_grpc::proto::golem::worker::{
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
 
-use crate::service::template::{TemplateError, TemplateService};
+use crate::service::template::{TemplateServiceBaseError, TemplateService};
 use crate::service::worker::{self, ConnectWorkerStream, WorkerService};
 
 fn server_error<T>(error: T) -> GrpcWorkerError
@@ -506,32 +506,32 @@ impl From<crate::service::worker::WorkerError> for worker_error::Error {
     }
 }
 
-impl From<TemplateError> for GrpcWorkerError {
-    fn from(error: TemplateError) -> Self {
+impl From<TemplateServiceBaseError> for GrpcWorkerError {
+    fn from(error: TemplateServiceBaseError) -> Self {
         GrpcWorkerError {
             error: Some(error.into()),
         }
     }
 }
 
-impl From<TemplateError> for worker_error::Error {
-    fn from(value: TemplateError) -> Self {
+impl From<TemplateServiceBaseError> for worker_error::Error {
+    fn from(value: TemplateServiceBaseError) -> Self {
         match value {
-            TemplateError::Connection(status) => worker_error::Error::InternalError(
+            TemplateServiceBaseError::Connection(status) => worker_error::Error::InternalError(
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
                         details: format!("Connection error:  Status: {status}"),
                     })),
                 },
             ),
-            TemplateError::Transport(transport_error) => worker_error::Error::InternalError(
+            TemplateServiceBaseError::Transport(transport_error) => worker_error::Error::InternalError(
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
                         details: format!("Transport error: {transport_error}"),
                     })),
                 },
             ),
-            TemplateError::Server(template_error) => match template_error.error {
+            TemplateServiceBaseError::Server(template_error) => match template_error.error {
                 Some(
                     golem_api_grpc::proto::golem::template::template_error::Error::AlreadyExists(
                         error,
@@ -581,7 +581,7 @@ impl From<TemplateError> for worker_error::Error {
                     },
                 ),
             },
-            TemplateError::Other(error) => worker_error::Error::InternalError(
+            TemplateServiceBaseError::Other(error) => worker_error::Error::InternalError(
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
                         details: format!("Unknown error: {error}"),

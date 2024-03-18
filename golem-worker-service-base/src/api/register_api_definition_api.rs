@@ -1,22 +1,12 @@
 use std::collections::HashMap;
 use std::result::Result;
-use std::sync::Arc;
 
 use golem_common::model::TemplateId;
-use poem_openapi::param::Query;
-use poem_openapi::payload::Json;
 use poem_openapi::*;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
-
-use crate::api::common::ApiEndpointError;
 use crate::api_definition;
 use crate::api_definition::{ApiDefinitionId, MethodPattern, Version};
-use crate::auth::{AuthService, CommonNamespace, EmptyAuthCtx};
 use crate::expr::Expr;
-use crate::oas_worker_bridge::*;
-use crate::service::register_definition::{ApiRegistrationError, RegisterApiDefinition};
-use golem_service_base::api_tags::ApiTags;
 
 // Mostly this data structures that represents the actual incoming request
 // exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.

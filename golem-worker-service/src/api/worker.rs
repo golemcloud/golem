@@ -10,10 +10,10 @@ use poem_openapi::*;
 use tap::TapFallible;
 use tonic::Status;
 
-use crate::service::template::{TemplateError, TemplateService};
+use crate::service::template::{TemplateServiceBaseError, TemplateService};
 use crate::service::worker::WorkerService;
 use golem_service_base::model::*;
-use golem_worker_service_base::api::error::WorkerError;
+use golem_worker_service_base::api::error::WorkerApiBaseError;
 
 pub struct WorkerApi {
     pub template_service: Arc<dyn TemplateService + Sync + Send>,
@@ -51,7 +51,7 @@ impl WorkerApi {
             .await
             .tap_err(|error| tracing::error!("Error getting latest template: {:?}", error))
             .map_err(|error| {
-                WorkerError::NotFound(Json(ErrorBody {
+                WorkerApiBaseError::NotFound(Json(ErrorBody {
                     error: format!(
                         "Couldn't retrieve the template not found: {}. error: {}",
                         &template_id, error
@@ -243,9 +243,9 @@ impl WorkerApi {
 fn make_worker_id(
     template_id: TemplateId,
     worker_name: String,
-) -> std::result::Result<WorkerId, WorkerError> {
+) -> std::result::Result<WorkerId, WorkerApiBaseError> {
     WorkerId::new(template_id, worker_name).map_err(|error| {
-        WorkerError::BadRequest(Json(ErrorsBody {
+        WorkerApiBaseError::BadRequest(Json(ErrorsBody {
             errors: vec![format!("Invalid worker name: {error}")],
         }))
     })
