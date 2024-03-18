@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::UriBackConversion;
+use golem_worker_service_base::UriBackConversion;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
 use golem_api_grpc::proto::golem::template::{

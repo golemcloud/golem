@@ -22,8 +22,6 @@ pub enum WorkerApiBaseError {
     InternalError(Json<GolemErrorBody>),
 }
 
-type Result<T> = std::result::Result<T, WorkerApiBaseError>;
-
 impl From<tonic::transport::Error> for WorkerApiBaseError {
     fn from(value: tonic::transport::Error) -> Self {
         WorkerApiBaseError::InternalError(Json(GolemErrorBody {

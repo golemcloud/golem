@@ -2,7 +2,7 @@ use golem_common::model::{AccountId, TemplateId};
 use golem_service_base::model::*;
 use golem_service_base::routing_table::RoutingTableError;
 use std::fmt::Display;
-use tonic::{Status, Streaming};
+use tonic::Status;
 
 // The dependents of golem-worker-service-base is expected
 // to have a worker service that can depend on this base error
@@ -72,7 +72,7 @@ pub enum TemplateServiceBaseError {
 }
 
 impl TemplateServiceBaseError {
-    fn is_retriable(&self) -> bool {
+    pub fn is_retriable(&self) -> bool {
         matches!(self, TemplateServiceBaseError::Connection(_))
     }
 }
