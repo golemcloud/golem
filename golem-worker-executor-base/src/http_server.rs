@@ -31,8 +31,9 @@ impl HttpServerImpl {
     pub fn new(
         addr: impl Into<SocketAddr> + Display + Send + 'static,
         registry: Registry,
+        body_message: &'static str,
     ) -> HttpServerImpl {
-        let handle = tokio::spawn(server(addr, registry));
+        let handle = tokio::spawn(server(addr, registry, body_message));
         HttpServerImpl { handle }
     }
 }
@@ -44,11 +45,15 @@ impl Drop for HttpServerImpl {
     }
 }
 
-async fn server(addr: impl Into<SocketAddr> + Display + Send, registry: Registry) {
-    let healthcheck = warp::path!("healthcheck").map(|| {
+async fn server(
+    addr: impl Into<SocketAddr> + Display + Send,
+    registry: Registry,
+    body_message: &'static str,
+) {
+    let healthcheck = warp::path!("healthcheck").map(move || {
         Response::builder()
             .status(StatusCode::OK)
-            .body(Body::from("Worker executor is running"))
+            .body(Body::from(body_message))
             .unwrap()
     });
 

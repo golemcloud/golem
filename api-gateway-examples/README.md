@@ -12,7 +12,7 @@ The API definition essentially comprises a set of endpoints, each associated wit
 
 The registration process for this endpoint definition is straightforward. Further configuration details can be discussed later as needed.
 
-## An example, including integration with an externa API Gateway
+## An example, including integration with an external API Gateway
 
 After deploying our Golem service, integration with external API Gateways, like Tyk, becomes straightforward. 
 This setup enables us to utilize the robust infrastructure and security features provided by the API Gateway while leveraging Golem for request processing.

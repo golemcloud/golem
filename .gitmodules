@@ -6,10 +6,10 @@
 	url = https://github.com/golemcloud/wasmtime
 [submodule "golem-openapi-client-generator"]
 	path = golem-openapi-client-generator
-	url = git@github.com:golemcloud/golem-openapi-client-generator.git
+	url = https://github.com/golemcloud/golem-openapi-client-generator
 [submodule "golem-cli"]
 	path = golem-cli
-	url = git@github.com:golemcloud/golem-cli.git
+	url = https://github.com/golemcloud/golem-cli
 [submodule "wasm-rpc"]
 	path = wasm-rpc
 	url = https://github.com/golemcloud/wasm-rpc

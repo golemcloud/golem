@@ -13,28 +13,30 @@
 // limitations under the License.
 
 mod error;
+mod healthcheck;
 mod http_server;
 mod model;
 mod persistence;
+mod rebalancing;
+mod shard_management;
 mod shard_manager_config;
 mod worker_executor;
 
-use std::collections::HashSet;
 use std::env;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
-use async_rwlock::RwLock;
+use crate::healthcheck::{get_unhealthy_pods, GrpcHealthCheck, HealthCheck};
 use error::ShardManagerError;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_server::{
     ShardManagerService, ShardManagerServiceServer,
 };
-use golem_common::model::{ShardAssignment, ShardId};
-use model::{Assignments, Pod, RoutingTable, Unassignments};
+use model::{Pod, RoutingTable};
 use persistence::{PersistenceService, PersistenceServiceDefault};
 use prometheus::{default_registry, Registry};
+use shard_management::ShardManagement;
 use shard_manager_config::ShardManagerConfig;
 use tonic::transport::Server;
 use tonic::Response;
@@ -43,47 +45,33 @@ use tracing_subscriber::EnvFilter;
 use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
 
 use crate::http_server::HttpServerImpl;
-use crate::model::Rebalance;
+use crate::shard_manager_config::HealthCheckMode;
 
 pub struct ShardManagerServiceImpl {
-    routing_table: Arc<RwLock<RoutingTable>>,
-    persistence_service: Arc<dyn PersistenceService + Send + Sync>,
-    instance_server_service: Arc<dyn WorkerExecutorService + Send + Sync>,
+    shard_management: ShardManagement,
     shard_manager_config: Arc<ShardManagerConfig>,
+    health_check: Arc<dyn HealthCheck + Send + Sync>,
 }
 
 impl ShardManagerServiceImpl {
     async fn new(
         persistence_service: Arc<dyn PersistenceService + Send + Sync>,
-        instance_server_service: Arc<dyn WorkerExecutorService + Send + Sync>,
+        worker_executor_service: Arc<dyn WorkerExecutorService + Send + Sync>,
         shard_manager_config: Arc<ShardManagerConfig>,
+        health_check: Arc<dyn HealthCheck + Send + Sync>,
     ) -> Result<ShardManagerServiceImpl, ShardManagerError> {
-        info!("Reading routing table from persistent storage");
-        let (mut routing_table, mut rebalance) = persistence_service.read().await.unwrap();
-        info!(
-            "Routing table read from persistent storage: {}",
-            routing_table
-        );
-
-        if rebalance.is_empty() {
-            info!("No rebalance was in progress.");
-        } else {
-            info!("A rebalance was in progress: {}", rebalance);
-            ShardManagerServiceImpl::rebalance(
-                &mut routing_table,
-                &mut rebalance,
-                instance_server_service.clone(),
-                persistence_service.clone(),
-            )
-            .await?;
-            info!("In progress rebalance completed: {}", routing_table);
-        }
+        let shard_management = ShardManagement::new(
+            persistence_service.clone(),
+            worker_executor_service,
+            health_check.clone(),
+            shard_manager_config.rebalance_threshold,
+        )
+        .await?;
 
         let shard_manager_service = ShardManagerServiceImpl {
-            routing_table: Arc::new(RwLock::new(routing_table)),
-            persistence_service,
-            instance_server_service,
+            shard_management,
             shard_manager_config,
+            health_check,
         };
 
         info!("Starting health check process...");
@@ -94,7 +82,7 @@ impl ShardManagerServiceImpl {
     }
 
     async fn get_routing_table_internal(&self) -> RoutingTable {
-        let routing_table = self.routing_table.read().await.clone();
+        let routing_table = self.shard_management.current_snapshot().await;
         info!("Shard Manager providing routing table: {}", routing_table);
         routing_table
     }
@@ -102,58 +90,34 @@ impl ShardManagerServiceImpl {
     async fn register_internal(
         &self,
         request: tonic::Request<golem::shardmanager::RegisterRequest>,
-    ) -> Result<ShardAssignment, ShardManagerError> {
+    ) -> Result<(), ShardManagerError> {
         let pod = Pod::from_register_request(request)?;
         info!("Shard Manager received request to register pod: {}", pod);
-        let mut routing_table = self.routing_table.write().await;
-        info!("Shard Manager registering pod: {}", pod);
-        match routing_table.get_shards(&pod) {
-            Some(shard_ids) => {
-                let number_of_shards = routing_table.number_of_shards;
-                let shard_assignment = ShardAssignment::new(number_of_shards, shard_ids);
-                info!("Pod already registered and assigned: {}", shard_assignment);
-                Ok(shard_assignment)
-            }
-            None => {
-                routing_table.add_pod(&pod);
-                let number_of_shards = routing_table.number_of_shards;
-                let shard_ids = routing_table.get_shards(&pod).unwrap();
-                let shard_assignment = ShardAssignment::new(number_of_shards, shard_ids);
-                info!("Pod registered and assigned: {}", shard_assignment);
-                Ok(shard_assignment)
-            }
-        }
+        self.shard_management.register_pod(pod).await;
+        Ok(())
     }
 
     fn start_health_check(&self) {
         let delay = self.shard_manager_config.health_check.delay;
-        let routing_table = self.routing_table.clone();
-        let persistence_service = self.persistence_service.clone();
-        let instance_server_service = self.instance_server_service.clone();
+        let shard_management = self.shard_management.clone();
+        let health_check = self.health_check.clone();
+
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(delay).await;
-                Self::health_check(
-                    routing_table.clone(),
-                    persistence_service.clone(),
-                    instance_server_service.clone(),
-                )
-                .await
+                Self::health_check(shard_management.clone(), health_check.clone()).await
             }
         });
     }
 
     async fn health_check(
-        routing_table: Arc<RwLock<RoutingTable>>,
-        persistence_service: Arc<dyn PersistenceService + Send + Sync>,
-        instance_server_service: Arc<dyn WorkerExecutorService + Send + Sync>,
+        shard_management: ShardManagement,
+        health_check: Arc<dyn HealthCheck + Send + Sync>,
     ) {
         debug!("Shard Manager scheduled to conduct health check");
-        let mut routing_table = routing_table.write().await;
+        let routing_table = shard_management.current_snapshot().await;
         debug!("Shard Manager checking health of registered pods...");
-        let failed_pods =
-            Self::health_check_pods(&routing_table.get_pods(), instance_server_service.clone())
-                .await;
+        let failed_pods = get_unhealthy_pods(health_check, &routing_table.get_pods()).await;
         if failed_pods.is_empty() {
             debug!("All registered pods are healthy")
         } else {
@@ -162,141 +126,11 @@ impl ShardManagerServiceImpl {
                 failed_pods
             );
             for failed_pod in failed_pods {
-                routing_table.remove_pod(&failed_pod);
+                shard_management.unregister_pod(failed_pod).await;
             }
         }
-        let mut rebalance = Rebalance::from_routing_table(&routing_table);
-        if !rebalance.is_empty() {
-            Self::rebalance(
-                &mut routing_table,
-                &mut rebalance,
-                instance_server_service.clone(),
-                persistence_service.clone(),
-            )
-            .await
-            .ok();
-        }
+
         debug!("Golem Shard Manager finished checking health of registered pods");
-    }
-
-    async fn health_check_pods(
-        pods: &HashSet<Pod>,
-        instance_server_service: Arc<dyn WorkerExecutorService + Send + Sync>,
-    ) -> HashSet<Pod> {
-        let futures: Vec<_> = pods
-            .iter()
-            .map(|pod| {
-                let instance_server_service = instance_server_service.clone();
-                Box::pin(async move {
-                    match instance_server_service.health_check(pod).await {
-                        true => None,
-                        false => Some(pod.clone()),
-                    }
-                })
-            })
-            .collect();
-        futures::future::join_all(futures)
-            .await
-            .into_iter()
-            .flatten()
-            .collect()
-    }
-
-    async fn revoke_shards(
-        unassignments: &Unassignments,
-        instance_server_service: Arc<dyn WorkerExecutorService + Send + Sync>,
-    ) -> Vec<(Pod, HashSet<ShardId>)> {
-        let futures: Vec<_> = unassignments
-            .unassignments
-            .iter()
-            .map(|(pod, shard_ids)| {
-                let instance_server_service = instance_server_service.clone();
-                Box::pin(async move {
-                    match instance_server_service.revoke_shards(pod, shard_ids).await {
-                        Ok(_) => None,
-                        Err(_) => Some((pod.clone(), shard_ids.clone())),
-                    }
-                })
-            })
-            .collect();
-        futures::future::join_all(futures)
-            .await
-            .into_iter()
-            .flatten()
-            .collect()
-    }
-
-    async fn assign_shards(
-        assignments: &Assignments,
-        instance_server_service: Arc<dyn WorkerExecutorService + Send + Sync>,
-    ) -> Vec<(Pod, HashSet<ShardId>)> {
-        let futures: Vec<_> = assignments
-            .assignments
-            .iter()
-            .map(|(pod, shard_ids)| {
-                let instance_server_service = instance_server_service.clone();
-                Box::pin(async move {
-                    match instance_server_service.assign_shards(pod, shard_ids).await {
-                        Ok(_) => None,
-                        Err(_) => Some((pod.clone(), shard_ids.clone())),
-                    }
-                })
-            })
-            .collect();
-        futures::future::join_all(futures)
-            .await
-            .into_iter()
-            .flatten()
-            .collect()
-    }
-
-    async fn rebalance(
-        routing_table: &mut RoutingTable,
-        rebalance: &mut Rebalance,
-        instance_server_service: Arc<dyn WorkerExecutorService + Send + Sync>,
-        persistence_service: Arc<dyn PersistenceService + Send + Sync>,
-    ) -> Result<(), ShardManagerError> {
-        info!("Shard manager beginning rebalance...");
-        let pods = rebalance.get_pods();
-        info!("The following pods are involved in rebalance: {:?}", pods);
-
-        info!("Conducting health check of pods involved in rebalance");
-        let unhealthy_pods = Self::health_check_pods(&pods, instance_server_service.clone()).await;
-        rebalance.remove_pods(&unhealthy_pods);
-        info!("The following pods were found to be unhealthy and have been removed from rebalance: {:?}", unhealthy_pods);
-
-        info!(
-            "Writing planned rebalance: {} to persistent storage",
-            rebalance
-        );
-        persistence_service.write(routing_table, rebalance).await?;
-        info!("Planned rebalance written to persistent storage");
-
-        info!("Executing shard unassignments: {}", rebalance.unassignments);
-        let failed_unassignments =
-            Self::revoke_shards(&rebalance.unassignments, instance_server_service.clone()).await;
-        let failed_shards = failed_unassignments
-            .iter()
-            .flat_map(|(_, shard_ids)| shard_ids.clone())
-            .collect();
-        rebalance.remove_shards(&failed_shards);
-        info!("The following shards could not be unassigned and have been removed from rebalance: {:?}", failed_shards);
-
-        info!("Executing shard assignments: {}", rebalance.assignments);
-        Self::assign_shards(&rebalance.assignments, instance_server_service.clone()).await;
-        routing_table.rebalance(rebalance);
-        info!("Executed shard assignments");
-
-        info!(
-            "Writing update routing table: {} to persistent storage",
-            routing_table
-        );
-        persistence_service
-            .write(routing_table, &Rebalance::new())
-            .await?;
-        info!("Updated routing table written to persistent storage");
-
-        Ok(())
     }
 }
 
@@ -322,15 +156,10 @@ impl ShardManagerService for ShardManagerServiceImpl {
         request: tonic::Request<golem::shardmanager::RegisterRequest>,
     ) -> Result<tonic::Response<golem::shardmanager::RegisterResponse>, tonic::Status> {
         match self.register_internal(request).await {
-            Ok(shard_assignment) => Ok(Response::new(golem::shardmanager::RegisterResponse {
+            Ok(_) => Ok(Response::new(golem::shardmanager::RegisterResponse {
                 result: Some(golem::shardmanager::register_response::Result::Success(
                     golem::shardmanager::RegisterSuccess {
-                        number_of_shards: shard_assignment.number_of_shards as u32,
-                        shard_ids: shard_assignment
-                            .shard_ids
-                            .into_iter()
-                            .map(|s| s.into())
-                            .collect(),
+                        number_of_shards: self.shard_manager_config.number_of_shards as u32,
                     },
                 )),
             })),
@@ -403,8 +232,8 @@ async fn async_main(
         &pool,
         &shard_manager_config.number_of_shards,
     ));
-    let instance_server_service = Arc::new(WorkerExecutorServiceDefault::new(
-        shard_manager_config.instance_server_service.clone(),
+    let worker_executors = Arc::new(WorkerExecutorServiceDefault::new(
+        shard_manager_config.worker_executors.clone(),
     ));
 
     let shard_manager_port_str = env::var("GOLEM_SHARD_MANAGER_PORT")?;
@@ -416,10 +245,28 @@ async fn async_main(
 
     let addr = shard_manager_addr.parse()?;
 
+    let health_check: Arc<dyn HealthCheck + Send + Sync> =
+        match &shard_manager_config.health_check.mode {
+            HealthCheckMode::Grpc => Arc::new(GrpcHealthCheck::new(
+                worker_executors.clone(),
+                shard_manager_config.worker_executors.retries.clone(),
+            )),
+            #[cfg(feature = "kubernetes")]
+            HealthCheckMode::K8s { namespace } => Arc::new(
+                crate::healthcheck::kubernetes::KubernetesHealthCheck::new(
+                    namespace.clone(),
+                    shard_manager_config.worker_executors.retries.clone(),
+                )
+                .await
+                .expect("Failed to initialize K8s health checker"),
+            ),
+        };
+
     let shard_manager = ShardManagerServiceImpl::new(
         persistence_service,
-        instance_server_service,
+        worker_executors,
         shard_manager_config,
+        health_check,
     )
     .await?;
 

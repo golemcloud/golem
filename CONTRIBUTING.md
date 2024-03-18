@@ -16,19 +16,26 @@ You can run all tests with
 
 To run individual tests you should first build all executables with `./scripts/build-all.sh` and then run tests in `golem-cli` directories:
 ```shell
-cargo test worker_new_instance
+cargo test --test integration worker_new_instance
 ```
 
 With `QUIET=true` you can hide services output:
 ```shell
-QUIET=true cargo test
+QUIET=true cargo test --test integration
 ```
 
 ### Running integration tests without docker
 
 Docker is used to run `Postgres` for `golem-services`. You can configure tests to use `Sqlite` DB with `GOLEM_TEST_DB=Sqlite`.
 ```shell
-GOLEM_TEST_DB=Sqlite RUST_LOG=info cargo test
+GOLEM_TEST_DB=Sqlite RUST_LOG=info cargo test --test integration
+```
+
+## Running sharding tests
+
+Same as integration tests, but with `--test sharding` instead of `--test integration`:
+```shell
+GOLEM_TEST_DB=Sqlite RUST_LOG=info cargo test --test sharding
 ```
 
 ## Local Testing
