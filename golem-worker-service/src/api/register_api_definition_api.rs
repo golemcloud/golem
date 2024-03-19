@@ -55,7 +55,9 @@ impl RegisterApiDefinitionApi {
             .await
             .map_err(ApiEndpointError::internal)?;
 
-        let definition = data.ok_or(ApiEndpointError::not_found("API Definition not found"))?;
+        let definition = data
+            .map(|d| d.api_definition)
+            .ok_or(ApiEndpointError::not_found("API Definition not found"))?;
 
         let definition: ApiDefinition =
             definition.try_into().map_err(ApiEndpointError::internal)?;
@@ -84,7 +86,9 @@ impl RegisterApiDefinitionApi {
             .await
             .map_err(ApiEndpointError::internal)?;
 
-        let definition = data.ok_or(ApiEndpointError::not_found("API Definition not found"))?;
+        let definition = data
+            .map(|d| d.api_definition)
+            .ok_or(ApiEndpointError::not_found("API Definition not found"))?;
 
         let definition: ApiDefinition =
             definition.try_into().map_err(ApiEndpointError::internal)?;
@@ -115,7 +119,10 @@ impl RegisterApiDefinitionApi {
 
         let values: Vec<ApiDefinition> = match data {
             Some(d) => {
-                let definition: ApiDefinition = d.try_into().map_err(ApiEndpointError::internal)?;
+                let definition: ApiDefinition = d
+                    .api_definition
+                    .try_into()
+                    .map_err(ApiEndpointError::internal)?;
                 vec![definition]
             }
             None => vec![],
@@ -177,6 +184,7 @@ async fn register_api(
 ) -> Result<(), ApiEndpointError> {
     definition_service
         .register(definition, EmptyAuthCtx {})
+        .map(|_| ())
         .await
         .map_err(|reg_error| {
             error!(
