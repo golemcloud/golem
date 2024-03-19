@@ -18,7 +18,7 @@ mocks = []
 [dependencies]
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc/wasm-rpc", default-features = false, features = ["host"] }
+golem-wasm-rpc = { workspace = true }
 
 anyhow = { workspace = true }
 async-fs = "2.1.0"

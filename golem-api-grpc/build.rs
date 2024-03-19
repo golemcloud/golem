@@ -1,8 +1,11 @@
+use cargo_metadata::MetadataCommand;
 use std::env;
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+
+    let wasm_rpc_root = find_package_root("golem-wasm-rpc");
 
     tonic_build::configure()
         .file_descriptor_set_path(out_dir.join("services.bin"))
@@ -59,9 +62,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/shardmanager/shard_manager_error.proto",
                 "proto/golem/shardmanager/shard_manager_service.proto",
             ],
-            &["../wasm-rpc/wasm-rpc/proto", "proto"],
+            &[&format!("{wasm_rpc_root}/proto"), &"proto".to_string()],
         )
         .unwrap();
 
     Ok(())
+}
+
+fn find_package_root(name: &str) -> String {
+    let metadata = MetadataCommand::new()
+        .manifest_path("./Cargo.toml")
+        .exec()
+        .unwrap();
+    let package = metadata.packages.iter().find(|p| p.name == name).unwrap();
+    package.manifest_path.parent().unwrap().to_string()
 }

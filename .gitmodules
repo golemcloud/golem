@@ -4,6 +4,3 @@
 [submodule "golem-cli"]
 	path = golem-cli
 	url = https://github.com/golemcloud/golem-cli
-[submodule "wasm-rpc"]
-	path = wasm-rpc
-	url = https://github.com/golemcloud/wasm-rpc
