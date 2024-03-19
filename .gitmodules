@@ -1,6 +1,3 @@
-[submodule "golem-wit"]
-	path = golem-wit
-	url = https://github.com/golemcloud/golem-wit
 [submodule "golem-openapi-client-generator"]
 	path = golem-openapi-client-generator
 	url = https://github.com/golemcloud/golem-openapi-client-generator
