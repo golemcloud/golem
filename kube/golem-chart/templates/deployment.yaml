@@ -63,6 +63,10 @@ spec:
               value: "{{ .Values.shardManager.ports.http }}"
             - name: GOLEM_SHARD_MANAGER_PORT
               value: "{{ .Values.shardManager.ports.grpc }}"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           ports:
             - name: http
               containerPort: {{ .Values.shardManager.ports.http }}
@@ -201,6 +205,10 @@ spec:
             - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__BUCKET_PREFIX
               value: {{ .Values.workerBlobStore.s3.bucketPrefix }}
 {{- end }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           ports:
             - name: http
               containerPort: {{ .Values.workerExecutor.ports.http }}
