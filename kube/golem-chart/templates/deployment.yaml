@@ -64,7 +64,7 @@ spec:
             - name: GOLEM_SHARD_MANAGER_PORT
               value: "{{ .Values.shardManager.ports.grpc }}"
             - name: GOLEM__HEALTH_CHECK__MODE__TYPE
-              value: "K8s"
+              value: {{ .Values.shardManager.worker.healthCheckType }}
             - name: GOLEM__HEALTH_CHECK__MODE__CONFIG__NAMESPACE
               valueFrom:
                 fieldRef:
