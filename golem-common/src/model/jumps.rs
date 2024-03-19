@@ -34,6 +34,12 @@ pub struct DeletedRegions {
     jumps: Vec<Jump>,
 }
 
+impl Default for DeletedRegions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DeletedRegions {
     /// Constructs an empty set of active jumps
     pub fn new() -> Self {

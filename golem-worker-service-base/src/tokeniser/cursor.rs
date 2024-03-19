@@ -185,7 +185,6 @@ impl TokenCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tokeniser::tokenizer::Tokenizer;
 
     #[test]
     fn capture_string_test() {

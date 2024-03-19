@@ -516,7 +516,13 @@ impl WorkerService for WorkerServiceMock {
         unimplemented!()
     }
 
-    async fn update_status(&self, _worker_id: &WorkerId, _status: WorkerStatus, _oplog_idx: u64) {
+    async fn update_status(
+        &self,
+        _worker_id: &WorkerId,
+        _status: WorkerStatus,
+        _deleted_regions: DeletedRegions,
+        _oplog_idx: u64,
+    ) {
         unimplemented!()
     }
 }
