@@ -124,7 +124,7 @@ impl RegisterApiDefinitionApi {
             .delete(&api_definition_id, &api_definition_version, EmptyAuthCtx {})
             .await?;
 
-        if deleted {
+        if deleted.is_some() {
             Ok(Json("API definition deleted".to_string()))
         } else {
             Ok(Json("API definition not found".to_string()))
@@ -155,8 +155,10 @@ impl RegisterApiDefinitionApi {
             .await
             .map_err(|e| {
                 error!("API definition id: {} - register error: {e}", definition.id,);
-                e.into()
-            })
+                e
+            })?;
+
+        Ok(())
     }
 }
 

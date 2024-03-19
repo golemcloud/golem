@@ -49,7 +49,7 @@ pub enum ApiEndpointError {
     #[oai(status = 401)]
     Unauthorized(Json<WorkerServiceErrorBody>),
     #[oai(status = 403)]
-    LimitExceeded(Json<WorkerServiceErrorBody>),
+    Forbidden(Json<WorkerServiceErrorBody>),
     #[oai(status = 404)]
     NotFound(Json<MessageBody>),
     #[oai(status = 409)]
@@ -61,6 +61,12 @@ pub enum ApiEndpointError {
 impl ApiEndpointError {
     pub fn unauthorized<T: Display>(error: T) -> Self {
         Self::Unauthorized(Json(WorkerServiceErrorBody {
+            error: error.to_string(),
+        }))
+    }
+
+    pub fn forbidden<T: Display>(error: T) -> Self {
+        Self::Forbidden(Json(WorkerServiceErrorBody {
             error: error.to_string(),
         }))
     }
@@ -93,10 +99,14 @@ impl ApiEndpointError {
 impl From<crate::service::api_definition_service::ApiRegistrationError> for ApiEndpointError {
     fn from(error: crate::service::api_definition_service::ApiRegistrationError) -> Self {
         use crate::api_definition_repo::ApiRegistrationRepoError;
+        use crate::auth::AuthError;
         use crate::service::api_definition_service::ApiRegistrationError;
 
         match error {
-            ApiRegistrationError::AuthenticationError(error) => {
+            ApiRegistrationError::AuthenticationError(AuthError::Forbidden { .. }) => {
+                ApiEndpointError::forbidden(error)
+            }
+            ApiRegistrationError::AuthenticationError(AuthError::Unauthorized { .. }) => {
                 ApiEndpointError::unauthorized(error)
             }
             ApiRegistrationError::RepoError(ApiRegistrationRepoError::AlreadyExists(_)) => {
