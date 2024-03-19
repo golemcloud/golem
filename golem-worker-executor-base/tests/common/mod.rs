@@ -840,6 +840,17 @@ pub fn stdout_event(s: &str) -> LogEvent {
     }
 }
 
+pub fn stdout_event_starting_with(event: &LogEvent, s: &str) -> bool {
+    if let LogEvent {
+        event: Some(log_event::Event::Stdout(StdOutLog { message })),
+    } = event
+    {
+        message.starts_with(s)
+    } else {
+        false
+    }
+}
+
 pub fn stderr_event(s: &str) -> LogEvent {
     LogEvent {
         event: Some(log_event::Event::Stderr(StdErrLog {

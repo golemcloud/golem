@@ -1,5 +1,6 @@
 mod bindings;
 
+use reqwest::{Client, Response};
 use crate::bindings::exports::golem::it::api::Guest;
 use crate::bindings::golem::api::host::*;
 
@@ -21,7 +22,9 @@ impl Guest for Component {
         state += 1;
         println!("second: {state}"); // 'second 2'
 
-        set_oplog_index(state1); // we resume from state 1 so we emit 'second 2' again but not 'started 1'
+        if remote_call(state) {
+            set_oplog_index(state1); // we resume from state 1, so we emit 'second 2' again but not 'started 1'
+        }
 
         state += 1;
         println!("third: {state}"); // 'third 3'
@@ -31,7 +34,9 @@ impl Guest for Component {
         state += 1;
         println!("fourth: {state}"); // 'fourth 4'
 
-        set_oplog_index(state2); // we resume from state 2, so emit 'fourth 4' again but not the rest
+        if remote_call(state) {
+            set_oplog_index(state2); // we resume from state 2, so emit 'fourth 4' again but not the rest
+        }
 
         state += 1;
         println!("fifth: {state}"); // 'fifth 5'
@@ -47,4 +52,24 @@ impl Guest for Component {
 
         state // final value is 5
     }
+}
+
+fn remote_call(param: u64) -> bool {
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let client = Client::builder().build().unwrap();
+
+    let url = format!("http://localhost:{port}/step/{param}");
+
+    println!("Sending GET {url}");
+
+    let response: Response = client.get(&url)
+        .send()
+        .expect("Request failed");
+
+    let status = response.status();
+    let body = response.json::<bool>().expect("Invalid response");
+
+    println!("Received {status} {body}");
+    body
 }
