@@ -41,7 +41,7 @@ pub trait ApiDefinitionService<Namespace, AuthCtx> {
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
 }
 
-pub trait NamespaceT:
+pub trait ApiNamespace:
     Eq
     + Hash
     + PartialEq
@@ -67,7 +67,7 @@ impl<
             + bincode::Encode
             + bincode::Decode
             + serde::de::DeserializeOwned,
-    > NamespaceT for T
+    > ApiNamespace for T
 {
 }
 
@@ -151,7 +151,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
 
 impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx>
 where
-    Namespace: NamespaceT,
+    Namespace: ApiNamespace,
 {
     pub async fn is_authorized(
         &self,
@@ -180,7 +180,7 @@ where
 impl<Namespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespace, AuthCtx>
     for RegisterApiDefinitionDefault<Namespace, AuthCtx>
 where
-    Namespace: NamespaceT,
+    Namespace: ApiNamespace,
 {
     async fn register(
         &self,

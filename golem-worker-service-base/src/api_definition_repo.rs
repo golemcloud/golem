@@ -4,7 +4,7 @@ use std::fmt::{Debug, Display};
 use std::sync::Mutex;
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId};
-use crate::service::api_definition_service::{ApiDefinitionKey, NamespaceT};
+use crate::service::api_definition_service::{ApiDefinitionKey, ApiNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
@@ -12,7 +12,7 @@ use golem_common::redis::RedisPool;
 use tracing::{debug, info};
 
 #[async_trait]
-pub trait ApiDefinitionRepo<Namespace: NamespaceT> {
+pub trait ApiDefinitionRepo<Namespace: ApiNamespace> {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -81,7 +81,7 @@ impl<Namespace> Default for InMemoryRegistry<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: NamespaceT> ApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace> {
+impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace> {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -162,7 +162,7 @@ impl RedisApiRegistry {
 }
 
 #[async_trait]
-impl<Namespace: NamespaceT> ApiDefinitionRepo<Namespace> for RedisApiRegistry {
+impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for RedisApiRegistry {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -295,7 +295,7 @@ impl<Namespace: NamespaceT> ApiDefinitionRepo<Namespace> for RedisApiRegistry {
 
 impl RedisApiRegistry {
     /// Retrieve all keys for a given namespace.
-    async fn get_all_keys<Namespace: NamespaceT>(
+    async fn get_all_keys<Namespace: ApiNamespace>(
         &self,
         namespace: &Namespace,
     ) -> Result<Vec<ApiDefinitionKey<Namespace>>, ApiRegistrationRepoError> {
@@ -317,7 +317,7 @@ impl RedisApiRegistry {
     }
 
     /// Retrieve all api definitions for a given set of keys.
-    async fn get_all_api_definitions<Namespace: NamespaceT>(
+    async fn get_all_api_definitions<Namespace: ApiNamespace>(
         &self,
         keys: Vec<ApiDefinitionKey<Namespace>>,
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError> {
@@ -353,12 +353,14 @@ impl RedisApiRegistry {
 
 mod redis_keys {
 
-    use crate::service::api_definition_service::{ApiDefinitionKey, NamespaceT};
+    use crate::service::api_definition_service::{ApiDefinitionKey, ApiNamespace};
 
     use super::ApiRegistrationRepoError;
 
     /// Key API Definition.
-    pub fn api_definition_key<Namespace: NamespaceT>(key: &ApiDefinitionKey<Namespace>) -> String {
+    pub fn api_definition_key<Namespace: ApiNamespace>(
+        key: &ApiDefinitionKey<Namespace>,
+    ) -> String {
         format!(
             "apidefinition:definition:{}:{}:{}",
             key.namespace, key.id.0, key.version.0,
@@ -366,18 +368,18 @@ mod redis_keys {
     }
 
     /// Key for redis set containing all the apis in a namespace.
-    pub fn namespace_set_key<Namespace: NamespaceT>(namespace: &Namespace) -> String {
+    pub fn namespace_set_key<Namespace: ApiNamespace>(namespace: &Namespace) -> String {
         format!("apidefinition:definition:{}", namespace)
     }
 
     /// Value for the [`get_namespace_redis_key`] set.
-    pub fn namespace_set_value<Namespace: NamespaceT>(
+    pub fn namespace_set_value<Namespace: ApiNamespace>(
         key: &ApiDefinitionKey<Namespace>,
     ) -> Result<bytes::Bytes, ApiRegistrationRepoError> {
         golem_common::serialization::serialize(key).map_err(ApiRegistrationRepoError::InternalError)
     }
 
-    pub fn namespace_set_value_deserialize<Namespace: NamespaceT>(
+    pub fn namespace_set_value_deserialize<Namespace: ApiNamespace>(
         value: bytes::Bytes,
     ) -> Result<ApiDefinitionKey<Namespace>, ApiRegistrationRepoError> {
         golem_common::serialization::deserialize(&value)
