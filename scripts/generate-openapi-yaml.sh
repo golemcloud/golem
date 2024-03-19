@@ -18,11 +18,8 @@ cargo build
 popd || exit
 
 # Merge API specs
-pushd "${script_full_path}"/../golem-openapi-client-generator || exit
-cargo build
-cargo run -- merge --spec-yaml ../openapi/golem-template-service.yaml ../openapi/golem-worker-service.yaml --output-yaml ../openapi/golem-service.yaml
-
-popd || exit
+cargo install golem-openapi-client-generator@0.0.1
+golem-openapi-client-generator merge --spec-yaml ${script_full_path}/../openapi/golem-template-service.yaml ${script_full_path}/../openapi/golem-worker-service.yaml --output-yaml ${script_full_path}/../openapi/golem-service.yaml
 
 # Delete temporary files
 rm "${script_full_path}"/../openapi/golem-template-service.yaml
