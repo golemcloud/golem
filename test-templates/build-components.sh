@@ -107,7 +107,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "zig" ]; then
     echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
-    wasm-tools component new zig-out/bin/main.wasm -o "$target" --adapt ../../golem-wit/adapters/tier3/wasi_snapshot_preview1.wasm
+    wasm-tools component new zig-out/bin/main.wasm -o "$target" --adapt ../../golem-worker-executor-base/golem-wit/adapters/tier3/wasi_snapshot_preview1.wasm
     wasm-tools print "$target" >"$target_wat"
 
     popd || exit
@@ -131,7 +131,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "tinygo" ]; then
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
     wasm-tools component embed ./wit main.wasm --output main.embed.wasm
-    wasm-tools component new main.embed.wasm -o "$target" --adapt ../../golem-wit/adapters/tier2/wasi_snapshot_preview1.wasm
+    wasm-tools component new main.embed.wasm -o "$target" --adapt ../../golem-worker-executor-base/golem-wit/adapters/tier2/wasi_snapshot_preview1.wasm
     wasm-tools print "$target" >"$target_wat"
 
     popd || exit
@@ -152,7 +152,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "grain" ]; then
     echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
-    wasm-tools component new main.gr.wasm -o "$target" --adapt ../../golem-wit/adapters/tier3/wasi_snapshot_preview1.wasm
+    wasm-tools component new main.gr.wasm -o "$target" --adapt ../../golem-worker-executor-base/golem-wit/adapters/tier3/wasi_snapshot_preview1.wasm
     wasm-tools print "$target" >"$target_wat"
 
     popd || exit
@@ -199,7 +199,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "java" ]; then
     echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
-    wasm-tools component new target/generated/wasm/teavm-wasm/classes.wasm -o "$target" --adapt ../../golem-wit/adapters/tier2/wasi_snapshot_preview1.wasm
+    wasm-tools component new target/generated/wasm/teavm-wasm/classes.wasm -o "$target" --adapt ../../golem-worker-executor-base/golem-wit/adapters/tier2/wasi_snapshot_preview1.wasm
     wasm-tools print "$target" >"$target_wat"
 
     popd || exit
@@ -220,7 +220,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "dotnet" ]; then
     echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
-    wasm-tools component new bin/Release/net7.0/$subdir.wasm -o "$target" --adapt ../../golem-wit/adapters/tier3/wasi_snapshot_preview1.wasm
+    wasm-tools component new bin/Release/net7.0/$subdir.wasm -o "$target" --adapt ../../golem-worker-executor-base/golem-wit/adapters/tier3/wasi_snapshot_preview1.wasm
     wasm-tools print "$target" >"$target_wat"
 
     popd || exit
@@ -242,7 +242,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "swift" ]; then
     echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
-    wasm-tools component new main.opt.wasm -o "$target" --adapt ../../golem-wit/adapters/tier3/wasi_snapshot_preview1.wasm
+    wasm-tools component new main.opt.wasm -o "$target" --adapt ../../golem-worker-executor-base/golem-wit/adapters/tier3/wasi_snapshot_preview1.wasm
     wasm-tools print "$target" >"$target_wat"
 
     popd || exit
@@ -264,7 +264,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "c" ]; then
     echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
-    wasm-tools component new main.wasm -o "$target" --adapt ../../golem-wit/adapters/tier2/wasi_snapshot_preview1.wasm
+    wasm-tools component new main.wasm -o "$target" --adapt ../../golem-worker-executor-base/golem-wit/adapters/tier2/wasi_snapshot_preview1.wasm
     wasm-tools print "$target" >"$target_wat"
 
     popd || exit

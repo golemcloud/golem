@@ -2221,6 +2221,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-wit"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ce8a760c192419ae1e55fcef20470a248bbd2e19135ae13b6886ddb8619d142"
+
+[[package]]
 name = "golem-worker-executor"
 version = "0.0.0"
 dependencies = [
@@ -2269,6 +2275,7 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "cap-time-ext",
+ "cargo_metadata",
  "chrono",
  "console-subscriber",
  "ctor",
@@ -2284,6 +2291,7 @@ dependencies = [
  "golem-common",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "golem-wit",
  "http 0.2.11",
  "http 1.0.0",
  "http-body 1.0.0",
@@ -2302,6 +2310,7 @@ dependencies = [
  "rustls 0.22.2",
  "serde",
  "serde_json",
+ "symlink",
  "tempfile",
  "thiserror",
  "tokio",
@@ -5133,6 +5142,12 @@ name = "subtle"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81cdd64d312baedb58e21336b31bc043b77e01cc99033ce76ef539f78e965ebc"
+
+[[package]]
+name = "symlink"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
 
 [[package]]
 name = "syn"
