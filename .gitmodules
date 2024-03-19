@@ -1,15 +1,3 @@
-[submodule "golem-wit"]
-	path = golem-wit
-	url = https://github.com/golemcloud/golem-wit
-[submodule "wasmtime"]
-	path = wasmtime
-	url = https://github.com/golemcloud/wasmtime
-[submodule "golem-openapi-client-generator"]
-	path = golem-openapi-client-generator
-	url = https://github.com/golemcloud/golem-openapi-client-generator
 [submodule "golem-cli"]
 	path = golem-cli
 	url = https://github.com/golemcloud/golem-cli
-[submodule "wasm-rpc"]
-	path = wasm-rpc
-	url = https://github.com/golemcloud/wasm-rpc

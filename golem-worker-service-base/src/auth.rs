@@ -28,7 +28,9 @@ pub struct AuthServiceNoop {}
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmptyAuthCtx {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, bincode::Encode, bincode::Decode, serde::Deserialize,
+)]
 pub struct CommonNamespace(String);
 
 impl Default for CommonNamespace {

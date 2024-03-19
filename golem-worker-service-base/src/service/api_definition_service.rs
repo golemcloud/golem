@@ -16,57 +16,94 @@ pub trait ApiDefinitionService<Namespace, AuthCtx> {
         &self,
         definition: &ApiDefinition,
         auth_ctx: AuthCtx,
-    ) -> Result<(), ApiRegistrationError>;
+    ) -> Result<ApiDefinitionIdAnnotated<Namespace>, ApiRegistrationError>;
 
     async fn get(
         &self,
         api_definition_id: &ApiDefinitionId,
         version: &Version,
         auth_ctx: AuthCtx,
-    ) -> Result<Option<ApiDefinition>, ApiRegistrationError>;
+    ) -> Result<Option<ApiDefinitionAnnotated<Namespace>>, ApiRegistrationError>;
 
     async fn delete(
         &self,
         api_definition_id: &ApiDefinitionId,
         version: &Version,
         auth_ctx: AuthCtx,
-    ) -> Result<bool, ApiRegistrationError>;
+    ) -> Result<ApiDefinitionIdAnnotated<Namespace>, ApiRegistrationError>;
 
-    async fn get_all(&self, auth_ctx: AuthCtx) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
+    async fn get_all(
+        &self,
+        auth_ctx: AuthCtx,
+    ) -> Result<Vec<ApiDefinitionAnnotated<Namespace>>, ApiRegistrationError>;
 
     async fn get_all_versions(
         &self,
         api_id: &ApiDefinitionId,
         auth_ctx: AuthCtx,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError>;
+    ) -> Result<Vec<ApiDefinitionAnnotated<Namespace>>, ApiRegistrationError>;
+}
+
+pub struct ApiDefinitionIdAnnotated<Namespace> {
+    pub namespace: Namespace,
+    pub api_definition_id: ApiDefinitionId,
+}
+
+pub struct ApiDefinitionAnnotated<Namespace> {
+    pub namespace: Namespace,
+    pub api_definition: ApiDefinition,
+}
+
+pub trait ApiNamespace:
+    Eq
+    + Hash
+    + PartialEq
+    + Clone
+    + Debug
+    + Display
+    + Send
+    + Sync
+    + bincode::Encode
+    + bincode::Decode
+    + serde::de::DeserializeOwned
+{
+}
+impl<
+        T: Eq
+            + Hash
+            + PartialEq
+            + Clone
+            + Debug
+            + Display
+            + Send
+            + Sync
+            + bincode::Encode
+            + bincode::Decode
+            + serde::de::DeserializeOwned,
+    > ApiNamespace for T
+{
 }
 
 // An ApiDefinitionKey is just the original ApiDefinitionId with additional information of version and a possibility of namespace.
 // A namespace here can be for example: account, project, production, dev or a composite value, or infact as simple
 // as a constant string or unit.
 // A namespace is not pre-tied to any other parts of original ApiDefinitionId to keep the ApiDefinition part simple, reusable.
-#[derive(Eq, Hash, PartialEq, Clone, Debug)]
-pub struct ApiDefinitionKey<Namespace: Eq + Hash + PartialEq + Clone + Debug> {
+#[derive(
+    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
+)]
+pub struct ApiDefinitionKey<Namespace> {
     pub namespace: Namespace,
     pub id: ApiDefinitionId,
     pub version: Version,
 }
 
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> ApiDefinitionKey<Namespace> {
+impl<Namespace: Display> ApiDefinitionKey<Namespace> {
     pub fn with_namespace_displayed(&self) -> ApiDefinitionKey<String> {
         ApiDefinitionKey {
             namespace: self.namespace.to_string(),
             id: self.id.clone(),
             version: self.version.clone(),
         }
-    }
-}
-
-impl<Namespace: Display + Eq + Hash + PartialEq + Clone + Debug> Display
-    for ApiDefinitionKey<Namespace>
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}:{}", self.namespace, self.id, self.version.0)
     }
 }
 
@@ -125,9 +162,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     }
 }
 
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx>
-    RegisterApiDefinitionDefault<Namespace, AuthCtx>
-{
+impl<Namespace: ApiNamespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub async fn is_authorized(
         &self,
         permission: Permission,
@@ -152,17 +187,14 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx>
 }
 
 #[async_trait]
-impl<
-        Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync,
-        AuthCtx: Send + Sync,
-    > ApiDefinitionService<Namespace, AuthCtx>
+impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespace, AuthCtx>
     for RegisterApiDefinitionDefault<Namespace, AuthCtx>
 {
     async fn register(
         &self,
         definition: &ApiDefinition,
         auth_ctx: AuthCtx,
-    ) -> Result<(), ApiRegistrationError> {
+    ) -> Result<ApiDefinitionIdAnnotated<Namespace>, ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::Create, &auth_ctx).await?;
 
         let key = ApiDefinitionKey {
@@ -171,7 +203,12 @@ impl<
             version: definition.version.clone(),
         };
 
-        self.register_api(definition, &key).await
+        self.register_api(definition, &key)
+            .await
+            .map(|_| ApiDefinitionIdAnnotated {
+                namespace,
+                api_definition_id: definition.id.clone(),
+            })
     }
 
     async fn get(
@@ -179,7 +216,7 @@ impl<
         api_definition_id: &ApiDefinitionId,
         version: &Version,
         auth_ctx: AuthCtx,
-    ) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
+    ) -> Result<Option<ApiDefinitionAnnotated<Namespace>>, ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::View, &auth_ctx).await?;
 
         let key = ApiDefinitionKey {
@@ -191,6 +228,12 @@ impl<
         self.register_repo
             .get(&key)
             .await
+            .map(|api_definition| {
+                api_definition.map(|api_definition| ApiDefinitionAnnotated {
+                    namespace,
+                    api_definition,
+                })
+            })
             .map_err(ApiRegistrationError::from)
     }
 
@@ -199,7 +242,7 @@ impl<
         api_definition_id: &ApiDefinitionId,
         version: &Version,
         auth_ctx: AuthCtx,
-    ) -> Result<bool, ApiRegistrationError> {
+    ) -> Result<ApiDefinitionIdAnnotated<Namespace>, ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::Delete, &auth_ctx).await?;
 
         let key = ApiDefinitionKey {
@@ -211,15 +254,31 @@ impl<
         self.register_repo
             .delete(&key)
             .await
+            .map(|_| ApiDefinitionIdAnnotated {
+                namespace,
+                api_definition_id: api_definition_id.clone(),
+            })
             .map_err(ApiRegistrationError::from)
     }
 
-    async fn get_all(&self, auth_ctx: AuthCtx) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+    async fn get_all(
+        &self,
+        auth_ctx: AuthCtx,
+    ) -> Result<Vec<ApiDefinitionAnnotated<Namespace>>, ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::View, &auth_ctx).await?;
 
         self.register_repo
             .get_all(&namespace)
             .await
+            .map(|definitions| {
+                definitions
+                    .iter()
+                    .map(|definition| ApiDefinitionAnnotated {
+                        namespace: namespace.clone(),
+                        api_definition: definition.clone(),
+                    })
+                    .collect()
+            })
             .map_err(ApiRegistrationError::from)
     }
 
@@ -227,12 +286,22 @@ impl<
         &self,
         api_id: &ApiDefinitionId,
         auth_ctx: AuthCtx,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+    ) -> Result<Vec<ApiDefinitionAnnotated<Namespace>>, ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::View, &auth_ctx).await?;
 
         self.register_repo
             .get_all_versions(api_id, &namespace)
             .await
+            .map(|definitions| {
+                definitions
+                    .iter()
+                    .map(|definition| ApiDefinitionAnnotated {
+                        namespace: namespace.clone(),
+                        api_definition: definition.clone(),
+                    })
+                    .collect()
+            })
+            .map_err(ApiRegistrationError::from)
             .map_err(ApiRegistrationError::from)
     }
 }
@@ -243,10 +312,13 @@ pub struct RegisterApiDefinitionNoop {}
 impl ApiDefinitionService<CommonNamespace, EmptyAuthCtx> for RegisterApiDefinitionNoop {
     async fn register(
         &self,
-        _definition: &ApiDefinition,
+        definition: &ApiDefinition,
         _auth_ctx: EmptyAuthCtx,
-    ) -> Result<(), ApiRegistrationError> {
-        Ok(())
+    ) -> Result<ApiDefinitionIdAnnotated<CommonNamespace>, ApiRegistrationError> {
+        Ok(ApiDefinitionIdAnnotated {
+            namespace: CommonNamespace::default(),
+            api_definition_id: definition.id.clone(),
+        })
     }
 
     async fn get(
@@ -254,23 +326,26 @@ impl ApiDefinitionService<CommonNamespace, EmptyAuthCtx> for RegisterApiDefiniti
         _api_definition_id: &ApiDefinitionId,
         _version: &Version,
         _auth_ctx: EmptyAuthCtx,
-    ) -> Result<Option<ApiDefinition>, ApiRegistrationError> {
+    ) -> Result<Option<ApiDefinitionAnnotated<CommonNamespace>>, ApiRegistrationError> {
         Ok(None)
     }
 
     async fn delete(
         &self,
-        _api_definition_id: &ApiDefinitionId,
+        api_definition_id: &ApiDefinitionId,
         _version: &Version,
         _auth_ctx: EmptyAuthCtx,
-    ) -> Result<bool, ApiRegistrationError> {
-        Ok(false)
+    ) -> Result<ApiDefinitionIdAnnotated<CommonNamespace>, ApiRegistrationError> {
+        Ok(ApiDefinitionIdAnnotated {
+            namespace: CommonNamespace::default(),
+            api_definition_id: api_definition_id.clone(),
+        })
     }
 
     async fn get_all(
         &self,
         _auth_ctx: EmptyAuthCtx,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+    ) -> Result<Vec<ApiDefinitionAnnotated<CommonNamespace>>, ApiRegistrationError> {
         Ok(vec![])
     }
 
@@ -278,7 +353,7 @@ impl ApiDefinitionService<CommonNamespace, EmptyAuthCtx> for RegisterApiDefiniti
         &self,
         _api_id: &ApiDefinitionId,
         _auth_ctx: EmptyAuthCtx,
-    ) -> Result<Vec<ApiDefinition>, ApiRegistrationError> {
+    ) -> Result<Vec<ApiDefinitionAnnotated<CommonNamespace>>, ApiRegistrationError> {
         Ok(vec![])
     }
 }
