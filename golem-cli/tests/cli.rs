@@ -62,7 +62,7 @@ impl CliLive {
 
     // TODO; Use NginxInfo
     pub fn make(context: &ContextInfo) -> Result<CliLive, Failed> {
-        let golem_cli_path = PathBuf::from("./target/debug/golem-cli");
+        let golem_cli_path = PathBuf::from("../target/debug/golem-cli");
 
         println!(
             "CLI with template port {} and worker port {}",
