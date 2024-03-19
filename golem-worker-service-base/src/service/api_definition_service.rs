@@ -162,10 +162,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     }
 }
 
-impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx>
-where
-    Namespace: ApiNamespace,
-{
+impl<Namespace: ApiNamespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub async fn is_authorized(
         &self,
         permission: Permission,
@@ -190,10 +187,8 @@ where
 }
 
 #[async_trait]
-impl<Namespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespace, AuthCtx>
+impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespace, AuthCtx>
     for RegisterApiDefinitionDefault<Namespace, AuthCtx>
-where
-    Namespace: ApiNamespace,
 {
     async fn register(
         &self,
