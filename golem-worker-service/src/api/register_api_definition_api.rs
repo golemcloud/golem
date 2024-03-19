@@ -170,7 +170,7 @@ impl RegisterApiDefinitionApi {
 
         let values = data
             .into_iter()
-            .map(|d| d.try_into())
+            .map(|d| d.api_definition.try_into())
             .collect::<Result<Vec<ApiDefinition>, _>>()
             .map_err(ApiEndpointError::internal)?;
 
@@ -184,8 +184,8 @@ async fn register_api(
 ) -> Result<(), ApiEndpointError> {
     definition_service
         .register(definition, EmptyAuthCtx {})
-        .map(|_| ())
         .await
+        .map(|_| ())
         .map_err(|reg_error| {
             error!(
                 "API definition id: {} - register error: {}",
