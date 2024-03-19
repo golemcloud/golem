@@ -6,6 +6,7 @@ target/
 .idea/
 ./golem-worker-executor/data/
 ./golem-worker-executor-base/data/
+./golem-worker-executor-base/golem-wit/
 zig-cache/
 dump.rdb
 ./test-templates/*.wat
