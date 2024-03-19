@@ -119,7 +119,8 @@ impl ShardManagement {
             let (new_pods, removed_pods) = updates.lock().await.reset();
             debug!("Shard management loop woken up by change; new pods: {new_pods:?}, removed pods: {removed_pods:?}");
 
-            let mut current_routing_table = routing_table.read().await.clone();
+            // Getting a write lock while the rebalance plan is calculated and got persisted (but NOT applied)
+            let mut current_routing_table = routing_table.write().await;
 
             for pod in removed_pods {
                 current_routing_table.remove_pod(&pod);
@@ -152,9 +153,10 @@ impl ShardManagement {
             // This causes the shard manager to get restarted and have and retry the rebalance on next startup.
 
             persistence_service
-                .write(&routing_table.read().await.clone(), &rebalance)
+                .write(&current_routing_table, &rebalance)
                 .await
                 .expect("Failed to persist routing table");
+            drop(current_routing_table); // not holding the write lock while executing the rebalance
 
             Self::execute_rebalance(worker_executors.clone(), &mut rebalance)
                 .await
