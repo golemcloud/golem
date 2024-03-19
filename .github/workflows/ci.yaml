@@ -368,6 +368,7 @@ jobs:
         run: ./target/debug/golem-worker-service-yaml > ./target/golem-worker-service.yaml
       - name: Merge openapi specs
         run: |
+          cargo install golem-openapi-client-generator@0.0.1
           golem-openapi-client-generator merge --spec-yaml target/golem-template-service.yaml target/golem-worker-service.yaml --output-yaml target/golem-service.yaml
       - name: Check Golem OpenAPI yaml latest
         shell: bash
@@ -383,6 +384,7 @@ jobs:
       - name: Generate Golem client
         run: |
           expected_version=$( scripts/expected-client-version.sh )
+          cargo install golem-openapi-client-generator@0.0.1
           golem-openapi-client-generator generate --spec-yaml openapi/golem-service.yaml --output-directory golem-client --name "golem-client" --client-version "${expected_version}"
       - name: Integration tests
         working-directory: golem-cli
