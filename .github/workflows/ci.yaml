@@ -329,7 +329,6 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            golem-openapi-client-generator/target/
             golem-cli/target/
           key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
       - name: Setup Rust
@@ -358,10 +357,9 @@ jobs:
       - name: Generate golem-worker-service OpenAPI yaml
         run: ./target/debug/golem-worker-service-yaml > ./target/golem-worker-service.yaml
       - name: Merge openapi specs
-        working-directory: golem-openapi-client-generator
         run: |
-          cargo build
-          ./target/debug/golem-openapi-client-generator merge --spec-yaml ../target/golem-template-service.yaml ../target/golem-worker-service.yaml --output-yaml ../target/golem-service.yaml
+          cargo install golem-openapi-client-generator@0.0.1
+          golem-openapi-client-generator merge --spec-yaml target/golem-template-service.yaml target/golem-worker-service.yaml --output-yaml target/golem-service.yaml
       - name: Check Golem OpenAPI yaml latest
         shell: bash
         run: |
@@ -374,11 +372,10 @@ jobs:
               exit 1
           fi
       - name: Generate Golem client
-        working-directory: golem-openapi-client-generator
         run: |
           expected_version=$( ../scripts/expected-client-version.sh )
-          cargo build
-          ./target/debug/golem-openapi-client-generator generate --spec-yaml ../openapi/golem-service.yaml --output-directory ../golem-client --name "golem-client" --client-version "${expected_version}"
+          cargo install golem-openapi-client-generator@0.0.1
+          golem-openapi-client-generator generate --spec-yaml openapi/golem-service.yaml --output-directory golem-client --name "golem-client" --client-version "${expected_version}"
       - name: Integration tests
         working-directory: golem-cli
         env:
@@ -429,11 +426,10 @@ jobs:
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Generate Golem client
-        working-directory: golem-openapi-client-generator
         run: |
           export VERSION="${{ steps.get_version.outputs.version-without-v }}"
-          cargo build
-          ./target/debug/golem-openapi-client-generator generate --spec-yaml ../openapi/golem-service.yaml --output-directory ../golem-client --name "golem-client" --client-version "${VERSION}"
+          cargo install golem-openapi-client-generator@0.0.1
+          golem-openapi-client-generator generate --spec-yaml openapi/golem-service.yaml --output-directory golem-client --name "golem-client" --client-version "${VERSION}"
       - name: Publish Golem client
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
