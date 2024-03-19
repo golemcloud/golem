@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display};
-use std::hash::Hash;
 use std::sync::Mutex;
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId};
@@ -69,13 +68,11 @@ impl Display for ApiRegistrationRepoError {
     }
 }
 
-pub struct InMemoryRegistry<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> {
+pub struct InMemoryRegistry<Namespace> {
     registry: Mutex<HashMap<ApiDefinitionKey<Namespace>, ApiDefinition>>,
 }
 
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> Default
-    for InMemoryRegistry<Namespace>
-{
+impl<Namespace> Default for InMemoryRegistry<Namespace> {
     fn default() -> Self {
         InMemoryRegistry {
             registry: Mutex::new(HashMap::new()),
@@ -189,17 +186,15 @@ impl<Namespace: NamespaceT> ApiDefinitionRepo<Namespace> for RedisApiRegistry {
 
             self.pool
                 .with("persistence", "register_definition")
-                .transaction({
-                    |transaction| async move {
-                        transaction
-                            .set(definition_key, definition_value, None, None, false)
-                            .await?;
-                        transaction
-                            .sadd(namespace_set_key, vec![namespace_set_value])
-                            .await?;
+                .transaction(|transaction| async move {
+                    transaction
+                        .set(definition_key, definition_value, None, None, false)
+                        .await?;
+                    transaction
+                        .sadd(namespace_set_key, vec![namespace_set_value])
+                        .await?;
 
-                        Ok(transaction)
-                    }
+                    Ok(transaction)
                 })
                 .await
                 .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
@@ -246,15 +241,13 @@ impl<Namespace: NamespaceT> ApiDefinitionRepo<Namespace> for RedisApiRegistry {
         let (definition_delete, _): (u32, ()) = self
             .pool
             .with("persistence", "delete_definition")
-            .transaction({
-                |transaction| async move {
-                    transaction.del(definition_key).await?;
-                    transaction
-                        .srem(all_definitions_key, vec![definition_value])
-                        .await?;
+            .transaction(|transaction| async move {
+                transaction.del(definition_key).await?;
+                transaction
+                    .srem(all_definitions_key, vec![definition_value])
+                    .await?;
 
-                    Ok(transaction)
-                }
+                Ok(transaction)
             })
             .await
             .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
@@ -290,6 +283,7 @@ impl<Namespace: NamespaceT> ApiDefinitionRepo<Namespace> for RedisApiRegistry {
 }
 
 impl RedisApiRegistry {
+    /// Retrieve all keys for a given namespace.
     async fn get_all_keys<Namespace: NamespaceT>(
         &self,
         namespace: &Namespace,
@@ -313,6 +307,7 @@ impl RedisApiRegistry {
         Ok(api_ids)
     }
 
+    /// Retrieve all api definitions for a given set of keys.
     async fn get_all_api_definitions<Namespace: NamespaceT>(
         &self,
         keys: Vec<ApiDefinitionKey<Namespace>>,
@@ -366,15 +361,14 @@ mod redis_keys {
     pub fn namespace_set_value<Namespace: NamespaceT>(
         key: &ApiDefinitionKey<Namespace>,
     ) -> Result<bytes::Bytes, ApiRegistrationRepoError> {
-        golem_common::serialization::serialize(key)
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e))
+        golem_common::serialization::serialize(key).map_err(ApiRegistrationRepoError::InternalError)
     }
 
     pub fn namespace_set_value_deserialize<Namespace: NamespaceT>(
         value: bytes::Bytes,
     ) -> Result<ApiDefinitionKey<Namespace>, ApiRegistrationRepoError> {
         golem_common::serialization::deserialize(&value)
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e))
+            .map_err(ApiRegistrationRepoError::InternalError)
     }
 }
 
