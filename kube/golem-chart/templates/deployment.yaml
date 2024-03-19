@@ -63,7 +63,9 @@ spec:
               value: "{{ .Values.shardManager.ports.http }}"
             - name: GOLEM_SHARD_MANAGER_PORT
               value: "{{ .Values.shardManager.ports.grpc }}"
-            - name: POD_NAMESPACE
+            - name: GOLEM__HEALTH_CHECK__MODE__TYPE
+              value: "K8s"
+            - name: GOLEM__HEALTH_CHECK__MODE__CONFIG__NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
