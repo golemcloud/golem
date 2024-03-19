@@ -374,7 +374,6 @@ jobs:
       - name: Generate Golem client
         run: |
           expected_version=$( scripts/expected-client-version.sh )
-          cargo install golem-openapi-client-generator@0.0.1
           golem-openapi-client-generator generate --spec-yaml openapi/golem-service.yaml --output-directory golem-client --name "golem-client" --client-version "${expected_version}"
       - name: Integration tests
         working-directory: golem-cli
