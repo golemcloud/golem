@@ -286,7 +286,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         this: &T,
         worker_id: &WorkerId,
         status: WorkerStatus,
-    );
+    ) -> Result<(), GolemError>;
 
     /// Gets how many times the worker has been retried to recover from an error.
     async fn get_worker_retry_count<T: HasAll<Ctx> + Send + Sync>(

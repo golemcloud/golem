@@ -19,9 +19,10 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use fred::prelude::*;
 use golem_common::metrics::redis::record_redis_serialized_size;
+use golem_common::model::jumps::DeletedRegions;
 use golem_common::model::{ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord};
 use golem_common::redis::RedisPool;
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
@@ -41,7 +42,13 @@ pub trait WorkerService {
 
     async fn enumerate(&self) -> Vec<WorkerMetadata>;
 
-    async fn update_status(&self, worker_id: &WorkerId, status: WorkerStatus, oplog_idx: u64);
+    async fn update_status(
+        &self,
+        worker_id: &WorkerId,
+        status: WorkerStatus,
+        deleted_regions: DeletedRegions,
+        oplog_idx: u64,
+    );
 }
 
 pub fn configured(
@@ -113,7 +120,7 @@ impl WorkerService for WorkerServiceRedis {
 
         record_redis_serialized_size("instance", "details", details_value.len());
 
-        let old_details_value: Option<Bytes> = self
+        let _ = self
             .redis
             .with("instance", "add")
             .set(
@@ -127,23 +134,10 @@ impl WorkerService for WorkerServiceRedis {
             .unwrap_or_else(|err| {
                 panic!("failed to set worker metadata for {details_key} in Redis: {err}")
             });
-
-        let metadata = match old_details_value {
-            Some(old_details_value) => {
-                if details_value == old_details_value {
-                    Ok(())
-                } else {
-                    error!("Trying to activate existing worker {worker_id} with different metadata: {:?} vs {:?}", old_details_value, details_value);
-                    Err(GolemError::WorkerAlreadyExists {
-                        worker_id: worker_id.clone(),
-                    })
-                }
-            }
-            None => {
-                debug!("add_worker for {worker_id} succeeded");
-                Ok(())
-            }
-        };
+        // NOTE: we used to check here if the old and new metadata values are equivalent but this no longer works
+        // because of the worker status record which may be recalculated from latest oplog entries. This
+        // is not a problem though because soon by https://github.com/golemcloud/golem/issues/238 the static
+        // part will no longer be stored in Redis.
 
         let status_key = get_worker_status_redis_key(worker_id);
         let status_value = self
@@ -204,7 +198,7 @@ impl WorkerService for WorkerServiceRedis {
                 )
             });
 
-        metadata
+        Ok(())
     }
 
     async fn get(&self, worker_id: &WorkerId) -> Option<WorkerMetadata> {
@@ -325,12 +319,19 @@ impl WorkerService for WorkerServiceRedis {
         self.enum_workers_at_key(key).await
     }
 
-    async fn update_status(&self, worker_id: &WorkerId, status: WorkerStatus, oplog_idx: u64) {
+    async fn update_status(
+        &self,
+        worker_id: &WorkerId,
+        status: WorkerStatus,
+        deleted_regions: DeletedRegions,
+        oplog_idx: u64,
+    ) {
         record_worker_call("update_status");
 
         let status_key = get_worker_status_redis_key(worker_id);
         let status_value = WorkerStatusRecord {
             status: status.clone(),
+            deleted_regions,
             oplog_idx,
         };
         let serialized_status_value = self.redis.serialize(&status_value).unwrap_or_else(|err| {
@@ -458,9 +459,19 @@ impl WorkerService for WorkerServiceInMemory {
         self.workers.iter().map(|i| i.clone()).collect()
     }
 
-    async fn update_status(&self, worker_id: &WorkerId, status: WorkerStatus, oplog_idx: u64) {
+    async fn update_status(
+        &self,
+        worker_id: &WorkerId,
+        status: WorkerStatus,
+        deleted_regions: DeletedRegions,
+        oplog_idx: u64,
+    ) {
         self.workers.entry(worker_id.clone()).and_modify(|worker| {
-            worker.last_known_status = WorkerStatusRecord { status, oplog_idx }
+            worker.last_known_status = WorkerStatusRecord {
+                status,
+                deleted_regions,
+                oplog_idx,
+            }
         });
     }
 }

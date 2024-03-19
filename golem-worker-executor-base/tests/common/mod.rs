@@ -31,7 +31,8 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     InvokeWorkerRequest, ResumeWorkerRequest,
 };
 use golem_common::model::{
-    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
@@ -78,6 +79,7 @@ use tokio::task::JoinHandle;
 
 use golem::api;
 use golem_common::config::RedisConfig;
+use golem_common::model::jumps::DeletedRegions;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
@@ -244,9 +246,29 @@ impl TestWorkerExecutor {
 
         match response.result {
             None => panic!("No response from connect_worker"),
-            Some(get_worker_metadata_response::Result::Success(metadata)) => {
-                Some(metadata.try_into().unwrap())
-            }
+            Some(get_worker_metadata_response::Result::Success(metadata)) => Some(WorkerMetadata {
+                worker_id: VersionedWorkerId {
+                    worker_id: metadata
+                        .worker_id
+                        .expect("no worker_id")
+                        .clone()
+                        .try_into()
+                        .expect("invalid worker_id"),
+                    template_version: metadata.template_version,
+                },
+                args: metadata.args.clone(),
+                env: metadata
+                    .env
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<Vec<_>>(),
+                account_id: metadata.account_id.expect("no account_id").clone().into(),
+                last_known_status: WorkerStatusRecord {
+                    oplog_idx: 0,
+                    status: metadata.status.try_into().expect("invalid status"),
+                    deleted_regions: DeletedRegions::new(),
+                },
+            }),
             Some(get_worker_metadata_response::Result::Failure(WorkerExecutionError {
                 error: Some(worker_execution_error::Error::WorkerNotFound(_)),
             })) => None,
@@ -1040,7 +1062,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         this: &T,
         worker_id: &WorkerId,
         status: WorkerStatus,
-    ) {
+    ) -> Result<(), GolemError> {
         DurableWorkerCtx::<TestWorkerCtx>::set_worker_status(this, worker_id, status).await
     }
 

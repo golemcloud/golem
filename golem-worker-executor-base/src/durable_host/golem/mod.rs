@@ -24,7 +24,9 @@ use crate::model::InterruptKind;
 use crate::preview2::golem;
 use crate::preview2::golem::api::host::OplogIndex;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::{Jump, OplogEntry, PromiseId, TemplateId, Timestamp, WorkerId};
+use golem_common::model::jumps::Jump;
+use golem_common::model::oplog::OplogEntry;
+use golem_common::model::{PromiseId, TemplateId, Timestamp, WorkerId};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
@@ -105,48 +107,32 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             Err(anyhow!(
                 "Attempted to jump forward in oplog to index {jump_target} from {jump_source}"
             ))
+        } else if self
+            .private_state
+            .deleted_regions
+            .is_in_deleted_region(jump_target)
+        {
+            Err(anyhow!(
+                "Attempted to jump to a deleted region in oplog to index {jump_target} from {jump_source}"
+            ))
         } else {
-            // After jumping to the "past", when we reach that point during recovery we have to switch
-            // back to live mode. This means we eventually reach the set_oplog_index call that initiated this
-            // jump. In this case (second time we hit it) we need to ignore it and continue running to avoid
-            // an infinite jump-back loop.
-            //
-            // The problem is how do we know if it is the second time, when in both cases we are in live mode?
-            // We can't just look it up in active_jumps because the source oplog (the current) is different.
-            // But we record the (forward) jumps and then see if we can find a performed forward jump from the given
-            // target. If we can find one we ignore this operation but remove the jump record from the forward jump list.
-            // Otherwise it is a new jump and we have to write it to the oplog and restart the worker.
             if self.is_live() {
-                if self
-                    .private_state
-                    .active_jumps
-                    .try_match_forward_jump(jump_target)
-                {
-                    // If the jump is already in the active jumps, it means we have just reached the
-                    // restarted point of execution after a jump so we are not doing anything just continue running
-                    debug!("Ignoring live set_oplog_index as the jump was already performed");
-                    Ok(())
-                } else {
-                    let jump = Jump {
-                        target_oplog_idx: jump_target,
-                        source_oplog_idx: jump_source,
-                    };
+                let jump = Jump {
+                    target_oplog_idx: jump_target,
+                    source_oplog_idx: jump_source,
+                };
 
-                    // We have to repeat all previous jumps, so we add the new jump to the list of active jumps
-                    // and write an oplog entry containing all of them
-                    self.private_state.active_jumps.add_jump(jump);
-                    self.set_oplog_entry(OplogEntry::jump(
-                        Timestamp::now_utc(),
-                        self.private_state.active_jumps.jumps().clone(),
-                    ))
+                // We have to repeat all previous jumps, so we add the new jump to the list of active jumps
+                // and write an oplog entry containing all of them
+                self.private_state.deleted_regions.add_jump(jump.clone());
+                self.set_oplog_entry(OplogEntry::jump(Timestamp::now_utc(), jump))
                     .await;
-                    self.commit_oplog().await;
+                self.commit_oplog().await;
 
-                    debug!(
+                debug!(
                     "Interrupting live execution for jumping from {jump_source} to {jump_target}"
                 );
-                    Err(InterruptKind::Jump.into())
-                }
+                Err(InterruptKind::Jump.into())
             } else {
                 // In replay mode we never have to do anything here
                 debug!("Ignoring replayed set_oplog_index");

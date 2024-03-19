@@ -90,7 +90,7 @@ impl ExternalOperations<Context> for Context {
         this: &T,
         worker_id: &WorkerId,
         status: WorkerStatus,
-    ) {
+    ) -> Result<(), GolemError> {
         DurableWorkerCtx::<Context>::set_worker_status(this, worker_id, status).await
     }
 

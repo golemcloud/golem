@@ -46,11 +46,12 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use cap_std::ambient_authority;
+use golem_common::model::jumps::DeletedRegions;
+use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
     WorkerMetadata, WorkerStatus,
 };
-use golem_common::model::{OplogEntry, WrappedFunctionType};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use serde::de::DeserializeOwned;
@@ -65,7 +66,6 @@ use wasmtime_wasi_http::types::{
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
-use crate::durable_host::jumps::ActiveJumps;
 use crate::durable_host::wasm_rpc::UriExtensions;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::services::oplog::OplogService;
@@ -74,6 +74,7 @@ use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::HasOplogService;
 use crate::wasi_host;
+use crate::worker::calculate_last_known_status;
 
 pub mod blobstore;
 mod cli;
@@ -82,7 +83,6 @@ mod filesystem;
 mod golem;
 mod http;
 pub mod io;
-mod jumps;
 pub mod keyvalue;
 mod logging;
 mod random;
@@ -221,18 +221,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let oplog_size = oplog_service.get_size(&worker_id.worker_id).await;
 
-        let active_jumps = if oplog_size > 0 {
-            let last_entry = &oplog_service
-                .read(&worker_id.worker_id, oplog_size - 1, 1)
-                .await[0];
-            ActiveJumps::from_oplog_entry(last_entry)
-        } else {
-            ActiveJumps::new()
-        };
-
         debug!(
-            "Worker {} initialized with active jumps {}",
-            worker_id, active_jumps
+            "Worker {} initialized with deleted regions {}",
+            worker_id, worker_config.deleted_regions
         );
 
         let stdio =
@@ -283,7 +274,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         rpc,
                         resources: HashMap::new(),
                         last_resource_id: 0,
-                        active_jumps,
+                        deleted_regions: worker_config.deleted_regions.clone(),
                     },
                     temp_dir,
                     execution_status,
@@ -394,7 +385,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let oplog_idx = self.private_state.oplog_idx;
         self.private_state
             .worker_service
-            .update_status(&self.worker_id.worker_id, status, oplog_idx)
+            .update_status(
+                &self.worker_id.worker_id,
+                status,
+                self.private_state.deleted_regions.clone(),
+                oplog_idx,
+            )
             .await
     }
 
@@ -869,11 +865,17 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         this: &T,
         worker_id: &WorkerId,
         status: WorkerStatus,
-    ) {
-        let last_oplog_idx = last_oplog_idx(this, worker_id).await;
+    ) -> Result<(), GolemError> {
+        let latest_status = calculate_last_known_status(this, worker_id).await?;
         this.worker_service()
-            .update_status(worker_id, status, last_oplog_idx)
+            .update_status(
+                worker_id,
+                status,
+                latest_status.deleted_regions,
+                latest_status.oplog_idx,
+            )
             .await;
+        Ok(())
     }
 
     async fn get_worker_retry_count<T: HasAll<Ctx> + Send + Sync>(
@@ -1067,7 +1069,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     pub rpc: Arc<dyn Rpc + Send + Sync>,
     resources: HashMap<u64, ResourceAny>,
     last_resource_id: u64,
-    active_jumps: ActiveJumps,
+    deleted_regions: DeletedRegions,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -1115,12 +1117,11 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         let oplog_entries = self.read_oplog(self.oplog_idx, 1).await;
         let oplog_entry = oplog_entries[0].clone();
 
-        if let Some(idx) = self.active_jumps.has_active_jump(self.oplog_idx) {
+        if let Some(idx) = self.deleted_regions.is_deleted_region_start(self.oplog_idx) {
             debug!(
                 "Worker {} reached jump target {}, jumping to {} (oplog size: {})",
                 self.worker_id, self.oplog_idx, idx, self.oplog_size
             );
-            self.active_jumps.record_forward_jump(self.oplog_idx);
             self.oplog_idx = idx;
         } else {
             self.oplog_idx += 1;
@@ -1141,7 +1142,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 OplogEntry::Debug { message, .. } => debug!("Debug: {}", message),
                 _ => {
                     break Err(GolemError::unexpected_oplog_entry(
-                        "Jump",
+                        "NoOp",
                         format!("{:?}", oplog_entry),
                     ));
                 }

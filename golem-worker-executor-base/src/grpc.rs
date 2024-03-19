@@ -410,11 +410,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             WorkerStatus::Suspended => {
                 debug!("Marking suspended worker {worker_id} as interrupted");
-                Ctx::set_worker_status(self, &worker_id, WorkerStatus::Interrupted).await;
+                Ctx::set_worker_status(self, &worker_id, WorkerStatus::Interrupted).await?;
             }
             WorkerStatus::Retrying => {
                 debug!("Marking worker {worker_id} scheduled to be retried as interrupted");
-                Ctx::set_worker_status(self, &worker_id, WorkerStatus::Interrupted).await;
+                Ctx::set_worker_status(self, &worker_id, WorkerStatus::Interrupted).await?;
             }
             WorkerStatus::Running => {
                 let worker_state = Worker::get_or_create_with_config(
@@ -852,7 +852,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 while let Ok(item) = receiver.recv().await {
                     match item {
                         worker_event::WorkerEvent::Close => {
-                            debug!("WORKER_EVENT_STREAM CLOSED");
                             break;
                         }
                         worker_event::WorkerEvent::StdOut(line) => {

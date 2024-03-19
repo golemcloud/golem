@@ -33,7 +33,7 @@ use crate::durable_host::http::serialized::{
 };
 use crate::durable_host::serialized::SerializableError;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::{OplogEntry, WrappedFunctionType};
+use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use wasmtime_wasi_http::bindings::wasi::http::types::{
     Duration, ErrorCode, FieldKey, FieldValue, Fields, FutureIncomingResponse, FutureTrailers,
     HeaderError, Headers, Host, HostFields, HostFutureIncomingResponse, HostFutureTrailers,

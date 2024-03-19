@@ -19,7 +19,7 @@ use bytes::Bytes;
 use fred::prelude::RedisValue;
 use fred::types::RedisKey;
 use golem_common::metrics::redis::record_redis_serialized_size;
-use golem_common::model::OplogEntry;
+use golem_common::model::oplog::OplogEntry;
 use golem_common::model::WorkerId;
 use golem_common::redis::RedisPool;
 

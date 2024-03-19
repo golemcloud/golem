@@ -682,7 +682,7 @@ mod tests {
             _this: &T,
             _worker_id: &WorkerId,
             _status: WorkerStatus,
-        ) {
+        ) -> Result<(), GolemError> {
             unimplemented!()
         }
 
