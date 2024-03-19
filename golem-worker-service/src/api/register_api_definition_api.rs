@@ -91,8 +91,7 @@ impl RegisterApiDefinitionApi {
         let data = self
             .definition_service
             .get(&api_definition_id, &api_version, EmptyAuthCtx {})
-            .await
-            .map_err(ApiEndpointError::internal)?;
+            .await?;
 
         let values: Vec<ApiDefinition> = match data {
             Some(d) => {
