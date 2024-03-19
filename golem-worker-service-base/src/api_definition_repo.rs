@@ -193,7 +193,7 @@ impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for RedisApiRegistry 
                 .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
 
             let namespace_set_key = redis_keys::namespace_set_key(&key.namespace);
-            let namespace_set_value = redis_keys::namespace_set_value(key)?;
+            let namespace_set_value = redis_keys::encode_namespace_set_value(key)?;
 
             self.pool
                 .with("persistence", "register_definition")
@@ -247,7 +247,7 @@ impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for RedisApiRegistry 
         debug!("Delete from namespace: {}, id: {}", &key.namespace, &key.id);
         let definition_key = redis_keys::api_definition_key(key);
         let all_definitions_key = redis_keys::namespace_set_key(&key.namespace);
-        let definition_value = redis_keys::namespace_set_value(key)?;
+        let definition_value = redis_keys::encode_namespace_set_value(key)?;
 
         let (definition_delete, _): (u32, ()) = self
             .pool
@@ -310,7 +310,7 @@ impl RedisApiRegistry {
 
         let api_ids = project_ids
             .into_iter()
-            .map(redis_keys::namespace_set_value_deserialize)
+            .map(redis_keys::decode_namespace_set_value)
             .collect::<Result<Vec<ApiDefinitionKey<Namespace>>, ApiRegistrationRepoError>>()?;
 
         Ok(api_ids)
@@ -372,14 +372,14 @@ mod redis_keys {
         format!("apidefinition:definition:{}", namespace)
     }
 
-    /// Value for the [`get_namespace_redis_key`] set.
-    pub fn namespace_set_value<Namespace: ApiNamespace>(
+    /// Value for the [`namespace_set_key`] set.
+    pub fn encode_namespace_set_value<Namespace: ApiNamespace>(
         key: &ApiDefinitionKey<Namespace>,
     ) -> Result<bytes::Bytes, ApiRegistrationRepoError> {
         golem_common::serialization::serialize(key).map_err(ApiRegistrationRepoError::InternalError)
     }
 
-    pub fn namespace_set_value_deserialize<Namespace: ApiNamespace>(
+    pub fn decode_namespace_set_value<Namespace: ApiNamespace>(
         value: bytes::Bytes,
     ) -> Result<ApiDefinitionKey<Namespace>, ApiRegistrationRepoError> {
         golem_common::serialization::deserialize(&value)
