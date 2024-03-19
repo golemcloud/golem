@@ -403,7 +403,7 @@ jobs:
           mkdir -p ./.cargo
           echo 'paths = ["../golem-client"]' > ./.cargo/config.toml
           cargo build
-          RUST_LOG=info cargo test --test sharding
+          RUST_LOG=info cargo test --test sharding -- --nocapture
         timeout-minutes: 10
   publish:
     needs: [unit-tests, worker-tests, integration-tests]

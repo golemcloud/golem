@@ -1,0 +1,48 @@
+{
+  "workers_count": 4,
+  "steps": [
+    "StopAllShards",
+    {
+      "InvokeAndAwaitWorkersAsync": "Invoke, RestartShardManager, StartShards"
+    },
+    "RestartShardManager",
+    {
+      "Sleep": {
+        "secs": 3,
+        "nanos": 0
+      }
+    },
+    {
+      "StartShards": 4
+    },
+    "WaitForInvokeAndAwaitResult",
+    "StopAllShards",
+    "RestartShardManager",
+    {
+      "StartShards": 4
+    },
+    "RestartShardManager",
+    {
+      "InvokeAndAwaitWorkersAsync": "StartShards, RestartShardManager, Invoke"
+    },
+    "WaitForInvokeAndAwaitResult",
+    "StopAllShards",
+    "RestartShardManager",
+    {
+      "StartShards": 4
+    },
+    {
+      "StopShards": 3
+    },
+    {
+      "Sleep": {
+        "secs": 3,
+        "nanos": 0
+      }
+    },
+    {
+      "InvokeAndAwaitWorkersAsync": "StartShards(4), StopShards(3), Invoke"
+    },
+    "WaitForInvokeAndAwaitResult"
+  ]
+}

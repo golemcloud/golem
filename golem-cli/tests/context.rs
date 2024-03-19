@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use testcontainers::clients;
 
 const NETWORK: &str = "golem_test_network";
-const TAG: &str = "v0.0.67";
+const TAG: &str = "v0.0.70";
 
 #[derive(Debug, Clone)]
 pub struct EnvConfig {

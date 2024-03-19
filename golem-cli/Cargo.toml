@@ -17,7 +17,6 @@ harness = false
 [[test]]
 name = "sharding"
 path = "tests/sharding.rs"
-harness = false
 
 [dependencies]
 async-trait = { workspace = true }
