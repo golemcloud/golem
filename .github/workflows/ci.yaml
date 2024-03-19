@@ -60,6 +60,8 @@ jobs:
         with:
           path: |
             ~/.cargo/bin/
+            ~/.cargo/.crates2.json
+            ~/.cargo/.crates.toml
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
@@ -221,6 +223,8 @@ jobs:
         with:
           path: |
             ~/.cargo/bin/
+            ~/.cargo/.crates2.json
+            ~/.cargo/.crates.toml
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
@@ -252,6 +256,8 @@ jobs:
         with:
           path: |
             ~/.cargo/bin/
+            ~/.cargo/.crates2.json
+            ~/.cargo/.crates.toml
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
@@ -284,6 +290,8 @@ jobs:
         with:
           path: |
             ~/.cargo/bin/
+            ~/.cargo/.crates2.json
+            ~/.cargo/.crates.toml
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
@@ -326,6 +334,8 @@ jobs:
         with:
           path: |
             ~/.cargo/bin/
+            ~/.cargo/.crates2.json
+            ~/.cargo/.crates.toml
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
@@ -408,6 +418,8 @@ jobs:
         with:
           path: |
             ~/.cargo/bin/
+            ~/.cargo/.crates2.json
+            ~/.cargo/.crates.toml
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
