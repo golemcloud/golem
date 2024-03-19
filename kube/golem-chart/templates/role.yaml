@@ -16,7 +16,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: {{ .Values.serviceAccountName }}
-    namespace: {{ .Chart.namespace }}
+    namespace: {{ .Release.namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
