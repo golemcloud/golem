@@ -89,7 +89,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         record_host_function_call("golem::api", "get_oplog_index");
         let result = self.private_state.oplog_idx;
         if self.is_live() {
-            self.set_oplog_entry(OplogEntry::marker(Timestamp::now_utc()))
+            self.set_oplog_entry(OplogEntry::nop(Timestamp::now_utc()))
                 .await;
         } else {
             let _ = self.get_oplog_entry_marker().await?;

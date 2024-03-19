@@ -783,7 +783,7 @@ pub enum OplogEntry {
     },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
     /// more predictable.
-    Marker { timestamp: Timestamp },
+    NoOp { timestamp: Timestamp },
     /// The worker needs to recover up to the given target oplog index and continue running from
     /// the source oplog index from there. There can be multiple active jumps during replay.
     Jump {
@@ -927,8 +927,8 @@ impl OplogEntry {
         OplogEntry::Jump { timestamp, jumps }
     }
 
-    pub fn marker(timestamp: Timestamp) -> OplogEntry {
-        OplogEntry::Marker { timestamp }
+    pub fn nop(timestamp: Timestamp) -> OplogEntry {
+        OplogEntry::NoOp { timestamp }
     }
 }
 

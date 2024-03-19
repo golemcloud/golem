@@ -1133,7 +1133,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         loop {
             let oplog_entry = self.get_oplog_entry().await;
             match oplog_entry {
-                OplogEntry::Marker { .. } => {
+                OplogEntry::NoOp { .. } => {
                     break Ok(());
                 }
                 OplogEntry::Suspend { .. } => (),
