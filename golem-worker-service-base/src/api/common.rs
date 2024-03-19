@@ -89,3 +89,22 @@ impl ApiEndpointError {
         Self::AlreadyExists(Json(error.to_string()))
     }
 }
+
+impl From<crate::service::api_definition_service::ApiRegistrationError> for ApiEndpointError {
+    fn from(error: crate::service::api_definition_service::ApiRegistrationError) -> Self {
+        use crate::api_definition_repo::ApiRegistrationRepoError;
+        use crate::service::api_definition_service::ApiRegistrationError;
+
+        match error {
+            ApiRegistrationError::AuthenticationError(error) => {
+                ApiEndpointError::unauthorized(error)
+            }
+            ApiRegistrationError::RepoError(ApiRegistrationRepoError::AlreadyExists(_)) => {
+                ApiEndpointError::already_exists(error)
+            }
+            ApiRegistrationError::RepoError(ApiRegistrationRepoError::InternalError(_)) => {
+                ApiEndpointError::internal(error)
+            }
+        }
+    }
+}

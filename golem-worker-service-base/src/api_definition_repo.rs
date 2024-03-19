@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::sync::Mutex;
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId};
@@ -41,30 +40,17 @@ pub trait ApiDefinitionRepo<Namespace: ApiNamespace> {
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ApiRegistrationRepoError {
+    #[error("AlreadyExists: ApiDefinition with id: {} and version: {} already exists in the namespace {}", .0.id, .0.version, .0.namespace)]
     AlreadyExists(ApiDefinitionKey<String>),
+    #[error("InternalError: {0}")]
     InternalError(String),
 }
 
-impl From<Box<dyn Error>> for ApiRegistrationRepoError {
-    fn from(value: Box<dyn Error>) -> Self {
-        ApiRegistrationRepoError::InternalError(value.to_string())
-    }
-}
-
-impl Display for ApiRegistrationRepoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ApiRegistrationRepoError::InternalError(msg) => write!(f, "InternalError: {}", msg),
-            ApiRegistrationRepoError::AlreadyExists(api_definition_key) => {
-                write!(
-                    f,
-                    "AlreadyExists: ApiDefinition with id: {} and version:{} already exists in the namespace {}",
-                    api_definition_key.id, api_definition_key.version.0, api_definition_key.namespace
-                )
-            }
-        }
+impl ApiRegistrationRepoError {
+    fn internal(err: impl std::fmt::Display) -> Self {
+        ApiRegistrationRepoError::InternalError(err.to_string())
     }
 }
 
@@ -93,9 +79,7 @@ impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for InMemoryRegistry<
             e.insert(definition.clone());
             Ok(())
         } else {
-            Err(ApiRegistrationRepoError::AlreadyExists(
-                key.with_namespace_displayed(),
-            ))
+            Err(ApiRegistrationRepoError::AlreadyExists(key.displayed()))
         }
     }
 
@@ -155,7 +139,7 @@ impl RedisApiRegistry {
     pub async fn new(config: &RedisConfig) -> Result<RedisApiRegistry, ApiRegistrationRepoError> {
         let pool_result = RedisPool::configured(config)
             .await
-            .map_err(|err| ApiRegistrationRepoError::InternalError(err.to_string()))?;
+            .map_err(ApiRegistrationRepoError::internal)?;
 
         Ok(RedisApiRegistry { pool: pool_result })
     }
@@ -180,17 +164,15 @@ impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for RedisApiRegistry 
             .with("persistence", "get_definition")
             .exists(definition_key.clone())
             .await
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+            .map_err(ApiRegistrationRepoError::internal)?;
 
         if exists_count > 0 {
-            Err(ApiRegistrationRepoError::AlreadyExists(
-                key.with_namespace_displayed(),
-            ))
+            Err(ApiRegistrationRepoError::AlreadyExists(key.displayed()))
         } else {
             let definition_value = self
                 .pool
                 .serialize(definition)
-                .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+                .map_err(ApiRegistrationRepoError::internal)?;
 
             let namespace_set_key = redis_keys::namespace_set_key(&key.namespace);
             let namespace_set_value = redis_keys::encode_namespace_set_value(key)?;
@@ -208,7 +190,7 @@ impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for RedisApiRegistry 
                     Ok(transaction)
                 })
                 .await
-                .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+                .map_err(ApiRegistrationRepoError::internal)?;
 
             Ok(())
         }
@@ -225,16 +207,16 @@ impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for RedisApiRegistry 
             .with("persistence", "get_definition")
             .get(key)
             .await
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+            .map_err(ApiRegistrationRepoError::internal)?;
 
         match value {
             Some(value) => {
-                let value: Result<ApiDefinition, ApiRegistrationRepoError> = self
+                let value = self
                     .pool
                     .deserialize(&value)
-                    .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()));
+                    .map_err(ApiRegistrationRepoError::internal)?;
 
-                value.map(Some)
+                Ok(Some(value))
             }
             None => Ok(None),
         }
@@ -261,7 +243,7 @@ impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for RedisApiRegistry 
                 Ok(transaction)
             })
             .await
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+            .map_err(ApiRegistrationRepoError::internal)?;
 
         Ok(definition_delete > 0)
     }
@@ -306,7 +288,7 @@ impl RedisApiRegistry {
             .with("persistence", "get_project_definition_ids")
             .smembers(&namespace_key)
             .await
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+            .map_err(ApiRegistrationRepoError::internal)?;
 
         let api_ids = project_ids
             .into_iter()
@@ -335,7 +317,7 @@ impl RedisApiRegistry {
             .with("persistence", "mget_all_definitions")
             .mget(keys)
             .await
-            .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))?;
+            .map_err(ApiRegistrationRepoError::internal)?;
 
         let definitions = result
             .into_iter()
@@ -343,7 +325,7 @@ impl RedisApiRegistry {
             .map(|value| {
                 self.pool
                     .deserialize(&value)
-                    .map_err(|e| ApiRegistrationRepoError::InternalError(e.to_string()))
+                    .map_err(ApiRegistrationRepoError::internal)
             })
             .collect::<Result<Vec<ApiDefinition>, ApiRegistrationRepoError>>()?;
 
@@ -409,7 +391,7 @@ mod tests {
         }
     }
 
-    impl Display for CommonNamespace {
+    impl std::fmt::Display for CommonNamespace {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             write!(f, "{}", self.0)
         }
