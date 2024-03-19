@@ -54,32 +54,56 @@ pub struct ApiDefinitionAnnotated<Namespace> {
     pub api_definition: ApiDefinition,
 }
 
+pub trait ApiNamespace:
+    Eq
+    + Hash
+    + PartialEq
+    + Clone
+    + Debug
+    + Display
+    + Send
+    + Sync
+    + bincode::Encode
+    + bincode::Decode
+    + serde::de::DeserializeOwned
+{
+}
+impl<
+        T: Eq
+            + Hash
+            + PartialEq
+            + Clone
+            + Debug
+            + Display
+            + Send
+            + Sync
+            + bincode::Encode
+            + bincode::Decode
+            + serde::de::DeserializeOwned,
+    > ApiNamespace for T
+{
+}
+
 // An ApiDefinitionKey is just the original ApiDefinitionId with additional information of version and a possibility of namespace.
 // A namespace here can be for example: account, project, production, dev or a composite value, or infact as simple
 // as a constant string or unit.
 // A namespace is not pre-tied to any other parts of original ApiDefinitionId to keep the ApiDefinition part simple, reusable.
-#[derive(Eq, Hash, PartialEq, Clone, Debug)]
-pub struct ApiDefinitionKey<Namespace: Eq + Hash + PartialEq + Clone + Debug> {
+#[derive(
+    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
+)]
+pub struct ApiDefinitionKey<Namespace> {
     pub namespace: Namespace,
     pub id: ApiDefinitionId,
     pub version: Version,
 }
 
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display> ApiDefinitionKey<Namespace> {
+impl<Namespace: Display> ApiDefinitionKey<Namespace> {
     pub fn with_namespace_displayed(&self) -> ApiDefinitionKey<String> {
         ApiDefinitionKey {
             namespace: self.namespace.to_string(),
             id: self.id.clone(),
             version: self.version.clone(),
         }
-    }
-}
-
-impl<Namespace: Display + Eq + Hash + PartialEq + Clone + Debug> Display
-    for ApiDefinitionKey<Namespace>
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}:{}", self.namespace, self.id, self.version.0)
     }
 }
 
@@ -138,9 +162,7 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     }
 }
 
-impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx>
-    RegisterApiDefinitionDefault<Namespace, AuthCtx>
-{
+impl<Namespace: ApiNamespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub async fn is_authorized(
         &self,
         permission: Permission,
@@ -165,10 +187,7 @@ impl<Namespace: Eq + Hash + PartialEq + Clone + Debug + Display, AuthCtx>
 }
 
 #[async_trait]
-impl<
-        Namespace: Eq + Hash + PartialEq + Clone + Debug + Display + Send + Sync,
-        AuthCtx: Send + Sync,
-    > ApiDefinitionService<Namespace, AuthCtx>
+impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespace, AuthCtx>
     for RegisterApiDefinitionDefault<Namespace, AuthCtx>
 {
     async fn register(
