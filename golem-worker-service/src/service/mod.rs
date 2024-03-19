@@ -1,4 +1,3 @@
-pub mod template;
 pub mod worker;
 
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
@@ -23,6 +22,9 @@ use golem_worker_service_base::service::api_definition_service::{
 use golem_worker_service_base::service::http_request_definition_lookup::{
     ApiDefinitionLookupError, HttpRequestDefinitionLookup,
 };
+use golem_worker_service_base::service::template_service::{
+    TemplateService, TemplateServiceDefault, TemplateServiceNoop,
+};
 use golem_worker_service_base::worker_request_to_response::WorkerRequestToResponse;
 use http::HeaderMap;
 use poem::Response;
@@ -37,15 +39,19 @@ pub struct Services {
     pub definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
-    pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
+    pub template_service: Arc<dyn TemplateService + Sync + Send>,
     pub auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
 }
 
 impl Services {
     pub async fn new(config: &WorkerServiceBaseConfig) -> Result<Services, String> {
-        let template_service: Arc<dyn template::TemplateService + Sync + Send> = Arc::new(
-            template::TemplateServiceDefault::new(&config.template_service),
-        );
+        let template_service: Arc<dyn TemplateService + Sync + Send> = {
+            let config = &config.template_service;
+            let uri = config.uri();
+            let retries = config.retries.clone();
+
+            Arc::new(TemplateServiceDefault::new(uri, retries))
+        };
 
         let auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send> =
             Arc::new(AuthServiceNoop {});
@@ -112,8 +118,8 @@ impl Services {
     }
 
     pub fn noop() -> Services {
-        let template_service: Arc<dyn template::TemplateService + Sync + Send> =
-            Arc::new(template::TemplateServiceNoop {});
+        let template_service: Arc<dyn TemplateService + Sync + Send> =
+            Arc::new(TemplateServiceNoop {});
 
         let routing_table_service: Arc<
             dyn golem_service_base::routing_table::RoutingTableService + Send + Sync,
