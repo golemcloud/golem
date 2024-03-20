@@ -303,7 +303,7 @@ async fn invoke<Ctx: WorkerCtx>(
 
             for resource in resources_to_drop {
                 debug!(
-                    "Dropping passed owned resources {:?} in {worker_id}/{full_function_name}",
+                    "Dropping passed owned resources {:?} in {context}",
                     resource
                 );
                 resource.resource_drop_async(&mut store).await?;
@@ -318,7 +318,7 @@ async fn invoke<Ctx: WorkerCtx>(
                 output.push(result_value);
             }
 
-            store_results(&mut store, &output).await;
+            store_results(&mut store, &output, context).await;
 
             Ok(InvokeResult {
                 exited: false,
@@ -354,7 +354,7 @@ async fn invoke<Ctx: WorkerCtx>(
             let stdout = store.data_mut().finish_capturing_stdout().await.ok();
             let output: Vec<Value> = vec![Value::String(stdout.unwrap_or("".to_string()))];
 
-            store_results(&mut store, &output).await;
+            store_results(&mut store, &output, context).await;
 
             Ok(InvokeResult {
                 exited,
@@ -365,10 +365,14 @@ async fn invoke<Ctx: WorkerCtx>(
     }
 }
 
-async fn store_results<'a, Ctx: WorkerCtx>(store: &mut StoreContextMut<'a, Ctx>, output: &[Value]) {
+async fn store_results<'a, Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'a, Ctx>,
+    output: &[Value],
+    context: &str,
+) {
     if let Some(invocation_key) = store.data().get_current_invocation_key().await {
         debug!(
-            "Storing successful results for invocation key {:?} in {worker_id}/{full_function_name}",
+            "Storing successful results for invocation key {:?} in {context}",
             &invocation_key
         );
 
@@ -377,7 +381,7 @@ async fn store_results<'a, Ctx: WorkerCtx>(store: &mut StoreContextMut<'a, Ctx>,
             .confirm_invocation_key(&invocation_key, Ok(output.to_vec()))
             .await;
     } else {
-        debug!("No invocation key for {worker_id}/{full_function_name}");
+        debug!("No invocation key for {context}");
     }
 }
 
@@ -419,7 +423,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
     }
 
     let output = Vec::new();
-    store_results(&mut store, &output).await;
+    store_results(&mut store, &output, context).await;
 
     Ok(InvokeResult {
         exited: false,

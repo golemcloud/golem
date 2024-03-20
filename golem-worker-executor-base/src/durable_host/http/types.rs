@@ -20,7 +20,6 @@ use http::{HeaderName, HeaderValue};
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use tracing::info;
 
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::subscribe;

@@ -157,10 +157,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             let mut store = Store::new(&this.engine(), context);
             store.set_epoch_deadline(this.config().limits.epoch_ticks);
-            store.epoch_deadline_callback(|mut store| {
+            let worker_id_clone = versioned_worker_id.worker_id.clone();
+            store.epoch_deadline_callback(move |mut store| {
                 let current_level = store.get_fuel().unwrap_or(0);
                 if store.data().is_out_of_fuel(current_level as i64) {
-                    debug!("{worker_id} ran out of fuel, borrowing more");
+                    debug!("{worker_id_clone} ran out of fuel, borrowing more");
                     store.data_mut().borrow_fuel_sync();
                 }
 
