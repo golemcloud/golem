@@ -23,7 +23,7 @@ use std::process::Stdio;
 use testcontainers::clients;
 
 const NETWORK: &str = "golem_test_network";
-const TAG: &str = "v0.0.63";
+const TAG: &str = "v0.0.70";
 
 #[derive(Debug, Clone)]
 pub struct EnvConfig {

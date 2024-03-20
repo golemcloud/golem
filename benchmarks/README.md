@@ -24,6 +24,14 @@ Make sure you have `K8sRoutingType::Minikube` configured in your `make_context` 
 
 Make sure you have `K8sRoutingType::Ingress` configured in your `make_context` step of your benchmark.
 
+You can also change namespace name - only 1 benchamrk can use this name at the same time.
+
+This error is expected:
+
+> Failed to create template: golem cli failed with exit code: Some(1). Retry #1
+
+AWS DNS takes 3-5 minutes to update for ingress DNS name.
+
 ## Benchmark configuration
 
 At the moment file based configuration is not implemented yet - you can configure the benchmark in the source code.
