@@ -164,6 +164,7 @@ impl RegisterApiDefinitionApi {
 #[cfg(test)]
 mod test {
     use golem_worker_service_base::auth::AuthServiceNoop;
+    use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
     use poem::test::TestClient;
 
     use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
@@ -175,6 +176,7 @@ mod test {
         let definition_service = RegisterApiDefinitionDefault::new(
             Arc::new(AuthServiceNoop {}),
             Arc::new(InMemoryRegistry::default()),
+            Arc::new(ApiDefinitionValidatorNoop {}),
         );
 
         let endpoint = RegisterApiDefinitionApi::new(

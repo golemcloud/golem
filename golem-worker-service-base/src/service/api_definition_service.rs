@@ -7,6 +7,8 @@ use crate::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 use crate::auth::{AuthError, AuthService, CommonNamespace, EmptyAuthCtx, Permission};
 use async_trait::async_trait;
 
+use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationError};
+
 // A namespace here can be example: (account, project) etc.
 // Ideally a repo service and its implementation with a different service impl that takes care of
 // validations, authorisations etc is the right approach. However we are keeping it simple for now.
@@ -113,21 +115,26 @@ pub enum ApiRegistrationError {
     AuthenticationError(#[from] AuthError),
     #[error(transparent)]
     RepoError(#[from] ApiRegistrationRepoError),
+    #[error(transparent)]
+    ValidationError(#[from] ValidationError),
 }
 
 pub struct RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
     pub register_repo: Arc<dyn ApiDefinitionRepo<Namespace> + Sync + Send>,
+    pub api_definition_validator: Arc<dyn ApiDefinitionValidatorService + Sync + Send>,
 }
 
 impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub fn new(
         auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
         register_repo: Arc<dyn ApiDefinitionRepo<Namespace> + Sync + Send>,
+        api_definition_validator: Arc<dyn ApiDefinitionValidatorService + Sync + Send>,
     ) -> Self {
         Self {
             auth_service,
             register_repo,
+            api_definition_validator,
         }
     }
 }
@@ -163,6 +170,8 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
         auth_ctx: AuthCtx,
     ) -> Result<ApiDefinitionIdAnnotated<Namespace>, ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::Create, &auth_ctx).await?;
+
+        self.api_definition_validator.validate(definition).await?;
 
         let key = ApiDefinitionKey {
             namespace: namespace.clone(),

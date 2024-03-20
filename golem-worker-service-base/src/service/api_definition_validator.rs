@@ -11,11 +11,13 @@ use golem_service_base::model::{Export, ExportFunction, ExportInstance, Template
 use serde::{Deserialize, Serialize};
 
 #[async_trait]
-pub trait ApiDefinitionValidator {
+pub trait ApiDefinitionValidatorService {
     async fn validate(&self, api: &ApiDefinition) -> Result<(), ValidationError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, thiserror::Error)]
+// TODO: Fix this display impl.
+#[error("Validation error: {errors:?}")]
 pub struct ValidationError {
     pub errors: Vec<RouteValidationError>,
 }
@@ -51,7 +53,7 @@ impl ApiDefinitionValidatorDefault {
 }
 
 #[async_trait]
-impl ApiDefinitionValidator for ApiDefinitionValidatorDefault {
+impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
     async fn validate(&self, api: &ApiDefinition) -> Result<(), ValidationError> {
         let get_templates = api
             .routes
@@ -109,6 +111,7 @@ fn validate_route(
     templates: &HashMap<TemplateId, Template>,
 ) -> Result<(), RouteValidationError> {
     let template_id = route.binding.template.clone();
+    // We can unwrap here because we've already validated that all templates are present.
     let template = templates.get(&template_id).unwrap();
 
     let function_name = route.binding.function_name.clone();
@@ -142,4 +145,14 @@ fn find_function(name: &str, template: &Template) -> Option<ExportFunction> {
             }
         }
     })
+}
+
+#[derive(Copy, Clone)]
+pub struct ApiDefinitionValidatorNoop {}
+
+#[async_trait]
+impl ApiDefinitionValidatorService for ApiDefinitionValidatorNoop {
+    async fn validate(&self, _api: &ApiDefinition) -> Result<(), ValidationError> {
+        Ok(())
+    }
 }

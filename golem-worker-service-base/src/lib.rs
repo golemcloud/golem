@@ -2,7 +2,6 @@ pub mod api;
 pub mod api_definition;
 pub mod api_definition_repo;
 pub mod api_request_route_resolver;
-pub mod api_validator;
 pub mod app_config;
 pub mod auth;
 pub mod evaluator;

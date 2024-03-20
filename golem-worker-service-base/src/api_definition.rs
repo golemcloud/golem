@@ -8,7 +8,7 @@ use crate::parser::{GolemParser, ParseError};
 use bincode::{Decode, Encode};
 use derive_more::Display;
 use golem_common::model::TemplateId;
-use poem_openapi::{Enum, NewType};
+use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use Iterator;
@@ -108,21 +108,22 @@ impl MethodPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct LiteralInfo(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
 pub struct VarInfo {
     pub key_name: String,
     pub index: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
 pub struct QueryInfo {
     pub key_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode, Union)]
+#[oai(discriminator_name = "type", one_of = true)]
 pub enum PathPattern {
     Literal(LiteralInfo),
     Var(VarInfo),

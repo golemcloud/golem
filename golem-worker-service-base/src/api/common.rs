@@ -5,7 +5,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Union};
 use serde::{Deserialize, Serialize};
 
-use crate::api_definition::MethodPattern;
+use crate::api_definition::{MethodPattern, PathPattern};
 
 #[derive(Union)]
 #[oai(discriminator_name = "type", one_of = true)]
@@ -37,7 +37,7 @@ pub struct MessageBody {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct RouteValidationError {
     pub method: MethodPattern,
-    pub path: String,
+    pub path: PathPattern,
     pub template: TemplateId,
     pub detail: String,
 }
@@ -115,6 +115,26 @@ impl From<crate::service::api_definition_service::ApiRegistrationError> for ApiE
             ApiRegistrationError::RepoError(ApiRegistrationRepoError::InternalError(_)) => {
                 ApiEndpointError::internal(error)
             }
+            ApiRegistrationError::ValidationError(e) => e.into(),
         }
+    }
+}
+
+impl From<crate::service::api_definition_validator::ValidationError> for ApiEndpointError {
+    fn from(error: crate::service::api_definition_validator::ValidationError) -> Self {
+        let error = WorkerServiceErrorsBody::Validation(ValidationErrorsBody {
+            errors: error
+                .errors
+                .into_iter()
+                .map(|e| RouteValidationError {
+                    method: e.method,
+                    path: e.path,
+                    template: e.template,
+                    detail: e.detail,
+                })
+                .collect(),
+        });
+
+        ApiEndpointError::BadRequest(Json(error))
     }
 }
