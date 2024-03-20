@@ -1,3 +1,0 @@
-[submodule "golem-cli"]
-	path = golem-cli
-	url = https://github.com/golemcloud/golem-cli

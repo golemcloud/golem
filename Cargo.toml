@@ -2,16 +2,17 @@
 resolver = "2"
 
 members = [
-    "golem-worker-executor-base",
-    "golem-worker-executor",
-    "golem-common",
     "golem-api-grpc",
+    "golem-cli",
+    "golem-common",
     "golem-service-base",
+    "golem-template-compilation-service",
     "golem-template-service",
     "golem-shard-manager",
+    "golem-worker-executor-base",
+    "golem-worker-executor",
     "golem-worker-service-base",
     "golem-worker-service",
-    "golem-template-compilation-service"
 ]
 
 exclude = [
@@ -42,9 +43,6 @@ exclude = [
     "test-templates/write-stderr",
     "test-templates/write-stdout",
     "golem-client",
-    "golem-cli",
-    "libtest-mimic",
-    "wasm-rpc",
 ]
 
 [workspace.dependencies]

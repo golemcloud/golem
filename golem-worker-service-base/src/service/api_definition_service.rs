@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
 use crate::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
-use crate::auth::{AuthService, CommonNamespace, EmptyAuthCtx, Permission};
+use crate::auth::{AuthError, AuthService, CommonNamespace, EmptyAuthCtx, Permission};
 use async_trait::async_trait;
 
 // A namespace here can be example: (account, project) etc.
@@ -30,7 +30,7 @@ pub trait ApiDefinitionService<Namespace, AuthCtx> {
         api_definition_id: &ApiDefinitionId,
         version: &Version,
         auth_ctx: AuthCtx,
-    ) -> Result<ApiDefinitionIdAnnotated<Namespace>, ApiRegistrationError>;
+    ) -> Result<Option<ApiDefinitionIdAnnotated<Namespace>>, ApiRegistrationError>;
 
     async fn get_all(
         &self,
@@ -98,7 +98,7 @@ pub struct ApiDefinitionKey<Namespace> {
 }
 
 impl<Namespace: Display> ApiDefinitionKey<Namespace> {
-    pub fn with_namespace_displayed(&self) -> ApiDefinitionKey<String> {
+    pub fn displayed(&self) -> ApiDefinitionKey<String> {
         ApiDefinitionKey {
             namespace: self.namespace.to_string(),
             id: self.id.clone(),
@@ -107,42 +107,12 @@ impl<Namespace: Display> ApiDefinitionKey<Namespace> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ApiRegistrationError {
-    AlreadyExists(ApiDefinitionKey<String>),
-    InternalError(String),
-    AuthenticationError(String),
-}
-
-impl From<ApiRegistrationRepoError> for ApiRegistrationError {
-    fn from(value: ApiRegistrationRepoError) -> Self {
-        match value {
-            ApiRegistrationRepoError::InternalError(error) => {
-                ApiRegistrationError::InternalError(error)
-            }
-            ApiRegistrationRepoError::AlreadyExists(key) => {
-                ApiRegistrationError::AlreadyExists(key)
-            }
-        }
-    }
-}
-
-impl Display for ApiRegistrationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ApiRegistrationError::AuthenticationError(msg) => {
-                write!(f, "AuthenticationError: {}", msg)
-            }
-            ApiRegistrationError::InternalError(msg) => write!(f, "InternalError: {}", msg),
-            ApiRegistrationError::AlreadyExists(api_definition_key) => {
-                write!(
-                    f,
-                    "AlreadyExists: ApiDefinition with id: {} and version:{} already exists in the namespace {}",
-                    api_definition_key.id, api_definition_key.version.0, api_definition_key.namespace
-                )
-            }
-        }
-    }
+    #[error(transparent)]
+    AuthenticationError(#[from] AuthError),
+    #[error(transparent)]
+    RepoError(#[from] ApiRegistrationRepoError),
 }
 
 pub struct RegisterApiDefinitionDefault<Namespace, AuthCtx> {
@@ -168,10 +138,10 @@ impl<Namespace: ApiNamespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, A
         permission: Permission,
         auth_ctx: &AuthCtx,
     ) -> Result<Namespace, ApiRegistrationError> {
-        self.auth_service
+        Ok(self
+            .auth_service
             .is_authorized(permission, auth_ctx)
-            .await
-            .map_err(|err| ApiRegistrationError::InternalError(err.to_string()))
+            .await?)
     }
 
     pub async fn register_api(
@@ -179,10 +149,7 @@ impl<Namespace: ApiNamespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, A
         api_definition: &ApiDefinition,
         key: &ApiDefinitionKey<Namespace>,
     ) -> Result<(), ApiRegistrationError> {
-        self.register_repo
-            .register(api_definition, key)
-            .await
-            .map_err(ApiRegistrationError::from)
+        Ok(self.register_repo.register(api_definition, key).await?)
     }
 }
 
@@ -203,12 +170,14 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
             version: definition.version.clone(),
         };
 
-        self.register_api(definition, &key)
-            .await
-            .map(|_| ApiDefinitionIdAnnotated {
-                namespace,
-                api_definition_id: definition.id.clone(),
-            })
+        self.register_repo.register(definition, &key).await?;
+
+        let result = ApiDefinitionIdAnnotated {
+            namespace,
+            api_definition_id: key.id,
+        };
+
+        Ok(result)
     }
 
     async fn get(
@@ -225,16 +194,14 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
             version: version.clone(),
         };
 
-        self.register_repo
-            .get(&key)
-            .await
-            .map(|api_definition| {
-                api_definition.map(|api_definition| ApiDefinitionAnnotated {
-                    namespace,
-                    api_definition,
-                })
-            })
-            .map_err(ApiRegistrationError::from)
+        let api_definition = self.register_repo.get(&key).await?;
+
+        let result = api_definition.map(|api_definition| ApiDefinitionAnnotated {
+            namespace,
+            api_definition,
+        });
+
+        Ok(result)
     }
 
     async fn delete(
@@ -242,7 +209,7 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
         api_definition_id: &ApiDefinitionId,
         version: &Version,
         auth_ctx: AuthCtx,
-    ) -> Result<ApiDefinitionIdAnnotated<Namespace>, ApiRegistrationError> {
+    ) -> Result<Option<ApiDefinitionIdAnnotated<Namespace>>, ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::Delete, &auth_ctx).await?;
 
         let key = ApiDefinitionKey {
@@ -251,14 +218,18 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
             version: version.clone(),
         };
 
-        self.register_repo
-            .delete(&key)
-            .await
-            .map(|_| ApiDefinitionIdAnnotated {
+        let deleted = self.register_repo.delete(&key).await?;
+
+        let result = if deleted {
+            Some(ApiDefinitionIdAnnotated {
                 namespace,
-                api_definition_id: api_definition_id.clone(),
+                api_definition_id: key.id,
             })
-            .map_err(ApiRegistrationError::from)
+        } else {
+            None
+        };
+
+        Ok(result)
     }
 
     async fn get_all(
@@ -267,19 +238,17 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
     ) -> Result<Vec<ApiDefinitionAnnotated<Namespace>>, ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::View, &auth_ctx).await?;
 
-        self.register_repo
-            .get_all(&namespace)
-            .await
-            .map(|definitions| {
-                definitions
-                    .iter()
-                    .map(|definition| ApiDefinitionAnnotated {
-                        namespace: namespace.clone(),
-                        api_definition: definition.clone(),
-                    })
-                    .collect()
+        let definitions = self.register_repo.get_all(&namespace).await?;
+
+        let result = definitions
+            .into_iter()
+            .map(|definition| ApiDefinitionAnnotated {
+                namespace: namespace.clone(),
+                api_definition: definition.clone(),
             })
-            .map_err(ApiRegistrationError::from)
+            .collect();
+
+        Ok(result)
     }
 
     async fn get_all_versions(
@@ -289,20 +258,20 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
     ) -> Result<Vec<ApiDefinitionAnnotated<Namespace>>, ApiRegistrationError> {
         let namespace = self.is_authorized(Permission::View, &auth_ctx).await?;
 
-        self.register_repo
+        let definitions = self
+            .register_repo
             .get_all_versions(api_id, &namespace)
-            .await
-            .map(|definitions| {
-                definitions
-                    .iter()
-                    .map(|definition| ApiDefinitionAnnotated {
-                        namespace: namespace.clone(),
-                        api_definition: definition.clone(),
-                    })
-                    .collect()
+            .await?;
+
+        let result = definitions
+            .into_iter()
+            .map(|definition| ApiDefinitionAnnotated {
+                namespace: namespace.clone(),
+                api_definition: definition,
             })
-            .map_err(ApiRegistrationError::from)
-            .map_err(ApiRegistrationError::from)
+            .collect();
+
+        Ok(result)
     }
 }
 
@@ -312,12 +281,12 @@ pub struct RegisterApiDefinitionNoop {}
 impl ApiDefinitionService<CommonNamespace, EmptyAuthCtx> for RegisterApiDefinitionNoop {
     async fn register(
         &self,
-        definition: &ApiDefinition,
+        api_definition: &ApiDefinition,
         _auth_ctx: EmptyAuthCtx,
     ) -> Result<ApiDefinitionIdAnnotated<CommonNamespace>, ApiRegistrationError> {
         Ok(ApiDefinitionIdAnnotated {
             namespace: CommonNamespace::default(),
-            api_definition_id: definition.id.clone(),
+            api_definition_id: api_definition.id.clone(),
         })
     }
 
@@ -332,14 +301,11 @@ impl ApiDefinitionService<CommonNamespace, EmptyAuthCtx> for RegisterApiDefiniti
 
     async fn delete(
         &self,
-        api_definition_id: &ApiDefinitionId,
+        _api_definition_id: &ApiDefinitionId,
         _version: &Version,
         _auth_ctx: EmptyAuthCtx,
-    ) -> Result<ApiDefinitionIdAnnotated<CommonNamespace>, ApiRegistrationError> {
-        Ok(ApiDefinitionIdAnnotated {
-            namespace: CommonNamespace::default(),
-            api_definition_id: api_definition_id.clone(),
-        })
+    ) -> Result<Option<ApiDefinitionIdAnnotated<CommonNamespace>>, ApiRegistrationError> {
+        Ok(None)
     }
 
     async fn get_all(

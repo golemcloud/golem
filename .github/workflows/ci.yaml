@@ -447,3 +447,10 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         working-directory: golem-client
         run: cargo publish --all-features --allow-dirty
+      - name: Publish Golem CLI
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          export VERSION="${{ steps.get_version.outputs.version-without-v }}"
+          sed -i "s/0.0.0/$VERSION/g" golem-cli/Cargo.toml
+          cargo publish -p golem-cli --all-features --allow-dirty
