@@ -161,7 +161,7 @@ fn validate_route(
     // TODO: Validate function params.
     let _function = find_function(function_name.as_str(), template).ok_or_else(|| {
         RouteValidationError::from_route(route, format!("Invalid function name: {function_name}"))
-    });
+    })?;
 
     Ok(())
 }
