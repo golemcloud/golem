@@ -172,7 +172,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         worker_id: &common_model::WorkerId,
         metadata: &Option<WorkerMetadata>,
     ) -> Result<WorkerStatus, GolemError> {
-        debug!("validate_worker_status for {worker_id}");
         let worker_status = Ctx::get_assumed_worker_status(self, worker_id, metadata).await;
 
         match worker_status {

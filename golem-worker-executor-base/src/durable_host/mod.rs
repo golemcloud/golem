@@ -46,8 +46,8 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use cap_std::ambient_authority;
-use golem_common::model::jumps::DeletedRegions;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
     WorkerMetadata, WorkerStatus,
@@ -212,8 +212,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
         )?);
         debug!(
-            "Created temporary file system root for {:?} at {:?}",
-            worker_id,
+            "Created temporary file system root for {worker_id} at {:?}",
             temp_dir.path()
         );
         let root_dir = cap_std::fs::Dir::open_ambient_dir(temp_dir.path(), ambient_authority())
@@ -826,7 +825,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             }
         }
 
-        debug!("Function finished with {:?}", output);
+        debug!(
+            "Function {}/{full_function_name} finished with {:?}",
+            self.worker_id, output
+        );
 
         // Return indicating that it is done
         Ok(Some(output))
@@ -912,7 +914,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<(), GolemError> {
-        debug!("Starting prepare_instance for {}", worker_id);
+        debug!("Starting prepare_instance for {worker_id}");
         let start = Instant::now();
         let mut count = 0;
         let result = loop {
@@ -946,7 +948,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         .await;
 
                         if !finished {
-                            // TODO: distinguish jump from error retries here and do not treat jumps as "failed to recover" error
                             break Err(GolemError::failed_to_resume_instance(
                                 worker_id.worker_id.clone(),
                             ));
@@ -973,7 +974,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         };
         record_resume_worker(start.elapsed());
         record_number_of_replayed_functions(count);
-        debug!("Finished prepare_instance for {}", worker_id);
+        debug!("Finished prepare_instance for {worker_id}");
         result
     }
 
@@ -996,14 +997,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
     ) -> Result<(), anyhow::Error> {
-        info!("Recovering instances");
+        info!("Recovering workers");
 
-        let instances = this.worker_service().get_running_workers_in_shards().await;
+        let workers = this.worker_service().get_running_workers_in_shards().await;
 
-        debug!("Recovering running instances: {:?}", instances);
+        debug!("Recovering running workers: {:?}", workers);
 
-        for instance in instances {
-            let worker_id = instance.worker_id;
+        for worker in workers {
+            let worker_id = worker.worker_id;
             let previous_tries = Self::get_worker_retry_count(this, &worker_id.worker_id).await;
             let decision = this
                 .recovery_management()
@@ -1015,7 +1016,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             );
         }
 
-        info!("Finished recovering instances");
+        info!("Finished recovering workers");
         Ok(())
     }
 }

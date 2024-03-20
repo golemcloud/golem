@@ -139,7 +139,6 @@ where
     F: FnOnce(WasiCtx, ResourceTable) -> T,
 {
     let table = ResourceTable::new();
-    debug!("Creating WASI context, root directory is {:?}", root_dir);
     let wasi = WasiCtxBuilder::new()
         .args(args)
         .envs(env)

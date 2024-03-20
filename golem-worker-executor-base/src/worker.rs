@@ -20,8 +20,8 @@ use std::time::Instant;
 use async_mutex::Mutex;
 use bytes::Bytes;
 use golem_common::cache::PendingOrFinal;
-use golem_common::model::jumps::DeletedRegions;
 use golem_common::model::oplog::OplogEntry;
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
@@ -160,7 +160,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             store.epoch_deadline_callback(|mut store| {
                 let current_level = store.get_fuel().unwrap_or(0);
                 if store.data().is_out_of_fuel(current_level as i64) {
-                    debug!("ran out of fuel, borrowing more");
+                    debug!("{worker_id} ran out of fuel, borrowing more");
                     store.data_mut().borrow_fuel_sync();
                 }
 
@@ -178,7 +178,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let instance_pre = this.linker().instantiate_pre(&component).map_err(|e| {
                 GolemError::worker_creation_failed(
                     worker_id.clone(),
-                    format!("Failed to pre-instantiate component: {e}"),
+                    format!("Failed to pre-instantiate worker {worker_id}: {e}"),
                 )
             })?;
 
@@ -188,7 +188,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .map_err(|e| {
                     GolemError::worker_creation_failed(
                         worker_id.clone(),
-                        format!("Failed to instantiate component: {e}"),
+                        format!("Failed to instantiate worker {worker_id}: {e}"),
                     )
                 })?;
 
@@ -623,14 +623,17 @@ where
             let invocation_key =
                 invocation_key.expect("missing invocation key for invoke-and-await");
 
-            debug!("Waiting for invocation key {} to complete", invocation_key);
+            debug!(
+                "Waiting for invocation key {} to complete for {worker_id}",
+                invocation_key
+            );
             let result = this
                 .invocation_key_service()
                 .wait_for_confirmation(&worker_id, &invocation_key)
                 .await;
 
             debug!(
-                "Invocation key {} lookup result: {:?}",
+                "Invocation key {} lookup result for {worker_id}: {:?}",
                 invocation_key, result
             );
             match result {
@@ -699,7 +702,7 @@ fn calculate_deleted_regions(initial: &DeletedRegions, entries: &[OplogEntry]) -
     let mut result = initial.clone();
     for entry in entries {
         if let OplogEntry::Jump { jump, .. } = entry {
-            result.add_jump(jump.clone());
+            result.add(jump.clone());
         }
     }
     result

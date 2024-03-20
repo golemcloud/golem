@@ -83,11 +83,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(result) => {
-                debug!("RPC result: {result:?}");
+                debug!("RPC result for {}: {result:?}", self.worker_id);
                 Ok(Ok(result))
             }
             Err(err) => {
-                error!("RPC error: {err}");
+                error!("RPC error for {}: {err}", self.worker_id);
                 match err {
                     RpcError::ProtocolError { details } => {
                         Ok(Err(golem_wasm_rpc::RpcError::ProtocolError(details)))

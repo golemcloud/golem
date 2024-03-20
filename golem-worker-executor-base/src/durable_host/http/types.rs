@@ -267,7 +267,6 @@ impl<Ctx: WorkerCtx> HostRequestOptions for DurableWorkerCtx<Ctx> {
         ms: Option<Duration>,
     ) -> anyhow::Result<Result<(), ()>> {
         record_host_function_call("http::types::request_options", "set_connect_timeout_ms");
-        info!("set_connect_timeout {ms:?}");
         HostRequestOptions::set_connect_timeout(&mut self.as_wasi_http_view(), self_, ms)
     }
 

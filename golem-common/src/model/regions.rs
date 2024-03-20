@@ -17,21 +17,27 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
-pub struct Jump {
-    pub target_oplog_idx: u64,
-    pub source_oplog_idx: u64,
+pub struct OplogRegion {
+    pub start: u64,
+    pub end: u64,
 }
 
-impl Jump {
+impl OplogRegion {
     pub fn contains(&self, target: u64) -> bool {
-        target > self.source_oplog_idx && target <= self.target_oplog_idx
+        target > self.end && target <= self.start
+    }
+}
+
+impl Display for OplogRegion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{} => {}>", self.start, self.end)
     }
 }
 
 /// Structure holding all the regions deleted from the oplog by jumps
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct DeletedRegions {
-    jumps: Vec<Jump>,
+    regions: Vec<OplogRegion>,
 }
 
 impl Default for DeletedRegions {
@@ -41,37 +47,39 @@ impl Default for DeletedRegions {
 }
 
 impl DeletedRegions {
-    /// Constructs an empty set of active jumps
+    /// Constructs an empty set of deleted regions
     pub fn new() -> Self {
-        Self { jumps: Vec::new() }
-    }
-
-    /// Initializes from Jump entries in the oplog
-    pub fn from_jumps(entries: &[Jump]) -> Self {
         Self {
-            jumps: entries.to_vec(),
+            regions: Vec::new(),
         }
     }
 
-    /// Returns the list of active jumps
-    pub fn jumps(&self) -> &Vec<Jump> {
-        &self.jumps
+    /// Initializes from known list of deleted oplog regions
+    pub fn from_regions(regions: &[OplogRegion]) -> Self {
+        Self {
+            regions: regions.to_vec(),
+        }
     }
 
-    /// Adds a new jump definition to the list of active jumps
-    pub fn add_jump(&mut self, jump: Jump) {
-        self.jumps.push(jump);
+    /// Returns the list of deleted regions
+    pub fn regions(&self) -> &Vec<OplogRegion> {
+        &self.regions
+    }
+
+    /// Adds a new region to the list of deleted regions
+    pub fn add(&mut self, region: OplogRegion) {
+        self.regions.push(region);
     }
 
     /// Checks whether there is an deleted region starting at the given oplog index.
     /// If there is, returns the oplog index where the execution should continue, otherwise returns None.
-    pub fn is_deleted_region_start(&self, at: u64) -> Option<u64> {
+    pub fn is_deleted_region_start(&self, oplog_index: u64) -> Option<u64> {
         // TODO: optimize this by introducing a map during construction
-        self.jumps
+        self.regions
             .iter()
-            .filter_map(|jump| {
-                if jump.target_oplog_idx == at {
-                    Some(jump.source_oplog_idx + 1)
+            .filter_map(|region| {
+                if region.start == oplog_index {
+                    Some(region.end + 1)
                 } else {
                     None
                 }
@@ -79,8 +87,10 @@ impl DeletedRegions {
             .max()
     }
 
-    pub fn is_in_deleted_region(&self, target: u64) -> bool {
-        self.jumps.iter().any(|jump| jump.contains(target))
+    pub fn is_in_deleted_region(&self, oplog_index: u64) -> bool {
+        self.regions
+            .iter()
+            .any(|region| region.contains(oplog_index))
     }
 }
 
@@ -89,9 +99,9 @@ impl Display for DeletedRegions {
         write!(
             f,
             "[{}]",
-            self.jumps
+            self.regions
                 .iter()
-                .map(|jump| format!("<{} => {}>", jump.source_oplog_idx, jump.target_oplog_idx))
+                .map(|region| region.to_string())
                 .collect::<Vec<String>>()
                 .join(", ")
         )

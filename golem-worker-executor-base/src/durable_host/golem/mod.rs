@@ -24,8 +24,8 @@ use crate::model::InterruptKind;
 use crate::preview2::golem;
 use crate::preview2::golem::api::host::OplogIndex;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::jumps::Jump;
 use golem_common::model::oplog::OplogEntry;
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::{PromiseId, TemplateId, Timestamp, WorkerId};
 
 #[async_trait]
@@ -116,23 +116,26 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                 "Attempted to jump to a deleted region in oplog to index {jump_target} from {jump_source}"
             ))
         } else if self.is_live() {
-            let jump = Jump {
-                target_oplog_idx: jump_target,
-                source_oplog_idx: jump_source,
+            let jump = OplogRegion {
+                start: jump_target,
+                end: jump_source,
             };
 
             // We have to repeat all previous jumps, so we add the new jump to the list of active jumps
             // and write an oplog entry containing all of them
-            self.private_state.deleted_regions.add_jump(jump.clone());
+            self.private_state.deleted_regions.add(jump.clone());
             self.set_oplog_entry(OplogEntry::jump(Timestamp::now_utc(), jump))
                 .await;
             self.commit_oplog().await;
 
-            debug!("Interrupting live execution for jumping from {jump_source} to {jump_target}");
+            debug!(
+                "Interrupting live execution of {} for jumping from {jump_source} to {jump_target}",
+                self.worker_id
+            );
             Err(InterruptKind::Jump.into())
         } else {
             // In replay mode we never have to do anything here
-            debug!("Ignoring replayed set_oplog_index");
+            debug!("Ignoring replayed set_oplog_index for {}", self.worker_id);
             Ok(())
         }
     }

@@ -17,7 +17,7 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
-use golem_common::model::jumps::DeletedRegions;
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{ShardAssignment, ShardId, VersionedWorkerId, WorkerId};
 use serde::{Deserialize, Serialize};
 

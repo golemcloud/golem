@@ -79,7 +79,7 @@ use tokio::task::JoinHandle;
 
 use golem::api;
 use golem_common::config::RedisConfig;
-use golem_common::model::jumps::DeletedRegions;
+use golem_common::model::regions::DeletedRegions;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,

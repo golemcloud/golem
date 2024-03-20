@@ -79,7 +79,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
                 match invocation_key {
                     Some(invocation_key) => {
                         debug!(
-                            "Storing interrupted status for invocation key {:?}",
+                            "Storing interrupted status for invocation key {:?} in {worker_id}/{full_function_name}",
                             &invocation_key
                         );
                         store
@@ -106,7 +106,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
                 match invocation_key {
                     Some(invocation_key) => {
                         debug!(
-                            "Storing failed result for invocation key {:?}",
+                            "Storing failed result for invocation key {:?} in {worker_id}/{full_function_name}",
                             &invocation_key
                         );
                         store
@@ -302,7 +302,10 @@ async fn invoke<Ctx: WorkerCtx>(
                 call_exported_function(&mut store, function, params, context).await?;
 
             for resource in resources_to_drop {
-                debug!("Dropping passed owned resources {:?}", resource);
+                debug!(
+                    "Dropping passed owned resources {:?} in {worker_id}/{full_function_name}",
+                    resource
+                );
                 resource.resource_drop_async(&mut store).await?;
             }
 
@@ -365,7 +368,7 @@ async fn invoke<Ctx: WorkerCtx>(
 async fn store_results<'a, Ctx: WorkerCtx>(store: &mut StoreContextMut<'a, Ctx>, output: &[Value]) {
     if let Some(invocation_key) = store.data().get_current_invocation_key().await {
         debug!(
-            "Storing successful results for invocation key {:?}",
+            "Storing successful results for invocation key {:?} in {worker_id}/{full_function_name}",
             &invocation_key
         );
 
@@ -374,7 +377,7 @@ async fn store_results<'a, Ctx: WorkerCtx>(store: &mut StoreContextMut<'a, Ctx>,
             .confirm_invocation_key(&invocation_key, Ok(output.to_vec()))
             .await;
     } else {
-        debug!("No invocation key");
+        debug!("No invocation key for {worker_id}/{full_function_name}");
     }
 }
 
@@ -458,7 +461,10 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
         .data_mut()
         .return_fuel(current_fuel_level as i64)
         .await?;
-    debug!("fuel consumed for call: {}", consumed_fuel_for_call);
+    debug!(
+        "fuel consumed for call {context}: {}",
+        consumed_fuel_for_call
+    );
     record_invocation_consumption(consumed_fuel_for_call);
 
     Ok((result.map(|_| results), consumed_fuel_for_call))

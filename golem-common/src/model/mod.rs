@@ -33,11 +33,11 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::model::jumps::DeletedRegions;
+use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;
 
-pub mod jumps;
 pub mod oplog;
+pub mod regions;
 
 newtype_uuid!(
     TemplateId,

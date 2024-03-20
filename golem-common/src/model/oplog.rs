@@ -1,4 +1,4 @@
-use crate::model::jumps::Jump;
+use crate::model::regions::OplogRegion;
 use crate::model::{CallingConvention, InvocationKey, PromiseId, Timestamp};
 use crate::serialization::{
     deserialize_with_version, serialize, try_deserialize, SERIALIZATION_VERSION_V1,
@@ -56,7 +56,12 @@ pub enum OplogEntry {
     NoOp { timestamp: Timestamp },
     /// The worker needs to recover up to the given target oplog index and continue running from
     /// the source oplog index from there
-    Jump { timestamp: Timestamp, jump: Jump },
+    /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
+    /// ignore all recorded operations in between.
+    Jump {
+        timestamp: Timestamp,
+        jump: OplogRegion,
+    },
 }
 
 impl OplogEntry {
@@ -190,7 +195,7 @@ impl OplogEntry {
         }
     }
 
-    pub fn jump(timestamp: Timestamp, jump: Jump) -> OplogEntry {
+    pub fn jump(timestamp: Timestamp, jump: OplogRegion) -> OplogEntry {
         OplogEntry::Jump { timestamp, jump }
     }
 
