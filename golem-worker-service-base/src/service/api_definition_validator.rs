@@ -25,7 +25,7 @@ pub struct ValidationError {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RouteValidationError {
     pub method: MethodPattern,
-    pub path: PathPattern,
+    pub path: String,
     pub template: TemplateId,
     pub detail: String,
 }
@@ -34,7 +34,7 @@ impl RouteValidationError {
     fn from_route(route: Route, detail: String) -> Self {
         Self {
             method: route.method,
-            path: route.path,
+            path: route.path.to_string(),
             template: route.binding.template,
             detail,
         }
@@ -67,10 +67,7 @@ impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
                 self.template_service.get_latest(id).await.map_err(|e| {
                     tracing::error!("Error getting latest template: {:?}", e);
                     // TODO: Better error message.
-                    RouteValidationError::from_route(
-                        route,
-                        format!("Error getting latest template"),
-                    )
+                    RouteValidationError::from_route(route, "Error getting latest template".into())
                 })
             })
             .collect::<Vec<_>>();
@@ -136,7 +133,7 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
             if seen.contains(&route_key) {
                 Some(RouteValidationError {
                     method: route_key.method.clone(),
-                    path: route_key.path.clone(),
+                    path: route_key.path.to_string(),
                     template: route.binding.template.clone(),
                     detail: "Duplicate route".to_string(),
                 })

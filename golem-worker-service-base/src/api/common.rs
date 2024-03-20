@@ -5,7 +5,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Union};
 use serde::{Deserialize, Serialize};
 
-use crate::api_definition::{MethodPattern, PathPattern};
+use crate::api_definition::MethodPattern;
 
 #[derive(Union)]
 #[oai(discriminator_name = "type", one_of = true)]
@@ -37,7 +37,7 @@ pub struct MessageBody {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct RouteValidationError {
     pub method: MethodPattern,
-    pub path: PathPattern,
+    pub path: String,
     pub template: TemplateId,
     pub detail: String,
 }
@@ -128,7 +128,7 @@ impl From<crate::service::api_definition_validator::ValidationError> for ApiEndp
                 .into_iter()
                 .map(|e| RouteValidationError {
                     method: e.method,
-                    path: e.path,
+                    path: e.path.to_string(),
                     template: e.template,
                     detail: e.detail,
                 })

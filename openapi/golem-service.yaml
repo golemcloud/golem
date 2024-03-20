@@ -1878,62 +1878,6 @@ components:
       - Options
       - Trace
       - Head
-    PathPattern:
-      discriminator:
-        propertyName: type
-        mapping:
-          Literal: '#/components/schemas/PathPattern_string'
-          Var: '#/components/schemas/PathPattern_VarInfo'
-          Query: '#/components/schemas/PathPattern_QueryInfo'
-          Zip: '#/components/schemas/PathPattern_[PathPattern]'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PathPattern_string'
-      - $ref: '#/components/schemas/PathPattern_VarInfo'
-      - $ref: '#/components/schemas/PathPattern_QueryInfo'
-      - $ref: '#/components/schemas/PathPattern_[PathPattern]'
-    PathPattern_QueryInfo:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Query
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/QueryInfo'
-    PathPattern_VarInfo:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Var
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/VarInfo'
-    PathPattern_[PathPattern]:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Zip
-            type: string
-        required:
-        - type
-      - type: array
-        items:
-          $ref: '#/components/schemas/PathPattern'
-    PathPattern_string:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Literal
-            type: string
-        required:
-        - type
-      - type: string
     PromiseId:
       type: object
       properties:
@@ -1945,13 +1889,6 @@ components:
       required:
       - workerId
       - oplogIdx
-    QueryInfo:
-      type: object
-      properties:
-        key_name:
-          type: string
-      required:
-      - key_name
     ResponseMapping:
       type: object
       properties:
@@ -1985,7 +1922,7 @@ components:
         method:
           $ref: '#/components/schemas/MethodPattern'
         path:
-          $ref: '#/components/schemas/PathPattern'
+          type: string
         template:
           type: string
           format: uuid
@@ -2013,17 +1950,6 @@ components:
             $ref: '#/components/schemas/RouteValidationError'
       required:
       - errors
-    VarInfo:
-      type: object
-      properties:
-        key_name:
-          type: string
-        index:
-          type: integer
-          format: uint64
-      required:
-      - key_name
-      - index
     VersionInfo:
       type: object
       properties:
