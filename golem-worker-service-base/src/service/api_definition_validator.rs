@@ -64,11 +64,12 @@ impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
             .into_values()
             .map(|route| async move {
                 let id = &route.binding.template;
-                // TODO: Better error message.
                 self.template_service.get_latest(id).await.map_err(|e| {
+                    tracing::error!("Error getting latest template: {:?}", e);
+                    // TODO: Better error message.
                     RouteValidationError::from_route(
                         route,
-                        format!("Error getting latest template: {:?}", e),
+                        format!("Error getting latest template"),
                     )
                 })
             })
