@@ -21,7 +21,7 @@ use async_mutex::Mutex;
 use bytes::Bytes;
 use golem_common::cache::PendingOrFinal;
 use golem_common::model::oplog::OplogEntry;
-use golem_common::model::regions::DeletedRegions;
+use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder};
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
@@ -681,7 +681,7 @@ where
             .await;
 
         let status = calculate_latest_worker_status(&last_known.status, &new_entries);
-        let deleted_regions = calculate_deleted_regions(&last_known.deleted_regions, &new_entries);
+        let deleted_regions = calculate_deleted_regions(last_known.deleted_regions, &new_entries);
 
         Ok(WorkerStatusRecord {
             oplog_idx: last_oplog_index,
@@ -699,12 +699,12 @@ fn calculate_latest_worker_status(
     WorkerStatus::Running
 }
 
-fn calculate_deleted_regions(initial: &DeletedRegions, entries: &[OplogEntry]) -> DeletedRegions {
-    let mut result = initial.clone();
+fn calculate_deleted_regions(initial: DeletedRegions, entries: &[OplogEntry]) -> DeletedRegions {
+    let mut builder = DeletedRegionsBuilder::from_regions(initial.into_regions());
     for entry in entries {
         if let OplogEntry::Jump { jump, .. } = entry {
-            result.add(jump.clone());
+            builder.add(jump.clone());
         }
     }
-    result
+    builder.build()
 }

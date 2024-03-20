@@ -121,9 +121,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                 end: jump_source,
             };
 
-            // We have to repeat all previous jumps, so we add the new jump to the list of active jumps
-            // and write an oplog entry containing all of them
-            self.private_state.deleted_regions.add(jump.clone());
+            // Write an oplog entry with the new jump and then restart the worker
             self.set_oplog_entry(OplogEntry::jump(Timestamp::now_utc(), jump))
                 .await;
             self.commit_oplog().await;

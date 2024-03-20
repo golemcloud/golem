@@ -47,7 +47,7 @@ use bincode::{Decode, Encode};
 use bytes::Bytes;
 use cap_std::ambient_authority;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
-use golem_common::model::regions::DeletedRegions;
+use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
     WorkerMetadata, WorkerStatus,
@@ -274,6 +274,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         resources: HashMap::new(),
                         last_resource_id: 0,
                         deleted_regions: worker_config.deleted_regions.clone(),
+                        next_deleted_region: worker_config
+                            .deleted_regions
+                            .find_next_deleted_region(0),
                     },
                     temp_dir,
                     execution_status,
@@ -1071,6 +1074,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     resources: HashMap<u64, ResourceAny>,
     last_resource_id: u64,
     deleted_regions: DeletedRegions,
+    next_deleted_region: Option<OplogRegion>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -1118,14 +1122,26 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         let oplog_entries = self.read_oplog(self.oplog_idx, 1).await;
         let oplog_entry = oplog_entries[0].clone();
 
-        if let Some(idx) = self.deleted_regions.is_deleted_region_start(self.oplog_idx) {
-            debug!(
-                "Worker {} reached jump target {}, jumping to {} (oplog size: {})",
-                self.worker_id, self.oplog_idx, idx, self.oplog_size
-            );
-            self.oplog_idx = idx;
-        } else {
-            self.oplog_idx += 1;
+        let update_next_deleted_region = match &self.next_deleted_region {
+            Some(region) if region.start == self.oplog_idx => {
+                let target = region.end + 1;
+                debug!(
+                    "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
+                    self.worker_id, self.oplog_idx, target, self.oplog_size
+                );
+                self.oplog_idx = target;
+                true
+            }
+            _ => {
+                self.oplog_idx += 1;
+                false
+            }
+        };
+
+        if update_next_deleted_region {
+            self.next_deleted_region = self
+                .deleted_regions
+                .find_next_deleted_region(self.oplog_idx);
         }
 
         oplog_entry
