@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use tracing::debug;
 use uuid::Uuid;
@@ -21,8 +22,11 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
+use crate::preview2::golem::api::host::OplogIndex;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::{PromiseId, TemplateId, WorkerId};
+use golem_common::model::oplog::OplogEntry;
+use golem_common::model::regions::OplogRegion;
+use golem_common::model::{PromiseId, TemplateId, Timestamp, WorkerId};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
@@ -81,6 +85,58 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             Some(&function_name),
         );
         Ok(golem::rpc::types::Uri { value: uri.value })
+    }
+
+    async fn get_oplog_index(&mut self) -> anyhow::Result<OplogIndex> {
+        record_host_function_call("golem::api", "get_oplog_index");
+        let result = self.private_state.oplog_idx;
+        if self.is_live() {
+            self.set_oplog_entry(OplogEntry::nop(Timestamp::now_utc()))
+                .await;
+        } else {
+            let _ = self.get_oplog_entry_marker().await?;
+        }
+        Ok(result)
+    }
+
+    async fn set_oplog_index(&mut self, oplog_idx: OplogIndex) -> anyhow::Result<()> {
+        record_host_function_call("golem::api", "set_oplog_index");
+        let jump_source = self.private_state.oplog_idx;
+        let jump_target = oplog_idx;
+        if jump_target > jump_source {
+            Err(anyhow!(
+                "Attempted to jump forward in oplog to index {jump_target} from {jump_source}"
+            ))
+        } else if self
+            .private_state
+            .deleted_regions
+            .is_in_deleted_region(jump_target)
+        {
+            Err(anyhow!(
+                "Attempted to jump to a deleted region in oplog to index {jump_target} from {jump_source}"
+            ))
+        } else if self.is_live() {
+            let jump = OplogRegion {
+                start: jump_target,
+                end: jump_source,
+            };
+
+            // Write an oplog entry with the new jump and then restart the worker
+            self.private_state.deleted_regions.add(jump.clone());
+            self.set_oplog_entry(OplogEntry::jump(Timestamp::now_utc(), jump))
+                .await;
+            self.commit_oplog().await;
+
+            debug!(
+                "Interrupting live execution of {} for jumping from {jump_source} to {jump_target}",
+                self.worker_id
+            );
+            Err(InterruptKind::Jump.into())
+        } else {
+            // In replay mode we never have to do anything here
+            debug!("Ignoring replayed set_oplog_index for {}", self.worker_id);
+            Ok(())
+        }
     }
 }
 

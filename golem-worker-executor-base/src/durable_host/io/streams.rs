@@ -21,7 +21,7 @@ use crate::durable_host::serialized::SerializableStreamError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::WrappedFunctionType;
+use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime_wasi::preview2::bindings::wasi::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };

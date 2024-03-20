@@ -17,7 +17,6 @@ use std::time::Duration;
 
 use cap_std::fs::Dir;
 
-use tracing::debug;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 use wasmtime_wasi::preview2::bindings::wasi;
@@ -139,7 +138,6 @@ where
     F: FnOnce(WasiCtx, ResourceTable) -> T,
 {
     let table = ResourceTable::new();
-    debug!("Creating WASI context, root directory is {:?}", root_dir);
     let wasi = WasiCtxBuilder::new()
         .args(args)
         .envs(env)

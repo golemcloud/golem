@@ -29,6 +29,7 @@ poem-openapi = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 rand = "0.8.5"
+range-set-blaze = "0.1.16"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

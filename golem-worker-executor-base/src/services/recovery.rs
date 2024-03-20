@@ -48,13 +48,13 @@ pub trait RecoveryManagement {
     async fn schedule_recovery_for_error(
         &self,
         worker_id: &VersionedWorkerId,
-        previous_tries: u32,
+        previous_tries: u64,
         current_error: &anyhow::Error,
     ) -> RecoveryDecision;
     async fn schedule_recovery_on_startup(
         &self,
         worker_id: &VersionedWorkerId,
-        previous_tries: u32,
+        previous_tries: u64,
     ) -> RecoveryDecision;
 }
 
@@ -280,13 +280,14 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 
     fn get_recovery_decision_for_error(
         &self,
-        previous_tries: u32,
+        previous_tries: u64,
         current_error: &anyhow::Error,
     ) -> RecoveryDecision {
         match current_error.root_cause().downcast_ref::<InterruptKind>() {
             Some(InterruptKind::Interrupt) => RecoveryDecision::None,
             Some(InterruptKind::Suspend) => RecoveryDecision::None,
             Some(InterruptKind::Restart) => RecoveryDecision::Immediate,
+            Some(InterruptKind::Jump) => RecoveryDecision::Immediate,
             None => match Ctx::is_exit(current_error) {
                 Some(_) => RecoveryDecision::None,
                 None => match current_error.root_cause().downcast_ref::<Trap>() {
@@ -307,8 +308,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         }
     }
 
-    fn get_recovery_decision_on_startup(&self, previous_tries: u32) -> RecoveryDecision {
-        if previous_tries < self.golem_config.retry.max_attempts {
+    fn get_recovery_decision_on_startup(&self, previous_tries: u64) -> RecoveryDecision {
+        if previous_tries < (self.golem_config.retry.max_attempts as u64) {
             RecoveryDecision::Immediate
         } else {
             RecoveryDecision::None
@@ -401,7 +402,7 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     async fn schedule_recovery_for_error(
         &self,
         worker_id: &VersionedWorkerId,
-        previous_tries: u32,
+        previous_tries: u64,
         current_error: &anyhow::Error,
     ) -> RecoveryDecision {
         self.schedule_recovery(
@@ -414,7 +415,7 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     async fn schedule_recovery_on_startup(
         &self,
         worker_id: &VersionedWorkerId,
-        previous_tries: u32,
+        previous_tries: u64,
     ) -> RecoveryDecision {
         self.schedule_recovery(
             worker_id,
@@ -476,7 +477,7 @@ impl RecoveryManagement for RecoveryManagementMock {
     async fn schedule_recovery_for_error(
         &self,
         _worker_id: &VersionedWorkerId,
-        _previous_tries: u32,
+        _previous_tries: u64,
         _current_error: &anyhow::Error,
     ) -> RecoveryDecision {
         unimplemented!()
@@ -485,7 +486,7 @@ impl RecoveryManagement for RecoveryManagementMock {
     async fn schedule_recovery_on_startup(
         &self,
         _worker_id: &VersionedWorkerId,
-        _previous_tries: u32,
+        _previous_tries: u64,
     ) -> RecoveryDecision {
         unimplemented!()
     }
@@ -681,14 +682,14 @@ mod tests {
             _this: &T,
             _worker_id: &WorkerId,
             _status: WorkerStatus,
-        ) {
+        ) -> Result<(), GolemError> {
             unimplemented!()
         }
 
         async fn get_worker_retry_count<T: HasAll<Self> + Send + Sync>(
             _this: &T,
             _worker_id: &WorkerId,
-        ) -> u32 {
+        ) -> u64 {
             unimplemented!()
         }
 

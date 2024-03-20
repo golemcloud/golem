@@ -17,6 +17,7 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{ShardAssignment, ShardId, VersionedWorkerId, WorkerId};
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +46,7 @@ pub enum InterruptKind {
     Interrupt,
     Restart,
     Suspend,
+    Jump,
 }
 
 impl Display for InterruptKind {
@@ -53,18 +55,20 @@ impl Display for InterruptKind {
             InterruptKind::Interrupt => write!(f, "Interrupted via the Golem API"),
             InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
             InterruptKind::Suspend => write!(f, "Suspended"),
+            InterruptKind::Jump => write!(f, "Jumping back in time"),
         }
     }
 }
 
 impl Error for InterruptKind {}
 
-/// Worker-specific configuration. These values are used to initialize the worker and they can
+/// Worker-specific configuration. These values are used to initialize the worker, and they can
 /// be different for each worker.
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    pub deleted_regions: DeletedRegions,
 }
 
 impl WorkerConfig {
@@ -72,6 +76,7 @@ impl WorkerConfig {
         versioned_worker_id: VersionedWorkerId,
         worker_args: Vec<String>,
         mut worker_env: Vec<(String, String)>,
+        deleted_regions: DeletedRegions,
     ) -> WorkerConfig {
         let worker_name = versioned_worker_id.worker_id.worker_name.clone();
         let template_id = versioned_worker_id.worker_id.template_id;
@@ -82,6 +87,7 @@ impl WorkerConfig {
         WorkerConfig {
             args: worker_args,
             env: worker_env,
+            deleted_regions,
         }
     }
 }

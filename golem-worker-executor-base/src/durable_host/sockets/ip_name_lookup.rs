@@ -19,7 +19,7 @@ use crate::durable_host::serialized::{SerializableError, SerializableIpAddresses
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::WrappedFunctionType;
+use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime_wasi::preview2::bindings::sockets::network::ErrorCode;
 use wasmtime_wasi::preview2::bindings::wasi::sockets::ip_name_lookup::{
     Host, HostResolveAddressStream, IpAddress, Network, Pollable, ResolveAddressStream,

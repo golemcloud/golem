@@ -19,7 +19,7 @@ use bytes::Bytes;
 use fred::prelude::RedisValue;
 use fred::types::RedisKey;
 use golem_common::metrics::redis::record_redis_serialized_size;
-use golem_common::model::OplogEntry;
+use golem_common::model::oplog::OplogEntry;
 use golem_common::model::WorkerId;
 use golem_common::redis::RedisPool;
 
@@ -29,11 +29,11 @@ use crate::metrics::oplog::record_oplog_call;
 pub trait OplogService {
     async fn append(&self, worker_id: &WorkerId, arrays: &[OplogEntry]);
 
-    async fn get_size(&self, worker_id: &WorkerId) -> i32;
+    async fn get_size(&self, worker_id: &WorkerId) -> u64;
 
     async fn delete(&self, worker_id: &WorkerId);
 
-    async fn read(&self, worker_id: &WorkerId, idx: i32, n: i32) -> Vec<OplogEntry>;
+    async fn read(&self, worker_id: &WorkerId, idx: u64, n: u64) -> Vec<OplogEntry>;
 }
 
 #[derive(Clone, Debug)]
@@ -109,7 +109,7 @@ impl OplogService for OplogServiceDefault {
         }
     }
 
-    async fn get_size(&self, worker_id: &WorkerId) -> i32 {
+    async fn get_size(&self, worker_id: &WorkerId) -> u64 {
         record_oplog_call("get_size");
 
         let key = get_oplog_redis_key(worker_id);
@@ -137,7 +137,7 @@ impl OplogService for OplogServiceDefault {
             });
     }
 
-    async fn read(&self, worker_id: &WorkerId, idx: i32, n: i32) -> Vec<OplogEntry> {
+    async fn read(&self, worker_id: &WorkerId, idx: u64, n: u64) -> Vec<OplogEntry> {
         record_oplog_call("read");
 
         let key = get_oplog_redis_key(worker_id);
@@ -200,7 +200,7 @@ impl OplogService for OplogServiceMock {
         unimplemented!()
     }
 
-    async fn get_size(&self, _worker_id: &WorkerId) -> i32 {
+    async fn get_size(&self, _worker_id: &WorkerId) -> u64 {
         unimplemented!()
     }
 
@@ -208,7 +208,7 @@ impl OplogService for OplogServiceMock {
         unimplemented!()
     }
 
-    async fn read(&self, _worker_id: &WorkerId, _idx: i32, _n: i32) -> Vec<OplogEntry> {
+    async fn read(&self, _worker_id: &WorkerId, _idx: u64, _n: u64) -> Vec<OplogEntry> {
         unimplemented!()
     }
 }

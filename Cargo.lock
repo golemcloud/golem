@@ -2636,6 +2636,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "gen_ops"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "304de19db7028420975a296ab0fcbbc8e69438c4ed254a1e41e2a7f37d5f0e0a"
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2812,6 +2818,7 @@ dependencies = [
  "prometheus",
  "prost 0.12.3",
  "rand 0.8.5",
+ "range-set-blaze",
  "serde",
  "serde_json",
  "tokio",
@@ -3029,9 +3036,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ce8a760c192419ae1e55fcef20470a248bbd2e19135ae13b6886ddb8619d142"
+checksum = "b3263c22aa93cb043f2990a460547669627af71379833003d5605f86d970b301"
 
 [[package]]
 name = "golem-worker-executor"
@@ -5648,6 +5655,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f97cdb2a36ed4183de61b2f824cc45c9f1037f28afe0a322e9fff4c108b5aaa"
 dependencies = [
  "rand_core 0.6.4",
+]
+
+[[package]]
+name = "range-set-blaze"
+version = "0.1.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8421b5d459262eabbe49048d362897ff3e3830b44eac6cfe341d6acb2f0f13d2"
+dependencies = [
+ "gen_ops",
+ "itertools 0.12.1",
+ "num-integer",
+ "num-traits",
 ]
 
 [[package]]
