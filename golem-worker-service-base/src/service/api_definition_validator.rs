@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     api_definition::{ApiDefinition, MethodPattern, PathPattern, Route},
-    service::template_service::TemplateService,
+    service::template::TemplateService,
 };
 use async_trait::async_trait;
 use futures::future::join_all;

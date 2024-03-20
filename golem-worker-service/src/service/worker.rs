@@ -33,7 +33,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
 use golem_common::model::{CallingConvention, InvocationKey, WorkerStatus};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
-use golem_worker_service_base::service::template_service::TemplateService;
+use golem_worker_service_base::service::template::TemplateService;
 use serde_json::Value;
 use tokio::time::sleep;
 use tokio_stream::Stream;

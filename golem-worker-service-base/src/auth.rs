@@ -26,7 +26,7 @@ pub trait AuthService<AuthCtx, Namespace> {
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum AuthError {
-    #[error("AuthenticationError: {0}")]
+    #[error("Unauthorized: {0}")]
     Unauthorized(String),
     #[error("Auth {permission} is forbidden: {reason}")]
     Forbidden {

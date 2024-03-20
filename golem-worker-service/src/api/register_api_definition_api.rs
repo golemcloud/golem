@@ -13,7 +13,7 @@ use golem_worker_service_base::api_definition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, Version};
 use golem_worker_service_base::auth::{AuthService, CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::oas_worker_bridge::*;
-use golem_worker_service_base::service::api_definition_service::ApiDefinitionService;
+use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 
 pub struct RegisterApiDefinitionApi {
     pub definition_service:
@@ -168,7 +168,7 @@ mod test {
     use poem::test::TestClient;
 
     use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
-    use golem_worker_service_base::service::api_definition_service::RegisterApiDefinitionDefault;
+    use golem_worker_service_base::service::api_definition::RegisterApiDefinitionDefault;
 
     use super::*;
 

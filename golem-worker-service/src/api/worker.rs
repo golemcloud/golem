@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use golem_common::model::{CallingConvention, InvocationKey, TemplateId};
 use golem_service_base::api_tags::ApiTags;
-use golem_worker_service_base::service::template_service::TemplateService;
+use golem_worker_service_base::service::template::TemplateService;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;

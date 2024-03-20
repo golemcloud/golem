@@ -16,7 +16,7 @@ use golem_worker_service_base::http_request::InputHttpRequest;
 use golem_worker_service_base::oas_worker_bridge::{
     GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION,
 };
-use golem_worker_service_base::service::api_definition_service::{
+use golem_worker_service_base::service::api_definition::{
     ApiDefinitionKey, ApiDefinitionService, RegisterApiDefinitionDefault,
 };
 use golem_worker_service_base::service::api_definition_validator::{
@@ -25,7 +25,7 @@ use golem_worker_service_base::service::api_definition_validator::{
 use golem_worker_service_base::service::http_request_definition_lookup::{
     ApiDefinitionLookupError, HttpRequestDefinitionLookup,
 };
-use golem_worker_service_base::service::template_service::{
+use golem_worker_service_base::service::template::{
     TemplateService, TemplateServiceDefault, TemplateServiceNoop,
 };
 use golem_worker_service_base::worker_request_to_response::WorkerRequestToResponse;
