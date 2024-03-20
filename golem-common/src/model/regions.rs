@@ -124,6 +124,14 @@ impl DeletedRegions {
         }
     }
 
+    /// Adds a new region to the list of deleted regions
+    pub fn add(&mut self, region: OplogRegion) {
+        // We rebuild the map to make sure overlapping regions are properly merged
+        let mut builder = DeletedRegionsBuilder::from_regions(self.regions.clone().into_values());
+        builder.add(region);
+        self.regions = builder.build().regions;
+    }
+
     /// Returns the list of deleted regions
     pub fn regions(&self) -> Values<'_, u64, OplogRegion> {
         self.regions.values()
