@@ -6,6 +6,8 @@ shardManager:
     grpc: 9001
   service:
     type: ClusterIP
+  worker:
+    healthCheckType: "Grpc"
   redis:
     port: 6379
     host: golem-redis-master
