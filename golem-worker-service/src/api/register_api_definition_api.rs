@@ -13,7 +13,7 @@ use golem_worker_service_base::api_definition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, Version};
 use golem_worker_service_base::auth::{AuthService, CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::oas_worker_bridge::*;
-use golem_worker_service_base::service::api_definition_service::ApiDefinitionService;
+use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 
 pub struct RegisterApiDefinitionApi {
     pub definition_service:
@@ -164,10 +164,11 @@ impl RegisterApiDefinitionApi {
 #[cfg(test)]
 mod test {
     use golem_worker_service_base::auth::AuthServiceNoop;
+    use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
     use poem::test::TestClient;
 
     use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
-    use golem_worker_service_base::service::api_definition_service::RegisterApiDefinitionDefault;
+    use golem_worker_service_base::service::api_definition::RegisterApiDefinitionDefault;
 
     use super::*;
 
@@ -175,6 +176,7 @@ mod test {
         let definition_service = RegisterApiDefinitionDefault::new(
             Arc::new(AuthServiceNoop {}),
             Arc::new(InMemoryRegistry::default()),
+            Arc::new(ApiDefinitionValidatorNoop {}),
         );
 
         let endpoint = RegisterApiDefinitionApi::new(

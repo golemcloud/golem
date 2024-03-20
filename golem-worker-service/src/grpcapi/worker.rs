@@ -32,10 +32,10 @@ use golem_api_grpc::proto::golem::worker::{
     worker_error, worker_execution_error, InvocationKey, InvokeResult, UnknownError,
     VersionedWorkerId, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
 };
+use golem_worker_service_base::service::template::TemplateService;
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
 
-use crate::service::template::TemplateService;
 use crate::service::worker::{ConnectWorkerStream, WorkerService};
 
 fn server_error<T>(error: T) -> GrpcWorkerError

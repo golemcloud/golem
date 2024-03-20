@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use std::sync::Mutex;
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId};
-use crate::service::api_definition_service::{ApiDefinitionKey, ApiNamespace};
+use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
@@ -335,7 +335,7 @@ impl RedisApiRegistry {
 
 mod redis_keys {
 
-    use crate::service::api_definition_service::{ApiDefinitionKey, ApiNamespace};
+    use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
 
     use super::ApiRegistrationRepoError;
 

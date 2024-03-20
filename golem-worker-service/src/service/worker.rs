@@ -33,6 +33,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
 use golem_common::model::{CallingConvention, InvocationKey, WorkerStatus};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
+use golem_worker_service_base::service::template::TemplateService;
 use serde_json::Value;
 use tokio::time::sleep;
 use tokio_stream::Stream;
@@ -40,7 +41,6 @@ use tonic::transport::Channel;
 use tonic::{Status, Streaming};
 use tracing::{debug, info};
 
-use crate::service::template::TemplateService;
 use golem_service_base::model::*;
 use golem_service_base::routing_table::{RoutingTableError, RoutingTableService};
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
