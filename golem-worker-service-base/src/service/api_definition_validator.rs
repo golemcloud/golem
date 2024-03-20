@@ -57,8 +57,8 @@ impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
     async fn validate(&self, api: &ApiDefinition) -> Result<(), ValidationError> {
         let get_templates = api
             .routes
-            .clone()
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|route| (route.binding.template.clone(), route))
             .collect::<HashMap<_, _>>()
             .into_values()
@@ -84,6 +84,7 @@ impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
                 let errors = errors.into_iter().map(|r| r.unwrap_err()).collect();
                 return Err(ValidationError { errors });
             }
+
             successes
                 .into_iter()
                 .map(|r| r.unwrap())
@@ -91,12 +92,21 @@ impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
                 .collect()
         };
 
-        let errors = api
-            .routes
-            .clone()
-            .into_iter()
-            .flat_map(|route| validate_route(route, &templates).err())
-            .collect::<Vec<_>>();
+        let errors = {
+            let route_validation = api
+                .routes
+                .iter()
+                .cloned()
+                .flat_map(|route| validate_route(route, &templates).err())
+                .collect::<Vec<_>>();
+
+            let unique_route_errors = unique_routes(api.routes.as_slice());
+
+            let mut errors = route_validation;
+            errors.extend(unique_route_errors);
+
+            errors
+        };
 
         if errors.is_empty() {
             Ok(())
@@ -104,6 +114,37 @@ impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
             Err(ValidationError { errors })
         }
     }
+}
+
+fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub struct RouteKey<'a> {
+        pub method: &'a MethodPattern,
+        pub path: &'a PathPattern,
+    }
+
+    let mut seen = std::collections::HashSet::new();
+
+    routes
+        .iter()
+        .flat_map(|route| {
+            let route_key = RouteKey {
+                method: &route.method,
+                path: &route.path,
+            };
+            if seen.contains(&route_key) {
+                Some(RouteValidationError {
+                    method: route_key.method.clone(),
+                    path: route_key.path.clone(),
+                    template: route.binding.template.clone(),
+                    detail: "Duplicate route".to_string(),
+                })
+            } else {
+                seen.insert(route_key);
+                None
+            }
+        })
+        .collect()
 }
 
 fn validate_route(
