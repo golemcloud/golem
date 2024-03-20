@@ -1,7 +1,11 @@
 use crate::context::db::DbInfo;
 use crate::context::golem_template_service::{GolemTemplateService, GolemTemplateServiceInfo};
 use crate::context::redis::RedisInfo;
-use crate::context::{EnvConfig, ManagedPod, ManagedService, Runtime, ShardManagerInfo, NETWORK, TAG, ManagedRouting, K8sNamespace, K8sRoutingType};
+use crate::context::routing::Routing;
+use crate::context::{
+    EnvConfig, K8sNamespace, K8sRoutingType, ManagedPod, ManagedRouting, ManagedService, Runtime,
+    ShardManagerInfo, NETWORK, TAG,
+};
 use anyhow::{anyhow, Result};
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
@@ -17,7 +21,6 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::{Child, Command};
 use url::Url;
-use crate::context::routing::Routing;
 
 #[derive(Debug)]
 struct GolemWorkerServiceImage {
@@ -109,8 +112,17 @@ impl<'docker_client> GolemWorkerService<'docker_client> {
                 redis,
                 template,
             ),
-            Runtime::K8S{ namespace, routing } => {
-                GolemWorkerService::start_k8s(env_config, shard_manager, db, redis, template, namespace, routing).await
+            Runtime::K8S { namespace, routing } => {
+                GolemWorkerService::start_k8s(
+                    env_config,
+                    shard_manager,
+                    db,
+                    redis,
+                    template,
+                    namespace,
+                    routing,
+                )
+                .await
             }
         }
     }
@@ -121,7 +133,8 @@ impl<'docker_client> GolemWorkerService<'docker_client> {
         db: &DbInfo,
         redis: &RedisInfo,
         template: &GolemTemplateServiceInfo,
-        namespace: &K8sNamespace, k8s_routing_type: &K8sRoutingType
+        namespace: &K8sNamespace,
+        k8s_routing_type: &K8sRoutingType,
     ) -> Result<GolemWorkerService<'docker_client>> {
         println!("Starting Golem Worker Service pod with shard manager: {shard_manager:?}");
 
@@ -231,21 +244,20 @@ impl<'docker_client> GolemWorkerService<'docker_client> {
         } = Routing::create(name, http_port, namespace, k8s_routing_type).await?;
 
         let local_port = match k8s_routing_type {
-            K8sRoutingType::Minikube => {
-                res_srv
-                    .spec
-                    .as_ref()
-                    .ok_or(anyhow!("No spec in service"))?
-                    .ports
-                    .as_ref()
-                    .ok_or(anyhow!("No ports in service"))?
-                    .iter()
-                    .find(|p| p.name.iter().any(|n| n == "http"))
-                    .as_ref()
-                    .ok_or(anyhow!("No http port in spec"))?
-                    .node_port
-                    .ok_or(anyhow!("No node port for http port"))? as u16
-            }
+            K8sRoutingType::Minikube => res_srv
+                .spec
+                .as_ref()
+                .ok_or(anyhow!("No spec in service"))?
+                .ports
+                .as_ref()
+                .ok_or(anyhow!("No ports in service"))?
+                .iter()
+                .find(|p| p.name.iter().any(|n| n == "http"))
+                .as_ref()
+                .ok_or(anyhow!("No http port in spec"))?
+                .node_port
+                .ok_or(anyhow!("No node port for http port"))?
+                as u16,
             K8sRoutingType::Ingress => local_port,
         };
 

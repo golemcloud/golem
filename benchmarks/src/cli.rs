@@ -102,15 +102,15 @@ impl CliLive {
 
     fn template_base_url(&self) -> String {
         format!(
-            "{}://{}:{}", self.schema,
-            self.golem_template_host, self.golem_template_port
+            "{}://{}:{}",
+            self.schema, self.golem_template_host, self.golem_template_port
         )
     }
 
     fn worker_base_url(&self) -> String {
         format!(
-            "{}://{}:{}", self.schema,
-            self.golem_worker_host, self.golem_worker_port
+            "{}://{}:{}",
+            self.schema, self.golem_worker_host, self.golem_worker_port
         )
     }
 

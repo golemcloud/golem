@@ -1,5 +1,8 @@
 use crate::context::db::{Db, DbInner};
-use crate::context::{EnvConfig, ManagedPod, ManagedService, Runtime, NETWORK, K8sNamespace, K8sRoutingType};
+use crate::context::routing::Routing;
+use crate::context::{
+    EnvConfig, K8sNamespace, K8sRoutingType, ManagedPod, ManagedService, Runtime, NETWORK,
+};
 use anyhow::{anyhow, Result};
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
@@ -13,7 +16,6 @@ use tokio::io::BufReader;
 use tokio::process::{Child, Command};
 use tokio::time::sleep;
 use url::Url;
-use crate::context::routing::Routing;
 
 pub struct Redis<'docker_client> {
     host: String,
@@ -198,7 +200,10 @@ impl<'docker_client> Redis<'docker_client> {
         match &env_config.runtime {
             Runtime::Local => Redis::make_process(env_config).await,
             Runtime::Docker => Redis::start_docker(docker),
-            Runtime::K8S{namespace, routing: _ } => Redis::start_k8s(namespace).await,
+            Runtime::K8S {
+                namespace,
+                routing: _,
+            } => Redis::start_k8s(namespace).await,
         }
     }
 

@@ -1,6 +1,5 @@
 use crate::context::{
-    DbType, EnvConfig, K8sNamespace, K8sRoutingType, ManagedPod, ManagedService,
-    Runtime, NETWORK,
+    DbType, EnvConfig, K8sNamespace, K8sRoutingType, ManagedPod, ManagedService, Runtime, NETWORK,
 };
 use anyhow::Result;
 use k8s_openapi::api::core::v1::{Pod, Service};
@@ -97,15 +96,14 @@ impl<'docker_client> Db<'docker_client> {
         match &env_config.runtime {
             Runtime::Local => Self::start_postgres_docker(docker, true).await,
             Runtime::Docker => Self::start_postgres_docker(docker, false).await,
-            Runtime::K8S { namespace, routing: _ } => {
-                Self::start_postgres_k8s(namespace).await
-            }
+            Runtime::K8S {
+                namespace,
+                routing: _,
+            } => Self::start_postgres_k8s(namespace).await,
         }
     }
 
-    async fn start_postgres_k8s(
-        namespace: &K8sNamespace,
-    ) -> Result<Db<'docker_client>> {
+    async fn start_postgres_k8s(namespace: &K8sNamespace) -> Result<Db<'docker_client>> {
         println!("Creating Postgres pod");
 
         let pods: Api<Pod> = Api::namespaced(Client::try_default().await?, &namespace.0);
@@ -240,11 +238,7 @@ impl<'docker_client> Db<'docker_client> {
                 username: "postgres".to_owned(),
                 password: "postgres".to_owned(),
             }),
-            DbInner::K8S {
-                host,
-                port,
-                ..
-            } => DbInfo::Postgres(PostgresInfo {
+            DbInner::K8S { host, port, .. } => DbInfo::Postgres(PostgresInfo {
                 host: host.clone(),
                 port: *port,
                 database_name: "postgres".to_owned(),

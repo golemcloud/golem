@@ -1,10 +1,10 @@
-use std::time::Duration;
 use crate::context::{K8sNamespace, K8sRoutingType, ManagedRouting};
 use anyhow::{anyhow, Result};
 use k8s_openapi::api::networking::v1::Ingress;
 use kube::api::PostParams;
 use kube::{Api, Client};
 use serde_json::json;
+use std::time::Duration;
 use tokio::process::Command;
 use url::Url;
 
@@ -115,16 +115,22 @@ impl Routing {
 
     fn ingress_hostname(ingress: &Ingress, service_name: &str) -> Result<String> {
         let hostname = ingress
-            .status.as_ref()
+            .status
+            .as_ref()
             .ok_or(anyhow!("No ingress status for {service_name}"))?
-            .load_balancer.as_ref()
+            .load_balancer
+            .as_ref()
             .ok_or(anyhow!("No load balancer for {service_name}"))?
-            .ingress.as_ref()
+            .ingress
+            .as_ref()
             .ok_or(anyhow!("No ingress for {service_name}"))?
-            .get(0).as_ref()
+            .get(0)
+            .as_ref()
             .ok_or(anyhow!("Empty ingress for {service_name}"))?
-            .hostname.as_ref()
-            .ok_or(anyhow!("No ingress hostname for {service_name}"))?.to_string();
+            .hostname
+            .as_ref()
+            .ok_or(anyhow!("No ingress hostname for {service_name}"))?
+            .to_string();
 
         Ok(hostname)
     }

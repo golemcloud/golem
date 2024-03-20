@@ -17,9 +17,9 @@ use k8s_openapi::api::core::v1::{Namespace, Pod, Service};
 use k8s_openapi::api::networking::v1::Ingress;
 use kube::api::{DeleteParams, PostParams};
 use kube::{Api, Client};
+use serde_json::json;
 use std::path::PathBuf;
 use std::process::Stdio;
-use serde_json::json;
 use testcontainers::clients;
 
 const NETWORK: &str = "golem_test_network";
@@ -343,11 +343,14 @@ impl Context<'_> {
 
                 let res_ns = namespaces.create(&pp, &namespace).await?;
 
-                println!("Namespace created: {}", serde_json::to_string_pretty(&res_ns)?);
+                println!(
+                    "Namespace created: {}",
+                    serde_json::to_string_pretty(&res_ns)?
+                );
 
                 Ok(Some(ManagedNamespace::new(ns)))
             }
-            _ => Ok(None)
+            _ => Ok(None),
         }
     }
 

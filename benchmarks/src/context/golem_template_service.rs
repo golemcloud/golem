@@ -1,5 +1,9 @@
 use crate::context::db::DbInfo;
-use crate::context::{EnvConfig, ManagedPod, ManagedService, Runtime, NETWORK, TAG, K8sNamespace, K8sRoutingType, ManagedRouting};
+use crate::context::routing::Routing;
+use crate::context::{
+    EnvConfig, K8sNamespace, K8sRoutingType, ManagedPod, ManagedRouting, ManagedService, Runtime,
+    NETWORK, TAG,
+};
 use anyhow::{anyhow, Result};
 use golem_cli::clients::template::{TemplateClient, TemplateClientLive};
 use k8s_openapi::api::core::v1::{Pod, Service};
@@ -16,7 +20,6 @@ use tokio::io::BufReader;
 use tokio::process::{Child, Command};
 use tokio::time::Duration;
 use url::Url;
-use crate::context::routing::Routing;
 
 #[derive(Debug)]
 struct GolemTemplateServiceImage {
@@ -112,7 +115,9 @@ impl<'docker_client> GolemTemplateService<'docker_client> {
         match &env_config.runtime {
             Runtime::Local => GolemTemplateService::start_process(env_config, db).await,
             Runtime::Docker => GolemTemplateService::start_docker(docker, env_config, db),
-            Runtime::K8S{namespace, routing} => GolemTemplateService::start_k8s(env_config, db, namespace, routing).await,
+            Runtime::K8S { namespace, routing } => {
+                GolemTemplateService::start_k8s(env_config, db, namespace, routing).await
+            }
         }
     }
 
@@ -211,21 +216,20 @@ impl<'docker_client> GolemTemplateService<'docker_client> {
         } = Routing::create(name, http_port, namespace, k8s_routing_type).await?;
 
         let local_port = match k8s_routing_type {
-            K8sRoutingType::Minikube => {
-                res_srv
-                    .spec
-                    .as_ref()
-                    .ok_or(anyhow!("No spec in service"))?
-                    .ports
-                    .as_ref()
-                    .ok_or(anyhow!("No ports in service"))?
-                    .iter()
-                    .find(|p| p.name.iter().any(|n| n == "http"))
-                    .as_ref()
-                    .ok_or(anyhow!("No http port in spec"))?
-                    .node_port
-                    .ok_or(anyhow!("No node port for http port"))? as u16
-            }
+            K8sRoutingType::Minikube => res_srv
+                .spec
+                .as_ref()
+                .ok_or(anyhow!("No spec in service"))?
+                .ports
+                .as_ref()
+                .ok_or(anyhow!("No ports in service"))?
+                .iter()
+                .find(|p| p.name.iter().any(|n| n == "http"))
+                .as_ref()
+                .ok_or(anyhow!("No http port in spec"))?
+                .node_port
+                .ok_or(anyhow!("No node port for http port"))?
+                as u16,
             K8sRoutingType::Ingress => local_port,
         };
 
@@ -377,7 +381,8 @@ impl<'docker_client> GolemTemplateService<'docker_client> {
             }
         });
 
-        GolemTemplateService::wait_for_health_check(&env_config.schema,"localhost", http_port).await;
+        GolemTemplateService::wait_for_health_check(&env_config.schema, "localhost", http_port)
+            .await;
 
         Ok(GolemTemplateService {
             host: "localhost".to_string(),

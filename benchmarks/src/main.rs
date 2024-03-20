@@ -15,9 +15,9 @@ async fn main() -> Result<()> {
 
     let docker = clients::Cli::default();
     let mut conf = EnvConfig::from_env();
-    conf.runtime = Runtime::K8S{
+    conf.runtime = Runtime::K8S {
         namespace: K8sNamespace("benchmark".to_string()),
-        routing: K8sRoutingType::Ingress
+        routing: K8sRoutingType::Ingress,
     };
     conf.schema = "http".to_string();
     let context = Context::start(&docker, conf).await?;

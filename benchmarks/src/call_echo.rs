@@ -1,16 +1,16 @@
 use crate::benchmark::{Benchmark, BenchmarkConfig};
+use crate::cli::{Cli, CliLive};
 use crate::context::{Context, ContextInfo, EnvConfig, K8sNamespace, K8sRoutingType, Runtime};
 use anyhow::{anyhow, Result};
+use golem_cli::clients::template::TemplateView;
+use golem_cli::model::InvocationKey;
+use golem_client::model::{VersionedWorkerId, WorkerId};
+use serde_json::Value;
 use std::io::BufRead;
 use std::path::PathBuf;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use golem_client::model::{VersionedWorkerId, WorkerId};
-use serde_json::Value;
 use testcontainers::clients;
-use golem_cli::clients::template::TemplateView;
-use golem_cli::model::InvocationKey;
-use crate::cli::{Cli, CliLive};
 
 pub mod benchmark;
 pub mod cli;
@@ -52,7 +52,7 @@ fn run(docker: &clients::Cli) -> Result<()> {
     };
 
     let benchmark_config = BenchmarkConfig {
-        iterations: config.iterations
+        iterations: config.iterations,
     };
 
     let res = benchamrk.run(docker, config, benchmark_config)?;
@@ -81,9 +81,9 @@ async fn make_context_async<'docker_client>(
     config: CallEchoConfig,
 ) -> Result<Context<'docker_client>> {
     let mut env_conf = EnvConfig::from_env();
-    env_conf.runtime = Runtime::K8S{
+    env_conf.runtime = Runtime::K8S {
         namespace: K8sNamespace("benchmark".to_string()),
-        routing: K8sRoutingType::Ingress
+        routing: K8sRoutingType::Ingress,
     };
     env_conf.schema = "http".to_string();
     env_conf.n_worker_executors = config.n_worker_executors;
@@ -115,7 +115,8 @@ fn wait_for_startup(context: ContextInfo) -> Result<()> {
                 .env
                 .wasm_root
                 .join("option-service.wasm")
-                .to_str().ok_or(anyhow!("Can't print path."))?,
+                .to_str()
+                .ok_or(anyhow!("Can't print path."))?,
         ])?;
 
         Ok(template)
@@ -135,7 +136,10 @@ fn wait_for_startup(context: ContextInfo) -> Result<()> {
         }
     }
 
-    fn start_worker_unsafe(context: &ContextInfo, template: &TemplateView) -> Result<VersionedWorkerId> {
+    fn start_worker_unsafe(
+        context: &ContextInfo,
+        template: &TemplateView,
+    ) -> Result<VersionedWorkerId> {
         let cli = CliLive::make(context)?.with_long_args();
         let cfg = &cli.config;
         let worker_id: VersionedWorkerId = cli.run(&[
@@ -178,12 +182,22 @@ fn wait_for_startup(context: ContextInfo) -> Result<()> {
         }
     }
 
-    fn get_invocation_key_invoke_and_await_unsafe(context: &ContextInfo, worker_id: &WorkerId, function: &str, params: &str) -> Result<Value> {
+    fn get_invocation_key_invoke_and_await_unsafe(
+        context: &ContextInfo,
+        worker_id: &WorkerId,
+        function: &str,
+        params: &str,
+    ) -> Result<Value> {
         let key = get_invocation_key(context, worker_id);
         invoke_and_await_result(context, worker_id, function, params, &key)
     }
 
-    fn get_invocation_key_invoke_and_await_with_retry(context: &ContextInfo, worker_id: &WorkerId, function: &str, params: &str) -> Value {
+    fn get_invocation_key_invoke_and_await_with_retry(
+        context: &ContextInfo,
+        worker_id: &WorkerId,
+        function: &str,
+        params: &str,
+    ) -> Value {
         let mut n = 0;
         loop {
             match get_invocation_key_invoke_and_await_unsafe(context, worker_id, function, params) {
@@ -204,7 +218,12 @@ fn wait_for_startup(context: ContextInfo) -> Result<()> {
 
     for i in 1..=100 {
         println!("Initial worker call {i}/100");
-        let _ = get_invocation_key_invoke_and_await_with_retry(&context, &worker_id.worker_id, "golem:it/api/echo", r#"["Hello"]"#);
+        let _ = get_invocation_key_invoke_and_await_with_retry(
+            &context,
+            &worker_id.worker_id,
+            "golem:it/api/echo",
+            r#"["Hello"]"#,
+        );
     }
 
     Ok(())
@@ -225,7 +244,13 @@ fn get_invocation_key_unsafe(context: &ContextInfo, worker_id: &WorkerId) -> Res
     Ok(key)
 }
 
-fn invoke_and_await_result(context: &ContextInfo, worker_id: &WorkerId, function: &str, params: &str, key: &InvocationKey) -> Result<Value> {
+fn invoke_and_await_result(
+    context: &ContextInfo,
+    worker_id: &WorkerId,
+    function: &str,
+    params: &str,
+    key: &InvocationKey,
+) -> Result<Value> {
     let cli = CliLive::make(context)?.with_long_args();
     let cfg = &cli.config;
     let res = cli.run_json(&[
@@ -262,7 +287,8 @@ fn prepare(
     let cli = CliLive::make(&context)?.with_long_args();
     let cfg = &cli.config;
 
-    let mut workers = Vec::with_capacity((config.n_templates * config.n_workers_per_template) as usize);
+    let mut workers =
+        Vec::with_capacity((config.n_templates * config.n_workers_per_template) as usize);
 
     for t_n in 0..config.n_templates {
         let template_name = format!("run{run_id}t{t_n}");
@@ -276,7 +302,8 @@ fn prepare(
                 .env
                 .wasm_root
                 .join("option-service.wasm")
-                .to_str().ok_or(anyhow!("Can't print path."))?,
+                .to_str()
+                .ok_or(anyhow!("Can't print path."))?,
         ])?;
 
         for w_n in 0..config.n_workers_per_template {
@@ -295,10 +322,7 @@ fn prepare(
 
     println!("Created env for workload run {run_id}");
 
-    Ok(CallEchoState{
-        run_id,
-        workers,
-    })
+    Ok(CallEchoState { run_id, workers })
 }
 
 fn validate_state(context: ContextInfo, state: CallEchoState) -> Result<()> {
@@ -318,7 +342,13 @@ fn workload(context: ContextInfo, state: CallEchoState) -> Result<Duration> {
         let context = context.clone();
         joins.push(std::thread::spawn(move || {
             let key = get_invocation_key_unsafe(&context, &worker)?;
-            let _ = invoke_and_await_result(&context, &worker, "golem:it/api/echo", r#"["Hello"]"#, &key)?;
+            let _ = invoke_and_await_result(
+                &context,
+                &worker,
+                "golem:it/api/echo",
+                r#"["Hello"]"#,
+                &key,
+            )?;
 
             Ok(())
         }));
@@ -332,10 +362,7 @@ fn workload(context: ContextInfo, state: CallEchoState) -> Result<Duration> {
 }
 
 fn cleanup(context: Context) -> Result<()> {
-
-    let stop = async move {
-        drop(context)
-    };
+    let stop = async move { drop(context) };
 
     tokio::runtime::Builder::new_current_thread()
         .enable_all()

@@ -1,7 +1,7 @@
 use crate::context::{Context, ContextInfo};
 use anyhow::Result;
-use std::time::Duration;
 use k8s_openapi::serde::{Deserialize, Serialize};
+use std::time::Duration;
 use testcontainers::clients;
 
 pub struct BenchmarkConfig {

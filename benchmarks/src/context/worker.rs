@@ -1,7 +1,10 @@
 use crate::context::golem_template_service::GolemTemplateServiceInfo;
 use crate::context::golem_worker_service::GolemWorkerServiceInfo;
 use crate::context::redis::RedisInfo;
-use crate::context::{EnvConfig, ManagedPod, ManagedService, Runtime, ShardManagerInfo, NETWORK, TAG, ManagedRouting, K8sNamespace};
+use crate::context::{
+    EnvConfig, K8sNamespace, ManagedPod, ManagedRouting, ManagedService, Runtime, ShardManagerInfo,
+    NETWORK, TAG,
+};
 use anyhow::{anyhow, Result};
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
@@ -113,7 +116,10 @@ impl<'docker_client> WorkerExecutor<'docker_client> {
                 template,
                 shard_manager,
             ),
-            Runtime::K8S{namespace, routing: _} => {
+            Runtime::K8S {
+                namespace,
+                routing: _,
+            } => {
                 WorkerExecutor::start_k8s(
                     shard_id,
                     env_config,

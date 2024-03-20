@@ -1,5 +1,5 @@
 use crate::context::redis::RedisInfo;
-use crate::context::{EnvConfig, ManagedPod, ManagedService, Runtime, NETWORK, TAG, K8sNamespace};
+use crate::context::{EnvConfig, K8sNamespace, ManagedPod, ManagedService, Runtime, NETWORK, TAG};
 use anyhow::{anyhow, Result};
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
@@ -81,7 +81,10 @@ impl<'docker_client> ShardManager<'docker_client> {
         match &env_config.runtime {
             Runtime::Local => ShardManager::start_process(env_config, redis).await,
             Runtime::Docker => ShardManager::start_docker(docker, env_config, redis),
-            Runtime::K8S{namespace, routing: _} => ShardManager::start_k8s(env_config, redis, namespace).await,
+            Runtime::K8S {
+                namespace,
+                routing: _,
+            } => ShardManager::start_k8s(env_config, redis, namespace).await,
         }
     }
 
