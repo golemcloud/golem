@@ -21,7 +21,7 @@ use golem_common::model::TemplateId;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::{
-    ConnectWorkerStream, WorkerService, WorkerServiceBaseError,
+    ConnectWorkerStream, WorkerService, WorkerServiceError,
 };
 use poem::web::websocket::{Message, WebSocket, WebSocketStream};
 use poem::web::Data;
@@ -196,8 +196,8 @@ impl From<serde_json::Error> for ConnectError {
     }
 }
 
-impl From<WorkerServiceBaseError> for ConnectError {
-    fn from(error: WorkerServiceBaseError) -> Self {
+impl From<WorkerServiceError> for ConnectError {
+    fn from(error: WorkerServiceError) -> Self {
         ConnectError(error.to_string())
     }
 }

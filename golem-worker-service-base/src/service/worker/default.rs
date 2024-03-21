@@ -35,7 +35,7 @@ use tokio::time::sleep;
 use tonic::transport::Channel;
 use tracing::{debug, info};
 
-use super::{ConnectWorkerStream, WorkerServiceBaseError};
+use super::{ConnectWorkerStream, WorkerServiceError};
 
 #[async_trait]
 pub trait WorkerService<AuthCtx> {
@@ -43,7 +43,7 @@ pub trait WorkerService<AuthCtx> {
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<VersionedWorkerId, WorkerServiceBaseError>;
+    ) -> Result<VersionedWorkerId, WorkerServiceError>;
 
     async fn create(
         &self,
@@ -52,25 +52,25 @@ pub trait WorkerService<AuthCtx> {
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         auth_ctx: &AuthCtx,
-    ) -> Result<VersionedWorkerId, WorkerServiceBaseError>;
+    ) -> Result<VersionedWorkerId, WorkerServiceError>;
 
     async fn connect(
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<ConnectWorkerStream, WorkerServiceBaseError>;
+    ) -> Result<ConnectWorkerStream, WorkerServiceError>;
 
     async fn delete(
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerServiceBaseError>;
+    ) -> Result<(), WorkerServiceError>;
 
     async fn get_invocation_key(
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<InvocationKey, WorkerServiceBaseError>;
+    ) -> Result<InvocationKey, WorkerServiceError>;
 
     async fn invoke_and_await_function(
         &self,
@@ -80,7 +80,7 @@ pub trait WorkerService<AuthCtx> {
         params: Value,
         calling_convention: &CallingConvention,
         auth_ctx: &AuthCtx,
-    ) -> Result<Value, WorkerServiceBaseError>;
+    ) -> Result<Value, WorkerServiceError>;
 
     async fn invoke_and_await_function_proto(
         &self,
@@ -90,7 +90,7 @@ pub trait WorkerService<AuthCtx> {
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
         auth_ctx: &AuthCtx,
-    ) -> Result<ProtoInvokeResult, WorkerServiceBaseError>;
+    ) -> Result<ProtoInvokeResult, WorkerServiceError>;
 
     async fn invoke_function(
         &self,
@@ -98,7 +98,7 @@ pub trait WorkerService<AuthCtx> {
         function_name: String,
         params: Value,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerServiceBaseError>;
+    ) -> Result<(), WorkerServiceError>;
 
     async fn invoke_fn_proto(
         &self,
@@ -106,7 +106,7 @@ pub trait WorkerService<AuthCtx> {
         function_name: String,
         params: Vec<ProtoVal>,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerServiceBaseError>;
+    ) -> Result<(), WorkerServiceError>;
 
     async fn complete_promise(
         &self,
@@ -114,26 +114,26 @@ pub trait WorkerService<AuthCtx> {
         oplog_id: i32,
         data: Vec<u8>,
         auth_ctx: &AuthCtx,
-    ) -> Result<bool, WorkerServiceBaseError>;
+    ) -> Result<bool, WorkerServiceError>;
 
     async fn interrupt(
         &self,
         worker_id: &WorkerId,
         recover_immediately: bool,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerServiceBaseError>;
+    ) -> Result<(), WorkerServiceError>;
 
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<WorkerMetadata, WorkerServiceBaseError>;
+    ) -> Result<WorkerMetadata, WorkerServiceError>;
 
     async fn resume(
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerServiceBaseError>;
+    ) -> Result<(), WorkerServiceError>;
 }
 
 #[derive(Clone)]
@@ -206,7 +206,7 @@ where
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
+    ) -> Result<VersionedWorkerId, WorkerServiceError> {
         // TODO: More granular permisssions.
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::View);
         let _ = self
@@ -227,7 +227,7 @@ where
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         auth_ctx: &AuthCtx,
-    ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
+    ) -> Result<VersionedWorkerId, WorkerServiceError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Create);
         let namespace = self
             .auth_service
@@ -285,7 +285,7 @@ where
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<ConnectWorkerStream, WorkerServiceBaseError> {
+    ) -> Result<ConnectWorkerStream, WorkerServiceError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::View);
         let namespace = self
             .auth_service
@@ -309,11 +309,9 @@ where
                         Ok(response) => Ok(response),
                         Err(status) => {
                             if status.code() == tonic::Code::NotFound {
-                                Err(WorkerServiceBaseError::WorkerNotFound(
-                                    worker_id.clone().into(),
-                                ))
+                                Err(WorkerServiceError::WorkerNotFound(worker_id.clone().into()))
                             } else {
-                                Err(WorkerServiceBaseError::internal(status))
+                                Err(WorkerServiceError::internal(status))
                             }
                         }
                     }
@@ -333,7 +331,7 @@ where
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerServiceBaseError> {
+    ) -> Result<(), WorkerServiceError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Delete);
         let _ = self
             .auth_service
@@ -379,7 +377,7 @@ where
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<InvocationKey, WorkerServiceBaseError> {
+    ) -> Result<InvocationKey, WorkerServiceError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Create);
         let _ = self
             .auth_service
@@ -432,7 +430,7 @@ where
         params: Value,
         calling_convention: &CallingConvention,
         auth_ctx: &AuthCtx,
-    ) -> Result<Value, WorkerServiceBaseError> {
+    ) -> Result<Value, WorkerServiceError> {
         let template_details = self
             .try_get_template_for_worker(worker_id, auth_ctx)
             .await?;
@@ -441,7 +439,7 @@ where
             .metadata
             .function_by_name(&function_name)
             .ok_or_else(|| {
-                WorkerServiceBaseError::TypeChecker("Failed to find the function".to_string())
+                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -452,7 +450,7 @@ where
                     .collect(),
                 calling_convention.clone(),
             )
-            .map_err(|err| WorkerServiceBaseError::TypeChecker(err.join(", ")))?;
+            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
         let results_val = self
             .invoke_and_await_function_proto(
                 worker_id,
@@ -473,7 +471,7 @@ where
         let invoke_response_json = results_val
             .result
             .validate_function_result(function_results, calling_convention.clone())
-            .map_err(|err| WorkerServiceBaseError::TypeChecker(err.join(", ")))?;
+            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
         Ok(invoke_response_json)
     }
 
@@ -485,7 +483,7 @@ where
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
         auth_ctx: &AuthCtx,
-    ) -> Result<ProtoInvokeResult, WorkerServiceBaseError> {
+    ) -> Result<ProtoInvokeResult, WorkerServiceError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Create);
         let namespace = self
             .auth_service
@@ -500,7 +498,7 @@ where
             .metadata
             .function_by_name(&function_name)
             .ok_or_else(|| {
-                WorkerServiceBaseError::TypeChecker("Failed to find the function".to_string())
+                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -511,7 +509,7 @@ where
                     .collect(),
                 calling_convention.clone(),
             )
-            .map_err(|err| WorkerServiceBaseError::TypeChecker(err.join(", ")))?;
+            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         let invoke_response = self.retry_on_invalid_shard_id(
             worker_id,
@@ -564,7 +562,7 @@ where
         function_name: String,
         params: Value,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerServiceBaseError> {
+    ) -> Result<(), WorkerServiceError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Create);
         let namespace = self
             .auth_service
@@ -579,7 +577,7 @@ where
             .metadata
             .function_by_name(&function_name)
             .ok_or_else(|| {
-                WorkerServiceBaseError::TypeChecker("Failed to find the function".to_string())
+                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -590,7 +588,7 @@ where
                     .collect(),
                 CallingConvention::Component,
             )
-            .map_err(|err| WorkerServiceBaseError::TypeChecker(err.join(", ")))?;
+            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
         self.invoke_fn_proto(worker_id, function_name.clone(), params_val, auth_ctx)
             .await?;
         Ok(())
@@ -602,7 +600,7 @@ where
         function_name: String,
         params: Vec<ProtoVal>,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerServiceBaseError> {
+    ) -> Result<(), WorkerServiceError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Create);
         let namespace = self
             .auth_service
@@ -617,7 +615,7 @@ where
             .metadata
             .function_by_name(&function_name)
             .ok_or_else(|| {
-                WorkerServiceBaseError::TypeChecker("Failed to find the function".to_string())
+                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -628,7 +626,7 @@ where
                     .collect(),
                 CallingConvention::Component,
             )
-            .map_err(|err| WorkerServiceBaseError::TypeChecker(err.join(", ")))?;
+            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         let metadata = namespace.get_metadata().await?;
 
@@ -683,7 +681,7 @@ where
         oplog_id: i32,
         data: Vec<u8>,
         auth_ctx: &AuthCtx,
-    ) -> Result<bool, WorkerServiceBaseError> {
+    ) -> Result<bool, WorkerServiceError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Create);
         let namespace = self
             .auth_service
@@ -744,7 +742,7 @@ where
         worker_id: &WorkerId,
         recover_immediately: bool,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerServiceBaseError> {
+    ) -> Result<(), WorkerServiceError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Update);
         let _ = self
             .auth_service
@@ -791,7 +789,7 @@ where
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<WorkerMetadata, WorkerServiceBaseError> {
+    ) -> Result<WorkerMetadata, WorkerServiceError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::View);
         let _ = self
             .auth_service
@@ -835,7 +833,7 @@ where
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerServiceBaseError> {
+    ) -> Result<(), WorkerServiceError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Update);
         let _ = self
             .auth_service
@@ -886,7 +884,7 @@ where
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<Template, WorkerServiceBaseError> {
+    ) -> Result<Template, WorkerServiceError> {
         match self.get_metadata(worker_id, auth_ctx).await {
             Ok(metadata) => {
                 let template_version = metadata.template_version;
@@ -895,7 +893,7 @@ where
                     .get_by_version(&worker_id.template_id, template_version)
                     .await?
                     .ok_or_else(|| {
-                        WorkerServiceBaseError::VersionedTemplateIdNotFound(VersionedTemplateId {
+                        WorkerServiceError::VersionedTemplateIdNotFound(VersionedTemplateId {
                             template_id: worker_id.template_id.clone(),
                             version: template_version,
                         })
@@ -903,11 +901,11 @@ where
 
                 Ok(template_details)
             }
-            Err(WorkerServiceBaseError::WorkerNotFound(_)) => Ok(self
+            Err(WorkerServiceError::WorkerNotFound(_)) => Ok(self
                 .template_service
                 .get_latest(&worker_id.template_id)
                 .await?),
-            Err(WorkerServiceBaseError::Golem(GolemError::WorkerNotFound(_))) => Ok(self
+            Err(WorkerServiceError::Golem(GolemError::WorkerNotFound(_))) => Ok(self
                 .template_service
                 .get_latest(&worker_id.template_id)
                 .await?),
@@ -942,7 +940,7 @@ where
         worker_id: &WorkerId,
         i: &In,
         f: F,
-    ) -> Result<Out, WorkerServiceBaseError>
+    ) -> Result<Out, WorkerServiceError>
     where
         F: for<'b> Fn(
             &'b mut WorkerExecutorClient<Channel>,
@@ -973,7 +971,7 @@ where
                         }
                         Err(other) => {
                             debug!("Got {:?}, not retrying", other);
-                            return Err(WorkerServiceBaseError::Golem(other));
+                            return Err(WorkerServiceError::Golem(other));
                         }
                     }
                 }
@@ -1001,7 +999,7 @@ where
                 Err(other) => {
                     debug!("Got {}, not retrying", other);
                     // let err = anyhow::Error::new(other);
-                    return Err(WorkerServiceBaseError::internal(other));
+                    return Err(WorkerServiceError::internal(other));
                 }
             }
         }
@@ -1033,7 +1031,7 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
         &self,
         worker_id: &WorkerId,
         _: &EmptyAuthCtx,
-    ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
+    ) -> Result<VersionedWorkerId, WorkerServiceError> {
         Ok(VersionedWorkerId {
             worker_id: worker_id.clone(),
             template_version_used: 0,
@@ -1047,7 +1045,7 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
         _: Vec<String>,
         _: HashMap<String, String>,
         _: &EmptyAuthCtx,
-    ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
+    ) -> Result<VersionedWorkerId, WorkerServiceError> {
         Ok(VersionedWorkerId {
             worker_id: worker_id.clone(),
             template_version_used: 0,
@@ -1058,13 +1056,13 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
         &self,
         _: &WorkerId,
         _: &EmptyAuthCtx,
-    ) -> Result<ConnectWorkerStream, WorkerServiceBaseError> {
-        Err(WorkerServiceBaseError::Internal(anyhow::Error::msg(
+    ) -> Result<ConnectWorkerStream, WorkerServiceError> {
+        Err(WorkerServiceError::Internal(anyhow::Error::msg(
             "Not supported",
         )))
     }
 
-    async fn delete(&self, _: &WorkerId, _: &EmptyAuthCtx) -> Result<(), WorkerServiceBaseError> {
+    async fn delete(&self, _: &WorkerId, _: &EmptyAuthCtx) -> Result<(), WorkerServiceError> {
         Ok(())
     }
 
@@ -1072,7 +1070,7 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
         &self,
         _: &WorkerId,
         _: &EmptyAuthCtx,
-    ) -> Result<InvocationKey, WorkerServiceBaseError> {
+    ) -> Result<InvocationKey, WorkerServiceError> {
         Ok(InvocationKey {
             value: "".to_string(),
         })
@@ -1086,7 +1084,7 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
         _: Value,
         _: &CallingConvention,
         _: &EmptyAuthCtx,
-    ) -> Result<Value, WorkerServiceBaseError> {
+    ) -> Result<Value, WorkerServiceError> {
         Ok(Value::Null)
     }
 
@@ -1098,7 +1096,7 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
         _: Vec<ProtoVal>,
         _: &CallingConvention,
         _: &EmptyAuthCtx,
-    ) -> Result<ProtoInvokeResult, WorkerServiceBaseError> {
+    ) -> Result<ProtoInvokeResult, WorkerServiceError> {
         Ok(ProtoInvokeResult { result: vec![] })
     }
 
@@ -1108,7 +1106,7 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
         _: String,
         _: Value,
         _: &EmptyAuthCtx,
-    ) -> Result<(), WorkerServiceBaseError> {
+    ) -> Result<(), WorkerServiceError> {
         Ok(())
     }
 
@@ -1118,7 +1116,7 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
         _: String,
         _: Vec<ProtoVal>,
         _: &EmptyAuthCtx,
-    ) -> Result<(), WorkerServiceBaseError> {
+    ) -> Result<(), WorkerServiceError> {
         Ok(())
     }
 
@@ -1128,7 +1126,7 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
         _: i32,
         _: Vec<u8>,
         _: &EmptyAuthCtx,
-    ) -> Result<bool, WorkerServiceBaseError> {
+    ) -> Result<bool, WorkerServiceError> {
         Ok(true)
     }
 
@@ -1137,7 +1135,7 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
         _: &WorkerId,
         _: bool,
         _: &EmptyAuthCtx,
-    ) -> Result<(), WorkerServiceBaseError> {
+    ) -> Result<(), WorkerServiceError> {
         Ok(())
     }
 
@@ -1145,7 +1143,7 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
         &self,
         worker_id: &WorkerId,
         _: &EmptyAuthCtx,
-    ) -> Result<WorkerMetadata, WorkerServiceBaseError> {
+    ) -> Result<WorkerMetadata, WorkerServiceError> {
         Ok(WorkerMetadata {
             worker_id: worker_id.clone(),
             args: vec![],
@@ -1156,7 +1154,7 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
         })
     }
 
-    async fn resume(&self, _: &WorkerId, _: &EmptyAuthCtx) -> Result<(), WorkerServiceBaseError> {
+    async fn resume(&self, _: &WorkerId, _: &EmptyAuthCtx) -> Result<(), WorkerServiceError> {
         Ok(())
     }
 }

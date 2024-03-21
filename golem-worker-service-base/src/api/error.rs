@@ -1,5 +1,5 @@
 use crate::service::error::TemplateServiceError;
-use crate::service::worker::WorkerServiceBaseError;
+use crate::service::worker::WorkerServiceError;
 use golem_service_base::model::*;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -55,10 +55,10 @@ impl From<String> for WorkerApiBaseError {
     }
 }
 
-impl From<WorkerServiceBaseError> for WorkerApiBaseError {
-    fn from(value: WorkerServiceBaseError) -> Self {
+impl From<WorkerServiceError> for WorkerApiBaseError {
+    fn from(value: WorkerServiceError) -> Self {
         use golem_service_base::service::auth::AuthError;
-        use WorkerServiceBaseError as ServiceError;
+        use WorkerServiceError as ServiceError;
 
         fn internal(details: String) -> WorkerApiBaseError {
             WorkerApiBaseError::InternalError(Json(GolemErrorBody {
