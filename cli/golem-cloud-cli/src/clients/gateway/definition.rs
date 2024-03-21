@@ -25,12 +25,17 @@ pub trait DefinitionClient {
         api_definition_id: Option<&str>,
     ) -> Result<Vec<ApiDefinition>, GolemError>;
 
-    async fn update(&self, api_definition: ApiDefinition) -> Result<ApiDefinition, GolemError>;
+    async fn update(
+        &self,
+        project_id: ProjectId,
+        api_definition: ApiDefinition,
+    ) -> Result<ApiDefinition, GolemError>;
 
     async fn delete(
         &self,
         project_id: ProjectId,
         api_definition_id: &str,
+        version: &str,
     ) -> Result<String, GolemError>;
 }
 
@@ -50,15 +55,23 @@ impl<C: golem_gateway_client::api::ApiDefinitionClient + Sync + Send> Definition
         Ok(self.client.get(&project_id.0, api_definition_id).await?)
     }
 
-    async fn update(&self, api_definition: ApiDefinition) -> Result<ApiDefinition, GolemError> {
-        Ok(self.client.put(&api_definition).await?)
+    async fn update(
+        &self,
+        project_id: ProjectId,
+        api_definition: ApiDefinition,
+    ) -> Result<ApiDefinition, GolemError> {
+        Ok(self.client.put(&project_id.0, &api_definition).await?)
     }
 
     async fn delete(
         &self,
         project_id: ProjectId,
         api_definition_id: &str,
+        version: &str,
     ) -> Result<String, GolemError> {
-        Ok(self.client.delete(&project_id.0, api_definition_id).await?)
+        Ok(self
+            .client
+            .delete(&project_id.0, api_definition_id, version)
+            .await?)
     }
 }

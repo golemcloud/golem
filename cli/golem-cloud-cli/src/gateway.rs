@@ -96,7 +96,7 @@ impl<'p, P: ProjectClient + Sync + Send> GatewayHandler for GatewayHandlerLive<'
         };
 
         let healthcheck_client = HealthcheckClientLive {
-            client: golem_gateway_client::api::HealthcheckClientLive {
+            client: golem_gateway_client::api::HealthCheckClientLive {
                 context: context.clone(),
             },
         };

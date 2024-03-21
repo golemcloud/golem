@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_gateway_client::api::{
-    ApiCertificateError, ApiDefinitionError, ApiDeploymentError, ApiDomainError, HealthcheckError,
+    ApiCertificateError, ApiDefinitionError, ApiDeploymentError, ApiDomainError, HealthCheckError,
 };
 
 pub trait ResponseContentErrorMapper {
@@ -120,7 +120,7 @@ impl ResponseContentErrorMapper for ApiDomainError {
     }
 }
 
-impl ResponseContentErrorMapper for HealthcheckError {
+impl ResponseContentErrorMapper for HealthCheckError {
     fn map(self) -> String {
         match self {}
     }

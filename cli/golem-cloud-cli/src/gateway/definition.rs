@@ -36,6 +36,8 @@ pub enum DefinitionSubcommand {
     },
     #[command()]
     Update {
+        #[command(flatten)]
+        project_ref: ProjectRef,
         #[arg(value_name = "definition-file", value_hint = clap::ValueHint::FilePath)]
         definition_file: Option<PathBufOrStdin>,
     },
@@ -45,6 +47,8 @@ pub enum DefinitionSubcommand {
         project_ref: ProjectRef,
         #[arg(value_name = "api-definition-id", value_hint = clap::ValueHint::Other)]
         definition_id: String,
+        #[arg(value_name = "version", value_hint = clap::ValueHint::Other)]
+        version: String,
     },
 }
 
@@ -110,7 +114,12 @@ impl<'p, C: DefinitionClient + Sync + Send, P: ProjectClient + Sync + Send> Defi
 
                 Ok(GolemResult::Ok(Box::new(res)))
             }
-            DefinitionSubcommand::Update { definition_file } => {
+            DefinitionSubcommand::Update {
+                project_ref,
+                definition_file,
+            } => {
+                let project_id = self.projects.resolve_id_or_default(project_ref).await?;
+
                 let definition = match definition_file.unwrap_or(PathBufOrStdin::Stdin) {
                     PathBufOrStdin::Path(path) => {
                         let file = File::open(&path).map_err(|e| {
@@ -124,16 +133,20 @@ impl<'p, C: DefinitionClient + Sync + Send, P: ProjectClient + Sync + Send> Defi
                     PathBufOrStdin::Stdin => read_definition(format, io::stdin(), "stdin")?,
                 };
 
-                let res = self.client.update(definition).await?;
+                let res = self.client.update(project_id, definition).await?;
 
                 Ok(GolemResult::Ok(Box::new(res)))
             }
             DefinitionSubcommand::Delete {
                 project_ref,
                 definition_id,
+                version,
             } => {
                 let project_id = self.projects.resolve_id_or_default(project_ref).await?;
-                let res = self.client.delete(project_id, &definition_id).await?;
+                let res = self
+                    .client
+                    .delete(project_id, &definition_id, version.as_str())
+                    .await?;
                 Ok(GolemResult::Ok(Box::new(res)))
             }
         }

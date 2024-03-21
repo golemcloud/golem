@@ -97,7 +97,7 @@ impl<L: LoginClient + Send + Sync> AuthLive<L> {
         let file_res = OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true)
+            .truncate(true)
             .open(self.config_path(config_dir));
         let file = match file_res {
             Ok(file) => file,
