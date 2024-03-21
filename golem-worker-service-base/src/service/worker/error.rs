@@ -39,7 +39,7 @@ impl WorkerServiceError {
     where
         M: std::error::Error + Send + Sync + 'static,
     {
-        Self::Internal(anyhow::Error::msg(error))
+        Self::Internal(anyhow::Error::new(error))
     }
 }
 
