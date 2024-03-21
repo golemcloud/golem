@@ -386,8 +386,6 @@ jobs:
         env:
           CI: true
         run: |
-          mkdir -p ./.cargo
-          echo 'paths = ["../golem-client"]' > ./.cargo/config.toml
           cargo build
           RUST_LOG=info cargo test --test integration
       - name: Sharding tests
@@ -395,8 +393,6 @@ jobs:
         env:
           CI: true
         run: |
-          mkdir -p ./.cargo
-          echo 'paths = ["../golem-client"]' > ./.cargo/config.toml
           cargo build
           RUST_LOG=info cargo test --test sharding
         timeout-minutes: 10
@@ -435,11 +431,10 @@ jobs:
       - name: Publish Golem client
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        working-directory: golem-client
         run: |
           export VERSION="${{ steps.get_version.outputs.version-without-v }}"
-          sed -i "s/0.0.0/$VERSION/g" golem-cli/Cargo.toml
-          cargo publish --all-features --allow-dirty
+          sed -i "s/0.0.0/$VERSION/g" golem-client/Cargo.toml
+          cargo publish -p golem-client --all-features --allow-dirty
       - name: Publish Golem CLI
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
