@@ -131,14 +131,6 @@ impl Services {
         let template_service: Arc<dyn TemplateService + Sync + Send> =
             Arc::new(TemplateServiceNoop {});
 
-        let routing_table_service: Arc<
-            dyn golem_service_base::routing_table::RoutingTableService + Send + Sync,
-        > = Arc::new(golem_service_base::routing_table::RoutingTableServiceNoop {});
-
-        let worker_executor_grpc_clients: Arc<
-            dyn golem_service_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
-        > = Arc::new(golem_service_base::worker_executor_clients::WorkerExecutorClientsNoop {});
-
         let worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send> =
             Arc::new(WorkerServiceNoOp {});
 

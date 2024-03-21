@@ -20,7 +20,9 @@ use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::TemplateId;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::auth::EmptyAuthCtx;
-use golem_worker_service_base::service::worker::{ConnectWorkerStream, WorkerService, WorkerServiceBaseError};
+use golem_worker_service_base::service::worker::{
+    ConnectWorkerStream, WorkerService, WorkerServiceBaseError,
+};
 use poem::web::websocket::{Message, WebSocket, WebSocketStream};
 use poem::web::Data;
 use poem::*;
