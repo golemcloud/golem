@@ -6,16 +6,16 @@ use serde::{Deserialize, Serialize};
 // a mere request from where we can fetch details.
 #[async_trait]
 pub trait AuthService<AuthCtx, Namespace, P = Permission> {
-    async fn is_authorized(&self, permission: P, ctx: &AuthCtx) -> Result<Namespace, AuthError<P>>;
+    async fn is_authorized(&self, permission: P, ctx: &AuthCtx) -> Result<Namespace, AuthError>;
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum AuthError<P = Permission> {
+pub enum AuthError {
+    // TODO: Do we want to display these errors?
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
-    #[error("Auth {permission} is forbidden: {reason}")]
-    Forbidden { permission: P, reason: String },
-    // TODO: Do we want to display this?
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
     #[error("Internal error: {0}")]
     Internal(String),
 }

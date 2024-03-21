@@ -4,7 +4,9 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use crate::service::template::TemplateService;
 use golem_api_grpc::proto::golem::workerexecutor::{
-    self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, GetInvocationKeyRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest
+    self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
+    GetInvocationKeyRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest,
+    ResumeWorkerRequest,
 };
 use golem_api_grpc::proto::golem::{
     common::ResourceLimits, workerexecutor::worker_executor_client::WorkerExecutorClient,
@@ -12,8 +14,10 @@ use golem_api_grpc::proto::golem::{
 
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::worker::InvokeResult as ProtoInvokeResult;
-use golem_common::model::{AccountId, CallingConvention, InvocationKey};
-use golem_service_base::model::{GolemErrorUnknown, PromiseId, VersionedWorkerId, WorkerId, WorkerMetadata};
+use golem_common::model::{AccountId, CallingConvention, InvocationKey, TemplateId};
+use golem_service_base::model::{
+    GolemErrorUnknown, PromiseId, VersionedWorkerId, WorkerId, WorkerMetadata,
+};
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
     model::{
@@ -100,7 +104,7 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         function_name: String,
         params: Vec<ProtoVal>,
-        auth_ctx: &AuthCtx
+        auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerServiceBaseError>;
 
     async fn complete_promise(
@@ -137,10 +141,25 @@ where
     AuthCtx: Send + Sync,
     Namespace: Metadata + Send + Sync,
 {
-    auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Send + Sync>,
+    auth_service: Arc<dyn AuthService<AuthCtx, Namespace, TemplatePermission> + Send + Sync>,
     worker_executor_clients: Arc<dyn WorkerExecutorClients + Send + Sync>,
     template_service: Arc<dyn TemplateService + Send + Sync>,
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TemplatePermission {
+    pub template: TemplateId,
+    pub permission: Permission,
+}
+
+impl TemplatePermission {
+    pub fn new(template: TemplateId, permission: Permission) -> Self {
+        Self {
+            template,
+            permission,
+        }
+    }
 }
 
 // TODO: Replace with metadata map
@@ -148,8 +167,6 @@ where
 #[async_trait]
 pub trait Metadata {
     async fn get_metadata(&self) -> anyhow::Result<NamespaceMetadata>;
-    // async fn record_deletion(namespace: Namespace)
-    // async fn record_creation(namespace: Namespace)
 }
 
 #[derive(Clone, Debug)]
@@ -170,9 +187,10 @@ where
         auth_ctx: &AuthCtx,
     ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
         // TODO: More granular permisssions.
+        let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::View);
         let _ = self
             .auth_service
-            .is_authorized(Permission::View, auth_ctx)
+            .is_authorized(permission, auth_ctx)
             .await?;
 
         Ok(VersionedWorkerId {
@@ -189,9 +207,10 @@ where
         environment_variables: HashMap<String, String>,
         auth_ctx: &AuthCtx,
     ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
+        let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Create);
         let namespace = self
             .auth_service
-            .is_authorized(Permission::Create, auth_ctx)
+            .is_authorized(permission, auth_ctx)
             .await?;
 
         let metadata = namespace.get_metadata().await?;
@@ -246,37 +265,46 @@ where
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
     ) -> Result<ConnectWorkerStream, WorkerServiceBaseError> {
-        let namespace = self.auth_service.is_authorized(Permission::View, auth_ctx).await?;
+        let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::View);
+        let namespace = self
+            .auth_service
+            .is_authorized(permission, auth_ctx)
+            .await?;
+
         let metadata = namespace.get_metadata().await?;
-        self.retry_on_invalid_shard_id(worker_id, &(worker_id.clone(), metadata), |worker_executor_client, (worker_id, metadata)| {
-            Box::pin(async move {
-                let response = match worker_executor_client
-                    .connect_worker(ConnectWorkerRequest {
-                        worker_id: Some(worker_id.clone().into()),
-                        account_id: metadata.account_id.clone().map(|id| id.into()),
-                        account_limits: metadata.limits.clone(), 
-                    })
-                    .await
-                {
-                    Ok(response) => Ok(response),
-                    Err(status) => {
-                        if status.code() == tonic::Code::NotFound {
-                            Err(WorkerServiceBaseError::WorkerNotFound(worker_id.clone().into()))
-                        } else {
-                            Err(WorkerServiceBaseError::internal(
-                                status
-                            ))
+        self.retry_on_invalid_shard_id(
+            worker_id,
+            &(worker_id.clone(), metadata),
+            |worker_executor_client, (worker_id, metadata)| {
+                Box::pin(async move {
+                    let response = match worker_executor_client
+                        .connect_worker(ConnectWorkerRequest {
+                            worker_id: Some(worker_id.clone().into()),
+                            account_id: metadata.account_id.clone().map(|id| id.into()),
+                            account_limits: metadata.limits.clone(),
+                        })
+                        .await
+                    {
+                        Ok(response) => Ok(response),
+                        Err(status) => {
+                            if status.code() == tonic::Code::NotFound {
+                                Err(WorkerServiceBaseError::WorkerNotFound(
+                                    worker_id.clone().into(),
+                                ))
+                            } else {
+                                Err(WorkerServiceBaseError::internal(status))
+                            }
                         }
                     }
-                }
-                .map_err(|err| {
-                    GolemError::RuntimeError(GolemErrorRuntimeError {
-                        details: err.to_string(),
-                    })
-                })?;
-                Ok(ConnectWorkerStream::new(response.into_inner()))
-            })
-        })
+                    .map_err(|err| {
+                        GolemError::RuntimeError(GolemErrorRuntimeError {
+                            details: err.to_string(),
+                        })
+                    })?;
+                    Ok(ConnectWorkerStream::new(response.into_inner()))
+                })
+            },
+        )
         .await
     }
 
@@ -285,12 +313,12 @@ where
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerServiceBaseError> {
-        let _ = self
+        let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Delete);
+        let namespace = self
             .auth_service
-            .is_authorized(Permission::Delete, auth_ctx)
+            .is_authorized(permission, auth_ctx)
             .await?;
 
-        // let plan_limit = self.check_plan_limits(&worker_id.template_id).await?;
         self.retry_on_invalid_shard_id(
                 worker_id,
                 worker_id,
@@ -323,8 +351,6 @@ where
                 },
             )
             .await?;
-        // self.update_account_workers(&plan_limit.account_id, -1)
-        //     .await?;
         Ok(())
     }
 
@@ -333,10 +359,12 @@ where
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
     ) -> Result<InvocationKey, WorkerServiceBaseError> {
+        let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Create);
         let _ = self
             .auth_service
-            .is_authorized(Permission::Create, auth_ctx)
+            .is_authorized(permission, auth_ctx)
             .await?;
+
         let invocation_key = self
                 .retry_on_invalid_shard_id(worker_id, worker_id, |worker_executor_client, worker_id| {
                     Box::pin(async move {
@@ -411,7 +439,7 @@ where
                 invocation_key,
                 params_val,
                 calling_convention,
-                auth_ctx
+                auth_ctx,
             )
             .await?;
 
@@ -437,14 +465,16 @@ where
         calling_convention: &CallingConvention,
         auth_ctx: &AuthCtx,
     ) -> Result<ProtoInvokeResult, WorkerServiceBaseError> {
+        let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Create);
         let namespace = self
             .auth_service
-            .is_authorized(Permission::Create, auth_ctx)
+            .is_authorized(permission, auth_ctx)
             .await?;
-
         let metadata = namespace.get_metadata().await?;
 
-        let template_details = self.try_get_template_for_worker(worker_id, auth_ctx).await?;
+        let template_details = self
+            .try_get_template_for_worker(worker_id, auth_ctx)
+            .await?;
         let function_type = template_details
             .metadata
             .function_by_name(&function_name)
@@ -514,12 +544,16 @@ where
         params: Value,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerServiceBaseError> {
-        let _ = self
+        let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Create);
+        let namespace = self
             .auth_service
-            .is_authorized(Permission::Create, auth_ctx)
+            .is_authorized(permission, auth_ctx)
             .await?;
+        let metadata = namespace.get_metadata().await?;
 
-        let template_details = self.try_get_template_for_worker(worker_id, auth_ctx).await?;
+        let template_details = self
+            .try_get_template_for_worker(worker_id, auth_ctx)
+            .await?;
         let function_type = template_details
             .metadata
             .function_by_name(&function_name)
@@ -546,14 +580,18 @@ where
         worker_id: &WorkerId,
         function_name: String,
         params: Vec<ProtoVal>,
-        auth_ctx: &AuthCtx
+        auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerServiceBaseError> {
+        let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Create);
         let namespace = self
             .auth_service
-            .is_authorized(Permission::Create, auth_ctx)
+            .is_authorized(permission, auth_ctx)
             .await?;
+        let metadata = namespace.get_metadata().await?;
 
-        let template_details = self.try_get_template_for_worker(worker_id, auth_ctx).await?;
+        let template_details = self
+            .try_get_template_for_worker(worker_id, auth_ctx)
+            .await?;
         let function_type = template_details
             .metadata
             .function_by_name(&function_name)
@@ -625,11 +663,18 @@ where
         data: Vec<u8>,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerServiceBaseError> {
+        let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Create);
+        let namespace = self
+            .auth_service
+            .is_authorized(permission, auth_ctx)
+            .await?;
+        let metadata = namespace.get_metadata().await?;
+
         let promise_id = PromiseId {
             worker_id: worker_id.clone(),
             oplog_idx: oplog_id,
         };
-        let _ = self.auth_service.is_authorized(Permission::Create, auth_ctx);
+
         let result = self
             .retry_on_invalid_shard_id(
                 worker_id,
@@ -679,8 +724,13 @@ where
         recover_immediately: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerServiceBaseError> {
-        self.auth_service.is_authorized(Permission::Update, auth_ctx).await?;
-    self.retry_on_invalid_shard_id(
+        let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Update);
+        let namespace = self
+            .auth_service
+            .is_authorized(permission, auth_ctx)
+            .await?;
+
+        self.retry_on_invalid_shard_id(
         worker_id,
         worker_id,
         |worker_executor_client, worker_id| {
@@ -713,8 +763,7 @@ where
         },
     )
     .await?;
-    Ok(())
-
+        Ok(())
     }
 
     async fn get_metadata(
@@ -722,9 +771,10 @@ where
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
     ) -> Result<WorkerMetadata, WorkerServiceBaseError> {
-        let _ = self
+        let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::View);
+        let namespace = self
             .auth_service
-            .is_authorized(Permission::View, auth_ctx)
+            .is_authorized(permission, auth_ctx)
             .await?;
 
         let metadata = self.retry_on_invalid_shard_id(
@@ -765,7 +815,11 @@ where
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerServiceBaseError> {
-        self.auth_service.is_authorized(Permission::Update, auth_ctx).await?;
+        let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Update);
+        let _ = self
+            .auth_service
+            .is_authorized(permission, auth_ctx)
+            .await?;
         self.retry_on_invalid_shard_id(
             worker_id,
             worker_id,
@@ -800,7 +854,6 @@ where
         .await?;
         Ok(())
     }
-
 }
 
 impl<AuthCtx, Namespace> WorkerServiceDefault<AuthCtx, Namespace>
