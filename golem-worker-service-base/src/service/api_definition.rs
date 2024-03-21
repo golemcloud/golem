@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
 use crate::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
-use crate::auth::{AuthError, AuthService, CommonNamespace, EmptyAuthCtx, Permission};
+use crate::auth::{CommonNamespace, EmptyAuthCtx};
 use async_trait::async_trait;
+use golem_service_base::service::auth::{AuthError, AuthService, Permission};
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationError};
 

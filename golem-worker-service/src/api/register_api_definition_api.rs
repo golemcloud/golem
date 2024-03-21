@@ -1,6 +1,7 @@
 use std::result::Result;
 use std::sync::Arc;
 
+use golem_service_base::service::auth::AuthService;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -11,7 +12,7 @@ use golem_worker_service_base::api::common::ApiEndpointError;
 use golem_worker_service_base::api::register_api_definition_api::ApiDefinition;
 use golem_worker_service_base::api_definition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, Version};
-use golem_worker_service_base::auth::{AuthService, CommonNamespace, EmptyAuthCtx};
+use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::oas_worker_bridge::*;
 use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 
