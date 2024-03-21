@@ -277,7 +277,7 @@ pub trait WorkerService {
     async fn complete_promise(
         &self,
         worker_id: &WorkerId,
-        oplog_id: i32,
+        oplog_id: u64,
         data: Vec<u8>,
         auth: &AccountAuthorisation,
     ) -> Result<bool, WorkerError>;
@@ -1073,7 +1073,7 @@ impl WorkerService for WorkerServiceDefault {
     async fn complete_promise(
         &self,
         worker_id: &WorkerId,
-        oplog_id: i32,
+        oplog_id: u64,
         data: Vec<u8>,
         auth: &AccountAuthorisation,
     ) -> Result<bool, WorkerError> {
@@ -1386,7 +1386,7 @@ impl WorkerService for WorkerServiceNoOp {
     async fn complete_promise(
         &self,
         _worker_id: &WorkerId,
-        _oplog_id: i32,
+        _oplog_id: u64,
         _data: Vec<u8>,
         _auth: &AccountAuthorisation,
     ) -> Result<bool, WorkerError> {
