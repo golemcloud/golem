@@ -1504,6 +1504,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
 
 [[package]]
+name = "convert_case"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cookie"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1953,7 +1962,7 @@ version = "0.99.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fb810d30a7c1953f91334de7244731fc3f3c10d7fe163338a35b9f640960321"
 dependencies = [
- "convert_case",
+ "convert_case 0.4.0",
  "proc-macro2",
  "quote",
  "rustc_version",
@@ -2391,6 +2400,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmt"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09904adae26440d46daeacb5ed7922fee69d43ebf84d31e078cd49652cecd718"
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2782,13 +2797,12 @@ dependencies = [
 [[package]]
 name = "golem-client"
 version = "0.0.63"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "066800e50c47dc4a15f56d9e54567b47d62c309816700ecb69335453724195c8"
 dependencies = [
  "async-trait",
  "bytes 1.5.0",
  "chrono",
  "futures-core",
+ "golem-openapi-client-generator",
  "http 1.0.0",
  "reqwest",
  "serde",
@@ -2843,6 +2857,23 @@ dependencies = [
  "serde_json",
  "strum 0.26.1",
  "strum_macros 0.26.1",
+]
+
+[[package]]
+name = "golem-openapi-client-generator"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f97bf3414afc373dba77cdb43c7dc8a0faff9ba67117b6b0621efdc92abdb792"
+dependencies = [
+ "clap",
+ "convert_case 0.6.0",
+ "fmt",
+ "indexmap 2.2.2",
+ "indoc",
+ "itertools 0.12.1",
+ "openapiv3",
+ "serde",
+ "serde_yaml",
 ]
 
 [[package]]
