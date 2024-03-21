@@ -1,10 +1,13 @@
 use std::error::Error;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_common::model::CallingConvention;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::api_definition::ResponseMapping;
+use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::resolved_variables::ResolvedVariables;
+use golem_worker_service_base::service::worker::WorkerService;
 use golem_worker_service_base::worker_request::WorkerRequest;
 use golem_worker_service_base::worker_request_to_response::WorkerRequestToResponse;
 use golem_worker_service_base::worker_response::WorkerResponse;
@@ -12,14 +15,16 @@ use http::StatusCode;
 use poem::Body;
 use tracing::info;
 
-use crate::service::worker::{WorkerService, WorkerServiceDefault};
+use crate::service::worker::WorkerNamespace;
 
 pub struct WorkerRequestToHttpResponse {
-    pub worker_service: WorkerServiceDefault,
+    pub worker_service: Arc<dyn WorkerService<WorkerNamespace, EmptyAuthCtx> + Sync + Send>,
 }
 
 impl WorkerRequestToHttpResponse {
-    pub fn new(worker_service: WorkerServiceDefault) -> Self {
+    pub fn new(
+        worker_service: Arc<dyn WorkerService<WorkerNamespace, EmptyAuthCtx> + Sync + Send>,
+    ) -> Self {
         Self { worker_service }
     }
 }
@@ -65,9 +70,10 @@ async fn execute(
 
     let invocation_key = default_executor
         .worker_service
-        .get_invocation_key(&worker_id)
+        .get_invocation_key(&worker_id, &EmptyAuthCtx {})
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .value;
 
     let invoke_parameters = worker_request_params.function_params;
 
@@ -84,9 +90,11 @@ async fn execute(
             &invocation_key,
             invoke_parameters,
             &CallingConvention::Component,
+            &EmptyAuthCtx {},
         )
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .value;
 
     Ok(WorkerResponse {
         result: invoke_result,

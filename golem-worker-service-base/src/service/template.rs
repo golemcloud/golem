@@ -1,4 +1,4 @@
-use crate::service::error::TemplateServiceBaseError;
+use crate::service::error::TemplateServiceError;
 use crate::UriBackConversion;
 
 use async_trait::async_trait;
@@ -19,12 +19,9 @@ pub trait TemplateService {
         &self,
         template_id: &TemplateId,
         version: i32,
-    ) -> Result<Option<Template>, TemplateServiceBaseError>;
+    ) -> Result<Option<Template>, TemplateServiceError>;
 
-    async fn get_latest(
-        &self,
-        template_id: &TemplateId,
-    ) -> Result<Template, TemplateServiceBaseError>;
+    async fn get_latest(&self, template_id: &TemplateId) -> Result<Template, TemplateServiceError>;
 }
 
 #[derive(Clone)]
@@ -41,10 +38,7 @@ impl TemplateServiceDefault {
 
 #[async_trait]
 impl TemplateService for TemplateServiceDefault {
-    async fn get_latest(
-        &self,
-        template_id: &TemplateId,
-    ) -> Result<Template, TemplateServiceBaseError> {
+    async fn get_latest(&self, template_id: &TemplateId) -> Result<Template, TemplateServiceError> {
         let desc = format!("Getting latest version of template: {}", template_id);
         info!("{}", &desc);
         with_retries(
@@ -66,22 +60,24 @@ impl TemplateService for TemplateServiceDefault {
                         .into_inner();
 
                     match response.result {
-                        None => Err("Empty response".to_string().into()),
+                        None => Err(TemplateServiceError::Internal("Empty response".to_string())),
                         Some(get_template_metadata_response::Result::Success(response)) => {
                             let template_view: Result<
                                 golem_service_base::model::Template,
-                                TemplateServiceBaseError,
+                                TemplateServiceError,
                             > = match response.template {
                                 Some(template) => {
                                     let template: golem_service_base::model::Template =
                                         template.clone().try_into().map_err(|_| {
-                                            TemplateServiceBaseError::Other(
+                                            TemplateServiceError::Internal(
                                                 "Response conversion error".to_string(),
                                             )
                                         })?;
                                     Ok(template)
                                 }
-                                None => Err("Empty response".to_string().into()),
+                                None => Err(TemplateServiceError::Internal(
+                                    "Empty template response".to_string(),
+                                )),
                             };
                             Ok(template_view?)
                         }
@@ -91,7 +87,7 @@ impl TemplateService for TemplateServiceDefault {
                     }
                 })
             },
-            TemplateServiceBaseError::is_retriable,
+            TemplateServiceError::is_retriable,
         )
         .await
     }
@@ -99,7 +95,7 @@ impl TemplateService for TemplateServiceDefault {
         &self,
         template_id: &TemplateId,
         version: i32,
-    ) -> Result<Option<Template>, TemplateServiceBaseError> {
+    ) -> Result<Option<Template>, TemplateServiceError> {
         let desc = format!("Getting template: {}", template_id);
         info!("{}", &desc);
         with_retries(
@@ -119,22 +115,25 @@ impl TemplateService for TemplateServiceDefault {
                     let response = client.get_template_metadata(request).await?.into_inner();
 
                     match response.result {
-                        None => Err("Empty response".to_string().into()),
+                        None => Err(TemplateServiceError::Internal("Empty response".to_string())),
+
                         Some(get_template_metadata_response::Result::Success(response)) => {
                             let template_view: Result<
                                 Option<golem_service_base::model::Template>,
-                                TemplateServiceBaseError,
+                                TemplateServiceError,
                             > = match response.template {
                                 Some(template) => {
                                     let template: golem_service_base::model::Template =
                                         template.clone().try_into().map_err(|_| {
-                                            TemplateServiceBaseError::Other(
+                                            TemplateServiceError::Internal(
                                                 "Response conversion error".to_string(),
                                             )
                                         })?;
                                     Ok(Some(template))
                                 }
-                                None => Err("Empty response".to_string().into()),
+                                None => Err(TemplateServiceError::Internal(
+                                    "Empty template response".to_string(),
+                                )),
                             };
                             Ok(template_view?)
                         }
@@ -144,7 +143,7 @@ impl TemplateService for TemplateServiceDefault {
                     }
                 })
             },
-            TemplateServiceBaseError::is_retriable,
+            TemplateServiceError::is_retriable,
         )
         .await
     }
@@ -158,15 +157,15 @@ impl TemplateService for TemplateServiceNoop {
         &self,
         _template_id: &TemplateId,
         _version: i32,
-    ) -> Result<Option<Template>, TemplateServiceBaseError> {
+    ) -> Result<Option<Template>, TemplateServiceError> {
         Ok(None)
     }
 
     async fn get_latest(
         &self,
         _template_id: &TemplateId,
-    ) -> Result<Template, TemplateServiceBaseError> {
-        Err(TemplateServiceBaseError::Other(
+    ) -> Result<Template, TemplateServiceError> {
+        Err(TemplateServiceError::Internal(
             "Not implemented".to_string(),
         ))
     }
