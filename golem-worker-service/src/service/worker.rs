@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use golem_common::model::AccountId;
 use golem_service_base::service::auth::{AuthError, AuthService};
 use golem_worker_service_base::{
@@ -8,7 +10,13 @@ use golem_worker_service_base::{
 use async_trait::async_trait;
 
 pub type WorkerServiceDefault =
-    golem_worker_service_base::service::worker::WorkerServiceDefault<EmptyAuthCtx, WorkerNamespace>;
+    golem_worker_service_base::service::worker::WorkerServiceDefault<WorkerNamespace, EmptyAuthCtx>;
+
+pub type WorkerService = Arc<
+    dyn golem_worker_service_base::service::worker::WorkerService<WorkerNamespace, EmptyAuthCtx>
+        + Sync
+        + Send,
+>;
 
 #[derive(Clone, Copy, Debug)]
 pub struct NoopWorkerAuthService {}

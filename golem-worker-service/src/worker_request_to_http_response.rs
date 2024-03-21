@@ -15,12 +15,16 @@ use http::StatusCode;
 use poem::Body;
 use tracing::info;
 
+use crate::service::worker::WorkerNamespace;
+
 pub struct WorkerRequestToHttpResponse {
-    pub worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
+    pub worker_service: Arc<dyn WorkerService<WorkerNamespace, EmptyAuthCtx> + Sync + Send>,
 }
 
 impl WorkerRequestToHttpResponse {
-    pub fn new(worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>) -> Self {
+    pub fn new(
+        worker_service: Arc<dyn WorkerService<WorkerNamespace, EmptyAuthCtx> + Sync + Send>,
+    ) -> Self {
         Self { worker_service }
     }
 }
@@ -64,7 +68,7 @@ async fn execute(
         worker_request_params.function
     );
 
-    let invocation_key = default_executor
+    let (invocation_key, _) = default_executor
         .worker_service
         .get_invocation_key(&worker_id, &EmptyAuthCtx {})
         .await
@@ -77,7 +81,7 @@ async fn execute(
             template_id, worker_name.clone(), invocation_key, invoke_parameters
         );
 
-    let invoke_result = default_executor
+    let (invoke_result, _) = default_executor
         .worker_service
         .invoke_and_await_function(
             &worker_id,

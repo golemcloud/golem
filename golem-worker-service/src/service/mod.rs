@@ -27,20 +27,18 @@ use golem_worker_service_base::service::http_request_definition_lookup::{
 use golem_worker_service_base::service::template::{
     TemplateService, TemplateServiceDefault, TemplateServiceNoop,
 };
-use golem_worker_service_base::service::worker::{
-    WorkerService, WorkerServiceDefault, WorkerServiceNoOp,
-};
+use golem_worker_service_base::service::worker::{WorkerServiceDefault, WorkerServiceNoOp};
 use golem_worker_service_base::worker_request_to_response::WorkerRequestToResponse;
 use http::HeaderMap;
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
 
-use self::worker::NoopWorkerAuthService;
+use self::worker::{NoopWorkerAuthService, WorkerNamespace};
 
 #[derive(Clone)]
 pub struct Services {
-    pub worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
+    pub worker_service: crate::service::worker::WorkerService,
     pub definition_service:
         Arc<dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
     pub definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
@@ -83,7 +81,7 @@ impl Services {
 
         let worker_auth_service = Arc::new(NoopWorkerAuthService {});
 
-        let worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send> =
+        let worker_service: crate::service::worker::WorkerService =
             Arc::new(WorkerServiceDefault::new(
                 worker_auth_service.clone(),
                 worker_executor_grpc_clients.clone(),
@@ -131,8 +129,9 @@ impl Services {
         let template_service: Arc<dyn TemplateService + Sync + Send> =
             Arc::new(TemplateServiceNoop {});
 
-        let worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send> =
-            Arc::new(WorkerServiceNoOp {});
+        let worker_service: crate::service::worker::WorkerService = Arc::new(WorkerServiceNoOp {
+            namespace: WorkerNamespace::default(),
+        });
 
         let definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send> =
             Arc::new(InMemoryRegistry::default());

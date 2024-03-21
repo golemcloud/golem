@@ -13,28 +13,27 @@
 // limitations under the License.
 
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::TemplateId;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::auth::EmptyAuthCtx;
-use golem_worker_service_base::service::worker::{
-    ConnectWorkerStream, WorkerService, WorkerServiceError,
-};
+use golem_worker_service_base::service::worker::{ConnectWorkerStream, WorkerServiceError};
 use poem::web::websocket::{Message, WebSocket, WebSocketStream};
 use poem::web::Data;
 use poem::*;
 use tonic::Status;
 
+use crate::service::worker::WorkerService;
+
 #[derive(Clone)]
 pub struct ConnectService {
-    worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Send + Sync>,
+    worker_service: WorkerService,
 }
 
 impl ConnectService {
-    pub fn new(worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Send + Sync>) -> Self {
+    pub fn new(worker_service: WorkerService) -> Self {
         Self { worker_service }
     }
 }
@@ -70,7 +69,7 @@ async fn get_worker_stream(
         Err(err) => return Err((http::StatusCode::BAD_REQUEST, err.0).into_response()),
     };
 
-    let worker_stream = service
+    let (worker_stream, _) = service
         .worker_service
         .connect(&worker_id, &EmptyAuthCtx {})
         .await
