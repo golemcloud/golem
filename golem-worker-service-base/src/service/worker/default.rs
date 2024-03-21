@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use crate::service::template::TemplateService;
 use golem_api_grpc::proto::golem::workerexecutor::{
-    self, CompletePromiseRequest, CreateWorkerRequest, GetInvocationKeyRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest
+    self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, GetInvocationKeyRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest
 };
 use golem_api_grpc::proto::golem::{
     common::ResourceLimits, workerexecutor::worker_executor_client::WorkerExecutorClient,
@@ -30,7 +30,7 @@ use tokio::time::sleep;
 use tonic::transport::Channel;
 use tracing::{debug, info};
 
-use super::WorkerServiceBaseError;
+use super::{ConnectWorkerStream, WorkerServiceBaseError};
 
 #[async_trait]
 pub trait WorkerService<AuthCtx> {
@@ -49,10 +49,11 @@ pub trait WorkerService<AuthCtx> {
         auth_ctx: &AuthCtx,
     ) -> Result<VersionedWorkerId, WorkerServiceBaseError>;
 
-    // async fn connect(
-    //     &self,
-    //     worker_id: &WorkerId,
-    // ) -> Result<ConnectWorkerStream, WorkerServiceBaseError>;
+    async fn connect(
+        &self,
+        worker_id: &WorkerId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<ConnectWorkerStream, WorkerServiceBaseError>;
 
     async fn delete(
         &self,
@@ -238,6 +239,45 @@ where
             worker_id: worker_id.clone(),
             template_version_used: template_version,
         })
+    }
+
+    async fn connect(
+        &self,
+        worker_id: &WorkerId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<ConnectWorkerStream, WorkerServiceBaseError> {
+        let namespace = self.auth_service.is_authorized(Permission::View, auth_ctx).await?;
+        let metadata = namespace.get_metadata().await?;
+        self.retry_on_invalid_shard_id(worker_id, &(worker_id.clone(), metadata), |worker_executor_client, (worker_id, metadata)| {
+            Box::pin(async move {
+                let response = match worker_executor_client
+                    .connect_worker(ConnectWorkerRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone(), 
+                    })
+                    .await
+                {
+                    Ok(response) => Ok(response),
+                    Err(status) => {
+                        if status.code() == tonic::Code::NotFound {
+                            Err(WorkerServiceBaseError::WorkerNotFound(worker_id.clone().into()))
+                        } else {
+                            Err(WorkerServiceBaseError::internal(
+                                status
+                            ))
+                        }
+                    }
+                }
+                .map_err(|err| {
+                    GolemError::RuntimeError(GolemErrorRuntimeError {
+                        details: err.to_string(),
+                    })
+                })?;
+                Ok(ConnectWorkerStream::new(response.into_inner()))
+            })
+        })
+        .await
     }
 
     async fn delete(
@@ -886,8 +926,8 @@ where
                 }
                 Err(other) => {
                     debug!("Got {}, not retrying", other);
-                    let err = anyhow::Error::new(other);
-                    return Err(WorkerServiceBaseError::Internal(err));
+                    // let err = anyhow::Error::new(other);
+                    return Err(WorkerServiceBaseError::internal(other));
                 }
             }
         }

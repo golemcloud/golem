@@ -22,10 +22,19 @@ pub enum WorkerServiceBaseError {
     TemplateNotFound(TemplateId),
     #[error("Account not found: {0}")]
     AccountIdNotFound(AccountId),
-    // FIXME: Once worker is independent of account
+    // TODO: Once worker is independent of account
     #[error("Worker not found: {0}")]
     WorkerNotFound(WorkerId),
-    // TODO: FIX?
+    // TODO: Fix display impl.
     #[error("Golem error")]
     Golem(GolemError),
+}
+
+impl WorkerServiceBaseError {
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: std::error::Error + Send + Sync + 'static,
+    {
+        Self::Internal(anyhow::Error::msg(error))
+    }
 }
