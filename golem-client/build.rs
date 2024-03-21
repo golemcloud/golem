@@ -11,5 +11,5 @@ fn main() {
         "0.0.0",
         false,
     )
-        .expect("Failed to generate client code from OpenAPI spec.")
+    .expect("Failed to generate client code from OpenAPI spec.")
 }
