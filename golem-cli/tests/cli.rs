@@ -11,6 +11,7 @@ use std::process::{Child, Command, Stdio};
 #[derive(Debug, Clone)]
 pub struct CliConfig {
     short_args: bool,
+    quiet: bool,
 }
 
 impl CliConfig {
@@ -44,7 +45,10 @@ pub struct CliLive {
 impl CliLive {
     pub fn with_short_args(&self) -> Self {
         CliLive {
-            config: CliConfig { short_args: true },
+            config: CliConfig {
+                short_args: true,
+                quiet: self.config.quiet,
+            },
             golem_template_port: self.golem_template_port,
             golem_worker_port: self.golem_worker_port,
             golem_cli_path: self.golem_cli_path.clone(),
@@ -53,7 +57,10 @@ impl CliLive {
 
     pub fn with_long_args(&self) -> Self {
         CliLive {
-            config: CliConfig { short_args: false },
+            config: CliConfig {
+                short_args: false,
+                quiet: self.config.quiet,
+            },
             golem_template_port: self.golem_template_port,
             golem_worker_port: self.golem_worker_port,
             golem_cli_path: self.golem_cli_path.clone(),
@@ -70,9 +77,14 @@ impl CliLive {
             context.golem_worker_service.local_http_port
         );
 
+        let quiet = std::env::var("QUIET").is_ok();
+
         if golem_cli_path.exists() {
             Ok(CliLive {
-                config: CliConfig { short_args: false },
+                config: CliConfig {
+                    short_args: false,
+                    quiet,
+                },
                 golem_template_port: context.golem_template_service.local_http_port,
                 golem_worker_port: context.golem_worker_service.local_http_port,
                 golem_cli_path,
@@ -95,10 +107,12 @@ impl CliLive {
     }
 
     fn run_inner<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<String, Failed> {
-        println!(
-            "Executing Golem CLI command: {} {args:?}",
-            self.golem_cli_path.to_str().unwrap_or("")
-        );
+        if !self.config.quiet {
+            println!(
+                "Executing Golem CLI command: {} {args:?}",
+                self.golem_cli_path.to_str().unwrap_or("")
+            );
+        }
 
         let output = Command::new(&self.golem_cli_path)
             .env("GOLEM_TEMPLATE_BASE_URL", self.template_base_url())
@@ -112,8 +126,10 @@ impl CliLive {
         let stdout = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
         let stderr = String::from_utf8_lossy(output.stderr.as_slice()).to_string();
 
-        println!("CLI stdout: {stdout} for command {args:?}");
-        println!("CLI stderr: {stderr} for command {args:?}");
+        if !self.config.quiet {
+            println!("CLI stdout: {stdout} for command {args:?}");
+            println!("CLI stderr: {stderr} for command {args:?}");
+        }
 
         if !output.status.success() {
             return Err(format!(

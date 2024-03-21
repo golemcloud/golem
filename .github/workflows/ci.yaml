@@ -394,7 +394,7 @@ jobs:
           CI: true
         run: |
           cargo build
-          RUST_LOG=info cargo test --test sharding
+          RUST_LOG=info cargo test --test sharding -- --nocapture
         timeout-minutes: 10
   publish:
     needs: [unit-tests, worker-tests, integration-tests]

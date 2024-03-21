@@ -35,7 +35,7 @@ GOLEM_TEST_DB=Sqlite RUST_LOG=info cargo test --test integration
 
 Same as integration tests, but with `--test sharding` instead of `--test integration`:
 ```shell
-GOLEM_TEST_DB=Sqlite RUST_LOG=info cargo test --test sharding
+GOLEM_TEST_DB=Sqlite RUST_LOG=info cargo test --test sharding -- --nocapture
 ```
 
 ## Local Testing

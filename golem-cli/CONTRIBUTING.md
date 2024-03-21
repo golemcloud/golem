@@ -24,5 +24,5 @@ To run tests against the latest binaries without docker - see [`golem-services` 
 
 Same as integration tests, but with `--test sharding` instead of `--test integration`:
 ```shell
-QUIET=true GOLEM_DOCKER_SERVICES=true GOLEM_TEST_TEMPLATES="./test-templates"  cargo test --test sharding
+QUIET=true GOLEM_DOCKER_SERVICES=true GOLEM_TEST_TEMPLATES="./test-templates"  cargo test --test sharding -- --nocapture
 ```

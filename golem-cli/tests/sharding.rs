@@ -5,73 +5,99 @@ use crate::context::{Context, ContextInfo, EnvConfig};
 use golem_cli::clients::template::TemplateView;
 use golem_cli::model::InvocationKey;
 use golem_client::model::VersionedWorkerId;
-use libtest_mimic::{Arguments, Conclusion, Failed, Trial};
+use libtest_mimic::Failed;
 use rand::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
-use std::sync::mpsc::Receiver;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 use testcontainers::clients;
 
 pub mod cli;
 pub mod context;
 
-fn run(context: ContextInfo) -> Conclusion {
-    let args = Arguments::from_args();
-
-    let context = Arc::new(context);
-
-    let mut tests = Vec::new();
-
-    tests.append(&mut all(context.clone()));
-
-    libtest_mimic::run(&args, tests)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Scenario {
+    pub workers_count: usize,
+    pub steps: Vec<Step>,
 }
 
-fn main() -> Result<(), Failed> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum Step {
+    StartShards(usize),
+    StopShards(usize),
+    StopAllShards,
+    RestartShardManager,
+    Sleep(Duration),
+    InvokeAndAwaitWorkersAsync(String),
+    WaitForInvokeAndAwaitResult,
+}
+
+fn read_scenario() -> Scenario {
+    let file_path_str =
+        std::env::var("GOLEM_TEST_SCENARIO").unwrap_or("./test-files/scenario.json".to_string());
+    println!("Reading scenario from {file_path_str}");
+
+    let path = PathBuf::from(file_path_str);
+
+    let file = std::fs::File::open(&path).unwrap();
+
+    serde_json::from_reader(file).unwrap()
+}
+
+#[test]
+fn service_is_responsive_to_shard_changes() -> Result<(), Failed> {
     env_logger::init();
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+    let (context_tx, context_rx) = std::sync::mpsc::channel();
+    let (env_command_tx, env_command_rx) = std::sync::mpsc::channel();
+    let (env_event_tx, env_event_rx) = std::sync::mpsc::channel();
 
     let context_handler = std::thread::spawn(move || {
         let docker = clients::Cli::default();
-        let context = Context::start(&docker, EnvConfig::from_env_with_shards(0)).unwrap();
+        let context = Context::start(&docker, EnvConfig::from_env_with_shards(3)).unwrap();
 
         let context_info = context.info();
 
-        tx.send(context_info).unwrap();
+        context_tx.send(context_info).unwrap();
 
-        make_env_unstable(context, stop_rx);
+        env_handler(context, env_command_rx, env_event_tx);
 
         drop(docker);
     });
 
-    let context_info = rx.recv().unwrap();
+    let context_info = context_rx.recv().unwrap();
 
-    let res = run(context_info);
+    let cli = CliLive::make(&context_info)?.with_long_args();
 
-    stop_tx.send(()).unwrap();
+    service_is_responsive_to_shard_changes_run(
+        context_info,
+        read_scenario(),
+        env_command_tx,
+        env_event_rx,
+        cli,
+    )?;
+
     context_handler.join().unwrap();
 
-    res.exit()
+    Ok(())
 }
 
-pub fn all(context: Arc<ContextInfo>) -> Vec<Trial> {
-    let cli = CliLive::make(&context).unwrap().with_long_args();
-    let ctx = (context, cli);
-    vec![Trial::test_in_context(
-        format!("service_is_responsive_to_shard_changes"),
-        ctx.clone(),
-        service_is_responsive_to_shard_changes,
-    )]
-}
-
-enum Command {
-    StartShard,
-    StopShard,
+enum EnvCommand {
+    StartShards(usize),
+    StopShards(usize),
+    StopAllShards,
     RestartShardManager,
+    Stop,
+}
+
+enum EnvEvent {
+    StartShardsDone,
+    StopShardsDone,
+    StopAllShardsDone,
+    RestartShardManagerDone,
 }
 
 fn start_shard(context: &mut Context) {
@@ -109,6 +135,12 @@ fn start_shard(context: &mut Context) {
     }
 }
 
+fn start_shards(context: &mut Context, n: usize) {
+    for _ in 1..=n {
+        start_shard(context)
+    }
+}
+
 fn stop_shard(context: &mut Context) {
     let len = context.worker_executors.worker_executors.len();
 
@@ -122,6 +154,16 @@ fn stop_shard(context: &mut Context) {
     drop(we) // Not needed. Just making it explicit;
 }
 
+fn stop_shards(context: &mut Context, n: usize) {
+    for _ in 1..=n {
+        stop_shard(context)
+    }
+}
+
+fn stop_all_shards(context: &mut Context) {
+    stop_shards(context, context.worker_executors.worker_executors.len())
+}
+
 fn reload_shard_manager(context: &mut Context) {
     let old_shard_manager = context.shard_manager.take();
     drop(old_shard_manager); // Important! We should stop the old one first.
@@ -133,43 +175,39 @@ fn reload_shard_manager(context: &mut Context) {
     }
 }
 
-fn make_env_unstable(context: Context, stop_rx: Receiver<()>) {
+fn env_handler(context: Context, command_rx: Receiver<EnvCommand>, event_tx: Sender<EnvEvent>) {
     let mut context = context;
 
     println!("!!! Starting Golem Sharding Tester");
 
-    fn worker(context: &mut Context) {
-        let mut commands = vec![
-            Command::StartShard,
-            Command::StopShard,
-            Command::RestartShardManager,
-        ];
-        let mut rng = rand::thread_rng();
-        commands.shuffle(&mut rng);
-        match commands[0] {
-            Command::StartShard => {
-                println!("!!! Golem Sharding Tester starting shard");
-                start_shard(context);
-                println!("!!! Golem Sharding Tester started shard");
+    loop {
+        match command_rx.recv().unwrap() {
+            EnvCommand::StartShards(n) => {
+                println!("!!! Golem Sharding Tester starting shards({n})");
+                start_shards(&mut context, n);
+                println!("!!! Golem Sharding Tester started shards({n})");
+                event_tx.send(EnvEvent::StartShardsDone).unwrap();
             }
-            Command::StopShard => {
-                println!("!!! Golem Sharding Tester stopping shard");
-                stop_shard(context);
-                println!("!!! Golem Sharding Tester stopped shard");
+            EnvCommand::StopShards(n) => {
+                println!("!!! Golem Sharding Tester stopping shards{n}");
+                stop_shards(&mut context, n);
+                println!("!!! Golem Sharding Tester stopped shard{n}");
+                event_tx.send(EnvEvent::StopShardsDone).unwrap();
             }
-            Command::RestartShardManager => {
+            EnvCommand::StopAllShards => {
+                println!("!!! Golem Sharding Tester stopping all shards");
+                stop_all_shards(&mut context);
+                println!("!!! Golem Sharding Tester stopped all shard");
+                event_tx.send(EnvEvent::StopAllShardsDone).unwrap();
+            }
+            EnvCommand::RestartShardManager => {
                 println!("!!! Golem Sharding Tester reloading shard manager");
-                reload_shard_manager(context);
+                reload_shard_manager(&mut context);
                 println!("!!! Golem Sharding Tester reloaded shard manager");
+                event_tx.send(EnvEvent::RestartShardManagerDone).unwrap();
             }
+            EnvCommand::Stop => break,
         }
-    }
-
-    while stop_rx.try_recv().is_err() {
-        let mut rng = rand::thread_rng();
-        let n = rng.gen_range(1..10);
-        std::thread::sleep(Duration::from_secs(n));
-        worker(&mut context);
     }
 }
 
@@ -297,8 +335,12 @@ fn get_invocation_key_invoke_and_await_with_retry(
     res
 }
 
-fn service_is_responsive_to_shard_changes(
-    (context, cli): (Arc<ContextInfo>, CliLive),
+fn service_is_responsive_to_shard_changes_run(
+    context: ContextInfo,
+    scenario: Scenario,
+    env_command_tx: Sender<EnvCommand>,
+    env_event_rx: Receiver<EnvEvent>,
+    cli: CliLive,
 ) -> Result<(), Failed> {
     let template_name = "echo-service-1".to_string();
 
@@ -319,7 +361,7 @@ fn service_is_responsive_to_shard_changes(
 
     let mut workers_with_names = Vec::new();
 
-    for n in 1..=4 {
+    for n in 1..=scenario.workers_count {
         println!("*** WORKER {n} STARTING ***");
         let worker_name = format!("echo-service-{n}");
         let worker_id = upload_and_start_worker(&template, &worker_name, &cli)?;
@@ -329,44 +371,103 @@ fn service_is_responsive_to_shard_changes(
 
     println!("*** ALL WORKERS STARTED ***");
 
-    fn invoke_and_await_workers(
-        workers: &[(VersionedWorkerId, String)],
-        cli: &CliLive,
-    ) -> Result<(), Failed> {
-        let mut tasks = Vec::new();
+    let (worker_command_tx, worker_command_rx) = std::sync::mpsc::channel();
+    let (worker_event_tx, worker_event_rx) = std::sync::mpsc::channel();
 
-        for (worker, name) in workers {
-            let name = name.clone();
-            let template_id = worker.worker_id.template_id.to_string();
-            let cli = cli.clone();
-            tasks.push(std::thread::spawn(move || {
-                get_invocation_key_invoke_and_await_with_retry(
-                    &template_id,
-                    &name,
-                    "golem:it/api/echo",
-                    r#"["Hello"]"#,
-                    &cli,
-                )
-            }));
+    let workers_handler = std::thread::spawn(move || {
+        let workers_with_names = workers_with_names;
+        let cli = cli;
+
+        loop {
+            match worker_command_rx.recv().unwrap() {
+                WorkerCommand::InvokeAndAwaitWorkers(name) => {
+                    println!("*** INVOKING WORKERS: {name} ***");
+                    invoke_and_await_workers(&workers_with_names, &cli).unwrap();
+                    println!("*** INVOKING WORKERS {name} DONE ***");
+                    worker_event_tx
+                        .send(WorkerEvent::InvokeAndAwaitWorkersCompleted(name))
+                        .unwrap();
+                }
+                WorkerCommand::Stop => break,
+            }
         }
+    });
 
-        for task in tasks {
-            let _ = task.join().unwrap()?;
+    for step in scenario.steps {
+        match step {
+            Step::StartShards(n) => {
+                env_command_tx.send(EnvCommand::StartShards(n)).unwrap();
+                let _ = env_event_rx.recv().unwrap();
+            }
+            Step::StopShards(n) => {
+                env_command_tx.send(EnvCommand::StopShards(n)).unwrap();
+                let _ = env_event_rx.recv().unwrap();
+            }
+            Step::StopAllShards => {
+                env_command_tx.send(EnvCommand::StopAllShards).unwrap();
+                let _ = env_event_rx.recv().unwrap();
+            }
+            Step::RestartShardManager => {
+                env_command_tx
+                    .send(EnvCommand::RestartShardManager)
+                    .unwrap();
+                let _ = env_event_rx.recv().unwrap();
+            }
+            Step::Sleep(duration) => {
+                std::thread::sleep(duration);
+            }
+            Step::InvokeAndAwaitWorkersAsync(name) => {
+                worker_command_tx
+                    .send(WorkerCommand::InvokeAndAwaitWorkers(name))
+                    .unwrap();
+            }
+            Step::WaitForInvokeAndAwaitResult => {
+                let _ = worker_event_rx.recv().unwrap();
+            }
         }
-
-        Ok(())
     }
 
-    for c in 0..2 {
-        if c != 0 {
-            std::thread::sleep(Duration::from_secs(10));
-        }
-        println!("*** INVOKING WORKERS {c} ***");
-        invoke_and_await_workers(&workers_with_names, &cli)?;
-        println!("*** INVOKING WORKERS {c} DONE ***");
+    worker_command_tx.send(WorkerCommand::Stop).unwrap();
+    env_command_tx.send(EnvCommand::Stop).unwrap();
+
+    workers_handler.join().unwrap();
+
+    Ok(())
+}
+
+enum WorkerCommand {
+    InvokeAndAwaitWorkers(String),
+    Stop,
+}
+
+enum WorkerEvent {
+    InvokeAndAwaitWorkersCompleted(String),
+}
+
+fn invoke_and_await_workers(
+    workers: &[(VersionedWorkerId, String)],
+    cli: &CliLive,
+) -> Result<(), Failed> {
+    let mut tasks = Vec::new();
+
+    for (worker, name) in workers {
+        let name = name.clone();
+        let template_id = worker.worker_id.template_id.to_string();
+        let cli = cli.clone();
+        tasks.push(std::thread::spawn(move || {
+            get_invocation_key_invoke_and_await_with_retry(
+                &template_id,
+                &name,
+                "golem:it/api/echo",
+                r#"["Hello"]"#,
+                &cli,
+            )
+        }));
     }
 
-    println!("*** TEST COMPLETED ***");
+    for task in tasks {
+        let _ = task.join().unwrap()?;
+    }
 
     Ok(())
 }
