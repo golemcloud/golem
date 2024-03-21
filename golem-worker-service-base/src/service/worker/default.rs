@@ -228,7 +228,7 @@ where
                                 args: args.clone(),
                                 env: env.clone(),
                                 account_id: metadata.account_id.clone().map(|id| id.into()),
-                                account_limits: metadata.limits.clone(), 
+                                account_limits: metadata.limits.clone(),
                             }
                         )
                         .await
@@ -314,7 +314,7 @@ where
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerServiceBaseError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Delete);
-        let namespace = self
+        let _ = self
             .auth_service
             .is_authorized(permission, auth_ctx)
             .await?;
@@ -505,7 +505,7 @@ where
                             invocation_key: Some(invocation_key.clone().into()),
                             calling_convention: calling_convention.clone().into(),
                             account_id: metadata.account_id.clone().map(|id| id.into()),
-                            account_limits: metadata.limits.clone(), 
+                            account_limits: metadata.limits.clone(),
                         }
                     ).await.map_err(|err| {
                         GolemError::RuntimeError(GolemErrorRuntimeError {
@@ -549,7 +549,7 @@ where
             .auth_service
             .is_authorized(permission, auth_ctx)
             .await?;
-        let metadata = namespace.get_metadata().await?;
+        let _ = namespace.get_metadata().await?;
 
         let template_details = self
             .try_get_template_for_worker(worker_id, auth_ctx)
@@ -587,7 +587,7 @@ where
             .auth_service
             .is_authorized(permission, auth_ctx)
             .await?;
-        let metadata = namespace.get_metadata().await?;
+        let _ = namespace.get_metadata().await?;
 
         let template_details = self
             .try_get_template_for_worker(worker_id, auth_ctx)
@@ -628,7 +628,7 @@ where
                             name: function_name.clone(),
                             input: params_val.clone(),
                             account_id: metadata.account_id.clone().map(|id| id.into()),
-                            account_limits: metadata.limits.clone(), 
+                            account_limits: metadata.limits.clone(),
                         })
                         .await
                         .map_err(|err| {
@@ -668,7 +668,7 @@ where
             .auth_service
             .is_authorized(permission, auth_ctx)
             .await?;
-        let metadata = namespace.get_metadata().await?;
+        let _ = namespace.get_metadata().await?;
 
         let promise_id = PromiseId {
             worker_id: worker_id.clone(),
@@ -725,7 +725,7 @@ where
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerServiceBaseError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::Update);
-        let namespace = self
+        let _ = self
             .auth_service
             .is_authorized(permission, auth_ctx)
             .await?;
@@ -772,7 +772,7 @@ where
         auth_ctx: &AuthCtx,
     ) -> Result<WorkerMetadata, WorkerServiceBaseError> {
         let permission = TemplatePermission::new(worker_id.template_id.clone(), Permission::View);
-        let namespace = self
+        let _ = self
             .auth_service
             .is_authorized(permission, auth_ctx)
             .await?;
