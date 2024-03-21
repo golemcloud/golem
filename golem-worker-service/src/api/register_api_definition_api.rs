@@ -92,14 +92,12 @@ impl RegisterApiDefinitionApi {
         let data = self
             .definition_service
             .get(&api_definition_id, &api_version, EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         let values: Vec<ApiDefinition> = match data {
             Some(d) => {
-                let definition: ApiDefinition = d
-                    .api_definition
-                    .try_into()
-                    .map_err(ApiEndpointError::internal)?;
+                let definition: ApiDefinition = d.try_into().map_err(ApiEndpointError::internal)?;
                 vec![definition]
             }
             None => vec![],
@@ -122,7 +120,8 @@ impl RegisterApiDefinitionApi {
         let deleted = self
             .definition_service
             .delete(&api_definition_id, &api_definition_version, EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         if deleted.is_some() {
             Ok(Json("API definition deleted".to_string()))
@@ -133,11 +132,15 @@ impl RegisterApiDefinitionApi {
 
     #[oai(path = "/all", method = "get")]
     async fn get_all(&self) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
-        let data = self.definition_service.get_all(EmptyAuthCtx {}).await?;
+        let data = self
+            .definition_service
+            .get_all(EmptyAuthCtx {})
+            .await?
+            .value;
 
         let values = data
             .into_iter()
-            .map(|d| d.api_definition.try_into())
+            .map(|d| d.try_into())
             .collect::<Result<Vec<ApiDefinition>, _>>()
             .map_err(ApiEndpointError::internal)?;
 

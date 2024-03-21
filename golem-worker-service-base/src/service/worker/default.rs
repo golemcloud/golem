@@ -38,8 +38,7 @@ use tracing::{debug, info};
 
 use super::{ConnectWorkerStream, WorkerServiceError};
 
-pub type WorkerResult<T, Namespace> =
-    std::result::Result<WithNamespace<T, Namespace>, WorkerServiceError>;
+pub type WorkerResult<T, Namespace> = Result<WithNamespace<T, Namespace>, WorkerServiceError>;
 
 #[async_trait]
 pub trait WorkerService<Namespace, AuthCtx> {
