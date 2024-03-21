@@ -1964,7 +1964,7 @@ impl From<VersionedWorkerId> for golem_api_grpc::proto::golem::worker::Versioned
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct CompleteParameters {
-    pub oplog_idx: i32,
+    pub oplog_idx: u64,
     pub data: Vec<u8>,
 }
 
@@ -1984,7 +1984,7 @@ impl From<CompleteParameters> for golem_api_grpc::proto::golem::worker::Complete
 #[oai(rename_all = "camelCase")]
 pub struct PromiseId {
     pub worker_id: WorkerId,
-    pub oplog_idx: i32,
+    pub oplog_idx: u64,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::PromiseId> for PromiseId {

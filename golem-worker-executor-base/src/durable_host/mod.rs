@@ -24,7 +24,7 @@ use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::error::{is_interrupt, is_suspend, GolemError};
+use crate::error::{is_interrupt, is_jump, is_suspend, GolemError};
 use crate::invocation::invoke_worker;
 use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig};
 use crate::services::active_workers::ActiveWorkers;
@@ -46,11 +46,12 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use cap_std::ambient_authority;
+use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
+use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
     WorkerMetadata, WorkerStatus,
 };
-use golem_common::model::{OplogEntry, WrappedFunctionType};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use serde::de::DeserializeOwned;
@@ -73,6 +74,7 @@ use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::HasOplogService;
 use crate::wasi_host;
+use crate::worker::calculate_last_known_status;
 
 pub mod blobstore;
 mod cli;
@@ -117,6 +119,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub async fn commit_oplog(&mut self) {
         self.private_state.commit_oplog().await
+    }
+
+    async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {
+        self.private_state.get_oplog_entry_marker().await
     }
 
     async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
@@ -206,14 +212,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
         )?);
         debug!(
-            "Created temporary file system root for {:?} at {:?}",
-            worker_id,
+            "Created temporary file system root for {worker_id} at {:?}",
             temp_dir.path()
         );
         let root_dir = cap_std::fs::Dir::open_ambient_dir(temp_dir.path(), ambient_authority())
             .map_err(|e| GolemError::runtime(format!("Failed to open temporary directory: {e}")))?;
 
         let oplog_size = oplog_service.get_size(&worker_id.worker_id).await;
+
+        debug!(
+            "Worker {} initialized with deleted regions {}",
+            worker_id, worker_config.deleted_regions
+        );
 
         let stdio =
             ManagedStandardIo::new(worker_id.worker_id.clone(), invocation_key_service.clone());
@@ -263,6 +273,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         rpc,
                         resources: HashMap::new(),
                         last_resource_id: 0,
+                        deleted_regions: worker_config.deleted_regions.clone(),
+                        next_deleted_region: worker_config
+                            .deleted_regions
+                            .find_next_deleted_region(0),
                     },
                     temp_dir,
                     execution_status,
@@ -295,7 +309,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         DurableWorkerCtxWasiHttpView(self)
     }
 
-    pub async fn create_promise(&self, oplog_idx: i32) -> PromiseId {
+    pub async fn create_promise(&self, oplog_idx: u64) -> PromiseId {
         self.public_state
             .promise_service
             .create(&self.worker_id.worker_id, oplog_idx)
@@ -373,7 +387,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let oplog_idx = self.private_state.oplog_idx;
         self.private_state
             .worker_service
-            .update_status(&self.worker_id.worker_id, status, oplog_idx)
+            .update_status(
+                &self.worker_id.worker_id,
+                status,
+                self.private_state.deleted_regions.clone(),
+                oplog_idx,
+            )
             .await
     }
 
@@ -718,8 +737,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         let is_interrupt = is_interrupt(error);
         let is_suspend = is_suspend(error);
+        let is_jump = is_jump(error);
 
-        if is_live_after && !is_interrupt && !is_suspend {
+        if is_live_after && !is_interrupt && !is_suspend && !is_jump {
             self.set_oplog_entry(OplogEntry::Error {
                 timestamp: Timestamp::now_utc(),
             })
@@ -750,12 +770,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         let is_interrupt = is_interrupt(error);
         let is_suspend = is_suspend(error);
+        let is_jump = is_jump(error);
+
         match decision {
             RecoveryDecision::None => {
                 if is_interrupt {
                     Ok(WorkerStatus::Interrupted)
                 } else if is_suspend {
                     Ok(WorkerStatus::Suspended)
+                } else if is_jump {
+                    Ok(WorkerStatus::Running)
                 } else {
                     Ok(WorkerStatus::Failed)
                 }
@@ -804,7 +828,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             }
         }
 
-        debug!("Function finished with {:?}", output);
+        debug!(
+            "Function {}/{full_function_name} finished with {:?}",
+            self.worker_id, output
+        );
 
         // Return indicating that it is done
         Ok(Some(output))
@@ -843,17 +870,23 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         this: &T,
         worker_id: &WorkerId,
         status: WorkerStatus,
-    ) {
-        let last_oplog_idx = last_oplog_idx(this, worker_id).await;
+    ) -> Result<(), GolemError> {
+        let latest_status = calculate_last_known_status(this, worker_id).await?;
         this.worker_service()
-            .update_status(worker_id, status, last_oplog_idx)
+            .update_status(
+                worker_id,
+                status,
+                latest_status.deleted_regions,
+                latest_status.oplog_idx,
+            )
             .await;
+        Ok(())
     }
 
     async fn get_worker_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> u32 {
+    ) -> u64 {
         trailing_error_count(this, worker_id).await
     }
 
@@ -884,7 +917,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<(), GolemError> {
-        debug!("Starting prepare_instance for {}", worker_id);
+        debug!("Starting prepare_instance for {worker_id}");
         let start = Instant::now();
         let mut count = 0;
         let result = loop {
@@ -944,7 +977,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         };
         record_resume_worker(start.elapsed());
         record_number_of_replayed_functions(count);
-        debug!("Finished prepare_instance for {}", worker_id);
+        debug!("Finished prepare_instance for {worker_id}");
         result
     }
 
@@ -967,14 +1000,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
     ) -> Result<(), anyhow::Error> {
-        info!("Recovering instances");
+        info!("Recovering workers");
 
-        let instances = this.worker_service().get_running_workers_in_shards().await;
+        let workers = this.worker_service().get_running_workers_in_shards().await;
 
-        debug!("Recovering running instances: {:?}", instances);
+        debug!("Recovering running workers: {:?}", workers);
 
-        for instance in instances {
-            let worker_id = instance.worker_id;
+        for worker in workers {
+            let worker_id = worker.worker_id;
             let previous_tries = Self::get_worker_retry_count(this, &worker_id.worker_id).await;
             let decision = this
                 .recovery_management()
@@ -986,16 +1019,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             );
         }
 
-        info!("Finished recovering instances");
+        info!("Finished recovering workers");
         Ok(())
     }
 }
 
-async fn last_oplog_idx<T: HasOplogService>(this: &T, worker_id: &WorkerId) -> i32 {
+async fn last_oplog_idx<T: HasOplogService>(this: &T, worker_id: &WorkerId) -> u64 {
     this.oplog_service().get_size(worker_id).await
 }
 
-async fn trailing_error_count<T: HasOplogService>(this: &T, worker_id: &WorkerId) -> u32 {
+async fn trailing_error_count<T: HasOplogService>(this: &T, worker_id: &WorkerId) -> u64 {
     let mut idx = this.oplog_service().get_size(worker_id).await;
     let mut count = 0;
     if idx == 0 {
@@ -1022,8 +1055,8 @@ async fn trailing_error_count<T: HasOplogService>(this: &T, worker_id: &WorkerId
 
 pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     buffer: VecDeque<OplogEntry>,
-    oplog_idx: i32,
-    oplog_size: i32,
+    oplog_idx: u64,
+    oplog_size: u64,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
@@ -1040,6 +1073,8 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     pub rpc: Arc<dyn Rpc + Send + Sync>,
     resources: HashMap<u64, ResourceAny>,
     last_resource_id: u64,
+    deleted_regions: DeletedRegions,
+    next_deleted_region: Option<OplogRegion>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -1053,11 +1088,11 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         self.oplog_service.append(worker_id, &arrays).await
     }
 
-    pub async fn get_oplog_size(&mut self) -> i32 {
+    pub async fn get_oplog_size(&mut self) -> u64 {
         self.oplog_service.get_size(&self.worker_id).await
     }
 
-    pub async fn read_oplog(&self, idx: i32, n: i32) -> Vec<OplogEntry> {
+    pub async fn read_oplog(&self, idx: u64, n: u64) -> Vec<OplogEntry> {
         self.oplog_service.read(&self.worker_id, idx, n).await
     }
 
@@ -1083,10 +1118,53 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     pub async fn get_oplog_entry(&mut self) -> OplogEntry {
         assert!(self.is_replay());
+
         let oplog_entries = self.read_oplog(self.oplog_idx, 1).await;
         let oplog_entry = oplog_entries[0].clone();
-        self.oplog_idx += 1;
+
+        let update_next_deleted_region = match &self.next_deleted_region {
+            Some(region) if region.start == self.oplog_idx => {
+                let target = region.end + 1;
+                debug!(
+                    "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
+                    self.worker_id, self.oplog_idx, target, self.oplog_size
+                );
+                self.oplog_idx = target;
+                true
+            }
+            _ => {
+                self.oplog_idx += 1;
+                false
+            }
+        };
+
+        if update_next_deleted_region {
+            self.next_deleted_region = self
+                .deleted_regions
+                .find_next_deleted_region(self.oplog_idx);
+        }
+
         oplog_entry
+    }
+
+    async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {
+        loop {
+            let oplog_entry = self.get_oplog_entry().await;
+            match oplog_entry {
+                OplogEntry::NoOp { .. } => {
+                    break Ok(());
+                }
+                OplogEntry::Suspend { .. } => (),
+                OplogEntry::Error { .. } => (),
+                OplogEntry::Debug { message, .. } => debug!("Debug: {}", message),
+                _ => {
+                    break Err(GolemError::unexpected_oplog_entry(
+                        "NoOp",
+                        format!("{:?}", oplog_entry),
+                    ));
+                }
+            }
+        }
     }
 
     async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
@@ -1212,7 +1290,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     }
 
     /// Consumes Suspend and Error entries which are hints for the server to decide whether to
-    /// keep workers in memory or allow them to rerun etc but contain no actionable information
+    /// keep workers in memory or allow them to rerun etc., but contain no actionable information
     /// during replay
     async fn consume_hint_entries(&mut self) {
         loop {
@@ -1275,7 +1353,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     }
 
     /// Counts the number of Error entries that are at the end of the oplog. This equals to the number of retries that have been attempted.
-    pub async fn trailing_error_count(&self) -> u32 {
+    pub async fn trailing_error_count(&self) -> u64 {
         trailing_error_count(self, &self.worker_id).await
     }
 }

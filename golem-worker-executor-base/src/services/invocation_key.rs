@@ -212,7 +212,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
         worker_id: &WorkerId,
         key: &InvocationKey,
     ) -> LookupResult {
-        debug!("wait_for_confirmation {key:?}");
+        debug!("wait_for_confirmation for {worker_id}: {key:?}");
         loop {
             match self.lookup_key(worker_id, key) {
                 LookupResult::Invalid => break LookupResult::Invalid,

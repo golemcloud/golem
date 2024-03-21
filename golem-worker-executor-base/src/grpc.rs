@@ -172,7 +172,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         worker_id: &common_model::WorkerId,
         metadata: &Option<WorkerMetadata>,
     ) -> Result<WorkerStatus, GolemError> {
-        debug!("validate_worker_status for {worker_id}");
         let worker_status = Ctx::get_assumed_worker_status(self, worker_id, metadata).await;
 
         match worker_status {
@@ -410,11 +409,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             WorkerStatus::Suspended => {
                 debug!("Marking suspended worker {worker_id} as interrupted");
-                Ctx::set_worker_status(self, &worker_id, WorkerStatus::Interrupted).await;
+                Ctx::set_worker_status(self, &worker_id, WorkerStatus::Interrupted).await?;
             }
             WorkerStatus::Retrying => {
                 debug!("Marking worker {worker_id} scheduled to be retried as interrupted");
-                Ctx::set_worker_status(self, &worker_id, WorkerStatus::Interrupted).await;
+                Ctx::set_worker_status(self, &worker_id, WorkerStatus::Interrupted).await?;
             }
             WorkerStatus::Running => {
                 let worker_state = Worker::get_or_create_with_config(

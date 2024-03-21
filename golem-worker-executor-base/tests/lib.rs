@@ -20,6 +20,7 @@ pub mod guest_languages;
 pub mod keyvalue;
 pub mod rpc;
 pub mod scalability;
+pub mod transactions;
 pub mod wasi;
 
 #[allow(dead_code)]

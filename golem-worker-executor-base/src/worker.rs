@@ -20,9 +20,11 @@ use std::time::Instant;
 use async_mutex::Mutex;
 use bytes::Bytes;
 use golem_common::cache::PendingOrFinal;
+use golem_common::model::oplog::OplogEntry;
+use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder};
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatusRecord,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::Receiver;
@@ -36,7 +38,7 @@ use crate::model::{ExecutionStatus, InterruptKind, WorkerConfig};
 use crate::services::golem_config::GolemConfig;
 use crate::services::invocation_key::LookupResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
-use crate::services::{HasAll, HasInvocationKeyService};
+use crate::services::{HasAll, HasInvocationKeyService, HasOplogService, HasWorkerService};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
 /// Worker is one active wasmtime instance representing a Golem worker with its corresponding
@@ -114,7 +116,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 args: worker_args.clone(),
                 env: worker_env.clone(),
                 account_id,
-                last_known_status: WorkerStatusRecord::default(),
+                last_known_status: calculate_last_known_status(
+                    this,
+                    &versioned_worker_id.worker_id,
+                )
+                .await?,
             };
 
             this.worker_service().add(&worker_metadata).await?;
@@ -137,7 +143,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 this.rpc(),
                 this.extra_deps(),
                 this.config(),
-                WorkerConfig::new(worker_metadata.worker_id.clone(), worker_args, worker_env),
+                WorkerConfig::new(
+                    worker_metadata.worker_id.clone(),
+                    worker_args,
+                    worker_env,
+                    worker_metadata.last_known_status.deleted_regions.clone(),
+                ),
                 execution_status.clone(),
             )
             .await?;
@@ -146,10 +157,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             let mut store = Store::new(&this.engine(), context);
             store.set_epoch_deadline(this.config().limits.epoch_ticks);
-            store.epoch_deadline_callback(|mut store| {
+            let worker_id_clone = versioned_worker_id.worker_id.clone();
+            store.epoch_deadline_callback(move |mut store| {
                 let current_level = store.get_fuel().unwrap_or(0);
                 if store.data().is_out_of_fuel(current_level as i64) {
-                    debug!("ran out of fuel, borrowing more");
+                    debug!("{worker_id_clone} ran out of fuel, borrowing more");
                     store.data_mut().borrow_fuel_sync();
                 }
 
@@ -167,7 +179,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let instance_pre = this.linker().instantiate_pre(&component).map_err(|e| {
                 GolemError::worker_creation_failed(
                     worker_id.clone(),
-                    format!("Failed to pre-instantiate component: {e}"),
+                    format!("Failed to pre-instantiate worker {worker_id}: {e}"),
                 )
             })?;
 
@@ -177,7 +189,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .map_err(|e| {
                     GolemError::worker_creation_failed(
                         worker_id.clone(),
-                        format!("Failed to instantiate component: {e}"),
+                        format!("Failed to instantiate worker {worker_id}: {e}"),
                     )
                 })?;
 
@@ -595,8 +607,9 @@ pub async fn invoke_and_await<Ctx: WorkerCtx, T>(
 where
     T: HasInvocationKeyService,
 {
+    let worker_id = worker.metadata.worker_id.worker_id.clone();
     match invoke(
-        worker.clone(),
+        worker,
         this,
         invocation_key.clone(),
         calling_convention,
@@ -608,18 +621,20 @@ where
         Some(Ok(output)) => Ok(output),
         Some(Err(err)) => Err(err),
         None => {
-            let worker_id = &worker.metadata.worker_id.worker_id;
             let invocation_key =
                 invocation_key.expect("missing invocation key for invoke-and-await");
 
-            debug!("Waiting for invocation key {} to complete", invocation_key);
+            debug!(
+                "Waiting for invocation key {} to complete for {worker_id}",
+                invocation_key
+            );
             let result = this
                 .invocation_key_service()
-                .wait_for_confirmation(worker_id, &invocation_key)
+                .wait_for_confirmation(&worker_id, &invocation_key)
                 .await;
 
             debug!(
-                "Invocation key {} lookup result: {:?}",
+                "Invocation key {} lookup result for {worker_id}: {:?}",
                 invocation_key, result
             );
             match result {
@@ -635,4 +650,61 @@ where
             }
         }
     }
+}
+
+/// Gets the last cached worker status record and the new oplog entries and calculates the new worker status.
+pub async fn calculate_last_known_status<T>(
+    this: &T,
+    worker_id: &WorkerId,
+) -> Result<WorkerStatusRecord, GolemError>
+where
+    T: HasOplogService + HasWorkerService,
+{
+    let last_known = this
+        .worker_service()
+        .get(worker_id)
+        .await
+        .map(|metadata| metadata.last_known_status.clone())
+        .unwrap_or_default();
+
+    let last_oplog_index = this.oplog_service().get_size(worker_id).await;
+    if last_known.oplog_idx == last_oplog_index {
+        Ok(last_known)
+    } else {
+        let new_entries = this
+            .oplog_service()
+            .read(
+                worker_id,
+                last_known.oplog_idx,
+                last_oplog_index - last_known.oplog_idx,
+            )
+            .await;
+
+        let status = calculate_latest_worker_status(&last_known.status, &new_entries);
+        let deleted_regions = calculate_deleted_regions(last_known.deleted_regions, &new_entries);
+
+        Ok(WorkerStatusRecord {
+            oplog_idx: last_oplog_index,
+            status,
+            deleted_regions,
+        })
+    }
+}
+
+fn calculate_latest_worker_status(
+    _initial: &WorkerStatus,
+    _entries: &[OplogEntry],
+) -> WorkerStatus {
+    // TODO: this is currently not 100% accurate because we don't have an Interrupted oplog entry, see https://github.com/golemcloud/golem/issues/239
+    WorkerStatus::Running
+}
+
+fn calculate_deleted_regions(initial: DeletedRegions, entries: &[OplogEntry]) -> DeletedRegions {
+    let mut builder = DeletedRegionsBuilder::from_regions(initial.into_regions());
+    for entry in entries {
+        if let OplogEntry::Jump { jump, .. } = entry {
+            builder.add(jump.clone());
+        }
+    }
+    builder.build()
 }

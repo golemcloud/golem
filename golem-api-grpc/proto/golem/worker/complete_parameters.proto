@@ -4,6 +4,6 @@ package golem.worker;
 
 
 message CompleteParameters {
-  int32 oplog_idx = 1;
+  uint64 oplog_idx = 1;
   bytes data = 2;
 }

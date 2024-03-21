@@ -77,8 +77,8 @@ impl FuelManagement for Context {
 
     fn borrow_fuel_sync(&mut self) {}
 
-    async fn return_fuel(&mut self, current_level: i64) -> Result<i64, GolemError> {
-        Ok(current_level)
+    async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, GolemError> {
+        Ok(0)
     }
 }
 
@@ -90,14 +90,14 @@ impl ExternalOperations<Context> for Context {
         this: &T,
         worker_id: &WorkerId,
         status: WorkerStatus,
-    ) {
+    ) -> Result<(), GolemError> {
         DurableWorkerCtx::<Context>::set_worker_status(this, worker_id, status).await
     }
 
     async fn get_worker_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> u32 {
+    ) -> u64 {
         DurableWorkerCtx::<Context>::get_worker_retry_count(this, worker_id).await
     }
 

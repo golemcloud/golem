@@ -111,7 +111,7 @@ pub trait WorkerService<AuthCtx> {
     async fn complete_promise(
         &self,
         worker_id: &WorkerId,
-        oplog_id: i32,
+        oplog_id: u64,
         data: Vec<u8>,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerServiceError>;
@@ -678,7 +678,7 @@ where
     async fn complete_promise(
         &self,
         worker_id: &WorkerId,
-        oplog_id: i32,
+        oplog_id: u64,
         data: Vec<u8>,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerServiceError> {
@@ -1123,7 +1123,7 @@ impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
     async fn complete_promise(
         &self,
         _: &WorkerId,
-        _: i32,
+        _: u64,
         _: Vec<u8>,
         _: &EmptyAuthCtx,
     ) -> Result<bool, WorkerServiceError> {
