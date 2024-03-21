@@ -6,6 +6,8 @@ shardManager:
     grpc: 9001
   service:
     type: ClusterIP
+  worker:
+    healthCheckType: "Grpc"
   redis:
     port: 6379
     host: golem-redis-master
@@ -106,6 +108,7 @@ templateStore:
   pvc:
     storageClassName: hostpath
     storageSize: 5Gi
+    accessMode: ReadWriteOnce
   s3:
     objectPrefix: ""
     bucket: ""
@@ -116,6 +119,7 @@ templateCompiledStore:
   pvc:
     storageClassName: hostpath
     storageSize: 5Gi
+    accessMode: ReadWriteOnce
   s3:
     objectPrefix: ""
     bucket: ""
@@ -126,6 +130,7 @@ workerBlobStore:
   pvc:
     storageClassName: hostpath
     storageSize: 5Gi
+    accessMode: ReadWriteOnce
   s3:
     bucketPrefix: ""
     region: "us-east-1"

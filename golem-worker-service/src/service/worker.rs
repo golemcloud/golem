@@ -33,6 +33,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
 use golem_common::model::{CallingConvention, InvocationKey, WorkerStatus};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
+use golem_worker_service_base::service::template::TemplateService;
 use serde_json::Value;
 use tokio::time::sleep;
 use tokio_stream::Stream;
@@ -40,7 +41,6 @@ use tonic::transport::Channel;
 use tonic::{Status, Streaming};
 use tracing::{debug, info};
 
-use crate::service::template::TemplateService;
 use golem_service_base::model::*;
 use golem_service_base::routing_table::{RoutingTableError, RoutingTableService};
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
@@ -174,7 +174,7 @@ pub trait WorkerService {
     async fn complete_promise(
         &self,
         worker_id: &WorkerId,
-        oplog_id: i32,
+        oplog_id: u64,
         data: Vec<u8>,
     ) -> Result<bool, WorkerServiceBaseError>;
 
@@ -766,7 +766,7 @@ impl WorkerService for WorkerServiceDefault {
     async fn complete_promise(
         &self,
         worker_id: &WorkerId,
-        oplog_id: i32,
+        oplog_id: u64,
         data: Vec<u8>,
     ) -> Result<bool, WorkerServiceBaseError> {
         let promise_id = PromiseId {
@@ -1024,7 +1024,7 @@ impl WorkerService for WorkerServiceNoOp {
     async fn complete_promise(
         &self,
         _worker_id: &WorkerId,
-        _oplog_id: i32,
+        _oplog_id: u64,
         _data: Vec<u8>,
     ) -> Result<bool, WorkerServiceBaseError> {
         Ok(true)

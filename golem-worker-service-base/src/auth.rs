@@ -1,10 +1,10 @@
-use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use async_trait::async_trait;
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
 pub enum Permission {
     View,
     Create,
@@ -21,14 +21,27 @@ pub trait AuthService<AuthCtx, Namespace> {
         &self,
         permission: Permission,
         ctx: &AuthCtx,
-    ) -> Result<Namespace, Box<dyn Error>>;
+    ) -> Result<Namespace, AuthError>;
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum AuthError {
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+    #[error("Auth {permission} is forbidden: {reason}")]
+    Forbidden {
+        permission: Permission,
+        reason: String,
+    },
 }
 
 pub struct AuthServiceNoop {}
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmptyAuthCtx {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, bincode::Encode, bincode::Decode, serde::Deserialize,
+)]
 pub struct CommonNamespace(String);
 
 impl Default for CommonNamespace {
@@ -49,7 +62,7 @@ impl AuthService<EmptyAuthCtx, CommonNamespace> for AuthServiceNoop {
         &self,
         _permission: Permission,
         _ctx: &EmptyAuthCtx,
-    ) -> Result<CommonNamespace, Box<dyn Error>> {
+    ) -> Result<CommonNamespace, AuthError> {
         Ok(CommonNamespace::default())
     }
 }

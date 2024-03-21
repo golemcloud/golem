@@ -2,22 +2,23 @@
 resolver = "2"
 
 members = [
-    "golem-worker-executor-base",
-    "golem-worker-executor",
-    "golem-common",
     "golem-api-grpc",
+    "golem-cli",
+    "golem-client",
+    "golem-common",
     "golem-service-base",
+    "golem-template-compilation-service",
     "golem-template-service",
     "golem-shard-manager",
+    "golem-worker-executor-base",
+    "golem-worker-executor",
     "golem-worker-service-base",
     "golem-worker-service",
-    "golem-template-compilation-service"
 ]
 
 exclude = [
     "test-templates/shopping-cart",
     "test-templates/write-stdout",
-    "wasmtime",
     "test-templates/blob-store-service",
     "test-templates/clock-service",
     "test-templates/clocks",
@@ -42,11 +43,6 @@ exclude = [
     "test-templates/variant-service",
     "test-templates/write-stderr",
     "test-templates/write-stdout",
-    "golem-openapi-client-generator",
-    "golem-client",
-    "golem-cli",
-    "libtest-mimic",
-    "wasm-rpc",
 ]
 
 [workspace.dependencies]
@@ -69,6 +65,7 @@ futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
 golem-wasm-ast = "0.2.1"
+golem-wasm-rpc = { version = "0.0.13", default-features = false, features = ["host"] }
 http = "1.0.0" # keep in sync with wasmtime
 humantime-serde = "1.1.1"
 hyper = { version = "1.0.1", features = ["full"] } # keep in sync with wasmtime
@@ -122,7 +119,7 @@ warp = "0.3.6"
 webpki-roots = { version = "0.26.0" }
 
 [patch.crates-io]
-wasmtime = { path = "wasmtime/crates/wasmtime" }
-wasmtime-runtime = { path = "wasmtime/crates/runtime" }
-wasmtime-wasi = { path = "wasmtime/crates/wasi" }
-wasmtime-wasi-http = { path = "wasmtime/crates/wasi-http" }
+wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-17" }
+wasmtime-runtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-17" }
+wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-17" }
+wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-17" }

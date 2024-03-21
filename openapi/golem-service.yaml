@@ -1352,7 +1352,7 @@ components:
       properties:
         oplogIdx:
           type: integer
-          format: int32
+          format: uint64
         data:
           type: array
           items:
@@ -1885,7 +1885,7 @@ components:
           $ref: '#/components/schemas/WorkerId'
         oplogIdx:
           type: integer
-          format: int32
+          format: uint64
       required:
       - workerId
       - oplogIdx

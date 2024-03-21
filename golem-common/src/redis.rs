@@ -662,9 +662,11 @@ impl RedisTransaction {
         self.trx.sadd(self.prefixed_key(key), members).await
     }
 
-    pub async fn srem<K>(&self, key: K, members: Vec<String>) -> RedisResult<()>
+    pub async fn srem<K, V>(&self, key: K, members: V) -> RedisResult<()>
     where
         K: AsRef<str>,
+        V: TryInto<MultipleValues> + Send,
+        V::Error: Into<RedisError> + Send,
     {
         self.trx.srem(self.prefixed_key(key), members).await
     }

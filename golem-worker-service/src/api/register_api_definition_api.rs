@@ -13,9 +13,7 @@ use golem_worker_service_base::api_definition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, Version};
 use golem_worker_service_base::auth::{AuthService, CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::oas_worker_bridge::*;
-use golem_worker_service_base::service::api_definition_service::{
-    ApiDefinitionService, ApiRegistrationError,
-};
+use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 
 pub struct RegisterApiDefinitionApi {
     pub definition_service:
@@ -47,15 +45,7 @@ impl RegisterApiDefinitionApi {
             ApiEndpointError::bad_request(e)
         })?;
 
-        register_api(self.definition_service.clone(), &definition).await?;
-
-        let data = self
-            .definition_service
-            .get(&definition.id, &definition.version, EmptyAuthCtx {})
-            .await
-            .map_err(ApiEndpointError::internal)?;
-
-        let definition = data.ok_or(ApiEndpointError::not_found("API Definition not found"))?;
+        self.register_api(&definition).await?;
 
         let definition: ApiDefinition =
             definition.try_into().map_err(ApiEndpointError::internal)?;
@@ -72,19 +62,10 @@ impl RegisterApiDefinitionApi {
 
         let definition: api_definition::ApiDefinition = payload
             .0
-            .clone()
             .try_into()
             .map_err(ApiEndpointError::bad_request)?;
 
-        register_api(self.definition_service.clone(), &definition).await?;
-
-        let data = self
-            .definition_service
-            .get(&payload.id, &payload.version, EmptyAuthCtx {})
-            .await
-            .map_err(ApiEndpointError::internal)?;
-
-        let definition = data.ok_or(ApiEndpointError::not_found("API Definition not found"))?;
+        self.register_api(&definition).await?;
 
         let definition: ApiDefinition =
             definition.try_into().map_err(ApiEndpointError::internal)?;
@@ -110,12 +91,14 @@ impl RegisterApiDefinitionApi {
         let data = self
             .definition_service
             .get(&api_definition_id, &api_version, EmptyAuthCtx {})
-            .await
-            .map_err(ApiEndpointError::internal)?;
+            .await?;
 
         let values: Vec<ApiDefinition> = match data {
             Some(d) => {
-                let definition: ApiDefinition = d.try_into().map_err(ApiEndpointError::internal)?;
+                let definition: ApiDefinition = d
+                    .api_definition
+                    .try_into()
+                    .map_err(ApiEndpointError::internal)?;
                 vec![definition]
             }
             None => vec![],
@@ -135,35 +118,25 @@ impl RegisterApiDefinitionApi {
 
         info!("Delete API definition - id: {}", &api_definition_id);
 
-        let data = self
+        let deleted = self
             .definition_service
-            .get(&api_definition_id, &api_definition_version, EmptyAuthCtx {})
-            .await
-            .map_err(ApiEndpointError::internal)?;
+            .delete(&api_definition_id, &api_definition_version, EmptyAuthCtx {})
+            .await?;
 
-        if data.is_some() {
-            self.definition_service
-                .delete(&api_definition_id, &api_definition_version, EmptyAuthCtx {})
-                .await
-                .map_err(ApiEndpointError::internal)?;
-
-            return Ok(Json("API definition deleted".to_string()));
+        if deleted.is_some() {
+            Ok(Json("API definition deleted".to_string()))
+        } else {
+            Ok(Json("API definition not found".to_string()))
         }
-
-        Err(ApiEndpointError::not_found("API definition not found"))
     }
 
     #[oai(path = "/all", method = "get")]
     async fn get_all(&self) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
-        let data = self
-            .definition_service
-            .get_all(EmptyAuthCtx {})
-            .await
-            .map_err(ApiEndpointError::internal)?;
+        let data = self.definition_service.get_all(EmptyAuthCtx {}).await?;
 
         let values = data
             .into_iter()
-            .map(|d| d.try_into())
+            .map(|d| d.api_definition.try_into())
             .collect::<Result<Vec<ApiDefinition>, _>>()
             .map_err(ApiEndpointError::internal)?;
 
@@ -171,38 +144,31 @@ impl RegisterApiDefinitionApi {
     }
 }
 
-async fn register_api(
-    definition_service: Arc<dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
-    definition: &api_definition::ApiDefinition,
-) -> Result<(), ApiEndpointError> {
-    definition_service
-        .register(definition, EmptyAuthCtx {})
-        .await
-        .map_err(|reg_error| {
-            error!(
-                "API definition id: {} - register error: {}",
-                definition.id, reg_error
-            );
+impl RegisterApiDefinitionApi {
+    async fn register_api(
+        &self,
+        definition: &api_definition::ApiDefinition,
+    ) -> Result<(), ApiEndpointError> {
+        self.definition_service
+            .register(definition, EmptyAuthCtx {})
+            .await
+            .map_err(|e| {
+                error!("API definition id: {} - register error: {e}", definition.id,);
+                e
+            })?;
 
-            match reg_error {
-                ApiRegistrationError::AlreadyExists(_) => {
-                    ApiEndpointError::already_exists(reg_error)
-                }
-                ApiRegistrationError::InternalError(_) => ApiEndpointError::bad_request(reg_error),
-                ApiRegistrationError::AuthenticationError(msg) => {
-                    ApiEndpointError::unauthorized(msg)
-                }
-            }
-        })
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod test {
     use golem_worker_service_base::auth::AuthServiceNoop;
+    use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
     use poem::test::TestClient;
 
     use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
-    use golem_worker_service_base::service::api_definition_service::RegisterApiDefinitionDefault;
+    use golem_worker_service_base::service::api_definition::RegisterApiDefinitionDefault;
 
     use super::*;
 
@@ -210,6 +176,7 @@ mod test {
         let definition_service = RegisterApiDefinitionDefault::new(
             Arc::new(AuthServiceNoop {}),
             Arc::new(InMemoryRegistry::default()),
+            Arc::new(ApiDefinitionValidatorNoop {}),
         );
 
         let endpoint = RegisterApiDefinitionApi::new(

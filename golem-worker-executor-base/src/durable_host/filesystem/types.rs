@@ -28,7 +28,7 @@ use crate::durable_host::serialized::{
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::WrappedFunctionType;
+use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime;
 use wasmtime_wasi::preview2::bindings::filesystem::types::{
     Advice, Descriptor, DescriptorFlags, DescriptorStat, DescriptorType, DirectoryEntry,

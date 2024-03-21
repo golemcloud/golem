@@ -22,7 +22,7 @@ use tracing::{debug, error, warn};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 
-use crate::error::{is_interrupt, is_suspend, GolemError};
+use crate::error::{is_interrupt, is_jump, is_suspend, GolemError};
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::workerctx::{FuelManagement, WorkerCtx};
 
@@ -49,13 +49,11 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
 
     let worker_id = store.data().worker_id().clone();
-    debug!("invoke_worker_impl: {worker_id}/{full_function_name}");
+    debug!("invoke_worker: {worker_id}/{full_function_name}");
 
     if let Some(invocation_key) = &store.data().get_current_invocation_key().await {
         store.data_mut().resume_invocation_key(invocation_key).await
     }
-
-    debug!("invoke_worker_impl_or_fail: {worker_id}/{full_function_name}");
 
     let result = invoke_or_fail(
         &worker_id,
@@ -69,7 +67,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     .await;
 
     debug!(
-        "invoke_worker_impl_or_fail: {worker_id}/{full_function_name} resulted in {:?}",
+        "invoke_or_fail: {worker_id}/{full_function_name} resulted in {:?}",
         result
     );
 
@@ -81,7 +79,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
                 match invocation_key {
                     Some(invocation_key) => {
                         debug!(
-                            "Storing interrupted status for invocation key {:?}",
+                            "Storing interrupted status for invocation key {:?} in {worker_id}/{full_function_name}",
                             &invocation_key
                         );
                         store
@@ -99,12 +97,16 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
                 // this invocation was suspended and expected to be resumed by an external call or schedule
                 record_invocation(was_live_before, "suspended");
                 false
+            } else if is_jump(&err) {
+                // the worker needs to be restarted in order to jump to the past, but otherwise continues running
+                record_invocation(was_live_before, "jump");
+                false
             } else {
                 // this invocation failed it won't be retried later
                 match invocation_key {
                     Some(invocation_key) => {
                         debug!(
-                            "Storing failed result for invocation key {:?}",
+                            "Storing failed result for invocation key {:?} in {worker_id}/{full_function_name}",
                             &invocation_key
                         );
                         store
@@ -300,7 +302,10 @@ async fn invoke<Ctx: WorkerCtx>(
                 call_exported_function(&mut store, function, params, context).await?;
 
             for resource in resources_to_drop {
-                debug!("Dropping passed owned resources {:?}", resource);
+                debug!(
+                    "Dropping passed owned resources {:?} in {context}",
+                    resource
+                );
                 resource.resource_drop_async(&mut store).await?;
             }
 
@@ -313,7 +318,7 @@ async fn invoke<Ctx: WorkerCtx>(
                 output.push(result_value);
             }
 
-            store_results(&mut store, &output).await;
+            store_results(&mut store, &output, context).await;
 
             Ok(InvokeResult {
                 exited: false,
@@ -349,7 +354,7 @@ async fn invoke<Ctx: WorkerCtx>(
             let stdout = store.data_mut().finish_capturing_stdout().await.ok();
             let output: Vec<Value> = vec![Value::String(stdout.unwrap_or("".to_string()))];
 
-            store_results(&mut store, &output).await;
+            store_results(&mut store, &output, context).await;
 
             Ok(InvokeResult {
                 exited,
@@ -360,10 +365,14 @@ async fn invoke<Ctx: WorkerCtx>(
     }
 }
 
-async fn store_results<'a, Ctx: WorkerCtx>(store: &mut StoreContextMut<'a, Ctx>, output: &[Value]) {
+async fn store_results<'a, Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'a, Ctx>,
+    output: &[Value],
+    context: &str,
+) {
     if let Some(invocation_key) = store.data().get_current_invocation_key().await {
         debug!(
-            "Storing successful results for invocation key {:?}",
+            "Storing successful results for invocation key {:?} in {context}",
             &invocation_key
         );
 
@@ -372,7 +381,7 @@ async fn store_results<'a, Ctx: WorkerCtx>(store: &mut StoreContextMut<'a, Ctx>,
             .confirm_invocation_key(&invocation_key, Ok(output.to_vec()))
             .await;
     } else {
-        debug!("No invocation key");
+        debug!("No invocation key for {context}");
     }
 }
 
@@ -414,7 +423,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
     }
 
     let output = Vec::new();
-    store_results(&mut store, &output).await;
+    store_results(&mut store, &output, context).await;
 
     Ok(InvokeResult {
         exited: false,
@@ -456,7 +465,10 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
         .data_mut()
         .return_fuel(current_fuel_level as i64)
         .await?;
-    debug!("fuel consumed for call: {}", consumed_fuel_for_call);
+    debug!(
+        "fuel consumed for call {context}: {}",
+        consumed_fuel_for_call
+    );
     record_invocation_consumption(consumed_fuel_for_call);
 
     Ok((result.map(|_| results), consumed_fuel_for_call))

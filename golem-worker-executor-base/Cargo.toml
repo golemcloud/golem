@@ -18,7 +18,7 @@ mocks = []
 [dependencies]
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc/wasm-rpc", default-features = false, features = ["host"] }
+golem-wasm-rpc = { workspace = true }
 
 anyhow = { workspace = true }
 async-fs = "2.1.0"
@@ -42,6 +42,7 @@ fs-set-times = "0.20.1"
 futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "0.4.3"
+golem-wit = "0.2.0"
 http = { workspace = true }
 http_02 = { package = "http", version = "0.2.11" }
 http-body = "1.0.0" # keep in sync with wasmtime
@@ -87,6 +88,10 @@ redis = { version = "0.24.0", features = ["default"] }
 serde_json = { workspace = true }
 tracing-subscriber = { workspace = true }
 warp = { workspace = true }
+
+[build-dependencies]
+cargo_metadata = "0.18.1"
+symlink = "0.1.0"
 
 [[test]]
 name = "integration"

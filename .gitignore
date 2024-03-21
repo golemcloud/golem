@@ -6,6 +6,7 @@ target/
 .idea/
 ./golem-worker-executor/data/
 ./golem-worker-executor-base/data/
+./golem-worker-executor-base/golem-wit/
 zig-cache/
 dump.rdb
 ./test-templates/*.wat
@@ -16,4 +17,6 @@ dump.rdb
 ./test-templates/csharp-1/obj/
 ./test-templates/python-1/__pycache__/
 ./test-templates/tinygo-wasi*/tinygo_wasi/
-golem-client/
+golem-client/*
+!golem-client/Cargo.toml
+!golem-client/build.rs

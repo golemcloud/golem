@@ -16,7 +16,7 @@ pub mod container;
 pub mod types;
 
 use async_trait::async_trait;
-use golem_common::model::WrappedFunctionType;
+use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::WasiView;
 

@@ -740,3 +740,10 @@ pub fn is_suspend(error: &anyhow::Error) -> bool {
         .downcast_ref::<InterruptKind>()
         .map_or(false, |kind| *kind == InterruptKind::Suspend)
 }
+
+pub fn is_jump(error: &anyhow::Error) -> bool {
+    error
+        .root_cause()
+        .downcast_ref::<InterruptKind>()
+        .map_or(false, |kind| *kind == InterruptKind::Jump)
+}

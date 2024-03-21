@@ -595,7 +595,7 @@ mod tests {
     }
 
     fn promiseid_strat() -> impl Strategy<Value = PromiseId> {
-        (workerid_strat(), any::<i32>()).prop_map(|(worker_id, oplog_idx)| PromiseId {
+        (workerid_strat(), any::<u64>()).prop_map(|(worker_id, oplog_idx)| PromiseId {
             worker_id,
             oplog_idx,
         })

@@ -20,7 +20,6 @@ use http::{HeaderName, HeaderValue};
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use tracing::info;
 
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::subscribe;
@@ -33,7 +32,7 @@ use crate::durable_host::http::serialized::{
 };
 use crate::durable_host::serialized::SerializableError;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::{OplogEntry, WrappedFunctionType};
+use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use wasmtime_wasi_http::bindings::wasi::http::types::{
     Duration, ErrorCode, FieldKey, FieldValue, Fields, FutureIncomingResponse, FutureTrailers,
     HeaderError, Headers, Host, HostFields, HostFutureIncomingResponse, HostFutureTrailers,
@@ -267,7 +266,6 @@ impl<Ctx: WorkerCtx> HostRequestOptions for DurableWorkerCtx<Ctx> {
         ms: Option<Duration>,
     ) -> anyhow::Result<Result<(), ()>> {
         record_host_function_call("http::types::request_options", "set_connect_timeout_ms");
-        info!("set_connect_timeout {ms:?}");
         HostRequestOptions::set_connect_timeout(&mut self.as_wasi_http_view(), self_, ms)
     }
 

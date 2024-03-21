@@ -6,5 +6,5 @@ import "golem/worker/worker_id.proto";
 
 message PromiseId {
   WorkerId worker_id = 1;
-  int32 oplog_idx = 2;
+  uint64 oplog_idx = 2;
 }

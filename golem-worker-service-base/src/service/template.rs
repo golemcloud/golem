@@ -1,3 +1,6 @@
+use crate::service::error::TemplateServiceBaseError;
+use crate::UriBackConversion;
+
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
 use golem_api_grpc::proto::golem::template::{
@@ -7,9 +10,6 @@ use golem_common::config::RetryConfig;
 use golem_common::model::TemplateId;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Template;
-use golem_worker_service_base::app_config::TemplateServiceConfig;
-use golem_worker_service_base::service::error::TemplateServiceBaseError;
-use golem_worker_service_base::UriBackConversion;
 use http::Uri;
 use tracing::info;
 
@@ -29,16 +29,13 @@ pub trait TemplateService {
 
 #[derive(Clone)]
 pub struct TemplateServiceDefault {
-    pub uri: Uri,
-    pub retry_config: RetryConfig,
+    uri: Uri,
+    retry_config: RetryConfig,
 }
 
 impl TemplateServiceDefault {
-    pub fn new(config: &TemplateServiceConfig) -> Self {
-        Self {
-            uri: config.uri(),
-            retry_config: config.retries.clone(),
-        }
+    pub fn new(uri: Uri, retry_config: RetryConfig) -> Self {
+        Self { uri, retry_config }
     }
 }
 

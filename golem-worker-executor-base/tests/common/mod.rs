@@ -31,7 +31,8 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     InvokeWorkerRequest, ResumeWorkerRequest,
 };
 use golem_common::model::{
-    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
@@ -72,11 +73,13 @@ use golem_worker_executor_base::workerctx::{
 use golem_worker_executor_base::Bootstrap;
 use serde_json::Value as JsonValue;
 use tokio::runtime::Handle;
+use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 
 use golem::api;
 use golem_common::config::RedisConfig;
+use golem_common::model::regions::DeletedRegions;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
@@ -243,9 +246,29 @@ impl TestWorkerExecutor {
 
         match response.result {
             None => panic!("No response from connect_worker"),
-            Some(get_worker_metadata_response::Result::Success(metadata)) => {
-                Some(metadata.try_into().unwrap())
-            }
+            Some(get_worker_metadata_response::Result::Success(metadata)) => Some(WorkerMetadata {
+                worker_id: VersionedWorkerId {
+                    worker_id: metadata
+                        .worker_id
+                        .expect("no worker_id")
+                        .clone()
+                        .try_into()
+                        .expect("invalid worker_id"),
+                    template_version: metadata.template_version,
+                },
+                args: metadata.args.clone(),
+                env: metadata
+                    .env
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<Vec<_>>(),
+                account_id: metadata.account_id.expect("no account_id").clone().into(),
+                last_known_status: WorkerStatusRecord {
+                    oplog_idx: 0,
+                    status: metadata.status.try_into().expect("invalid status"),
+                    deleted_regions: DeletedRegions::new(),
+                },
+            }),
             Some(get_worker_metadata_response::Result::Failure(WorkerExecutionError {
                 error: Some(worker_execution_error::Error::WorkerNotFound(_)),
             })) => None,
@@ -497,6 +520,66 @@ impl TestWorkerExecutor {
         });
 
         rx
+    }
+
+    pub async fn capture_output_forever(
+        &self,
+        worker_id: &WorkerId,
+    ) -> (
+        UnboundedReceiver<Option<LogEvent>>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut cloned_client = self.client.clone();
+        let worker_id = worker_id.clone();
+        let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let mut abort = false;
+            while !abort {
+                let mut response = cloned_client
+                    .connect_worker(ConnectWorkerRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                        account_id: Some(
+                            AccountId {
+                                value: "test-account".to_string(),
+                            }
+                            .into(),
+                        ),
+                        account_limits: None,
+                    })
+                    .await
+                    .expect("Failed to connect worker")
+                    .into_inner();
+
+                loop {
+                    select! {
+                        msg = response.message() => {
+                            match msg {
+                                Ok(Some(event)) =>  {
+                                    debug!("Received event: {:?}", event);
+                                    tx.send(Some(event)).expect("Failed to send event");
+                                }
+                                Ok(None) => {
+                                    break;
+                                }
+                                Err(e) => {
+                                    panic!("Failed to get message: {:?}", e);
+                                }
+                            }
+                        }
+                        _ = (&mut abort_rx) => {
+                            abort = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            tx.send(None).expect("Failed to send event");
+            debug!("Finished receiving events");
+        });
+
+        (rx, abort_tx)
     }
 
     pub async fn capture_output_with_termination(
@@ -757,6 +840,17 @@ pub fn stdout_event(s: &str) -> LogEvent {
     }
 }
 
+pub fn stdout_event_starting_with(event: &LogEvent, s: &str) -> bool {
+    if let LogEvent {
+        event: Some(log_event::Event::Stdout(StdOutLog { message })),
+    } = event
+    {
+        message.starts_with(s)
+    } else {
+        false
+    }
+}
+
 pub fn stderr_event(s: &str) -> LogEvent {
     LogEvent {
         event: Some(log_event::Event::Stderr(StdErrLog {
@@ -966,8 +1060,8 @@ impl FuelManagement for TestWorkerCtx {
 
     fn borrow_fuel_sync(&mut self) {}
 
-    async fn return_fuel(&mut self, current_level: i64) -> Result<i64, GolemError> {
-        Ok(current_level)
+    async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, GolemError> {
+        Ok(0)
     }
 }
 
@@ -979,14 +1073,14 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         this: &T,
         worker_id: &WorkerId,
         status: WorkerStatus,
-    ) {
+    ) -> Result<(), GolemError> {
         DurableWorkerCtx::<TestWorkerCtx>::set_worker_status(this, worker_id, status).await
     }
 
     async fn get_worker_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> u32 {
+    ) -> u64 {
         DurableWorkerCtx::<TestWorkerCtx>::get_worker_retry_count(this, worker_id).await
     }
 
