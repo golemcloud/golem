@@ -20,4 +20,4 @@ tracing = "^0.1"
 uuid = { version = "^1.6", features = ["serde"] }
 
 [build-dependencies]
-golem-openapi-client-generator = "0.0.3"
+golem-openapi-client-generator = "0.0.4"
