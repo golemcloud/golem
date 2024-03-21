@@ -1,0 +1,5 @@
+normalize_comments = true 
+reorder_imports = true 
+group_imports = "StdExternalCrate"
+newline_style = "Unix"
+imports_granularity = "Module"

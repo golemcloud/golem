@@ -1,0 +1,299 @@
+From 4b01d0bfe7cc4b635e1fd2924865dc1211127bab Mon Sep 17 00:00:00 2001
+From: Daniel Vigovszky <daniel.vigovszky@gmail.com>
+Date: Sun, 3 Mar 2024 14:32:09 +0100
+Subject: [PATCH] Documented commands and arguments
+
+---
+ Cargo.lock      |  8 ++++----
+ Cargo.toml      |  2 +-
+ src/main.rs     | 14 ++++++++++++++
+ src/template.rs |  8 ++++++++
+ src/worker.rs   | 45 +++++++++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 72 insertions(+), 5 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index f1b7537..19be4c1 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1815,9 +1815,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "golem-wasm-rpc"
+-version = "0.0.10"
++version = "0.0.11"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "5dda60483d07c166b768f675b1f2e31dba3fb1d6ce0f231f9725e88e3f6660bb"
++checksum = "00022b15f014c5a4d5484c261f75f78b0d631761c9de877b45873076c5d7ecee"
+ dependencies = [
+  "arbitrary",
+  "bigdecimal",
+@@ -1833,9 +1833,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "golem-wasm-rpc-stubgen"
+-version = "0.0.10"
++version = "0.0.11"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "32e140c72c08a2c81d50fcc228082354d736912d464727d193b42cd987a0ec9b"
++checksum = "381507b741738ad7cce6dcf37e2855229b4789abeb563d2d42ad6a143a488596"
+ dependencies = [
+  "anyhow",
+  "cargo-component",
+diff --git a/Cargo.toml b/Cargo.toml
+index 4e7f543..1ec5f42 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -23,7 +23,7 @@ derive_more = "0.99.17"
+ futures-util = "0.3.30"
+ golem-client = "0.0.63"
+ golem-examples = "0.1.11"
+-golem-wasm-rpc-stubgen = { version = "0.0.10", optional = true }
++golem-wasm-rpc-stubgen = { version = "0.0.11", optional = true }
+ http = "1.0.0"
+ indoc = "2.0.4"
+ itertools = "0.11.0"
+diff --git a/src/main.rs b/src/main.rs
+index f576e67..2ab6d0c 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -33,35 +33,49 @@ use golem_cli::worker::{WorkerHandler, WorkerHandlerLive, WorkerSubcommand};
+ #[derive(Subcommand, Debug)]
+ #[command()]
+ enum Command {
++    /// Upload and manage Golem templates
+     #[command()]
+     Template {
+         #[command(subcommand)]
+         subcommand: TemplateSubcommand,
+     },
++
++    /// Manage Golem workers
+     #[command()]
+     Worker {
+         #[command(subcommand)]
+         subcommand: WorkerSubcommand,
+     },
++
++    /// Create a new Golem template from built-in examples
+     #[command()]
+     New {
++        /// Name of the example to use
+         #[arg(short, long)]
+         example: ExampleName,
+ 
++        /// The new template's name
+         #[arg(short, long)]
+         template_name: golem_examples::model::TemplateName,
+ 
++        /// The package name of the generated template (in namespace:name format)
+         #[arg(short, long)]
+         package_name: Option<PackageName>,
+     },
++
++    /// Lists the built-in examples available for creating new templates
+     #[command()]
+     ListExamples {
++        /// The minimum language tier to include in the list
+         #[arg(short, long)]
+         min_tier: Option<GuestLanguageTier>,
+ 
++        /// Filter examples by a given guest language
+         #[arg(short, long)]
+         language: Option<GuestLanguage>,
+     },
++
++    /// WASM RPC stub generator
+     #[cfg(feature = "stubgen")]
+     Stubgen {
+         #[command(subcommand)]
+diff --git a/src/template.rs b/src/template.rs
+index 03b00e1..7e707ea 100644
+--- a/src/template.rs
++++ b/src/template.rs
+@@ -26,26 +26,34 @@ use crate::model::{
+ #[derive(Subcommand, Debug)]
+ #[command()]
+ pub enum TemplateSubcommand {
++    /// Creates a new template with a given name by uploading the template WASM
+     #[command()]
+     Add {
++        /// Name of the newly created template
+         #[arg(short, long)]
+         template_name: TemplateName,
+ 
++        /// The WASM file to be used as a Golem template
+         #[arg(value_name = "template-file", value_hint = clap::ValueHint::FilePath)]
+         template_file: PathBufOrStdin, // TODO: validate exists
+     },
+ 
++    /// Updates an existing template by uploading a new version of its WASM
+     #[command()]
+     Update {
++        /// The template name or identifier to update
+         #[command(flatten)]
+         template_id_or_name: TemplateIdOrName,
+ 
++        /// The WASM file to be used as as a new version of the Golem template
+         #[arg(value_name = "template-file", value_hint = clap::ValueHint::FilePath)]
+         template_file: PathBufOrStdin, // TODO: validate exists
+     },
+ 
++    /// Lists the existing templates
+     #[command()]
+     List {
++        /// Optionally look for only templates matching a given name
+         #[arg(short, long)]
+         template_name: Option<TemplateName>,
+     },
+diff --git a/src/worker.rs b/src/worker.rs
+index 34b8e16..3a68273 100644
+--- a/src/worker.rs
++++ b/src/worker.rs
+@@ -27,99 +27,144 @@ use crate::template::TemplateHandler;
+ #[derive(Subcommand, Debug)]
+ #[command()]
+ pub enum WorkerSubcommand {
++    /// Creates a new idle worker
+     #[command()]
+     Add {
++        /// The Golem template to use for the worker, identified by either its name or its template ID
+         #[command(flatten)]
+         template_id_or_name: TemplateIdOrName,
+ 
++        /// Name of the newly created worker
+         #[arg(short, long)]
+         worker_name: WorkerName,
+ 
++        /// List of environment variables (key-value pairs) passed to the worker
+         #[arg(short, long, value_parser = parse_key_val, value_name = "ENV=VAL")]
+         env: Vec<(String, String)>,
+ 
++        /// List of command line arguments passed to the worker
+         #[arg(value_name = "args")]
+         args: Vec<String>,
+     },
++
++    /// Generates an invocation ID for achieving at-most-one invocation when doing retries
+     #[command()]
+     InvocationKey {
++        /// The Golem template the worker to be invoked belongs to
+         #[command(flatten)]
+         template_id_or_name: TemplateIdOrName,
+ 
++        /// Name of the worker
+         #[arg(short, long)]
+         worker_name: WorkerName,
+     },
++
++    /// Invokes a worker and waits for its completion
+     #[command()]
+     InvokeAndAwait {
++        /// The Golem template the worker to be invoked belongs to
+         #[command(flatten)]
+         template_id_or_name: TemplateIdOrName,
+ 
++        /// Name of the worker
+         #[arg(short, long)]
+         worker_name: WorkerName,
+ 
++        /// A pre-generated invocation key, if not provided, a new one will be generated
+         #[arg(short = 'k', long)]
+         invocation_key: Option<InvocationKey>,
+ 
++        /// Name of the function to be invoked
+         #[arg(short, long)]
+         function: String,
+ 
++        /// JSON array representing the parameters to be passed to the function
+         #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser))]
+         parameters: serde_json::value::Value,
+ 
++        /// Enables the STDIO cal;ing convention, passing the parameters through stdin instead of a typed exported interface
+         #[arg(short = 's', long, default_value_t = false)]
+         use_stdio: bool,
+     },
++
++    /// Triggers a function invocation on a worker without waiting for its completion
+     #[command()]
+     Invoke {
++        /// The Golem template the worker to be invoked belongs to
+         #[command(flatten)]
+         template_id_or_name: TemplateIdOrName,
+ 
++        /// Name of the worker
+         #[arg(short, long)]
+         worker_name: WorkerName,
+ 
++        /// Name of the function to be invoked
+         #[arg(short, long)]
+         function: String,
+ 
++        /// JSON array representing the parameters to be passed to the function
+         #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser))]
+         parameters: serde_json::value::Value,
+     },
++
++    /// Connect to a worker and live stream its standard output, error and log channels
+     #[command()]
+     Connect {
++        /// The Golem template the worker to be connected to belongs to
+         #[command(flatten)]
+         template_id_or_name: TemplateIdOrName,
+ 
++        /// Name of the worker
+         #[arg(short, long)]
+         worker_name: WorkerName,
+     },
++
++    /// Interrupts a running worker
+     #[command()]
+     Interrupt {
++        /// The Golem template the worker to be interrupted belongs to
+         #[command(flatten)]
+         template_id_or_name: TemplateIdOrName,
+ 
++        /// Name of the worker
+         #[arg(short, long)]
+         worker_name: WorkerName,
+     },
++
++    /// Simulates a crash on a worker for testing purposes.
++    ///
++    /// The worker starts recovering and resuming immediately.
+     #[command()]
+     SimulatedCrash {
++        /// The Golem template the worker to be crashed belongs to
+         #[command(flatten)]
+         template_id_or_name: TemplateIdOrName,
+ 
++        /// Name of the worker
+         #[arg(short, long)]
+         worker_name: WorkerName,
+     },
++
++    /// Deletes a worker
+     #[command()]
+     Delete {
++        /// The Golem template the worker to be deleted belongs to
+         #[command(flatten)]
+         template_id_or_name: TemplateIdOrName,
+ 
++        /// Name of the worker
+         #[arg(short, long)]
+         worker_name: WorkerName,
+     },
++
++    /// Retrieves metadata about an existing worker
+     #[command()]
+     Get {
++        /// The Golem template the worker to be retrieved belongs to
+         #[command(flatten)]
+         template_id_or_name: TemplateIdOrName,
+ 
++        /// Name of the worker
+         #[arg(short, long)]
+         worker_name: WorkerName,
+     },
+-- 
+2.39.3 (Apple Git-145)
+
