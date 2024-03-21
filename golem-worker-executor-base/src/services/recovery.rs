@@ -392,8 +392,10 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 
     async fn is_marked_as_interrupted(&self, worker_id: &WorkerId) -> bool {
         let worker_metadata = self.worker_service().get(worker_id).await;
-        let worker_status = Ctx::get_assumed_worker_status(self, worker_id, &worker_metadata).await;
-        worker_status == WorkerStatus::Interrupted
+        Ctx::compute_latest_worker_status(self, worker_id, &worker_metadata)
+            .await
+            .map(|s| s.status == WorkerStatus::Interrupted)
+            .unwrap_or(false)
     }
 }
 
@@ -522,7 +524,7 @@ mod tests {
     use bytes::Bytes;
     use golem_common::model::{
         AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerId,
-        WorkerMetadata, WorkerStatus,
+        WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use golem_wasm_rpc::wasmtime::ResourceStore;
     use golem_wasm_rpc::{Uri, Value};
@@ -693,11 +695,11 @@ mod tests {
             unimplemented!()
         }
 
-        async fn get_assumed_worker_status<T: HasAll<Self> + Send + Sync>(
+        async fn compute_latest_worker_status<T: HasAll<Self> + Send + Sync>(
             _this: &T,
             _worker_id: &WorkerId,
             _metadata: &Option<WorkerMetadata>,
-        ) -> WorkerStatus {
+        ) -> Result<WorkerStatusRecord, GolemError> {
             unimplemented!()
         }
 

@@ -50,7 +50,7 @@ use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
-    WorkerMetadata, WorkerStatus,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -738,9 +738,20 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let is_interrupt = is_interrupt(error);
         let is_suspend = is_suspend(error);
         let is_jump = is_jump(error);
+        let is_failure = !is_interrupt && !is_suspend && !is_jump;
 
-        if is_live_after && !is_interrupt && !is_suspend && !is_jump {
+        if is_live_after && is_failure {
             self.set_oplog_entry(OplogEntry::Error {
+                timestamp: Timestamp::now_utc(),
+            })
+            .await;
+
+            self.commit_oplog().await;
+        }
+
+        if is_live_after && is_interrupt {
+            // appending an Interrupted hint to the end of the oplog, which can be used to determine worker status
+            self.set_oplog_entry(OplogEntry::Interrupted {
                 timestamp: Timestamp::now_utc(),
             })
             .await;
@@ -871,7 +882,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         worker_id: &WorkerId,
         status: WorkerStatus,
     ) -> Result<(), GolemError> {
-        let latest_status = calculate_last_known_status(this, worker_id).await?;
+        let metadata = this.worker_service().get(worker_id).await;
+        let latest_status = calculate_last_known_status(this, worker_id, &metadata).await?;
         this.worker_service()
             .update_status(
                 worker_id,
@@ -890,26 +902,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         trailing_error_count(this, worker_id).await
     }
 
-    async fn get_assumed_worker_status<T: HasAll<Ctx> + Send + Sync>(
+    async fn compute_latest_worker_status<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
         metadata: &Option<WorkerMetadata>,
-    ) -> WorkerStatus {
-        let last_oplog_idx = last_oplog_idx(this, worker_id).await;
-        let worker_status = match metadata {
-            Some(metadata) => {
-                if metadata.last_known_status.oplog_idx == last_oplog_idx {
-                    debug!("get_assumed_instance_status for {worker_id}: stored last oplog idx matches current one, using stored status");
-                    metadata.last_known_status.status.clone()
-                } else {
-                    debug!("get_assumed_instance_status for {worker_id}: stored last oplog idx ({}) does not match current one ({last_oplog_idx}), using stored status", metadata.last_known_status.oplog_idx);
-                    WorkerStatus::Running
-                }
-            }
-            None => WorkerStatus::Idle,
-        };
-        debug!("get_assumed_instance_status for {worker_id}: assuming status {worker_status:?}");
-        worker_status
+    ) -> Result<WorkerStatusRecord, GolemError> {
+        calculate_last_known_status(this, worker_id, metadata).await
     }
 
     async fn prepare_instance(
@@ -1022,10 +1020,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         info!("Finished recovering workers");
         Ok(())
     }
-}
-
-async fn last_oplog_idx<T: HasOplogService>(this: &T, worker_id: &WorkerId) -> u64 {
-    this.oplog_service().get_size(worker_id).await
 }
 
 async fn trailing_error_count<T: HasOplogService>(this: &T, worker_id: &WorkerId) -> u64 {
@@ -1154,9 +1148,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 OplogEntry::NoOp { .. } => {
                     break Ok(());
                 }
-                OplogEntry::Suspend { .. } => (),
-                OplogEntry::Error { .. } => (),
-                OplogEntry::Debug { message, .. } => debug!("Debug: {}", message),
+                entry if entry.is_hint() => {}
                 _ => {
                     break Err(GolemError::unexpected_oplog_entry(
                         "NoOp",
@@ -1185,9 +1177,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         })
                         .unwrap());
                 }
-                OplogEntry::Suspend { .. } => (),
-                OplogEntry::Error { .. } => (),
-                OplogEntry::Debug { message, .. } => debug!("Debug: {}", message),
+                entry if entry.is_hint() => {}
                 _ => {
                     break Err(GolemError::unexpected_oplog_entry(
                         "ImportedFunctionInvoked",
@@ -1237,9 +1227,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                             calling_convention.clone(),
                         )));
                     }
-                    OplogEntry::Suspend { .. } => (),
-                    OplogEntry::Error { .. } => (),
-                    OplogEntry::Debug { message, .. } => debug!("Debug: {}", message),
+                    entry if entry.is_hint() => {}
                     _ => {
                         break Err(GolemError::unexpected_oplog_entry(
                             "ExportedFunctionInvoked",
@@ -1274,8 +1262,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                             .collect();
                         break Ok(Some(response));
                     }
-                    OplogEntry::Suspend { .. } => (),
-                    OplogEntry::Debug { message, .. } => debug!("Debug: {}", message),
+                    entry if entry.is_hint() => {}
                     _ => {
                         break Err(GolemError::unexpected_oplog_entry(
                             "ExportedFunctionCompleted",
@@ -1289,7 +1276,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
     }
 
-    /// Consumes Suspend and Error entries which are hints for the server to decide whether to
+    /// Consumes Suspend, Error and Interrupt entries which are hints for the server to decide whether to
     /// keep workers in memory or allow them to rerun etc., but contain no actionable information
     /// during replay
     async fn consume_hint_entries(&mut self) {
@@ -1297,8 +1284,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             if self.is_replay() {
                 let oplog_entry = self.get_oplog_entry().await;
                 match oplog_entry {
-                    OplogEntry::Suspend { .. } => (),
-                    OplogEntry::Error { .. } => (),
+                    entry if entry.is_hint() => {}
                     _ => {
                         self.oplog_idx -= 1;
                         break;
