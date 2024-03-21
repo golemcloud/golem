@@ -2896,6 +2896,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tonic",
  "tracing",
@@ -3179,6 +3180,7 @@ dependencies = [
 name = "golem-worker-service"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bincode 2.0.0-rc.3",
  "bytes 1.5.0",
@@ -3228,6 +3230,7 @@ dependencies = [
 name = "golem-worker-service-base"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bincode 2.0.0-rc.3",
  "bytes 1.5.0",

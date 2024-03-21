@@ -53,3 +53,4 @@ opentelemetry-prometheus = { workspace = true }
 futures-util = { workspace = true }
 tap = "1.0.1"
 thiserror = { workspace = true }
+anyhow = { workspace = true }

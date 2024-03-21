@@ -1,4 +1,5 @@
-use crate::service::error::TemplateServiceBaseError;
+use crate::service::error::TemplateServiceError;
+use crate::service::worker::WorkerServiceError;
 use golem_service_base::model::*;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -14,6 +15,10 @@ use tonic::Status;
 pub enum WorkerApiBaseError {
     #[oai(status = 400)]
     BadRequest(Json<ErrorsBody>),
+    #[oai(status = 401)]
+    Unauthorized(Json<ErrorBody>),
+    #[oai(status = 403)]
+    Forbidden(Json<ErrorBody>),
     #[oai(status = 404)]
     NotFound(Json<ErrorBody>),
     #[oai(status = 409)]
@@ -50,21 +55,31 @@ impl From<String> for WorkerApiBaseError {
     }
 }
 
-impl From<crate::service::error::WorkerServiceBaseError> for WorkerApiBaseError {
-    fn from(value: crate::service::error::WorkerServiceBaseError) -> Self {
-        use crate::service::error::WorkerServiceBaseError as ServiceError;
+impl From<WorkerServiceError> for WorkerApiBaseError {
+    fn from(value: WorkerServiceError) -> Self {
+        use golem_service_base::service::auth::AuthError;
+        use WorkerServiceError as ServiceError;
+
+        fn internal(details: String) -> WorkerApiBaseError {
+            WorkerApiBaseError::InternalError(Json(GolemErrorBody {
+                golem_error: GolemError::Unknown(GolemErrorUnknown { details }),
+            }))
+        }
 
         match value {
-            ServiceError::Internal(error) => {
-                WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
-                }))
-            }
-            ServiceError::TypeCheckerError(error) => {
-                WorkerApiBaseError::BadRequest(Json(ErrorsBody {
-                    errors: vec![format!("Type checker error: {error}")],
-                }))
-            }
+            ServiceError::Auth(error) => match error {
+                AuthError::Unauthorized(error) => {
+                    WorkerApiBaseError::Unauthorized(Json(ErrorBody { error }))
+                }
+                AuthError::Forbidden(error) => {
+                    WorkerApiBaseError::Forbidden(Json(ErrorBody { error }))
+                }
+                AuthError::Internal(error) => internal(error.to_string()),
+            },
+            ServiceError::Internal(error) => internal(error.to_string()),
+            ServiceError::TypeChecker(error) => WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                errors: vec![format!("Type checker error: {error}")],
+            })),
             ServiceError::VersionedTemplateIdNotFound(template_id) => {
                 WorkerApiBaseError::NotFound(Json(ErrorBody {
                     error: format!("Template not found: {template_id}"),
@@ -88,28 +103,28 @@ impl From<crate::service::error::WorkerServiceBaseError> for WorkerApiBaseError 
             ServiceError::Golem(golem_error) => {
                 WorkerApiBaseError::InternalError(Json(GolemErrorBody { golem_error }))
             }
-            ServiceError::DelegatedTemplateServiceError(error) => error.into(),
+            ServiceError::Template(error) => error.into(),
         }
     }
 }
 
-impl From<TemplateServiceBaseError> for WorkerApiBaseError {
-    fn from(value: TemplateServiceBaseError) -> Self {
+impl From<TemplateServiceError> for WorkerApiBaseError {
+    fn from(value: TemplateServiceError) -> Self {
         match value {
-            TemplateServiceBaseError::Connection(error) => WorkerApiBaseError::InternalError(Json(GolemErrorBody {
+            TemplateServiceError::Connection(error) => WorkerApiBaseError::InternalError(Json(GolemErrorBody {
                 golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Internal connection error: {error}") }),
             })),
-            TemplateServiceBaseError::Other(error) => {
+            TemplateServiceError::Internal(error) => {
                 WorkerApiBaseError::InternalError(Json(GolemErrorBody {
                     golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Internal error: {error}") }),
                 }))
             },
-            TemplateServiceBaseError::Transport(_) => {
+            TemplateServiceError::Transport(_) => {
                 WorkerApiBaseError::InternalError(Json(GolemErrorBody {
                     golem_error: GolemError::Unknown(GolemErrorUnknown { details: "Transport Error when connecting to template service".to_string() }),
                 }))
             },
-            TemplateServiceBaseError::Server(template_error) => {
+            TemplateServiceError::Server(template_error) => {
                 match template_error.error {
                     Some(error) => match error {
                         golem_api_grpc::proto::golem::template::template_error::Error::BadRequest(errors) => {

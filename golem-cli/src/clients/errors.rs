@@ -45,6 +45,8 @@ impl ResponseContentErrorMapper for WorkerError {
     fn map(self) -> String {
         match self {
             WorkerError::Error400(errors) => errors.errors.iter().join(", "),
+            WorkerError::Error401(error) => error.error,
+            WorkerError::Error403(error) => error.error,
             WorkerError::Error404(error) => error.error,
             WorkerError::Error409(error) => error.error,
             WorkerError::Error500(error) => display_golem_error(error.golem_error),

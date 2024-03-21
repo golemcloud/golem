@@ -1,6 +1,7 @@
 use std::result::Result;
 use std::sync::Arc;
 
+use golem_service_base::service::auth::AuthService;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -11,7 +12,7 @@ use golem_worker_service_base::api::common::ApiEndpointError;
 use golem_worker_service_base::api::register_api_definition_api::ApiDefinition;
 use golem_worker_service_base::api_definition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, Version};
-use golem_worker_service_base::auth::{AuthService, CommonNamespace, EmptyAuthCtx};
+use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::oas_worker_bridge::*;
 use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 
@@ -91,14 +92,12 @@ impl RegisterApiDefinitionApi {
         let data = self
             .definition_service
             .get(&api_definition_id, &api_version, EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         let values: Vec<ApiDefinition> = match data {
             Some(d) => {
-                let definition: ApiDefinition = d
-                    .api_definition
-                    .try_into()
-                    .map_err(ApiEndpointError::internal)?;
+                let definition: ApiDefinition = d.try_into().map_err(ApiEndpointError::internal)?;
                 vec![definition]
             }
             None => vec![],
@@ -121,7 +120,8 @@ impl RegisterApiDefinitionApi {
         let deleted = self
             .definition_service
             .delete(&api_definition_id, &api_definition_version, EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         if deleted.is_some() {
             Ok(Json("API definition deleted".to_string()))
@@ -132,11 +132,15 @@ impl RegisterApiDefinitionApi {
 
     #[oai(path = "/all", method = "get")]
     async fn get_all(&self) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
-        let data = self.definition_service.get_all(EmptyAuthCtx {}).await?;
+        let data = self
+            .definition_service
+            .get_all(EmptyAuthCtx {})
+            .await?
+            .value;
 
         let values = data
             .into_iter()
-            .map(|d| d.api_definition.try_into())
+            .map(|d| d.try_into())
             .collect::<Result<Vec<ApiDefinition>, _>>()
             .map_err(ApiEndpointError::internal)?;
 
