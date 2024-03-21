@@ -381,18 +381,11 @@ jobs:
               echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec." 1>&2
               exit 1
           fi
-      - name: Generate Golem client
-        run: |
-          expected_version=$( scripts/expected-client-version.sh )
-          cargo install golem-openapi-client-generator@0.0.1
-          golem-openapi-client-generator generate --spec-yaml openapi/golem-service.yaml --output-directory golem-client --name "golem-client" --client-version "${expected_version}"
       - name: Integration tests
         working-directory: golem-cli
         env:
           CI: true
         run: |
-          mkdir -p ./.cargo
-          echo 'paths = ["../golem-client"]' > ./.cargo/config.toml
           cargo build
           RUST_LOG=info cargo test --test integration
       - name: Sharding tests
@@ -400,8 +393,6 @@ jobs:
         env:
           CI: true
         run: |
-          mkdir -p ./.cargo
-          echo 'paths = ["../golem-client"]' > ./.cargo/config.toml
           cargo build
           RUST_LOG=info cargo test --test sharding
         timeout-minutes: 10
@@ -437,16 +428,13 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - id: get_version
         uses: battila7/get-version-action@v2
-      - name: Generate Golem client
-        run: |
-          export VERSION="${{ steps.get_version.outputs.version-without-v }}"
-          cargo install golem-openapi-client-generator@0.0.1
-          golem-openapi-client-generator generate --spec-yaml openapi/golem-service.yaml --output-directory golem-client --name "golem-client" --client-version "${VERSION}"
       - name: Publish Golem client
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        working-directory: golem-client
-        run: cargo publish --all-features --allow-dirty
+        run: |
+          export VERSION="${{ steps.get_version.outputs.version-without-v }}"
+          sed -i "s/0.0.0/$VERSION/g" golem-client/Cargo.toml
+          cargo publish -p golem-client --all-features --allow-dirty
       - name: Publish Golem CLI
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

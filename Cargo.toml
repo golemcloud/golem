@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "golem-api-grpc",
     "golem-cli",
+    "golem-client",
     "golem-common",
     "golem-service-base",
     "golem-template-compilation-service",
@@ -42,7 +43,6 @@ exclude = [
     "test-templates/variant-service",
     "test-templates/write-stderr",
     "test-templates/write-stdout",
-    "golem-client",
 ]
 
 [workspace.dependencies]

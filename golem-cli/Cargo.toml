@@ -20,6 +20,8 @@ path = "tests/sharding.rs"
 harness = false
 
 [dependencies]
+golem-client = { path = "../golem-client" }
+
 async-trait = { workspace = true }
 chrono = { workspace = true }
 clap = { version = "4.4.12", features = ["derive"] }
@@ -27,7 +29,6 @@ clap-verbosity-flag = "2.1.1"
 derive_more = "0.99.17"
 dirs = "5.0.1"
 futures-util = { workspace = true }
-golem-client = "0.0.63" # TODO: path dependency and prebuild step
 golem-examples = "0.1.12"
 golem-wasm-rpc-stubgen = { version = "0.0.13", optional = true }
 h2 = "0.3.24"
