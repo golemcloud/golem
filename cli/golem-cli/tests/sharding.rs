@@ -62,7 +62,7 @@ pub fn all(context: Arc<ContextInfo>) -> Vec<Trial> {
     let cli = CliLive::make(&context).unwrap().with_long_args();
     let ctx = (context, cli);
     vec![Trial::test_in_context(
-        format!("service_is_responsive_to_shard_changes"),
+        "service_is_responsive_to_shard_changes".to_string(),
         ctx.clone(),
         service_is_responsive_to_shard_changes,
     )]
@@ -82,13 +82,12 @@ fn start_shard(context: &mut Context) {
         .map(|we| we.shard_id)
         .collect();
     let mut ids = (0..10)
-        .into_iter()
         .filter(|i| !used_ids.contains(i))
         .collect::<Vec<_>>();
     let mut rng = thread_rng();
     ids.shuffle(&mut rng);
 
-    match ids.get(0) {
+    match ids.first() {
         Some(id) => {
             match WorkerExecutor::start(
                 context.docker,
@@ -139,7 +138,7 @@ fn make_env_unstable(context: Context, stop_rx: Receiver<()>) {
     println!("!!! Starting Golem Sharding Tester");
 
     fn worker(context: &mut Context) {
-        let mut commands = vec![
+        let mut commands = [
             Command::StartShard,
             Command::StopShard,
             Command::RestartShardManager,
@@ -290,7 +289,7 @@ fn get_invocation_key_invoke_and_await_with_retry(
     params: &str,
     cli: &CliLive,
 ) -> Result<Value, Failed> {
-    let key = get_invocation_key_with_retry(&template_id, &worker_name, &cli)?;
+    let key = get_invocation_key_with_retry(template_id, worker_name, cli)?;
     let res =
         invoke_and_await_result_with_retry(template_id, worker_name, function, params, &key, cli);
     println!("*** WORKER {worker_name} INVOKED ***");
