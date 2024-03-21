@@ -91,7 +91,6 @@ warp = { workspace = true }
 
 [build-dependencies]
 cargo_metadata = "0.18.1"
-symlink = "0.1.0"
 
 [[test]]
 name = "integration"
