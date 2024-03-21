@@ -38,3 +38,15 @@ impl std::fmt::Display for Permission {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WithNamespace<T, Namespace> {
+    pub value: T,
+    pub namespace: Namespace,
+}
+
+impl<T, Namespace> WithNamespace<T, Namespace> {
+    pub fn new(value: T, namespace: Namespace) -> Self {
+        Self { value, namespace }
+    }
+}

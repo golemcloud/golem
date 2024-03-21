@@ -68,11 +68,12 @@ async fn execute(
         worker_request_params.function
     );
 
-    let (invocation_key, _) = default_executor
+    let invocation_key = default_executor
         .worker_service
         .get_invocation_key(&worker_id, &EmptyAuthCtx {})
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .value;
 
     let invoke_parameters = worker_request_params.function_params;
 
@@ -81,7 +82,7 @@ async fn execute(
             template_id, worker_name.clone(), invocation_key, invoke_parameters
         );
 
-    let (invoke_result, _) = default_executor
+    let invoke_result = default_executor
         .worker_service
         .invoke_and_await_function(
             &worker_id,
@@ -92,7 +93,8 @@ async fn execute(
             &EmptyAuthCtx {},
         )
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .value;
 
     Ok(WorkerResponse {
         result: invoke_result,

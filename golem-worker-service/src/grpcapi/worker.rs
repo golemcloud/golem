@@ -270,7 +270,7 @@ impl WorkerGrpcApi {
 
         let worker_id = make_worker_id(template_id, request.name)?;
 
-        let (worker, _) = self
+        let worker = self
             .worker_service
             .create(
                 &worker_id,
@@ -279,7 +279,8 @@ impl WorkerGrpcApi {
                 request.env,
                 &EmptyAuthCtx {},
             )
-            .await?;
+            .await?
+            .value;
 
         Ok(worker.into())
     }
@@ -304,7 +305,7 @@ impl WorkerGrpcApi {
             .complete_parameters
             .ok_or_else(|| bad_request_error("Missing complete parameters"))?;
 
-        let (result, _) = self
+        let result = self
             .worker_service
             .complete_promise(
                 &worker_id,
@@ -312,7 +313,8 @@ impl WorkerGrpcApi {
                 parameters.data,
                 &EmptyAuthCtx {},
             )
-            .await?;
+            .await?
+            .value;
 
         Ok(result)
     }
@@ -323,10 +325,11 @@ impl WorkerGrpcApi {
     ) -> Result<WorkerMetadata, GrpcWorkerError> {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
-        let (metadata, _) = self
+        let metadata = self
             .worker_service
             .get_metadata(&worker_id, &EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         Ok(metadata.into())
     }
@@ -350,10 +353,11 @@ impl WorkerGrpcApi {
     ) -> Result<InvocationKey, GrpcWorkerError> {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
-        let (invocation_key, _) = self
+        let invocation_key = self
             .worker_service
             .get_invocation_key(&worker_id, &EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         Ok(invocation_key.into())
     }
@@ -396,7 +400,7 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(bad_request_error)?;
 
-        let (result, _) = self
+        let result = self
             .worker_service
             .invoke_and_await_function_proto(
                 &worker_id,
@@ -406,7 +410,8 @@ impl WorkerGrpcApi {
                 &calling_convention,
                 &EmptyAuthCtx {},
             )
-            .await?;
+            .await?
+            .value;
 
         Ok(result)
     }
@@ -454,7 +459,7 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(bad_request_error)?;
 
-        let (result, _) = self
+        let result = self
             .worker_service
             .invoke_and_await_function(
                 &worker_id,
@@ -464,7 +469,8 @@ impl WorkerGrpcApi {
                 &calling_convention,
                 &EmptyAuthCtx {},
             )
-            .await?;
+            .await?
+            .value;
 
         Ok(result)
     }
@@ -474,10 +480,11 @@ impl WorkerGrpcApi {
         request: ConnectWorkerRequest,
     ) -> Result<ConnectWorkerStream, GrpcWorkerError> {
         let worker_id = make_crate_worker_id(request.worker_id)?;
-        let (stream, _) = self
+        let stream = self
             .worker_service
             .connect(&worker_id, &EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         Ok(stream)
     }

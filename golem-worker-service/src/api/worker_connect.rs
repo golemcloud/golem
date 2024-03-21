@@ -69,11 +69,12 @@ async fn get_worker_stream(
         Err(err) => return Err((http::StatusCode::BAD_REQUEST, err.0).into_response()),
     };
 
-    let (worker_stream, _) = service
+    let worker_stream = service
         .worker_service
         .connect(&worker_id, &EmptyAuthCtx {})
         .await
-        .map_err(|e| (http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| (http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .value;
 
     Ok((worker_id, worker_stream))
 }

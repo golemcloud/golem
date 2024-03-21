@@ -31,10 +31,11 @@ impl WorkerApi {
     )]
     async fn get_worker_by_id(&self, worker_id: Path<String>) -> Result<Json<VersionedWorkerId>> {
         let worker_id: WorkerId = golem_common::model::WorkerId::from_str(&worker_id.0)?.into();
-        let (worker, _) = self
+        let worker = self
             .worker_service
             .get_by_id(&worker_id, &EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         Ok(Json(worker))
     }
@@ -67,7 +68,7 @@ impl WorkerApi {
         let WorkerCreationRequest { name, args, env } = request.0;
 
         let worker_id = make_worker_id(template_id, name)?;
-        let (worker, _) = self
+        let worker = self
             .worker_service
             .create(
                 &worker_id,
@@ -76,7 +77,8 @@ impl WorkerApi {
                 env,
                 &EmptyAuthCtx {},
             )
-            .await?;
+            .await?
+            .value;
 
         Ok(Json(worker))
     }
@@ -112,10 +114,11 @@ impl WorkerApi {
     ) -> Result<Json<InvocationKey>> {
         let worker_id = make_worker_id(template_id.0, worker_name.0)?;
 
-        let (invocation_key, _) = self
+        let invocation_key = self
             .worker_service
             .get_invocation_key(&worker_id, &EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         Ok(Json(invocation_key))
     }
@@ -138,7 +141,7 @@ impl WorkerApi {
 
         let calling_convention = calling_convention.0.unwrap_or(CallingConvention::Component);
 
-        let (result, _) = self
+        let result = self
             .worker_service
             .invoke_and_await_function(
                 &worker_id,
@@ -150,7 +153,8 @@ impl WorkerApi {
                 &calling_convention,
                 &EmptyAuthCtx {},
             )
-            .await?;
+            .await?
+            .value;
 
         Ok(Json(InvokeResult { result }))
     }
@@ -190,10 +194,11 @@ impl WorkerApi {
         let worker_id = make_worker_id(template_id.0, worker_name.0)?;
         let CompleteParameters { oplog_idx, data } = params.0;
 
-        let (result, _) = self
+        let result = self
             .worker_service
             .complete_promise(&worker_id, oplog_idx, data, &EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         Ok(Json(result))
     }
@@ -233,10 +238,11 @@ impl WorkerApi {
         worker_name: Path<String>,
     ) -> Result<Json<WorkerMetadata>> {
         let worker_id = make_worker_id(template_id.0, worker_name.0)?;
-        let (result, _) = self
+        let result = self
             .worker_service
             .get_metadata(&worker_id, &EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         Ok(Json(result))
     }

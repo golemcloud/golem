@@ -19,6 +19,7 @@ use golem_common::model::{AccountId, CallingConvention, InvocationKey, TemplateI
 use golem_service_base::model::{
     GolemErrorUnknown, PromiseId, VersionedWorkerId, WorkerId, WorkerMetadata,
 };
+use golem_service_base::service::auth::WithNamespace;
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
     model::{
@@ -37,7 +38,8 @@ use tracing::{debug, info};
 
 use super::{ConnectWorkerStream, WorkerServiceError};
 
-pub type WorkerResult<T, Namespace> = std::result::Result<(T, Namespace), WorkerServiceError>;
+pub type WorkerResult<T, Namespace> =
+    std::result::Result<WithNamespace<T, Namespace>, WorkerServiceError>;
 
 #[async_trait]
 pub trait WorkerService<Namespace, AuthCtx> {
@@ -211,7 +213,7 @@ where
             .is_authorized(permission, auth_ctx)
             .await?;
 
-        Ok((
+        Ok(WithNamespace::new(
             VersionedWorkerId {
                 worker_id: worker_id.clone(),
                 template_version_used: 0,
@@ -280,7 +282,7 @@ where
             template_version_used: template_version,
         };
 
-        Ok((worker_id, namespace))
+        Ok(WithNamespace::new(worker_id, namespace))
     }
 
     async fn connect(
@@ -331,7 +333,7 @@ where
             )
             .await?;
 
-        Ok((stream, namespace))
+        Ok(WithNamespace::new(stream, namespace))
     }
 
     async fn delete(
@@ -378,7 +380,7 @@ where
             )
             .await?;
 
-        Ok(((), namespace))
+        Ok(WithNamespace::new((), namespace))
     }
 
     async fn get_invocation_key(
@@ -427,7 +429,7 @@ where
                     })
                 })
                 .await?;
-        Ok((invocation_key, namespace))
+        Ok(WithNamespace::new(invocation_key, namespace))
     }
 
     async fn invoke_and_await_function(
@@ -459,7 +461,10 @@ where
                 calling_convention.clone(),
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
-        let (results_val, namespace) = self
+        let WithNamespace {
+            value: results_val,
+            namespace,
+        } = self
             .invoke_and_await_function_proto(
                 worker_id,
                 function_name,
@@ -481,7 +486,7 @@ where
             .validate_function_result(function_results, calling_convention.clone())
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
-        Ok((invoke_response_json, namespace))
+        Ok(WithNamespace::new(invoke_response_json, namespace))
     }
 
     async fn invoke_and_await_function_proto(
@@ -562,7 +567,7 @@ where
                 })
             },
         ).await?;
-        Ok((invoke_response, namespace))
+        Ok(WithNamespace::new(invoke_response, namespace))
     }
 
     async fn invoke_function(
@@ -601,7 +606,7 @@ where
         self.invoke_fn_proto(worker_id, function_name.clone(), params_val, auth_ctx)
             .await?;
 
-        Ok(((), namespace))
+        Ok(WithNamespace::new((), namespace))
     }
 
     async fn invoke_fn_proto(
@@ -682,7 +687,7 @@ where
             },
         )
             .await?;
-        Ok(((), namespace))
+        Ok(WithNamespace::new((), namespace))
     }
 
     async fn complete_promise(
@@ -744,7 +749,7 @@ where
                 },
             )
             .await?;
-        Ok((result, namespace))
+        Ok(WithNamespace::new(result, namespace))
     }
 
     async fn interrupt(
@@ -792,7 +797,7 @@ where
             },
         ).await?;
 
-        Ok(((), namespace))
+        Ok(WithNamespace::new((), namespace))
     }
 
     async fn get_metadata(
@@ -837,7 +842,7 @@ where
             },
         ).await?;
 
-        Ok((metadata, namespace))
+        Ok(WithNamespace::new(metadata, namespace))
     }
 
     async fn resume(
@@ -882,7 +887,7 @@ where
             },
         )
         .await?;
-        Ok(((), namespace))
+        Ok(WithNamespace::new((), namespace))
     }
 }
 
@@ -897,7 +902,8 @@ where
         auth_ctx: &AuthCtx,
     ) -> Result<Template, WorkerServiceError> {
         match self.get_metadata(worker_id, auth_ctx).await {
-            Ok((metadata, _)) => {
+            Ok(result) => {
+                let metadata = result.value;
                 let template_version = metadata.template_version;
                 let template_details = self
                     .template_service
@@ -1048,7 +1054,7 @@ where
         worker_id: &WorkerId,
         _: &EmptyAuthCtx,
     ) -> WorkerResult<VersionedWorkerId, Namespace> {
-        Ok((
+        Ok(WithNamespace::new(
             VersionedWorkerId {
                 worker_id: worker_id.clone(),
                 template_version_used: 0,
@@ -1065,7 +1071,7 @@ where
         _: HashMap<String, String>,
         _: &EmptyAuthCtx,
     ) -> WorkerResult<VersionedWorkerId, Namespace> {
-        Ok((
+        Ok(WithNamespace::new(
             VersionedWorkerId {
                 worker_id: worker_id.clone(),
                 template_version_used: 0,
@@ -1085,7 +1091,7 @@ where
     }
 
     async fn delete(&self, _: &WorkerId, _: &EmptyAuthCtx) -> WorkerResult<(), Namespace> {
-        Ok(((), self.namespace.clone()))
+        Ok(WithNamespace::new((), self.namespace.clone()))
     }
 
     async fn get_invocation_key(
@@ -1093,7 +1099,7 @@ where
         _: &WorkerId,
         _: &EmptyAuthCtx,
     ) -> WorkerResult<InvocationKey, Namespace> {
-        Ok((
+        Ok(WithNamespace::new(
             InvocationKey {
                 value: "".to_string(),
             },
@@ -1110,7 +1116,7 @@ where
         _: &CallingConvention,
         _: &EmptyAuthCtx,
     ) -> WorkerResult<Value, Namespace> {
-        Ok((Value::Null, self.namespace.clone()))
+        Ok(WithNamespace::new(Value::Null, self.namespace.clone()))
     }
 
     async fn invoke_and_await_function_proto(
@@ -1122,7 +1128,10 @@ where
         _: &CallingConvention,
         _: &EmptyAuthCtx,
     ) -> WorkerResult<ProtoInvokeResult, Namespace> {
-        Ok((ProtoInvokeResult { result: vec![] }, self.namespace.clone()))
+        Ok(WithNamespace::new(
+            ProtoInvokeResult { result: vec![] },
+            self.namespace.clone(),
+        ))
     }
 
     async fn invoke_function(
@@ -1132,7 +1141,7 @@ where
         _: Value,
         _: &EmptyAuthCtx,
     ) -> WorkerResult<(), Namespace> {
-        Ok(((), self.namespace.clone()))
+        Ok(WithNamespace::new((), self.namespace.clone()))
     }
 
     async fn invoke_fn_proto(
@@ -1142,7 +1151,7 @@ where
         _: Vec<ProtoVal>,
         _: &EmptyAuthCtx,
     ) -> WorkerResult<(), Namespace> {
-        Ok(((), self.namespace.clone()))
+        Ok(WithNamespace::new((), self.namespace.clone()))
     }
 
     async fn complete_promise(
@@ -1152,7 +1161,7 @@ where
         _: Vec<u8>,
         _: &EmptyAuthCtx,
     ) -> WorkerResult<bool, Namespace> {
-        Ok((true, self.namespace.clone()))
+        Ok(WithNamespace::new(true, self.namespace.clone()))
     }
 
     async fn interrupt(
@@ -1161,7 +1170,7 @@ where
         _: bool,
         _: &EmptyAuthCtx,
     ) -> WorkerResult<(), Namespace> {
-        Ok(((), self.namespace.clone()))
+        Ok(WithNamespace::new((), self.namespace.clone()))
     }
 
     async fn get_metadata(
@@ -1169,7 +1178,7 @@ where
         worker_id: &WorkerId,
         _: &EmptyAuthCtx,
     ) -> WorkerResult<WorkerMetadata, Namespace> {
-        Ok((
+        Ok(WithNamespace::new(
             WorkerMetadata {
                 worker_id: worker_id.clone(),
                 args: vec![],
@@ -1183,6 +1192,6 @@ where
     }
 
     async fn resume(&self, _: &WorkerId, _: &EmptyAuthCtx) -> WorkerResult<(), Namespace> {
-        Ok(((), self.namespace.clone()))
+        Ok(WithNamespace::new((), self.namespace.clone()))
     }
 }
