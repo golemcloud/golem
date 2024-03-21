@@ -6,7 +6,7 @@ COPY --from=chamber /chamber /bin/chamber
 
 WORKDIR /app
 
-COPY /target/x86_64-unknown-linux-gnu/release/golem-shard-manager ./
+COPY /target/x86_64-unknown-linux-gnu/release/cloud-shard-manager ./
 COPY /cloud-shard-manager/config/shard-manager.toml ./config/shard-manager.toml
 
 RUN apt-get update && apt-get install -y libssl-dev
@@ -31,7 +31,7 @@ ENV ENVIRONMENT=$ENVIRONMENT \
 
 EXPOSE 8080
 
-RUN chmod +x golem-shard-manager
+RUN chmod +x cloud-shard-manager
 
 COPY cloud-shard-manager/cloud-shard-manager-wrapper.sh cloud-shard-manager-wrapper.sh
 RUN chmod +x cloud-shard-manager-wrapper.sh

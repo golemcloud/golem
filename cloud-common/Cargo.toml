@@ -6,8 +6,8 @@ edition = "2021"
 [lib]
 
 [dependencies]
-golem-common = { path = "../golem-services/golem-common" }
-golem-api-grpc = { path = "../golem-services/golem-api-grpc" }
+golem-common = { workspace = true }
+golem-api-grpc = { workspace = true }
 cloud-api-grpc = { path = "../cloud-api-grpc" }
 
 async-trait = { workspace = true }

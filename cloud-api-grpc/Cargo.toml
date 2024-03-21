@@ -10,8 +10,8 @@ description = "GRPC API for Golem Cloud services"
 [lib]
 
 [dependencies]
-golem-api-grpc = { path = "../golem-services/golem-api-grpc", version = "0.0.0" }
-golem-wasm-rpc = { path = "../golem-services/wasm-rpc/wasm-rpc", default-features = false, features = ["host"] }
+golem-api-grpc = { workspace = true }
+golem-wasm-rpc = { workspace = true }
 
 async-trait = { workspace = true }
 bincode = { workspace = true }
@@ -25,4 +25,5 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [build-dependencies]
+cargo_metadata = "0.18.1"
 tonic-build = "0.11.0"

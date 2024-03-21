@@ -14,10 +14,10 @@ path = "src/openapi_yaml.rs"
 [lib]
 
 [dependencies]
-golem-common = { path = "../golem-services/golem-common" }
-golem-api-grpc = { path = "../golem-services/golem-api-grpc" }
-golem-service-base = { path = "../golem-services/golem-service-base" }
-golem-wasm-rpc = { path = "../golem-services/wasm-rpc/wasm-rpc", default-features = false, features = ["host"] }
+golem-common = { workspace = true }
+golem-api-grpc = { workspace = true }
+golem-service-base = { workspace = true }
+golem-wasm-rpc = { workspace = true }
 
 cloud-common = { path = "../cloud-common" }
 cloud-api-grpc = { path = "../cloud-api-grpc" }
@@ -50,7 +50,7 @@ serde_json = { workspace = true }
 serde_with = "3.5.0"
 strum = { workspace = true }
 strum_macros = { workspace = true }
-sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "postgres", "uuid" , "migrate", "chrono"] }
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "migrate", "chrono"] }
 tap = "1.0.1"
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

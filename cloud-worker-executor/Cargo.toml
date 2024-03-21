@@ -10,10 +10,10 @@ name = "cloud-worker-executor"
 path = "src/server.rs"
 
 [dependencies]
-golem-common = { path = "../golem-services/golem-common" }
-golem-api-grpc = { path = "../golem-services/golem-api-grpc" }
-golem-wasm-rpc = { path = "../golem-services/wasm-rpc/wasm-rpc", default-features = false, features = ["host"] }
-golem-worker-executor-base = { path = "../golem-services/golem-worker-executor-base" }
+golem-common = { workspace = true }
+golem-api-grpc = { workspace = true }
+golem-wasm-rpc = { workspace = true }
+golem-worker-executor-base = { workspace = true }
 cloud-api-grpc = { path = "../cloud-api-grpc" }
 
 anyhow = { workspace = true }
@@ -66,7 +66,7 @@ windows-sys = "0.52.0"
 log = "0.4.20"
 
 [dev-dependencies]
-golem-worker-executor-base = { path = "../golem-services/golem-worker-executor-base", features = ["mocks"] }
+golem-worker-executor-base = { workspace = true, features = ["mocks"] }
 fred = { workspace = true, features = ["metrics", "serde-json", "partial-tracing", "mocks"] }
 ctor = "0.2.6"
 assert2 = "0.3.11"

@@ -1,8 +1,11 @@
+use cargo_metadata::MetadataCommand;
 use std::env;
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+
+    let golem_api_grpc_root = find_package_root("golem-api-grpc");
 
     tonic_build::configure()
         .extern_path(".golem.common", "::golem_api_grpc::proto::golem::common")
@@ -73,9 +76,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/cloud/token/unsafe_token.proto",
                 "proto/golem/cloud/token/token_service.proto",
             ],
-            &["../golem-services/golem-api-grpc/proto", "proto"],
+            &[
+                &format!("{golem_api_grpc_root}/proto"),
+                &"proto".to_string(),
+            ],
         )
         .unwrap();
 
     Ok(())
+}
+
+fn find_package_root(name: &str) -> String {
+    let metadata = MetadataCommand::new()
+        .manifest_path("./Cargo.toml")
+        .exec()
+        .unwrap();
+    let package = metadata.packages.iter().find(|p| p.name == name).unwrap();
+    package.manifest_path.parent().unwrap().to_string()
 }
