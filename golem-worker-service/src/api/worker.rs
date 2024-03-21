@@ -3,19 +3,20 @@ use std::sync::Arc;
 
 use golem_common::model::{CallingConvention, InvocationKey, TemplateId};
 use golem_service_base::api_tags::ApiTags;
+use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::template::TemplateService;
+use golem_worker_service_base::service::worker::WorkerService;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tap::TapFallible;
 
-use crate::service::worker::WorkerService;
 use golem_service_base::model::*;
 use golem_worker_service_base::api::error::WorkerApiBaseError;
 
 pub struct WorkerApi {
     pub template_service: Arc<dyn TemplateService + Sync + Send>,
-    pub worker_service: Arc<dyn WorkerService + Sync + Send>,
+    pub worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
 }
 
 type Result<T> = std::result::Result<T, WorkerApiBaseError>;
@@ -29,7 +30,10 @@ impl WorkerApi {
     )]
     async fn get_worker_by_id(&self, worker_id: Path<String>) -> Result<Json<VersionedWorkerId>> {
         let worker_id: WorkerId = golem_common::model::WorkerId::from_str(&worker_id.0)?.into();
-        let worker = self.worker_service.get_by_id(&worker_id).await?;
+        let worker = self
+            .worker_service
+            .get_by_id(&worker_id, &EmptyAuthCtx {})
+            .await?;
 
         Ok(Json(worker))
     }
@@ -69,6 +73,7 @@ impl WorkerApi {
                 latest_template.versioned_template_id.version,
                 args,
                 env,
+                &EmptyAuthCtx {},
             )
             .await?;
 
@@ -87,7 +92,9 @@ impl WorkerApi {
     ) -> Result<Json<DeleteWorkerResponse>> {
         let worker_id = make_worker_id(template_id.0, worker_name.0)?;
 
-        self.worker_service.delete(&worker_id).await?;
+        self.worker_service
+            .delete(&worker_id, &EmptyAuthCtx {})
+            .await?;
 
         Ok(Json(DeleteWorkerResponse {}))
     }
@@ -104,7 +111,10 @@ impl WorkerApi {
     ) -> Result<Json<InvocationKey>> {
         let worker_id = make_worker_id(template_id.0, worker_name.0)?;
 
-        let invocation_key = self.worker_service.get_invocation_key(&worker_id).await?;
+        let invocation_key = self
+            .worker_service
+            .get_invocation_key(&worker_id, &EmptyAuthCtx {})
+            .await?;
 
         Ok(Json(invocation_key))
     }
@@ -137,6 +147,7 @@ impl WorkerApi {
                 },
                 params.0.params,
                 &calling_convention,
+                &EmptyAuthCtx {},
             )
             .await?;
 
@@ -158,7 +169,7 @@ impl WorkerApi {
         let worker_id = make_worker_id(template_id.0, worker_name.0)?;
 
         self.worker_service
-            .invoke_function(&worker_id, function.0, params.0.params)
+            .invoke_function(&worker_id, function.0, params.0.params, &EmptyAuthCtx {})
             .await?;
 
         Ok(Json(InvokeResponse {}))
@@ -180,7 +191,7 @@ impl WorkerApi {
 
         let result = self
             .worker_service
-            .complete_promise(&worker_id, oplog_idx, data)
+            .complete_promise(&worker_id, oplog_idx, data, &EmptyAuthCtx {})
             .await?;
 
         Ok(Json(result))
@@ -200,7 +211,11 @@ impl WorkerApi {
         let worker_id = make_worker_id(template_id.0, worker_name.0)?;
 
         self.worker_service
-            .interrupt(&worker_id, recover_immediately.0.unwrap_or(false))
+            .interrupt(
+                &worker_id,
+                recover_immediately.0.unwrap_or(false),
+                &EmptyAuthCtx {},
+            )
             .await?;
 
         Ok(Json(InterruptResponse {}))
@@ -217,7 +232,10 @@ impl WorkerApi {
         worker_name: Path<String>,
     ) -> Result<Json<WorkerMetadata>> {
         let worker_id = make_worker_id(template_id.0, worker_name.0)?;
-        let result = self.worker_service.get_metadata(&worker_id).await?;
+        let result = self
+            .worker_service
+            .get_metadata(&worker_id, &EmptyAuthCtx {})
+            .await?;
 
         Ok(Json(result))
     }
@@ -234,7 +252,9 @@ impl WorkerApi {
     ) -> Result<Json<ResumeResponse>> {
         let worker_id = make_worker_id(template_id.0, worker_name.0)?;
 
-        self.worker_service.resume(&worker_id).await?;
+        self.worker_service
+            .resume(&worker_id, &EmptyAuthCtx {})
+            .await?;
 
         Ok(Json(ResumeResponse {}))
     }

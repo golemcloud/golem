@@ -32,11 +32,11 @@ use golem_api_grpc::proto::golem::worker::{
     worker_error, worker_execution_error, InvocationKey, InvokeResult, UnknownError,
     VersionedWorkerId, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
 };
+use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::template::TemplateService;
+use golem_worker_service_base::service::worker::{ConnectWorkerStream, WorkerService};
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
-
-use crate::service::worker::{ConnectWorkerStream, WorkerService};
 
 fn server_error<T>(error: T) -> GrpcWorkerError
 where
@@ -52,7 +52,7 @@ where
 }
 pub struct WorkerGrpcApi {
     pub template_service: Arc<dyn TemplateService + Sync + Send>,
-    pub worker_service: Arc<dyn WorkerService + Sync + Send>,
+    pub worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
 }
 
 #[async_trait::async_trait]
@@ -231,7 +231,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
-    type ConnectWorkerStream = crate::service::worker::ConnectWorkerStream;
+    type ConnectWorkerStream = golem_worker_service_base::service::worker::ConnectWorkerStream;
 
     async fn connect_worker(
         &self,
@@ -275,6 +275,7 @@ impl WorkerGrpcApi {
                 latest_template_version.versioned_template_id.version,
                 request.args,
                 request.env,
+                &EmptyAuthCtx {},
             )
             .await?;
 
@@ -284,7 +285,9 @@ impl WorkerGrpcApi {
     async fn delete_worker(&self, request: DeleteWorkerRequest) -> Result<(), GrpcWorkerError> {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
-        self.worker_service.delete(&worker_id).await?;
+        self.worker_service
+            .delete(&worker_id, &EmptyAuthCtx {})
+            .await?;
 
         Ok(())
     }
@@ -301,7 +304,12 @@ impl WorkerGrpcApi {
 
         let result = self
             .worker_service
-            .complete_promise(&worker_id, parameters.oplog_idx, parameters.data)
+            .complete_promise(
+                &worker_id,
+                parameters.oplog_idx,
+                parameters.data,
+                &EmptyAuthCtx {},
+            )
             .await?;
 
         Ok(result)
@@ -313,7 +321,10 @@ impl WorkerGrpcApi {
     ) -> Result<WorkerMetadata, GrpcWorkerError> {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
-        let metadata = self.worker_service.get_metadata(&worker_id).await?;
+        let metadata = self
+            .worker_service
+            .get_metadata(&worker_id, &EmptyAuthCtx {})
+            .await?;
 
         Ok(metadata.into())
     }
@@ -325,7 +336,7 @@ impl WorkerGrpcApi {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         self.worker_service
-            .interrupt(&worker_id, request.recover_immediately)
+            .interrupt(&worker_id, request.recover_immediately, &EmptyAuthCtx {})
             .await?;
 
         Ok(())
@@ -337,7 +348,10 @@ impl WorkerGrpcApi {
     ) -> Result<InvocationKey, GrpcWorkerError> {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
-        let invocation_key = self.worker_service.get_invocation_key(&worker_id).await?;
+        let invocation_key = self
+            .worker_service
+            .get_invocation_key(&worker_id, &EmptyAuthCtx {})
+            .await?;
 
         Ok(invocation_key.into())
     }
@@ -350,7 +364,12 @@ impl WorkerGrpcApi {
             .ok_or_else(|| bad_request_error("Missing invoke parameters"))?;
 
         self.worker_service
-            .invoke_fn_proto(&worker_id, request.function, params.params)
+            .invoke_fn_proto(
+                &worker_id,
+                request.function,
+                params.params,
+                &EmptyAuthCtx {},
+            )
             .await?;
 
         Ok(())
@@ -383,6 +402,7 @@ impl WorkerGrpcApi {
                 &invocation_key.into(),
                 params.params,
                 &calling_convention,
+                &EmptyAuthCtx {},
             )
             .await?;
 
@@ -392,7 +412,9 @@ impl WorkerGrpcApi {
     async fn resume_worker(&self, request: ResumeWorkerRequest) -> Result<(), GrpcWorkerError> {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
-        self.worker_service.resume(&worker_id).await?;
+        self.worker_service
+            .resume(&worker_id, &EmptyAuthCtx {})
+            .await?;
 
         Ok(())
     }
@@ -405,7 +427,7 @@ impl WorkerGrpcApi {
                 .map_err(|e| bad_request_error(format!("Error parsing invoke parameters: {e}")))?;
 
         self.worker_service
-            .invoke_function(&worker_id, request.function, params)
+            .invoke_function(&worker_id, request.function, params, &EmptyAuthCtx {})
             .await?;
 
         Ok(())
@@ -438,6 +460,7 @@ impl WorkerGrpcApi {
                 &invocation_key.into(),
                 params,
                 &calling_convention,
+                &EmptyAuthCtx {},
             )
             .await?;
 
@@ -449,7 +472,10 @@ impl WorkerGrpcApi {
         request: ConnectWorkerRequest,
     ) -> Result<ConnectWorkerStream, GrpcWorkerError> {
         let worker_id = make_crate_worker_id(request.worker_id)?;
-        let stream = self.worker_service.connect(&worker_id).await?;
+        let stream = self
+            .worker_service
+            .connect(&worker_id, &EmptyAuthCtx {})
+            .await?;
 
         Ok(stream)
     }

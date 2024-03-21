@@ -2,6 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use crate::auth::EmptyAuthCtx;
 use crate::service::template::TemplateService;
 use golem_api_grpc::proto::golem::workerexecutor::{
     self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
@@ -145,6 +146,26 @@ where
     worker_executor_clients: Arc<dyn WorkerExecutorClients + Send + Sync>,
     template_service: Arc<dyn TemplateService + Send + Sync>,
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
+}
+
+impl<AuthCtx, Namespace> WorkerServiceDefault<AuthCtx, Namespace>
+where
+    AuthCtx: Send + Sync,
+    Namespace: Metadata + Send + Sync,
+{
+    pub fn new(
+        auth_service: Arc<dyn AuthService<AuthCtx, Namespace, TemplatePermission> + Send + Sync>,
+        worker_executor_clients: Arc<dyn WorkerExecutorClients + Send + Sync>,
+        template_service: Arc<dyn TemplateService + Send + Sync>,
+        routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
+    ) -> Self {
+        Self {
+            auth_service,
+            worker_executor_clients,
+            template_service,
+            routing_table_service,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -996,9 +1017,146 @@ fn is_connection_failure(message: &str) -> bool {
 
 #[derive(Debug, thiserror::Error)]
 enum GetWorkerExecutorClientError {
-    // TODO: Add more details
-    #[error("Failed to get routing table")]
+    // TODO: Change to display
+    #[error("Failed to get routing table: {0:?}")]
     FailedToGetRoutingTable(RoutingTableError),
     #[error("Failed to connect to pod {0}")]
     FailedToConnectToPod(String),
+}
+
+#[derive(Default)]
+pub struct WorkerServiceNoOp {}
+
+#[async_trait]
+impl WorkerService<EmptyAuthCtx> for WorkerServiceNoOp {
+    async fn get_by_id(
+        &self,
+        worker_id: &WorkerId,
+        _: &EmptyAuthCtx,
+    ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
+        Ok(VersionedWorkerId {
+            worker_id: worker_id.clone(),
+            template_version_used: 0,
+        })
+    }
+
+    async fn create(
+        &self,
+        worker_id: &WorkerId,
+        _: i32,
+        _: Vec<String>,
+        _: HashMap<String, String>,
+        _: &EmptyAuthCtx,
+    ) -> Result<VersionedWorkerId, WorkerServiceBaseError> {
+        Ok(VersionedWorkerId {
+            worker_id: worker_id.clone(),
+            template_version_used: 0,
+        })
+    }
+
+    async fn connect(
+        &self,
+        _: &WorkerId,
+        _: &EmptyAuthCtx,
+    ) -> Result<ConnectWorkerStream, WorkerServiceBaseError> {
+        Err(WorkerServiceBaseError::Internal(anyhow::Error::msg(
+            "Not supported",
+        )))
+    }
+
+    async fn delete(&self, _: &WorkerId, _: &EmptyAuthCtx) -> Result<(), WorkerServiceBaseError> {
+        Ok(())
+    }
+
+    async fn get_invocation_key(
+        &self,
+        _: &WorkerId,
+        _: &EmptyAuthCtx,
+    ) -> Result<InvocationKey, WorkerServiceBaseError> {
+        Ok(InvocationKey {
+            value: "".to_string(),
+        })
+    }
+
+    async fn invoke_and_await_function(
+        &self,
+        _: &WorkerId,
+        _: String,
+        _: &InvocationKey,
+        _: Value,
+        _: &CallingConvention,
+        _: &EmptyAuthCtx,
+    ) -> Result<Value, WorkerServiceBaseError> {
+        Ok(Value::Null)
+    }
+
+    async fn invoke_and_await_function_proto(
+        &self,
+        _: &WorkerId,
+        _: String,
+        _: &InvocationKey,
+        _: Vec<ProtoVal>,
+        _: &CallingConvention,
+        _: &EmptyAuthCtx,
+    ) -> Result<ProtoInvokeResult, WorkerServiceBaseError> {
+        Ok(ProtoInvokeResult { result: vec![] })
+    }
+
+    async fn invoke_function(
+        &self,
+        _: &WorkerId,
+        _: String,
+        _: Value,
+        _: &EmptyAuthCtx,
+    ) -> Result<(), WorkerServiceBaseError> {
+        Ok(())
+    }
+
+    async fn invoke_fn_proto(
+        &self,
+        _: &WorkerId,
+        _: String,
+        _: Vec<ProtoVal>,
+        _: &EmptyAuthCtx,
+    ) -> Result<(), WorkerServiceBaseError> {
+        Ok(())
+    }
+
+    async fn complete_promise(
+        &self,
+        _: &WorkerId,
+        _: i32,
+        _: Vec<u8>,
+        _: &EmptyAuthCtx,
+    ) -> Result<bool, WorkerServiceBaseError> {
+        Ok(true)
+    }
+
+    async fn interrupt(
+        &self,
+        _: &WorkerId,
+        _: bool,
+        _: &EmptyAuthCtx,
+    ) -> Result<(), WorkerServiceBaseError> {
+        Ok(())
+    }
+
+    async fn get_metadata(
+        &self,
+        worker_id: &WorkerId,
+        _: &EmptyAuthCtx,
+    ) -> Result<WorkerMetadata, WorkerServiceBaseError> {
+        Ok(WorkerMetadata {
+            worker_id: worker_id.clone(),
+            args: vec![],
+            env: Default::default(),
+            status: golem_common::model::WorkerStatus::Running,
+            template_version: 0,
+            retry_count: 0,
+        })
+    }
+
+    async fn resume(&self, _: &WorkerId, _: &EmptyAuthCtx) -> Result<(), WorkerServiceBaseError> {
+        Ok(())
+    }
 }

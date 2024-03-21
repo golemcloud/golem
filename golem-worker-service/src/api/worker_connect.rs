@@ -15,11 +15,12 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use crate::service::worker::{ConnectWorkerStream, WorkerService};
 use futures_util::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::TemplateId;
 use golem_service_base::model::WorkerId;
+use golem_worker_service_base::auth::EmptyAuthCtx;
+use golem_worker_service_base::service::worker::{ConnectWorkerStream, WorkerService, WorkerServiceBaseError};
 use poem::web::websocket::{Message, WebSocket, WebSocketStream};
 use poem::web::Data;
 use poem::*;
@@ -27,11 +28,11 @@ use tonic::Status;
 
 #[derive(Clone)]
 pub struct ConnectService {
-    worker_service: Arc<dyn WorkerService + Send + Sync>,
+    worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Send + Sync>,
 }
 
 impl ConnectService {
-    pub fn new(worker_service: Arc<dyn WorkerService + Send + Sync>) -> Self {
+    pub fn new(worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Send + Sync>) -> Self {
         Self { worker_service }
     }
 }
@@ -69,7 +70,7 @@ async fn get_worker_stream(
 
     let worker_stream = service
         .worker_service
-        .connect(&worker_id)
+        .connect(&worker_id, &EmptyAuthCtx {})
         .await
         .map_err(|e| (http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -193,8 +194,8 @@ impl From<serde_json::Error> for ConnectError {
     }
 }
 
-impl From<golem_worker_service_base::service::error::WorkerServiceBaseError> for ConnectError {
-    fn from(error: golem_worker_service_base::service::error::WorkerServiceBaseError) -> Self {
+impl From<WorkerServiceBaseError> for ConnectError {
+    fn from(error: WorkerServiceBaseError) -> Self {
         ConnectError(error.to_string())
     }
 }
