@@ -43,6 +43,7 @@ exclude = [
     "test-templates/write-stderr",
     "test-templates/write-stdout",
     "golem-client",
+    "benchmarks",
 ]
 
 [workspace.dependencies]
