@@ -2861,9 +2861,9 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.3"
+version = "0.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f97bf3414afc373dba77cdb43c7dc8a0faff9ba67117b6b0621efdc92abdb792"
+checksum = "c34ec5889bca6fbb3e1c747d449744598a345416c8f82fb75b3a3f81a265833a"
 dependencies = [
  "clap",
  "convert_case 0.6.0",
@@ -2896,6 +2896,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tonic",
  "tracing",
@@ -3155,7 +3156,6 @@ dependencies = [
  "rustls 0.22.2",
  "serde",
  "serde_json",
- "symlink",
  "tempfile",
  "thiserror",
  "tokio",
@@ -3180,6 +3180,7 @@ dependencies = [
 name = "golem-worker-service"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bincode 2.0.0-rc.3",
  "bytes 1.5.0",
@@ -3229,6 +3230,7 @@ dependencies = [
 name = "golem-worker-service-base"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bincode 2.0.0-rc.3",
  "bytes 1.5.0",
@@ -6958,12 +6960,6 @@ name = "subtle"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81cdd64d312baedb58e21336b31bc043b77e01cc99033ce76ef539f78e965ebc"
-
-[[package]]
-name = "symlink"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
 
 [[package]]
 name = "syn"

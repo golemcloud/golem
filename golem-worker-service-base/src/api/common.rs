@@ -97,13 +97,13 @@ impl ApiEndpointError {
 }
 
 mod conversion {
+    use golem_service_base::service::auth::AuthError;
     use poem_openapi::payload::Json;
 
     use super::{
         ApiEndpointError, RouteValidationError, ValidationErrorsBody, WorkerServiceErrorsBody,
     };
     use crate::api_definition_repo::ApiRegistrationRepoError;
-    use crate::auth::AuthError;
     use crate::service::api_definition::ApiRegistrationError;
     use crate::service::api_definition_validator::ValidationError;
 
@@ -115,6 +115,9 @@ mod conversion {
                 }
                 ApiRegistrationError::AuthenticationError(AuthError::Unauthorized { .. }) => {
                     ApiEndpointError::unauthorized(error)
+                }
+                ApiRegistrationError::AuthenticationError(AuthError::Internal(_)) => {
+                    ApiEndpointError::internal("Internal error")
                 }
                 ApiRegistrationError::RepoError(ApiRegistrationRepoError::AlreadyExists(_)) => {
                     ApiEndpointError::already_exists(error)
