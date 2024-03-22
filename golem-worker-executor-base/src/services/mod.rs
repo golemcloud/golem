@@ -61,6 +61,18 @@ pub trait HasWorkerService {
     fn worker_service(&self) -> Arc<dyn worker::WorkerService + Send + Sync>;
 }
 
+pub trait HasWorkerEnumerationService {
+    fn worker_enumeration_service(
+        &self,
+    ) -> Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>;
+}
+
+pub trait HasRunningWorkerEnumerationService {
+    fn running_worker_enumeration_service(
+        &self,
+    ) -> Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>;
+}
+
 pub trait HasInvocationKeyService {
     fn invocation_key_service(&self)
         -> Arc<dyn invocation_key::InvocationKeyService + Send + Sync>;
