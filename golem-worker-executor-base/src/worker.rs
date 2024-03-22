@@ -37,8 +37,11 @@ use crate::metrics::wasm::{record_create_worker, record_create_worker_failure};
 use crate::model::{ExecutionStatus, InterruptKind, WorkerConfig};
 use crate::services::golem_config::GolemConfig;
 use crate::services::invocation_key::LookupResult;
+use crate::services::recovery::{RecoveryManagement, TrapType};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
-use crate::services::{HasAll, HasInvocationKeyService, HasOplogService, HasWorkerService};
+use crate::services::{
+    HasAll, HasInvocationKeyService, HasOplogService, HasRecoveryManagement, HasWorkerService,
+};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
 /// Worker is one active wasmtime instance representing a Golem worker with its corresponding
@@ -740,4 +743,25 @@ fn calculate_deleted_regions(initial: DeletedRegions, entries: &[OplogEntry]) ->
         }
     }
     builder.build()
+}
+
+pub async fn calculate_worker_status(
+    recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+    trap_type: &TrapType,
+    previous_tries: u64,
+) -> WorkerStatus {
+    match trap_type {
+        TrapType::Interrupt(InterruptKind::Interrupt) => WorkerStatus::Interrupted,
+        TrapType::Interrupt(InterruptKind::Suspend) => WorkerStatus::Suspended,
+        TrapType::Interrupt(InterruptKind::Jump) => WorkerStatus::Running,
+        TrapType::Interrupt(InterruptKind::Restart) => WorkerStatus::Running,
+        TrapType::Exit => WorkerStatus::Exited,
+        TrapType::Error(err) => {
+            if recovery_management.is_retriable(previous_tries, error) {
+                WorkerStatus::Retrying
+            } else {
+                WorkerStatus::Failed
+            }
+        }
+    }
 }

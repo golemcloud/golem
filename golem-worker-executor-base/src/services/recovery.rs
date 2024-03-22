@@ -73,6 +73,7 @@ pub trait RecoveryManagement {
     /// performed, and `trap_type` distinguishes errors, interrupts and exit signals.
     async fn schedule_recovery_on_trap(
         &self,
+        worker_id: &VersionedWorkerId,
         previous_tries: u64,
         trap_type: &TrapType,
     ) -> RecoveryDecision;
@@ -83,9 +84,12 @@ pub trait RecoveryManagement {
     /// and exited workers can never.
     async fn schedule_recovery_on_startup(
         &self,
+        worker_id: &VersionedWorkerId,
         previous_tries: u64,
         error: &WorkerError,
     ) -> RecoveryDecision;
+
+    fn is_retriable(&self, previous_tries: u64, error: &WorkerError) -> bool;
 }
 
 pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
@@ -308,6 +312,43 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         }
     }
 
+    fn get_recovery_decision_on_trap(
+        &self,
+        previous_tries: u64,
+        trap_type: &TrapType,
+    ) -> RecoveryDecision {
+        match trap_type {
+            TrapType::Interrupt(InterruptKind::Interrupt) => RecoveryDecision::None,
+            TrapType::Interrupt(InterruptKind::Suspend) => RecoveryDecision::None,
+            TrapType::Interrupt(InterruptKind::Restart) => RecoveryDecision::Immediate,
+            TrapType::Interrupt(InterruptKind::Jump) => RecoveryDecision::Immediate,
+            TrapType::Exit => RecoveryDecision::None,
+            TrapType::Error(error) => {
+                if self.is_retriable(previous_tries, error) {
+                    let retry_config = &self.golem_config.retry;
+                    match get_delay(retry_config, previous_tries) {
+                        Some(delay) => RecoveryDecision::Delayed(delay),
+                        None => RecoveryDecision::None,
+                    }
+                } else {
+                    RecoveryDecision::None
+                }
+            }
+        }
+    }
+
+    fn get_recovery_decision_on_startup(
+        &self,
+        previous_tries: u64,
+        error: &WorkerError,
+    ) -> RecoveryDecision {
+        if self.is_retriable(previous_tries, error) {
+            RecoveryDecision::Immediate
+        } else {
+            RecoveryDecision::None
+        }
+    }
+
     async fn schedule_recovery(
         &self,
         worker_id: &VersionedWorkerId,
@@ -395,40 +436,40 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     async fn schedule_recovery_on_trap(
         &self,
+        worker_id: &VersionedWorkerId,
         previous_tries: u64,
         trap_type: &TrapType,
     ) -> RecoveryDecision {
-        match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt) => RecoveryDecision::None,
-            TrapType::Interrupt(InterruptKind::Suspend) => RecoveryDecision::None,
-            TrapType::Interrupt(InterruptKind::Restart) => RecoveryDecision::Immediate,
-            TrapType::Interrupt(InterruptKind::Jump) => RecoveryDecision::Immediate,
-            TrapType::Exit => RecoveryDecision::None,
-            TrapType::Error(WorkerError::StackOverflow) => RecoveryDecision::None,
-            TrapType::Error(_) => {
-                let retry_config = &self.golem_config.retry;
-                match get_delay(retry_config, previous_tries) {
-                    Some(delay) => RecoveryDecision::Delayed(delay),
-                    None => RecoveryDecision::None,
-                }
-            }
-        }
+        self.schedule_recovery(
+            worker_id,
+            self.get_recovery_decision_on_trap(previous_tries, trap_type),
+        )
+        .await
     }
 
     async fn schedule_recovery_on_startup(
         &self,
+        worker_id: &VersionedWorkerId,
         previous_tries: u64,
         error: &WorkerError,
     ) -> RecoveryDecision {
+        self.schedule_recovery(
+            worker_id,
+            self.get_recovery_decision_on_startup(previous_tries, error),
+        )
+        .await
+    }
+
+    fn is_retriable(&self, previous_tries: u64, error: &WorkerError) -> bool {
         match error {
             WorkerError::Unknown(_) => {
                 if previous_tries < (self.golem_config.retry.max_attempts as u64) {
-                    RecoveryDecision::Immediate
+                    true
                 } else {
-                    RecoveryDecision::None
+                    false
                 }
             }
-            WorkerError::StackOverflow => RecoveryDecision::None,
+            WorkerError::StackOverflow => true,
         }
     }
 }

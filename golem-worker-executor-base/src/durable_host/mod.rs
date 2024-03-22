@@ -35,7 +35,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
-use crate::services::HasAll;
+use crate::services::{HasAll, HasRecoveryManagement};
 use crate::wasi_host::managed_stdio::ManagedStandardIo;
 use crate::workerctx::{
     ExternalOperations, InvocationHooks, InvocationManagement, IoCapturing, PublicWorkerIo,
@@ -775,29 +775,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         let oplog_idx = self.private_state.get_oplog_size().await;
         debug!(
-            "Recovery decision for {}#{} because of error {} after {} tries: {:?}",
+            "Recovery decision for {}#{} because of error {:?} after {} tries: {:?}",
             self.worker_id, oplog_idx, error, previous_tries, decision
         );
 
-        let is_interrupt = is_interrupt(error);
-        let is_suspend = is_suspend(error);
-        let is_jump = is_jump(error);
-
-        match decision {
-            RecoveryDecision::None => {
-                if is_interrupt {
-                    Ok(WorkerStatus::Interrupted)
-                } else if is_suspend {
-                    Ok(WorkerStatus::Suspended)
-                } else if is_jump {
-                    Ok(WorkerStatus::Running)
-                } else {
-                    Ok(WorkerStatus::Failed)
-                }
-            }
-            RecoveryDecision::Immediate => Ok(WorkerStatus::Retrying),
-            RecoveryDecision::Delayed(_) => Ok(WorkerStatus::Retrying),
-        }
+        Ok(calculate_worker_status(
+            self.private_state.recovery_management.clone(),
+            error,
+            previous_tries,
+        ))
     }
 
     async fn on_invocation_success(
