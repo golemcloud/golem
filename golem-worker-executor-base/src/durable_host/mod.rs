@@ -35,7 +35,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
-use crate::services::{HasAll, HasRecoveryManagement};
+use crate::services::HasAll;
 use crate::wasi_host::managed_stdio::ManagedStandardIo;
 use crate::workerctx::{
     ExternalOperations, InvocationHooks, InvocationManagement, IoCapturing, PublicWorkerIo,
@@ -46,7 +46,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use cap_std::ambient_authority;
-use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
+use golem_common::model::oplog::{OplogEntry, WorkerError, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
@@ -69,12 +69,12 @@ use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::wasm_rpc::UriExtensions;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::services::oplog::OplogService;
-use crate::services::recovery::{RecoveryDecision, RecoveryManagement, TrapType};
+use crate::services::recovery::{RecoveryManagement, TrapType};
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::HasOplogService;
 use crate::wasi_host;
-use crate::worker::calculate_last_known_status;
+use crate::worker::{calculate_last_known_status, calculate_worker_status};
 
 pub mod blobstore;
 mod cli;
@@ -733,30 +733,37 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
     async fn on_invocation_failure(&mut self, error: &TrapType) -> Result<(), anyhow::Error> {
         self.consume_hint_entries().await;
-        let is_live_after = self.is_live();
 
-        let is_interrupt = is_interrupt(error);
-        let is_suspend = is_suspend(error);
-        let is_jump = is_jump(error);
-        let is_failure = !is_interrupt && !is_suspend && !is_jump;
+        if self.is_live() {
+            let needs_commit = match error {
+                TrapType::Error(error) => {
+                    self.set_oplog_entry(OplogEntry::Error {
+                        timestamp: Timestamp::now_utc(),
+                        error: error.clone(),
+                    })
+                    .await;
+                    true
+                }
+                TrapType::Interrupt(InterruptKind::Interrupt) => {
+                    self.set_oplog_entry(OplogEntry::Interrupted {
+                        timestamp: Timestamp::now_utc(),
+                    })
+                    .await;
+                    true
+                }
+                TrapType::Exit => {
+                    self.set_oplog_entry(OplogEntry::Exited {
+                        timestamp: Timestamp::now_utc(),
+                    })
+                    .await;
+                    true
+                }
+                _ => false,
+            };
 
-        if is_live_after && is_failure {
-            self.set_oplog_entry(OplogEntry::Error {
-                timestamp: Timestamp::now_utc(),
-            })
-            .await;
-
-            self.commit_oplog().await;
-        }
-
-        if is_live_after && is_interrupt {
-            // appending an Interrupted hint to the end of the oplog, which can be used to determine worker status
-            self.set_oplog_entry(OplogEntry::Interrupted {
-                timestamp: Timestamp::now_utc(),
-            })
-            .await;
-
-            self.commit_oplog().await;
+            if needs_commit {
+                self.commit_oplog().await;
+            }
         }
 
         Ok(())
@@ -770,7 +777,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let decision = self
             .private_state
             .recovery_management
-            .schedule_recovery_for_error(&self.worker_id, previous_tries, error)
+            .schedule_recovery_on_trap(&self.worker_id, previous_tries, error)
             .await;
 
         let oplog_idx = self.private_state.get_oplog_size().await;
@@ -877,11 +884,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         Ok(())
     }
 
-    async fn get_worker_retry_count<T: HasAll<Ctx> + Send + Sync>(
+    async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> u64 {
-        trailing_error_count(this, worker_id).await
+    ) -> Option<(WorkerError, u64)> {
+        last_error_and_retry_count(this, worker_id).await
     }
 
     async fn compute_latest_worker_status<T: HasAll<Ctx> + Send + Sync>(
@@ -988,15 +995,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         for worker in workers {
             let worker_id = worker.worker_id;
-            let previous_tries = Self::get_worker_retry_count(this, &worker_id.worker_id).await;
+            let previous_tries =
+                Self::get_last_error_and_retry_count(this, &worker_id.worker_id).await;
             let decision = this
                 .recovery_management()
-                .schedule_recovery_on_startup(&worker_id, previous_tries)
+                .schedule_recovery_on_startup(&worker_id, &previous_tries)
                 .await;
             debug!(
-                "Recovery decision for {} after {} tries: {:?}",
+                "Recovery decision for {} after {:?} tries: {:?}",
                 worker_id, previous_tries, decision
-            );
+            ); // TODO: Proper type and Display instance for get_last_error_and_retry_count's result
         }
 
         info!("Finished recovering workers");
@@ -1004,26 +1012,37 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     }
 }
 
-async fn trailing_error_count<T: HasOplogService>(this: &T, worker_id: &WorkerId) -> u64 {
+async fn last_error_and_retry_count<T: HasOplogService>(
+    this: &T,
+    worker_id: &WorkerId,
+) -> Option<(WorkerError, u64)> {
     let mut idx = this.oplog_service().get_size(worker_id).await;
     let mut count = 0;
     if idx == 0 {
-        0
+        None
     } else {
         loop {
+            let mut first_error = None;
             let oplog_entry = this.oplog_service().read(worker_id, idx - 1, 1).await;
             match oplog_entry.first()
                 .unwrap_or_else(|| panic!("Internal error: op log for {} has size greater than zero but no entry at last index", worker_id)) {
-                OplogEntry::Error { .. } => {
+                OplogEntry::Error { error, .. } => {
                     count += 1;
+                    if first_error.is_none() {
+                        first_error = Some(error.clone());
+                    }
                     if idx > 0 {
                         idx -= 1;
                         continue;
                     } else {
-                        break count;
+                        break Some((first_error.unwrap(), count));
                     }
                 }
-                _ => break count,
+                _ =>
+                    match first_error {
+                        Some(error) => break Some((error, count)),
+                        None => break None
+                    }
             }
         }
     }
@@ -1321,8 +1340,12 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     }
 
     /// Counts the number of Error entries that are at the end of the oplog. This equals to the number of retries that have been attempted.
+    /// It also returns the last error stored in these entries.
     pub async fn trailing_error_count(&self) -> u64 {
-        trailing_error_count(self, &self.worker_id).await
+        last_error_and_retry_count(self, &self.worker_id)
+            .await
+            .map(|(_, count)| count)
+            .unwrap_or_default()
     }
 }
 

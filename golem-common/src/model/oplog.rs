@@ -230,7 +230,7 @@ pub enum WrappedFunctionType {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 pub enum WorkerError {
     Unknown(String),
-    StackOverflow
+    StackOverflow,
 }
 
 #[cfg(test)]

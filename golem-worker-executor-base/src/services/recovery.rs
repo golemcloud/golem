@@ -85,8 +85,7 @@ pub trait RecoveryManagement {
     async fn schedule_recovery_on_startup(
         &self,
         worker_id: &VersionedWorkerId,
-        previous_tries: u64,
-        error: &WorkerError,
+        previous_error: &Option<(WorkerError, u64)>,
     ) -> RecoveryDecision;
 
     fn is_retriable(&self, previous_tries: u64, error: &WorkerError) -> bool;
@@ -339,13 +338,17 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 
     fn get_recovery_decision_on_startup(
         &self,
-        previous_tries: u64,
-        error: &WorkerError,
+        previous_error: &Option<(WorkerError, u64)>,
     ) -> RecoveryDecision {
-        if self.is_retriable(previous_tries, error) {
-            RecoveryDecision::Immediate
-        } else {
-            RecoveryDecision::None
+        match previous_error {
+            Some((error, previous_tries)) => {
+                if self.is_retriable(*previous_tries, error) {
+                    RecoveryDecision::Immediate
+                } else {
+                    RecoveryDecision::None
+                }
+            }
+            None => RecoveryDecision::Immediate,
         }
     }
 
@@ -450,12 +453,11 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     async fn schedule_recovery_on_startup(
         &self,
         worker_id: &VersionedWorkerId,
-        previous_tries: u64,
-        error: &WorkerError,
+        previous_error: &Option<(WorkerError, u64)>,
     ) -> RecoveryDecision {
         self.schedule_recovery(
             worker_id,
-            self.get_recovery_decision_on_startup(previous_tries, error),
+            self.get_recovery_decision_on_startup(previous_error),
         )
         .await
     }
@@ -463,11 +465,7 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     fn is_retriable(&self, previous_tries: u64, error: &WorkerError) -> bool {
         match error {
             WorkerError::Unknown(_) => {
-                if previous_tries < (self.golem_config.retry.max_attempts as u64) {
-                    true
-                } else {
-                    false
-                }
+                previous_tries < (self.golem_config.retry.max_attempts as u64)
             }
             WorkerError::StackOverflow => true,
         }
@@ -735,7 +733,7 @@ mod tests {
             unimplemented!()
         }
 
-        async fn get_worker_retry_count<T: HasAll<Self> + Send + Sync>(
+        async fn get_last_error_and_retry_count<T: HasAll<Self> + Send + Sync>(
             _this: &T,
             _worker_id: &WorkerId,
         ) -> u64 {

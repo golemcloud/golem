@@ -17,6 +17,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
@@ -249,12 +250,12 @@ pub trait InvocationHooks {
     ) -> anyhow::Result<()>;
 
     /// Called when a worker invocation fails, before the worker gets deactivated
-    async fn on_invocation_failure(&mut self, error: &TrapType) -> Result<(), anyhow::Error>;
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> Result<(), anyhow::Error>;
 
     /// Called when a worker invocation fails, after the worker has been deactivated
     async fn on_invocation_failure_deactivated(
         &mut self,
-        error: &TrapType
+        trap_type: &TrapType,
     ) -> Result<WorkerStatus, anyhow::Error>;
 
     /// Called when a worker invocation succeeds
@@ -289,11 +290,12 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     ) -> Result<(), GolemError>;
 
     // TODO: move this to WorkerStatusRecord
-    /// Gets how many times the worker has been retried to recover from an error.
-    async fn get_worker_retry_count<T: HasAll<Ctx> + Send + Sync>(
+    /// Gets how many times the worker has been retried to recover from an error, and what
+    /// error was stored in the last entry.
+    async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> u64;
+    ) -> Option<(WorkerError, u64)>;
 
     /// Gets a best-effort current worker status without activating the worker
     async fn compute_latest_worker_status<T: HasAll<Ctx> + Send + Sync>(

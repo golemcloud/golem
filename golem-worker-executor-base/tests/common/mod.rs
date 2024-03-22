@@ -1077,11 +1077,11 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         DurableWorkerCtx::<TestWorkerCtx>::set_worker_status(this, worker_id, status).await
     }
 
-    async fn get_worker_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
+    async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
     ) -> u64 {
-        DurableWorkerCtx::<TestWorkerCtx>::get_worker_retry_count(this, worker_id).await
+        DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(this, worker_id).await
     }
 
     async fn compute_latest_worker_status<T: HasAll<TestWorkerCtx> + Send + Sync>(

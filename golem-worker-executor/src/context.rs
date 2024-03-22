@@ -94,11 +94,11 @@ impl ExternalOperations<Context> for Context {
         DurableWorkerCtx::<Context>::set_worker_status(this, worker_id, status).await
     }
 
-    async fn get_worker_retry_count<T: HasAll<Context> + Send + Sync>(
+    async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
     ) -> u64 {
-        DurableWorkerCtx::<Context>::get_worker_retry_count(this, worker_id).await
+        DurableWorkerCtx::<Context>::get_last_error_and_retry_count(this, worker_id).await
     }
 
     async fn compute_latest_worker_status<T: HasAll<Context> + Send + Sync>(
