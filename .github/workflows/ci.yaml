@@ -23,15 +23,17 @@ jobs:
       matrix:
         platform:
           - platform: linux/amd64
+            name: linux/amd64
             target: x86_64-unknown-linux-gnu
             build-config: ""
           - platform: linux/arm64
+            name: linux/arm64
             target: aarch64-unknown-linux-gnu
             build-config: '--config "target.aarch64-unknown-linux-gnu.linker = ''aarch64-linux-gnu-gcc''"'
     name: docker-targets-build (${{ matrix.platform.platform }})
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: "0"
@@ -57,7 +59,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install gcc-aarch64-linux-gnu
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -67,14 +69,14 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-release-${{ matrix.platform }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-release-${{ matrix.platform.name }}-${{ hashFiles('**/Cargo.lock') }}
       - name: Build Executables
         env:
-          PLATFORM_OVERRIDE: ${{ matrix.platform }}
+          PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
         run: cargo make build-release
       - name: Prepare Targets
         env:
-          PLATFORM_OVERRIDE: ${{ matrix.platform }}
+          PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
         run: cargo make package-release
       - uses: actions/upload-artifact@v4
         name: Upload Targets
@@ -87,7 +89,7 @@ jobs:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: "0"
@@ -214,10 +216,10 @@ jobs:
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -248,10 +250,10 @@ jobs:
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -283,10 +285,10 @@ jobs:
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -327,10 +329,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -357,5 +359,5 @@ jobs:
       - name: Publish all packages
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          VERSION: "${{ steps.get_version.outputs.version-without-v }}"
+          VERSION: ${{ steps.get_version.outputs.version-without-v }}
         run: cargo make publish
