@@ -45,6 +45,7 @@ jobs:
           toolchain: stable
           target: ${{ matrix.platform.target }}
           override: true
+      - uses: davidB/rust-cargo-make@v1
       - name: Install Rust Target
         run: rustup target add ${{ matrix.platform.target }}
       - name: Install Protoc
@@ -66,18 +67,15 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-release-${{ matrix.platform }}-${{ hashFiles('**/Cargo.lock') }}
       - name: Build Executables
-        run: cargo build --release --target ${{ matrix.platform.target }} ${{ matrix.platform.build-config }}
+        env:
+          PLATFORM_OVERRIDE: ${{ matrix.platform }}
+        run: cargo make build-release
       - name: Prepare Targets
-        run: |
-          cd target
-          tar -cvf ${{ matrix.platform.target }}.tar \
-            ${{ matrix.platform.target }}/release/golem-shard-manager \
-            ${{ matrix.platform.target }}/release/worker-executor \
-            ${{ matrix.platform.target }}/release/golem-template-service  \
-            ${{ matrix.platform.target }}/release/golem-worker-service  \
-            ${{ matrix.platform.target }}/release/golem-template-compilation-service 
+        env:
+          PLATFORM_OVERRIDE: ${{ matrix.platform }}
+        run: cargo make package-release
       - uses: actions/upload-artifact@v4
         name: Upload Targets
         with:
@@ -85,7 +83,7 @@ jobs:
           path: target/${{ matrix.platform.target }}.tar
   docker-publish:
     runs-on: ubuntu-latest
-    needs: [docker-targets-build]
+    needs: [ docker-targets-build ]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
@@ -235,16 +233,17 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check formatting
-        run: cargo fmt -- --check
-      - name: Clippy
-        run: cargo clippy -- -Dwarnings
+      - name: Check formatting and clippy rules
+        run: cargo make check
       - name: Unit tests
-        run: cargo test --lib --bins --all-features
+        run: cargo make unit-tests
+      - name: Check that OpenAPI specs are up-to-date
+        run: cargo make check-openapi
   worker-tests:
     runs-on: ubuntu-latest
     steps:
@@ -268,6 +267,7 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
         with:
@@ -277,53 +277,9 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
-      - name: "Worker Executor integration tests"
-        run: WASMTIME_BACKTRACE_DETAILS=1 cargo test --package golem-worker-executor-base --test '*' -- --nocapture
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          submodules: recursive
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates2.json
-            ~/.cargo/.crates.toml
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v1
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build all
-        # --release to minimize artifact size
-        run: cargo build --release
-      - name: Upload binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: golem-binaries
-          retention-days: 1
-          path: |
-            target/release/golem-template-service
-            target/release/golem-worker-service
-            target/release/golem-template-compilation-service
-            target/release/golem-worker-service-yaml
-            target/release/golem-template-service-yaml
-            target/release/golem-shard-manager
-            target/release/worker-executor
+      - name: Worker Executor integration tests
+        run: cargo make worker-executor-tests
   integration-tests:
-    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -346,6 +302,7 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
         with:
@@ -355,49 +312,17 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
-      - name: Download binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: golem-binaries
-          path: ./target/debug/
-      - name: Restore executable flag
-        run: chmod a+x ./target/debug/*
-      - name: Generate golem-template-service OpenAPI yaml
-        run: ./target/debug/golem-template-service-yaml > ./target/golem-template-service.yaml
-      - name: Generate golem-worker-service OpenAPI yaml
-        run: ./target/debug/golem-worker-service-yaml > ./target/golem-worker-service.yaml
-      - name: Merge openapi specs
-        run: |
-          cargo install golem-openapi-client-generator@0.0.1
-          golem-openapi-client-generator merge --spec-yaml target/golem-template-service.yaml target/golem-worker-service.yaml --output-yaml target/golem-service.yaml
-      - name: Check Golem OpenAPI yaml latest
-        shell: bash
-        run: |
-          if diff openapi/golem-service.yaml target/golem-service.yaml  >/dev/null 2>&1
-            then
-              echo "Latest Golem OpenAPI spec version detected."
-            else
-              echo "openapi/golem-service.yaml is not the same as produced by golem-service-yaml." 1>&2
-              echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec." 1>&2
-              exit 1
-          fi
       - name: Integration tests
-        working-directory: golem-cli
         env:
           CI: true
-        run: |
-          cargo build
-          RUST_LOG=info cargo test --test integration
+        run: cargo make integration-tests
       - name: Sharding tests
-        working-directory: golem-cli
         env:
           CI: true
-        run: |
-          cargo build
-          RUST_LOG=info cargo test --test sharding
+        run: cargo make sharding-tests
         timeout-minutes: 10
   publish:
-    needs: [unit-tests, worker-tests, integration-tests]
+    needs: [ unit-tests, worker-tests, integration-tests ]
     if: "startsWith(github.ref, 'refs/tags/v')"
     runs-on: ubuntu-latest
     steps:
@@ -415,30 +340,22 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}-is
 
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
+      - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - id: get_version
         uses: battila7/get-version-action@v2
-      - name: Publish Golem client
+      - name: Publish all packages
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          export VERSION="${{ steps.get_version.outputs.version-without-v }}"
-          sed -i "s/0.0.0/$VERSION/g" golem-client/Cargo.toml
-          cargo publish -p golem-client --all-features --allow-dirty
-      - name: Publish Golem CLI
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          export VERSION="${{ steps.get_version.outputs.version-without-v }}"
-          sed -i "s/0.0.0/$VERSION/g" golem-cli/Cargo.toml
-          cargo publish -p golem-cli --all-features --allow-dirty
+          VERSION: "${{ steps.get_version.outputs.version-without-v }}"
+        run: cargo make publish

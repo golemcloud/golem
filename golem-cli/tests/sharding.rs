@@ -87,24 +87,21 @@ fn start_shard(context: &mut Context) {
     let mut rng = thread_rng();
     ids.shuffle(&mut rng);
 
-    match ids.first() {
-        Some(id) => {
-            match WorkerExecutor::start(
-                context.docker,
-                *id,
-                &context.env,
-                &context.redis.info(),
-                &context.golem_worker_service.info(),
-                &context.golem_template_service.info(),
-                &context.shard_manager.as_ref().unwrap().info(),
-            ) {
-                Ok(we) => context.worker_executors.worker_executors.push(we),
-                Err(e) => {
-                    println!("Failed to start worker: {e:?}");
-                }
+    if let Some(id) = ids.first() {
+        match WorkerExecutor::start(
+            context.docker,
+            *id,
+            &context.env,
+            &context.redis.info(),
+            &context.golem_worker_service.info(),
+            &context.golem_template_service.info(),
+            &context.shard_manager.as_ref().unwrap().info(),
+        ) {
+            Ok(we) => context.worker_executors.worker_executors.push(we),
+            Err(e) => {
+                println!("Failed to start worker: {e:?}");
             }
         }
-        None => {}
     }
 }
 
