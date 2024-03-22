@@ -33,6 +33,7 @@ struct Redis {
 
 impl Redis {
     pub fn new() -> Self {
+        let host = "localhost".to_string();
         let port = 6379;
         let child = Command::new("redis-server")
             .arg("--port")
@@ -45,7 +46,7 @@ impl Redis {
             .expect("Failed to spawn redis server");
 
         let start = Instant::now();
-        let mut client = redis::Client::open("redis://localhost:6379").unwrap();
+        let mut client = redis::Client::open(format!("redis://{host}:{port}")).unwrap();
         loop {
             let result: RedisResult<Vec<String>> = client.keys("*");
             if result.is_ok() {
@@ -58,7 +59,7 @@ impl Redis {
         }
 
         Self {
-            host: "localhost".to_string(),
+            host,
             port,
             child: Some(child),
             valid: AtomicBool::new(true),
@@ -76,6 +77,12 @@ impl Redis {
             self.valid.store(false, Ordering::Release);
             let _ = child.kill();
         }
+    }
+
+    pub fn get_connection(&self) -> redis::Connection {
+        self.assert_valid();
+        let client = redis::Client::open(format!("redis://{}:{}", self.host, self.port)).unwrap();
+        client.get_connection().unwrap()
     }
 }
 
