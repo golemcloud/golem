@@ -71,6 +71,11 @@ condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
 command = "cargo"
 args = [
     "build",
+    "-p", "golem-shard-manager", # NOTE: Not all projects are cross-compilable because of an openssl dependency
+    "-p", "golem-worker-executor",
+    "-p", "golem-template-service",
+    "-p", "golem-worker-service",
+    "-p", "golem-template-compilation-service",
     "--release",
     "--target",
     "aarch64-unknown-linux-gnu",
