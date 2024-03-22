@@ -1,0 +1,23 @@
+[package]
+name = "golem-client"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Client for Golem Cloud's REST API"
+
+[lib]
+
+[dependencies]
+async-trait = "^0.1"
+bytes = "^1.5"
+chrono = { version = "^0.4", features = ["serde"] }
+futures-core = "^0.3"
+http = "^1.0"
+reqwest = { version = "^0.11", features = ["gzip", "json", "multipart", "stream"] }
+serde = { version = "^1.0", features = ["derive"] }
+serde_json = "^1.0"
+tracing = "^0.1"
+uuid = { version = "^1.6", features = ["serde"] }
+
+[build-dependencies]
+golem-openapi-client-generator = "0.0.4"

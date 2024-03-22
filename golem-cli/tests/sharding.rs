@@ -135,7 +135,7 @@ fn make_env_unstable(context: Context, stop_rx: Receiver<()>) {
     println!("!!! Starting Golem Sharding Tester");
 
     fn worker(context: &mut Context) {
-        let mut commands = vec![
+        let mut commands = [
             Command::StartShard,
             Command::StopShard,
             Command::RestartShardManager,

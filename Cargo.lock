@@ -1504,6 +1504,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
 
 [[package]]
+name = "convert_case"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cookie"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1953,7 +1962,7 @@ version = "0.99.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fb810d30a7c1953f91334de7244731fc3f3c10d7fe163338a35b9f640960321"
 dependencies = [
- "convert_case",
+ "convert_case 0.4.0",
  "proc-macro2",
  "quote",
  "rustc_version",
@@ -2391,6 +2400,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmt"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09904adae26440d46daeacb5ed7922fee69d43ebf84d31e078cd49652cecd718"
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2781,14 +2796,13 @@ dependencies = [
 
 [[package]]
 name = "golem-client"
-version = "0.0.63"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "066800e50c47dc4a15f56d9e54567b47d62c309816700ecb69335453724195c8"
+version = "0.0.0"
 dependencies = [
  "async-trait",
  "bytes 1.5.0",
  "chrono",
  "futures-core",
+ "golem-openapi-client-generator",
  "http 1.0.0",
  "reqwest",
  "serde",
@@ -2846,6 +2860,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-openapi-client-generator"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c34ec5889bca6fbb3e1c747d449744598a345416c8f82fb75b3a3f81a265833a"
+dependencies = [
+ "clap",
+ "convert_case 0.6.0",
+ "fmt",
+ "indexmap 2.2.2",
+ "indoc",
+ "itertools 0.12.1",
+ "openapiv3",
+ "serde",
+ "serde_yaml",
+]
+
+[[package]]
 name = "golem-service-base"
 version = "0.1.0"
 dependencies = [
@@ -2865,6 +2896,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tonic",
  "tracing",
@@ -3124,7 +3156,6 @@ dependencies = [
  "rustls 0.22.2",
  "serde",
  "serde_json",
- "symlink",
  "tempfile",
  "thiserror",
  "tokio",
@@ -3149,6 +3180,7 @@ dependencies = [
 name = "golem-worker-service"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bincode 2.0.0-rc.3",
  "bytes 1.5.0",
@@ -3198,6 +3230,7 @@ dependencies = [
 name = "golem-worker-service-base"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bincode 2.0.0-rc.3",
  "bytes 1.5.0",
@@ -6927,12 +6960,6 @@ name = "subtle"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81cdd64d312baedb58e21336b31bc043b77e01cc99033ce76ef539f78e965ebc"
-
-[[package]]
-name = "symlink"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
 
 [[package]]
 name = "syn"
