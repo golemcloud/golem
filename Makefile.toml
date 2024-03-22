@@ -71,6 +71,11 @@ condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
 command = "cargo"
 args = [
     "build",
+    "-p", "golem-shard-manager", # NOTE: Not all projects are cross-compilable because of an openssl dependency
+    "-p", "golem-worker-executor",
+    "-p", "golem-template-service",
+    "-p", "golem-worker-service",
+    "-p", "golem-template-compilation-service",
     "--release",
     "--target",
     "aarch64-unknown-linux-gnu",
@@ -223,6 +228,11 @@ description = "Sets the version in golem-client/Cargo.toml to the value of the V
 command = "sed"
 args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
 
+[tasks.set-golem-client-version.mac]
+description = "Sets the version in golem-client/Cargo.toml to the value of the VERSION environment variable"
+command = "sed"
+args = ["-i", "''", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
+
 [tasks.publish-golem-client]
 description = "Publishes golem-client package to crates.io"
 dependencies = ["set-golem-client-version", "build-release"]
@@ -233,6 +243,12 @@ args = ["publish", "-p", "golem-client", "--all-features", "--allow-dirty"]
 description = "Sets the version in golem-cli/Cargo.toml to the value of the VERSION environment variable"
 command = "sed"
 args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]
+
+[tasks.set-golem-cli-version.mac]
+description = "Sets the version in golem-cli/Cargo.toml to the value of the VERSION environment variable"
+command = "sed"
+args = ["-i", "''", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]
+
 
 [tasks.publish-golem-cli]
 description = "Publishes golem-cli package to crates.io"
