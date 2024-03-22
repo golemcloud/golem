@@ -12,18 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Display, Formatter};
+use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
-use golem_api_grpc::proto::golem::worker::LogEvent;
+use futures::StreamExt;
 use golem_common::model::TemplateId;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::auth::EmptyAuthCtx;
-use golem_worker_service_base::service::worker::{ConnectWorkerStream, WorkerServiceError};
-use poem::web::websocket::{Message, WebSocket, WebSocketStream};
+use golem_worker_service_base::service::worker::{proxy_worker_connection, ConnectWorkerStream};
+use poem::web::websocket::WebSocket;
 use poem::web::Data;
 use poem::*;
-use tonic::Status;
 
 use crate::service::worker::WorkerService;
 
@@ -52,7 +50,16 @@ pub async fn ws(
             websocket
                 .on_upgrade(move |socket| {
                     tokio::spawn(async move {
-                        proxy_worker_connection(worker_id, worker_stream, socket).await;
+                        let (sink, stream) = socket.split();
+                        let _ = proxy_worker_connection(
+                            worker_id,
+                            worker_stream,
+                            sink,
+                            stream,
+                            PING_INTERVAL,
+                            PING_TIMEOUT,
+                        )
+                        .await;
                     })
                 })
                 .into_response()
@@ -60,13 +67,16 @@ pub async fn ws(
         .unwrap_or_else(|err| err)
 }
 
+const PING_INTERVAL: Duration = Duration::from_secs(30);
+const PING_TIMEOUT: Duration = Duration::from_secs(15);
+
 async fn get_worker_stream(
     service: &ConnectService,
     req: &Request,
 ) -> Result<(WorkerId, ConnectWorkerStream), Response> {
     let worker_id = match get_worker_id(req) {
         Ok(worker_id) => worker_id,
-        Err(err) => return Err((http::StatusCode::BAD_REQUEST, err.0).into_response()),
+        Err(err) => return Err((http::StatusCode::BAD_REQUEST, err).into_response()),
     };
 
     let worker_stream = service
@@ -79,152 +89,16 @@ async fn get_worker_stream(
     Ok((worker_id, worker_stream))
 }
 
-#[tracing::instrument(skip_all, fields(worker_id = worker_id.to_string()))]
-async fn proxy_worker_connection(
-    worker_id: golem_service_base::model::WorkerId,
-    mut worker_stream: ConnectWorkerStream,
-    mut websocket: WebSocketStream,
-) {
-    tracing::info!("Connecting to worker: {worker_id}");
-
-    let result = loop {
-        tokio::select! {
-            // WebSocket is cancellation safe.
-            // https://github.com/snapview/tokio-tungstenite/issues/167
-            websocket_message = websocket.next() => {
-                match websocket_message {
-                    Some(Ok(Message::Close(payload))) => {
-                        tracing::info!("Client closed WebSocket connection: {payload:?}");
-                        break Ok(());
-                    }
-
-                    Some(Ok(Message::Ping(_))) => {
-                        tracing::info!("Received PING");
-                        if let Err(error) = websocket.send(Message::Pong(Vec::new())).await{
-                            tracing::info!("Error sending PONG: {error}");
-                            break Err(error.into());
-                        }
-                    }
-                    Some(Err(error)) => {
-                        let error: ConnectError = error.into();
-                        tracing::info!("Received WebSocket Error: {error}");
-                        break Err(error);
-                    },
-                    Some(Ok(_)) => {}
-                    None => {
-                        tracing::info!("WebSocket connection closed");
-                        break Ok(());
-                    }
-                }
-            },
-
-            worker_message = worker_stream.next() => {
-                if let Some(message) = worker_message {
-                    if let Err(error) = forward_worker_message(message, &mut websocket).await {
-                        tracing::info!("Error forwarding message to WebSocket client: {error}");
-                        break(Err(error))
-                    }
-                } else {
-                    tracing::info!("Worker Stream ended");
-                    break Ok(());
-                }
-            },
-        }
-    };
-
-    if let Err(ref error) = result {
-        tracing::info!("Error proxying worker: {worker_id} {error}");
-    }
-
-    if let Err(error) = websocket.close().await {
-        tracing::info!("Error closing WebSocket connection: {error}");
-    } else {
-        tracing::info!("WebSocket connection successfully closed");
-    }
-}
-
-async fn forward_worker_message<S, E>(
-    message: Result<LogEvent, tonic::Status>,
-    socket: &mut S,
-) -> Result<(), ConnectError>
-where
-    S: futures_util::Sink<Message, Error = E> + Unpin,
-    ConnectError: From<E>,
-{
-    let message = message?;
-    let msg_json = serde_json::to_string(&message)?;
-    socket.send(Message::Text(msg_json)).await?;
-    Ok(())
-}
-
-#[derive(Debug)]
-struct ConnectError(String);
-
-impl Display for ConnectError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<tonic::transport::Error> for ConnectError {
-    fn from(value: tonic::transport::Error) -> Self {
-        ConnectError(value.to_string())
-    }
-}
-
-impl From<Status> for ConnectError {
-    fn from(value: Status) -> Self {
-        ConnectError(value.to_string())
-    }
-}
-
-impl From<String> for ConnectError {
-    fn from(value: String) -> Self {
-        ConnectError(value)
-    }
-}
-
-impl From<std::io::Error> for ConnectError {
-    fn from(value: std::io::Error) -> Self {
-        ConnectError(value.to_string())
-    }
-}
-
-impl From<serde_json::Error> for ConnectError {
-    fn from(value: serde_json::Error) -> Self {
-        ConnectError(value.to_string())
-    }
-}
-
-impl From<WorkerServiceError> for ConnectError {
-    fn from(error: WorkerServiceError) -> Self {
-        ConnectError(error.to_string())
-    }
-}
-
-fn make_worker_id(
-    template_id: TemplateId,
-    worker_name: String,
-) -> std::result::Result<WorkerId, ConnectError> {
-    WorkerId::new(template_id, worker_name)
-        .map_err(|error| ConnectError(format!("Invalid worker name: {error}")))
-}
-
-fn make_template_id(template_id: String) -> std::result::Result<TemplateId, ConnectError> {
-    TemplateId::try_from(template_id.as_str())
-        .map_err(|error| ConnectError(format!("Invalid template id: {error}")))
-}
-
-fn get_worker_id(req: &Request) -> Result<golem_service_base::model::WorkerId, ConnectError> {
+fn get_worker_id(req: &Request) -> Result<WorkerId, String> {
     let (template_id, worker_name) = req.path_params::<(String, String)>().map_err(|_| {
-        ConnectError(
-            "Valid path parameters (template_id and worker_name) are required ".to_string(),
-        )
+        "Valid path parameters (template_id and worker_name) are required ".to_string()
     })?;
 
-    let template_id = make_template_id(template_id)?;
+    let template_id = TemplateId::try_from(template_id.as_str())
+        .map_err(|error| format!("Invalid template id: {error}"))?;
 
-    let worker_id = make_worker_id(template_id, worker_name)?;
+    let worker_id = WorkerId::new(template_id, worker_name)
+        .map_err(|error| format!("Invalid worker name: {error}"))?;
 
     Ok(worker_id)
 }
