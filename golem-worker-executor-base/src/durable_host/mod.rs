@@ -823,10 +823,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             });
 
             self.set_oplog_entry(oplog_entry).await;
-            self.set_oplog_entry(OplogEntry::Suspend {
-                timestamp: Timestamp::now_utc(),
-            })
-            .await;
             self.commit_oplog().await;
         } else {
             let response = self.get_oplog_entry_exported_function_completed().await?;
