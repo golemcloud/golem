@@ -36,6 +36,7 @@ pub mod shard_manager;
 pub mod template;
 pub mod worker;
 pub mod worker_activator;
+pub mod worker_enumeration;
 pub mod worker_event;
 
 // HasXXX traits for fine-grained control of which dependencies a function needs
