@@ -19,7 +19,9 @@ use std::time::Instant;
 
 use bincode::{Decode, Encode};
 use bytes::Bytes;
+use fred::bytes_utils::Str;
 use fred::clients::Transaction;
+use fred::cmd;
 use fred::prelude::{RedisPool as FredRedisPool, *};
 use fred::types::{
     InfoKind, Limit, MultipleKeys, MultipleOrderedPairs, MultipleValues, MultipleZaddValues,
@@ -633,6 +635,78 @@ impl<'a> RedisLabelledApi<'a> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
         Ok(connected_slaves)
+    }
+
+
+    pub async fn scan<K>(
+        &self,
+        pattern: K,
+        cursor: u32,
+        count: u32,
+    ) -> RedisResult<(u32, Vec<RedisKey>)>
+        where
+            K: AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+
+        //https://redis.io/commands/scan/
+        let mut args: Vec<String> = Vec::with_capacity(5);
+        args.push(cursor.to_string());
+        args.push("MATCH".to_string());
+        args.push(self.prefixed_key(pattern));
+        args.push("COUNT".to_string());
+        args.push(count.to_string());
+
+        //https://github.com/aembke/fred.rs/blob/3a91ee9bc12faff9d32627c0db2c9b24c54efa03/examples/custom.rs#L7
+
+        self.record(
+            start,
+            "SCAN",
+            self.pool
+                .next()
+                .custom_raw(cmd!("SCAN"), args)
+                .await
+                .and_then(|f| self.parse_key_scan_frame(f)),
+        )
+    }
+
+    // FIXME
+    fn parse_key_scan_frame(frame: Resp3Frame) -> RedisResult<(u32, Vec<RedisKey>)> {
+        use fred::prelude::*;
+        use std::convert::TryInto;
+        if let Resp3Frame::Array { mut data, .. } = frame {
+            if data.len() == 2 {
+                let cursor: u32 = (data[0].clone()).try_into()?;
+
+
+                if let Some(Resp3Frame::Array { data, .. }) = data.pop() {
+                    let mut keys = Vec::with_capacity(data.len());
+
+                    for frame in data.into_iter() {
+                        let key: RedisKey = (frame).try_into()?;
+                        keys.push(key);
+                    }
+
+                    Ok((cursor, keys))
+                } else {
+                    Err(RedisError::new(
+                        RedisErrorKind::Protocol,
+                        "Expected second SCAN result element to be an array.",
+                    ))
+                }
+            } else {
+                Err(RedisError::new(
+                    RedisErrorKind::Protocol,
+                    "Expected two-element bulk string array from SCAN.",
+                ))
+            }
+        } else {
+            Err(RedisError::new(
+                RedisErrorKind::Protocol,
+                "Expected bulk string array from SCAN.",
+            ))
+        }
     }
 }
 
