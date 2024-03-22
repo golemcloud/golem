@@ -227,7 +227,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
+          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -261,7 +261,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
+          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -296,7 +296,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             golem-cli/target/
-          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}-is
+          key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -340,7 +340,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}-is
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
