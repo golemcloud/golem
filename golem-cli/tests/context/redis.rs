@@ -12,7 +12,11 @@ pub struct Redis<'docker_client> {
 }
 
 enum RedisInner<'docker_client> {
-    Process { child: Child, monitor_child: Child },
+    Process {
+        child: Child,
+        monitor_child: Child,
+    },
+    #[allow(dead_code)]
     Docker(Container<'docker_client, testcontainers_modules::redis::Redis>),
     None,
 }

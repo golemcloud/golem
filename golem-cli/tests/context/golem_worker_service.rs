@@ -69,6 +69,7 @@ pub struct GolemWorkerService<'docker_client> {
 
 enum GolemWorkerServiceInner<'docker_client> {
     Process(Child),
+    #[allow(dead_code)]
     Docker(Container<'docker_client, GolemWorkerServiceImage>),
 }
 

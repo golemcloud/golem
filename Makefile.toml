@@ -1,0 +1,291 @@
+# List of top-level tasks intended for use:
+#
+# - `cargo make dev-flow` or just `cargo make`: runs a full development flow, including fixing format and clippy, building and running tests and generating OpenAPI specs
+# - `cargo make build`: builds everything in debug mode
+# - `cargo make build-release`: builds everything in release mode. customizable with PLATFORM_OVERRIDE env variable for docker builds
+# - `cargo make check`: runs rustfmt and clippy checks without applying any fix
+# - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
+# - `cargo make unit-tests`: runs unit tests only
+# - `cargo make worker-executor-tests`: runs worker executor tests only
+# - `cargo make integration-tests`: runs integration tests only
+# - `cargo make sharding-tests`: runs sharding integration tests only
+# - `cargo make test`: runs all unit tests, worker executor tests and integration tests
+# - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI)
+# - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
+# - `cargo make publish`: publishes packages to crates.io
+
+[config]
+default_to_workspace = false # by default, we run cargo commands on top level instead of per member
+skip_core_tasks = true       # we are not using the predefined cargo-make flows, instead redefine here for more clarity
+
+[tasks.default]
+description = "This is the task that gets executed by 'cargo make' when no task is specified"
+run_task = "dev-flow"
+
+[tasks.dev]
+description = "Alias to the dev-flow task"
+alias = "dev-flow"
+
+[tasks.dev-flow]
+description = "Runs a full development flow, including fixing format and clippy, building and running tests"
+dependencies = [
+    "fix",
+    "check",
+    "build",
+    # "test"
+]
+
+[tasks.build]
+description = "Builds everything in debug mode"
+command = "cargo"
+args = ["build"]
+
+[tasks.build-release]
+description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
+to build for other target than the current one, can be linux/amd64 or linux/arm64. This is used for cross-compiling
+for docker images."""
+dependencies = [
+    "build-release-default",
+    "build-release-override-linux-amd64",
+    "build-release-override-linux-arm64"
+]
+
+# There are three variants of build-release, and only one of them will run based on the value of
+# the PLATFORM_OVERRIDE environment variable
+
+[tasks.build-release-default]
+description = "Build the project in release mode"
+condition = { env_not_set = ["PLATFORM_OVERRIDE"] }
+command = "cargo"
+args = ["build", "--release"]
+
+[tasks.build-release-override-linux-amd64]
+description = "Build the project in release mode with target platform override to linux/amd64"
+condition = { env = { "PLATFORM_OVERRIDE" = "linux/amd64" } }
+command = "cargo"
+args = ["build", "--release", "--target", "x86_64-unknown-linux-gnu"]
+
+[tasks.build-release-override-linux-arm64]
+description = "Build the project in release mode with target platform override to linux/arm64"
+condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
+command = "cargo"
+args = [
+    "build",
+    "--release",
+    "--target",
+    "aarch64-unknown-linux-gnu",
+    "--config",
+    "target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'"
+]
+
+## ** CHECK **
+
+[tasks.check]
+description = "Runs rustfmt and clippy checks without applying any fix"
+dependencies = [
+    "check-rustfmt",
+    "check-clippy"
+]
+
+[tasks.check-rustfmt]
+description = "Runs rustfmt checks without applying any fix"
+install_crate = "rustfmt"
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.check-clippy]
+description = "Runs clippy checks without applying any fix"
+install_crate = "clippy"
+command = "cargo"
+args = ["clippy", "--no-deps", "--all-targets", "--", "-Dwarnings"]
+
+## ** FIX **
+
+[tasks.fix]
+description = "Runs rustfmt and clippy checks and applies fixes"
+dependencies = [
+    "fix-rustfmt",
+    "fix-clippy"
+]
+
+[tasks.fix-rustfmt]
+description = "Runs rustfmt checks and applies fixes"
+install_crate = "rustfmt"
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.fix-clippy]
+description = "Runs clippy checks and applies fixes"
+install_crate = "clippy"
+command = "cargo"
+args = ["clippy", "--fix", "--allow-dirty", "--", "-Dwarnings"]
+
+## ** TEST **
+
+[tasks.test]
+description = "Runs all unit tests, worker executor tests and integration tests"
+dependencies = [
+    "unit-tests",
+    "worker-executor-tests",
+    "integration-tests"
+]
+
+[tasks.unit-tests]
+description = "Runs unit tests only"
+command = "cargo"
+dependencies = ["build"]
+args = ["test", "--lib", "--bins", "--all-features"]
+
+[tasks.worker-executor-tests]
+description = "Runs worker executor tests only"
+dependencies = ["build"]
+env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
+command = "cargo"
+args = ["test", "--package", "golem-worker-executor-base", "--test", "*", "--", "--nocapture"]
+
+[tasks.integration-tests]
+description = "Runs integration tests only"
+dependencies = ["build"]
+env = { "RUST_LOG" = "info" }
+command = "cargo"
+args = ["test", "--package", "golem-cli", "--test", "integration", "--", "--nocapture"]
+
+[tasks.sharding-tests]
+description = "Runs sharding integration tests only"
+dependencies = ["build"]
+env = { "RUST_LOG" = "info" }
+command = "cargo"
+args = ["test", "--package", "golem-cli", "--test", "sharding", "--", "--nocapture"]
+
+## ** CHECK-OPENAPI **
+[tasks.check-openapi]
+description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
+dependencies = [
+    "generate-worker-service-openapi",
+    "generate-template-service-openapi",
+    "merge-openapi",
+    "diff-openapi"
+]
+
+[tasks.diff-openapi]
+description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
+dependencies = ["merge-openapi"]
+script = '''
+  if diff openapi/golem-service.yaml target/golem-service.yaml  >/dev/null 2>&1
+    then
+      echo "Latest Golem OpenAPI spec version detected."
+    else
+      echo "openapi/golem-service.yaml is not the same as produced by golem-service-yaml." 1>&2
+      echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec." 1>&2
+      exit 1
+  fi
+'''
+
+## ** GENERATE-OPENAPI **
+[tasks.generate-openapi]
+description = "Generates openapi spec from the code and saves it to the openapi directory"
+dependencies = [
+    "generate-worker-service-openapi",
+    "generate-template-service-openapi",
+    "merge-openapi",
+    "store-openapi"
+]
+
+[tasks.generate-worker-service-openapi]
+description = "Generates openapi spec for worker service"
+dependencies = ["build"]
+script = "./target/debug/golem-worker-service-yaml > ./target/golem-worker-service.yaml"
+
+[tasks.generate-template-service-openapi]
+description = "Generates openapi spec for template service"
+dependencies = ["build"]
+script = "./target/debug/golem-template-service-yaml > ./target/golem-template-service.yaml"
+
+[tasks.merge-openapi]
+install_crate = { crate_name = "golem-openapi-client-generator", version = "0.0.4" }
+dependencies = ["generate-worker-service-openapi", "generate-template-service-openapi"]
+command = "golem-openapi-client-generator"
+args = ["merge", "--spec-yaml", "./target/golem-template-service.yaml", "./target/golem-worker-service.yaml", "--output-yaml", "./target/golem-service.yaml"]
+
+[tasks.store-openapi]
+description = "Stores the generated openapi spec in the openapi directory"
+dependencies = ["merge-openapi"]
+command = "cp"
+args = ["-v", "./target/golem-service.yaml", "./openapi/golem-service.yaml"]
+
+## ** PUBLISH **
+[tasks.publish]
+description = "Publishes packages to crates.io"
+dependencies = ["publish-golem-client", "publish-golem-cli"]
+
+[tasks.set-golem-client-version]
+description = "Sets the version in golem-client/Cargo.toml to the value of the VERSION environment variable"
+command = "sed"
+args = ["-i", "s/0\\.0\\.0/$VERSION/g", "golem-client/Cargo.toml"]
+
+[tasks.publish-golem-client]
+description = "Publishes golem-client package to crates.io"
+dependencies = ["set-golem-client-version", "build-release"]
+command = "cargo"
+args = ["publish", "-p", "golem-client", "--all-features", "--allow-dirty"]
+
+[tasks.set-golem-cli-version]
+description = "Sets the version in golem-cli/Cargo.toml to the value of the VERSION environment variable"
+command = "sed"
+args = ["-i", "s/0\\.0\\.0/$VERSION/g", "golem-cli/Cargo.toml"]
+
+[tasks.publish-golem-cli]
+description = "Publishes golem-cli package to crates.io"
+dependencies = ["set-golem-cli-version", "build-release"]
+command = "cargo"
+args = ["publish", "-p", "golem-cli", "--all-features", "--allow-dirty"]
+
+## ** PACKAGE RELEASE **
+
+# There are three variants of package-release, and only one of them will run based on the value of
+# the PLATFORM_OVERRIDE environment variable
+
+[tasks.package-release]
+description = "Packages the project's release artifact"
+dependencies = [
+    "package-release-default",
+    "package-release-override-linux-amd64",
+    "package-release-override-linux-arm64"
+]
+
+[tasks.package-release-base]
+private = true
+description = "Packages the project's release artifact. Must have the PLATFORM_TARGET env var set."
+cwd = "target"
+command = "tar"
+args = [
+    "-cvf",
+    "${PLATFORM_TARGET}.tar",
+    "${PLATFORM_TARGET}/release/golem-shard-manager",
+    "${PLATFORM_TARGET}/release/worker-executor",
+    "${PLATFORM_TARGET}/release/golem-template-service",
+    "${PLATFORM_TARGET}/release/golem-worker-service",
+    "${PLATFORM_TARGET}/release/golem-template-compilation-service"
+]
+
+
+[tasks.package-release-default]
+description = "Packages the project's release artifact"
+condition = { env_not_set = ["PLATFORM_OVERRIDE"] }
+env = { "PLATFORM_TARGET" = "." }
+extend = "package-release-base"
+dependencies = ["build-release-default"]
+
+[tasks.package-release-override-linux-amd64]
+description = "Packages the project's release artifact with target platform override to linux/amd64"
+condition = { env = { "PLATFORM_OVERRIDE" = "linux/amd64" } }
+env = { "PLATFORM_TARGET" = "x86_64-unknown-linux-gnu" }
+extend = "package-release-base"
+dependencies = ["build-release-override-linux-amd64"]
+
+[tasks.package-release-override-linux-arm64]
+description = "Packages the project in release artifact with target platform override to linux/arm64"
+condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
+env = { "PLATFORM_TARGET" = "aarch64-unknown-linux-gnu" }
+extend = "package-release-base"
+dependencies = ["build-release-override-linux-arm64"]
