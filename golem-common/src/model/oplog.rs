@@ -46,11 +46,6 @@ pub enum OplogEntry {
     Suspend { timestamp: Timestamp },
     /// Worker failed
     Error { timestamp: Timestamp },
-    /// Debug log entry
-    Debug {
-        timestamp: Timestamp,
-        message: String,
-    },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
     /// more predictable.
     NoOp { timestamp: Timestamp },
@@ -62,6 +57,9 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         jump: OplogRegion,
     },
+    /// Indicates that the worker has been interrupted at this point.
+    /// Only used to recompute the worker's (cached) status, has no effect on execution.
+    Interrupted { timestamp: Timestamp },
 }
 
 impl OplogEntry {
@@ -201,6 +199,14 @@ impl OplogEntry {
 
     pub fn nop(timestamp: Timestamp) -> OplogEntry {
         OplogEntry::NoOp { timestamp }
+    }
+
+    /// True if the oplog entry is a "hint" that should be skipped during replay
+    pub fn is_hint(&self) -> bool {
+        matches!(
+            self,
+            OplogEntry::Suspend { .. } | OplogEntry::Error { .. } | OplogEntry::Interrupted { .. }
+        )
     }
 }
 

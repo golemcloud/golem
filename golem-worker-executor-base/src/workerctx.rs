@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatus,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
@@ -288,6 +288,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         status: WorkerStatus,
     ) -> Result<(), GolemError>;
 
+    // TODO: move this to WorkerStatusRecord
     /// Gets how many times the worker has been retried to recover from an error.
     async fn get_worker_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
@@ -295,11 +296,11 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     ) -> u64;
 
     /// Gets a best-effort current worker status without activating the worker
-    async fn get_assumed_worker_status<T: HasAll<Ctx> + Send + Sync>(
+    async fn compute_latest_worker_status<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
         metadata: &Option<WorkerMetadata>,
-    ) -> WorkerStatus;
+    ) -> Result<WorkerStatusRecord, GolemError>;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
     /// This can be used to restore the previous state of the worker but by general it can be no-op.

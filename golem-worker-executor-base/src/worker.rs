@@ -111,6 +111,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 template_version,
             };
 
+            let previous_metadata = this.worker_service().get(&worker_id).await;
             let worker_metadata = WorkerMetadata {
                 worker_id: versioned_worker_id.clone(),
                 args: worker_args.clone(),
@@ -119,6 +120,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_known_status: calculate_last_known_status(
                     this,
                     &versioned_worker_id.worker_id,
+                    &previous_metadata,
                 )
                 .await?,
             };
@@ -656,14 +658,13 @@ where
 pub async fn calculate_last_known_status<T>(
     this: &T,
     worker_id: &WorkerId,
+    metadata: &Option<WorkerMetadata>,
 ) -> Result<WorkerStatusRecord, GolemError>
 where
     T: HasOplogService + HasWorkerService,
 {
-    let last_known = this
-        .worker_service()
-        .get(worker_id)
-        .await
+    let last_known = metadata
+        .as_ref()
         .map(|metadata| metadata.last_known_status.clone())
         .unwrap_or_default();
 
@@ -691,12 +692,44 @@ where
     }
 }
 
-fn calculate_latest_worker_status(
-    _initial: &WorkerStatus,
-    _entries: &[OplogEntry],
-) -> WorkerStatus {
-    // TODO: this is currently not 100% accurate because we don't have an Interrupted oplog entry, see https://github.com/golemcloud/golem/issues/239
-    WorkerStatus::Running
+fn calculate_latest_worker_status(initial: &WorkerStatus, entries: &[OplogEntry]) -> WorkerStatus {
+    let mut result = initial.clone();
+    for entry in entries {
+        match entry {
+            OplogEntry::ImportedFunctionInvoked { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::ExportedFunctionInvoked { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::ExportedFunctionCompleted { .. } => {
+                result = WorkerStatus::Idle;
+            }
+            OplogEntry::CreatePromise { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::CompletePromise { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::Suspend { .. } => {
+                result = WorkerStatus::Suspended;
+            }
+            OplogEntry::Error { .. } => {
+                // TODO: currently we cannot compute Failed and Exit statuses
+                result = WorkerStatus::Retrying;
+            }
+            OplogEntry::NoOp { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::Jump { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::Interrupted { .. } => {
+                result = WorkerStatus::Interrupted;
+            }
+        }
+    }
+    result
 }
 
 fn calculate_deleted_regions(initial: DeletedRegions, entries: &[OplogEntry]) -> DeletedRegions {
