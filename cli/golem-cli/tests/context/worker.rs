@@ -25,6 +25,7 @@ pub struct WorkerExecutor<'docker_client> {
 
 enum WorkerExecutorInner<'docker_client> {
     Process(Child),
+    #[allow(dead_code)]
     Docker(Container<'docker_client, WorkerExecutorImage>),
 }
 

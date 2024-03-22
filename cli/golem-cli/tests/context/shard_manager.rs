@@ -17,6 +17,7 @@ pub struct ShardManager<'docker_client> {
 
 enum ShardManagerInner<'docker_client> {
     Process(Child),
+    #[allow(dead_code)]
     Docker(Container<'docker_client, ShardManagerImage>),
 }
 
