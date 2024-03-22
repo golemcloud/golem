@@ -34,7 +34,7 @@ use crate::services::invocation_key::InvocationKeyService;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::OplogService;
 use crate::services::promise::PromiseService;
-use crate::services::recovery::RecoveryManagement;
+use crate::services::recovery::{RecoveryManagement, TrapType};
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
@@ -249,12 +249,12 @@ pub trait InvocationHooks {
     ) -> anyhow::Result<()>;
 
     /// Called when a worker invocation fails, before the worker gets deactivated
-    async fn on_invocation_failure(&mut self, error: &anyhow::Error) -> Result<(), anyhow::Error>;
+    async fn on_invocation_failure(&mut self, error: &TrapType) -> Result<(), anyhow::Error>;
 
     /// Called when a worker invocation fails, after the worker has been deactivated
     async fn on_invocation_failure_deactivated(
         &mut self,
-        error: &anyhow::Error,
+        error: &TrapType
     ) -> Result<WorkerStatus, anyhow::Error>;
 
     /// Called when a worker invocation succeeds

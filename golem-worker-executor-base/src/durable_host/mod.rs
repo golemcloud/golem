@@ -24,7 +24,7 @@ use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::error::{is_interrupt, is_jump, is_suspend, GolemError};
+use crate::error::GolemError;
 use crate::invocation::invoke_worker;
 use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig};
 use crate::services::active_workers::ActiveWorkers;
@@ -69,7 +69,7 @@ use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::wasm_rpc::UriExtensions;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::services::oplog::OplogService;
-use crate::services::recovery::{RecoveryDecision, RecoveryManagement};
+use crate::services::recovery::{RecoveryDecision, RecoveryManagement, TrapType};
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::HasOplogService;
@@ -731,7 +731,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn on_invocation_failure(&mut self, error: &anyhow::Error) -> Result<(), anyhow::Error> {
+    async fn on_invocation_failure(&mut self, error: &TrapType) -> Result<(), anyhow::Error> {
         self.consume_hint_entries().await;
         let is_live_after = self.is_live();
 
@@ -764,7 +764,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
     async fn on_invocation_failure_deactivated(
         &mut self,
-        error: &anyhow::Error,
+        error: &TrapType,
     ) -> Result<WorkerStatus, anyhow::Error> {
         let previous_tries = self.private_state.trailing_error_count().await;
         let decision = self

@@ -726,24 +726,3 @@ impl From<EncodingError> for GolemError {
         }
     }
 }
-
-pub fn is_interrupt(error: &anyhow::Error) -> bool {
-    error
-        .root_cause()
-        .downcast_ref::<InterruptKind>()
-        .map_or(false, |kind| *kind == InterruptKind::Interrupt)
-}
-
-pub fn is_suspend(error: &anyhow::Error) -> bool {
-    error
-        .root_cause()
-        .downcast_ref::<InterruptKind>()
-        .map_or(false, |kind| *kind == InterruptKind::Suspend)
-}
-
-pub fn is_jump(error: &anyhow::Error) -> bool {
-    error
-        .root_cause()
-        .downcast_ref::<InterruptKind>()
-        .map_or(false, |kind| *kind == InterruptKind::Jump)
-}

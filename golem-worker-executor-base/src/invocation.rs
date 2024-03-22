@@ -22,8 +22,9 @@ use tracing::{debug, error, warn};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 
-use crate::error::{is_interrupt, is_jump, is_suspend, GolemError};
+use crate::error::GolemError;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
+use crate::services::recovery::TrapType;
 use crate::workerctx::{FuelManagement, WorkerCtx};
 
 /// Invokes a function on a worker.
@@ -229,11 +230,12 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 
     match call_result {
         Err(err) => {
-            store.data_mut().on_invocation_failure(&err).await?;
+            let trap_type = TrapType::from_error(&err);
+            store.data_mut().on_invocation_failure(&trap_type).await?;
             store.data_mut().deactivate().await;
             let result_status = store
                 .data_mut()
-                .on_invocation_failure_deactivated(&err)
+                .on_invocation_failure_deactivated(&trap_type)
                 .await?;
             store
                 .data_mut()

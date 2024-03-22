@@ -29,12 +29,36 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_mutex::Mutex;
 use async_trait::async_trait;
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::{VersionedWorkerId, WorkerId, WorkerStatus};
 use golem_common::retries::get_delay;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use wasmtime::Trap;
+
+// TODO: move to crate::model?
+#[derive(Clone, Debug)]
+pub enum TrapType {
+    Interrupt(InterruptKind),
+    Exit,
+    Error(WorkerError),
+}
+
+impl TrapType {
+    pub fn from_error<Ctx: WorkerCtx>(error: &anyhow::Error) -> TrapType {
+        match error.root_cause().downcast_ref::<InterruptKind>() {
+            Some(kind) => TrapType::Interrupt(kind.clone()),
+            None => match Ctx::is_exit(error) {
+                Some(_) => TrapType::Exit,
+                None => match error.root_cause().downcast_ref::<Trap>() {
+                    Some(&Trap::StackOverflow) => TrapType::Error(WorkerError::StackOverflow),
+                    _ => TrapType::Error(WorkerError::Unknown(format!("{:?}", error))),
+                },
+            },
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum RecoveryDecision {
@@ -45,16 +69,22 @@ pub enum RecoveryDecision {
 
 #[async_trait]
 pub trait RecoveryManagement {
-    async fn schedule_recovery_for_error(
+    /// Makes a recovery decision in case the worker reached a trap. `previous_tries` is the number of retries already
+    /// performed, and `trap_type` distinguishes errors, interrupts and exit signals.
+    async fn schedule_recovery_on_trap(
         &self,
-        worker_id: &VersionedWorkerId,
         previous_tries: u64,
-        current_error: &anyhow::Error,
+        trap_type: &TrapType,
     ) -> RecoveryDecision;
+
+    /// Makes a recovery decision when a worker gets started. `previous_tries` is the number of retries already
+    /// performed and `WorkerError` is the error that caused the worker to fail in the last attempt.
+    /// The other trap types are not relevant here, because interrupted workers can always be recovered,
+    /// and exited workers can never.
     async fn schedule_recovery_on_startup(
         &self,
-        worker_id: &VersionedWorkerId,
         previous_tries: u64,
+        error: &WorkerError,
     ) -> RecoveryDecision;
 }
 
@@ -278,44 +308,6 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         }
     }
 
-    fn get_recovery_decision_for_error(
-        &self,
-        previous_tries: u64,
-        current_error: &anyhow::Error,
-    ) -> RecoveryDecision {
-        match current_error.root_cause().downcast_ref::<InterruptKind>() {
-            Some(InterruptKind::Interrupt) => RecoveryDecision::None,
-            Some(InterruptKind::Suspend) => RecoveryDecision::None,
-            Some(InterruptKind::Restart) => RecoveryDecision::Immediate,
-            Some(InterruptKind::Jump) => RecoveryDecision::Immediate,
-            None => match Ctx::is_exit(current_error) {
-                Some(_) => RecoveryDecision::None,
-                None => match current_error.root_cause().downcast_ref::<Trap>() {
-                    Some(&Trap::StackOverflow) =>
-                    // Never retrying a stack overflow
-                    {
-                        RecoveryDecision::None
-                    }
-                    _ => {
-                        let retry_config = &self.golem_config.retry;
-                        match get_delay(retry_config, previous_tries) {
-                            Some(delay) => RecoveryDecision::Delayed(delay),
-                            None => RecoveryDecision::None,
-                        }
-                    }
-                },
-            },
-        }
-    }
-
-    fn get_recovery_decision_on_startup(&self, previous_tries: u64) -> RecoveryDecision {
-        if previous_tries < (self.golem_config.retry.max_attempts as u64) {
-            RecoveryDecision::Immediate
-        } else {
-            RecoveryDecision::None
-        }
-    }
-
     async fn schedule_recovery(
         &self,
         worker_id: &VersionedWorkerId,
@@ -401,29 +393,43 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
-    async fn schedule_recovery_for_error(
+    async fn schedule_recovery_on_trap(
         &self,
-        worker_id: &VersionedWorkerId,
         previous_tries: u64,
-        current_error: &anyhow::Error,
+        trap_type: &TrapType,
     ) -> RecoveryDecision {
-        self.schedule_recovery(
-            worker_id,
-            self.get_recovery_decision_for_error(previous_tries, current_error),
-        )
-        .await
+        match trap_type {
+            TrapType::Interrupt(InterruptKind::Interrupt) => RecoveryDecision::None,
+            TrapType::Interrupt(InterruptKind::Suspend) => RecoveryDecision::None,
+            TrapType::Interrupt(InterruptKind::Restart) => RecoveryDecision::Immediate,
+            TrapType::Interrupt(InterruptKind::Jump) => RecoveryDecision::Immediate,
+            TrapType::Exit => RecoveryDecision::None,
+            TrapType::Error(WorkerError::StackOverflow) => RecoveryDecision::None,
+            TrapType::Error(_) => {
+                let retry_config = &self.golem_config.retry;
+                match get_delay(retry_config, previous_tries) {
+                    Some(delay) => RecoveryDecision::Delayed(delay),
+                    None => RecoveryDecision::None,
+                }
+            }
+        }
     }
 
     async fn schedule_recovery_on_startup(
         &self,
-        worker_id: &VersionedWorkerId,
         previous_tries: u64,
+        error: &WorkerError,
     ) -> RecoveryDecision {
-        self.schedule_recovery(
-            worker_id,
-            self.get_recovery_decision_on_startup(previous_tries),
-        )
-        .await
+        match error {
+            WorkerError::Unknown(_) => {
+                if previous_tries < (self.golem_config.retry.max_attempts as u64) {
+                    RecoveryDecision::Immediate
+                } else {
+                    RecoveryDecision::None
+                }
+            }
+            WorkerError::StackOverflow => RecoveryDecision::None,
+        }
     }
 }
 
@@ -476,21 +482,20 @@ impl RecoveryManagementMock {
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl RecoveryManagement for RecoveryManagementMock {
-    async fn schedule_recovery_for_error(
+    async fn schedule_recovery_on_trap(
         &self,
-        _worker_id: &VersionedWorkerId,
         _previous_tries: u64,
-        _current_error: &anyhow::Error,
+        _trap_type: &TrapType,
     ) -> RecoveryDecision {
-        unimplemented!()
+        todo!()
     }
 
     async fn schedule_recovery_on_startup(
         &self,
-        _worker_id: &VersionedWorkerId,
         _previous_tries: u64,
+        _error: &WorkerError,
     ) -> RecoveryDecision {
-        unimplemented!()
+        todo!()
     }
 }
 
@@ -522,6 +527,7 @@ mod tests {
     use anyhow::Error;
     use async_trait::async_trait;
     use bytes::Bytes;
+    use golem_common::model::oplog::WorkerError;
     use golem_common::model::{
         AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerId,
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
@@ -871,7 +877,6 @@ mod tests {
 
     #[tokio::test]
     async fn immediately_recovers_worker_on_startup_with_no_errors() {
-        let test_id = create_test_id();
         let start_time = Instant::now();
         let (sender, mut receiver) =
             tokio::sync::broadcast::channel::<(VersionedWorkerId, Duration)>(1);
@@ -881,7 +886,9 @@ mod tests {
             sender.send((id, elapsed)).unwrap();
         })
         .await;
-        let _ = svc.schedule_recovery_on_startup(&test_id, 0).await;
+        let _ = svc
+            .schedule_recovery_on_startup(0, &WorkerError::Unknown("x".to_string()))
+            .await;
         let (id, elapsed) = receiver.recv().await.unwrap();
         assert_eq!(id, test_id);
         assert!(elapsed.as_millis() < 100, "elapsed time was {:?}", elapsed);
