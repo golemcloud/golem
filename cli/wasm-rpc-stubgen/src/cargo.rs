@@ -34,14 +34,30 @@ struct MetadataRoot {
 #[derive(Serialize, Deserialize)]
 struct ComponentMetadata {
     package: Option<String>,
-    target: ComponentTarget,
+    target: Option<ComponentTarget>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct ComponentTarget {
     world: Option<String>,
+    #[serde(default = "default_path")]
     path: String,
+    #[serde(default)]
     dependencies: HashMap<String, WitDependency>,
+}
+
+fn default_path() -> String {
+    "wit".to_string()
+}
+
+impl Default for ComponentTarget {
+    fn default() -> Self {
+        Self {
+            world: None,
+            path: "wit".to_string(),
+            dependencies: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -97,11 +113,11 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
                 "{}:{}",
                 def.root_package_name.namespace, def.root_package_name.name
             )),
-            target: ComponentTarget {
+            target: Some(ComponentTarget {
                 world: Some(def.target_world_name()?),
                 path: "wit".to_string(),
                 dependencies: wit_dependencies,
-            },
+            }),
         }),
     };
 
@@ -201,7 +217,11 @@ pub fn is_cargo_workspace_toml(path: &Path) -> anyhow::Result<bool> {
 pub fn add_workspace_members(path: &Path, members: &[String]) -> anyhow::Result<()> {
     let mut manifest = Manifest::from_path(path)?;
     if let Some(workspace) = manifest.workspace.as_mut() {
-        workspace.members.extend(members.iter().cloned());
+        for member in members {
+            if !workspace.members.contains(member) {
+                workspace.members.push(member.to_string());
+            }
+        }
     }
 
     let cargo_toml = toml::to_string(&manifest)?;
@@ -216,7 +236,9 @@ pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> an
     if let Some(ref mut package) = manifest.package {
         if let Some(ref mut metadata) = package.metadata {
             if let Some(ref mut component) = metadata.component {
-                let existing: HashSet<_> = component.target.dependencies.keys().cloned().collect();
+                let mut new_target = ComponentTarget::default();
+                let target = component.target.as_mut().unwrap_or(&mut new_target);
+                let existing: HashSet<_> = target.dependencies.keys().cloned().collect();
                 for name in names {
                     if !existing.contains(name) {
                         let relative_path = format!("wit/deps/{}", name);
@@ -226,13 +248,17 @@ pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> an
                             .join(&relative_path);
                         let package_name = wit::get_package_name(&path)?;
 
-                        component.target.dependencies.insert(
+                        target.dependencies.insert(
                             format!("{}:{}", package_name.namespace, package_name.name),
                             WitDependency {
                                 path: relative_path,
                             },
                         );
                     }
+                }
+
+                if component.target.is_none() {
+                    component.target = Some(new_target);
                 }
 
                 let cargo_toml = toml::to_string(&manifest)?;
