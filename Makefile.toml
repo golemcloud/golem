@@ -221,7 +221,10 @@ args = ["-v", "./target/golem-service.yaml", "./openapi/golem-service.yaml"]
 ## ** PUBLISH **
 [tasks.publish]
 description = "Publishes packages to crates.io"
-dependencies = ["publish-golem-client", "publish-golem-cli"]
+dependencies = [
+    "publish-golem-client",
+    "publish-golem-cli"
+]
 
 [tasks.set-golem-client-version]
 description = "Sets the version in golem-client/Cargo.toml to the value of the VERSION environment variable"
@@ -235,7 +238,7 @@ args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
 
 [tasks.publish-golem-client]
 description = "Publishes golem-client package to crates.io"
-dependencies = ["set-golem-client-version", "build-release"]
+dependencies = ["set-golem-client-version", "set-golem-client-version", "build-release"]
 command = "cargo"
 args = ["publish", "-p", "golem-client", "--all-features", "--allow-dirty"]
 
@@ -252,7 +255,7 @@ args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]
 
 [tasks.publish-golem-cli]
 description = "Publishes golem-cli package to crates.io"
-dependencies = ["set-golem-cli-version", "build-release"]
+dependencies = ["set-golem-cli-version", "set-golem-client-version", "build-release"]
 command = "cargo"
 args = ["publish", "-p", "golem-cli", "--all-features", "--allow-dirty"]
 
