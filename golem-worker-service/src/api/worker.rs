@@ -1,10 +1,8 @@
 use std::str::FromStr;
-use std::sync::Arc;
 
 use golem_common::model::{CallingConvention, InvocationKey, TemplateId};
 use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::auth::EmptyAuthCtx;
-use golem_worker_service_base::service::template::TemplateService;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -13,10 +11,10 @@ use tap::TapFallible;
 use golem_service_base::model::*;
 use golem_worker_service_base::api::error::WorkerApiBaseError;
 
-use crate::service::worker::WorkerService;
+use crate::service::{template::TemplateService, worker::WorkerService};
 
 pub struct WorkerApi {
-    pub template_service: Arc<dyn TemplateService + Sync + Send>,
+    pub template_service: TemplateService,
     pub worker_service: WorkerService,
 }
 
@@ -53,7 +51,7 @@ impl WorkerApi {
         let template_id = template_id.0;
         let latest_template = self
             .template_service
-            .get_latest(&template_id)
+            .get_latest(&template_id, &EmptyAuthCtx {})
             .await
             .tap_err(|error| tracing::error!("Error getting latest template: {:?}", error))
             .map_err(|error| {
@@ -63,7 +61,8 @@ impl WorkerApi {
                         &template_id, error
                     ),
                 }))
-            })?;
+            })?
+            .value;
 
         let WorkerCreationRequest { name, args, env } = request.0;
 

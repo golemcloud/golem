@@ -4,6 +4,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use crate::auth::EmptyAuthCtx;
 use crate::service::template::TemplateService;
+use crate::service::TemplatePermission;
 use golem_api_grpc::proto::golem::workerexecutor::{
     self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
     GetInvocationKeyRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest,
@@ -15,16 +16,14 @@ use golem_api_grpc::proto::golem::{
 
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::worker::InvokeResult as ProtoInvokeResult;
-use golem_common::model::{AccountId, CallingConvention, InvocationKey, TemplateId};
+use golem_common::model::{AccountId, CallingConvention, InvocationKey};
 use golem_service_base::model::{
     GolemErrorUnknown, PromiseId, VersionedWorkerId, WorkerId, WorkerMetadata,
 };
 use golem_service_base::service::auth::WithNamespace;
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
-    model::{
-        GolemError, GolemErrorInvalidShardId, GolemErrorRuntimeError, Template, VersionedTemplateId,
-    },
+    model::{GolemError, GolemErrorInvalidShardId, GolemErrorRuntimeError, Template},
     routing_table::{RoutingTableError, RoutingTableService},
     service::auth::{AuthService, Permission},
     worker_executor_clients::WorkerExecutorClients,
@@ -141,7 +140,7 @@ where
 {
     auth_service: Arc<dyn AuthService<AuthCtx, Namespace, TemplatePermission> + Send + Sync>,
     worker_executor_clients: Arc<dyn WorkerExecutorClients + Send + Sync>,
-    template_service: Arc<dyn TemplateService + Send + Sync>,
+    template_service: Arc<dyn TemplateService<Namespace, AuthCtx> + Send + Sync>,
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
 }
 
@@ -153,7 +152,7 @@ where
     pub fn new(
         auth_service: Arc<dyn AuthService<AuthCtx, Namespace, TemplatePermission> + Send + Sync>,
         worker_executor_clients: Arc<dyn WorkerExecutorClients + Send + Sync>,
-        template_service: Arc<dyn TemplateService + Send + Sync>,
+        template_service: Arc<dyn TemplateService<Namespace, AuthCtx> + Send + Sync>,
         routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
     ) -> Self {
         Self {
@@ -161,21 +160,6 @@ where
             worker_executor_clients,
             template_service,
             routing_table_service,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct TemplatePermission {
-    pub template: TemplateId,
-    pub permission: Permission,
-}
-
-impl TemplatePermission {
-    pub fn new(template: TemplateId, permission: Permission) -> Self {
-        Self {
-            template,
-            permission,
         }
     }
 }
@@ -906,25 +890,22 @@ where
                 let template_version = metadata.template_version;
                 let template_details = self
                     .template_service
-                    .get_by_version(&worker_id.template_id, template_version)
+                    .get_by_version(&worker_id.template_id, template_version, auth_ctx)
                     .await?
-                    .ok_or_else(|| {
-                        WorkerServiceError::VersionedTemplateIdNotFound(VersionedTemplateId {
-                            template_id: worker_id.template_id.clone(),
-                            version: template_version,
-                        })
-                    })?;
+                    .value;
 
                 Ok(template_details)
             }
             Err(WorkerServiceError::WorkerNotFound(_)) => Ok(self
                 .template_service
-                .get_latest(&worker_id.template_id)
-                .await?),
+                .get_latest(&worker_id.template_id, auth_ctx)
+                .await?
+                .value),
             Err(WorkerServiceError::Golem(GolemError::WorkerNotFound(_))) => Ok(self
                 .template_service
-                .get_latest(&worker_id.template_id)
-                .await?),
+                .get_latest(&worker_id.template_id, auth_ctx)
+                .await?
+                .value),
             Err(other) => Err(other),
         }
     }

@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     api_definition::{ApiDefinition, MethodPattern, PathPattern, Route},
+    auth::EmptyAuthCtx,
     service::template::TemplateService,
 };
 use async_trait::async_trait;
@@ -11,8 +12,12 @@ use golem_service_base::model::{Export, ExportFunction, ExportInstance, Template
 use serde::{Deserialize, Serialize};
 
 #[async_trait]
-pub trait ApiDefinitionValidatorService {
-    async fn validate(&self, api: &ApiDefinition) -> Result<(), ValidationError>;
+pub trait ApiDefinitionValidatorService<AuthCtx> {
+    async fn validate(
+        &self,
+        api: &ApiDefinition,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), ValidationError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, thiserror::Error)]
@@ -42,19 +47,30 @@ impl RouteValidationError {
 }
 
 #[derive(Clone)]
-pub struct ApiDefinitionValidatorDefault {
-    template_service: Arc<dyn TemplateService + Send + Sync>,
+pub struct ApiDefinitionValidatorDefault<Namespace, AuthCtx> {
+    template_service: Arc<dyn TemplateService<Namespace, AuthCtx> + Send + Sync>,
 }
 
-impl ApiDefinitionValidatorDefault {
-    pub fn new(template_service: Arc<dyn TemplateService + Send + Sync>) -> Self {
+impl<Namespace, AuthCtx> ApiDefinitionValidatorDefault<Namespace, AuthCtx> {
+    pub fn new(
+        template_service: Arc<dyn TemplateService<Namespace, AuthCtx> + Send + Sync>,
+    ) -> Self {
         Self { template_service }
     }
 }
 
 #[async_trait]
-impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
-    async fn validate(&self, api: &ApiDefinition) -> Result<(), ValidationError> {
+impl<Namespace, AuthCtx> ApiDefinitionValidatorService<AuthCtx>
+    for ApiDefinitionValidatorDefault<Namespace, AuthCtx>
+where
+    Namespace: std::fmt::Debug + Send + Sync,
+    AuthCtx: Send + Sync,
+{
+    async fn validate(
+        &self,
+        api: &ApiDefinition,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), ValidationError> {
         let get_templates = api
             .routes
             .iter()
@@ -64,11 +80,17 @@ impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
             .into_values()
             .map(|route| async move {
                 let id = &route.binding.template;
-                self.template_service.get_latest(id).await.map_err(|e| {
-                    tracing::error!("Error getting latest template: {:?}", e);
-                    // TODO: Better error message.
-                    RouteValidationError::from_route(route, "Error getting latest template".into())
-                })
+                self.template_service
+                    .get_latest(id, auth_ctx)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error getting latest template: {:?}", e);
+                        // TODO: Better error message.
+                        RouteValidationError::from_route(
+                            route,
+                            "Error getting latest template".into(),
+                        )
+                    })
             })
             .collect::<Vec<_>>();
 
@@ -86,6 +108,7 @@ impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
             successes
                 .into_iter()
                 .map(|r| r.unwrap())
+                .map(|t| t.value)
                 .map(|template| (template.versioned_template_id.template_id.clone(), template))
                 .collect()
         };
@@ -190,8 +213,12 @@ fn find_function(name: &str, template: &Template) -> Option<ExportFunction> {
 pub struct ApiDefinitionValidatorNoop {}
 
 #[async_trait]
-impl ApiDefinitionValidatorService for ApiDefinitionValidatorNoop {
-    async fn validate(&self, _api: &ApiDefinition) -> Result<(), ValidationError> {
+impl ApiDefinitionValidatorService<EmptyAuthCtx> for ApiDefinitionValidatorNoop {
+    async fn validate(
+        &self,
+        _api: &ApiDefinition,
+        _auth_ctx: &EmptyAuthCtx,
+    ) -> Result<(), ValidationError> {
         Ok(())
     }
 }

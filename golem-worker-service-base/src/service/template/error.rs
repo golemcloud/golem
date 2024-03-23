@@ -1,12 +1,15 @@
 use golem_api_grpc::proto::golem::worker::{
     self, worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
 };
+use golem_service_base::service::auth::AuthError;
 use tonic::Status;
 
 // The dependents of golem-worker-service-base is expected
 // to have a template service internally that can depend on this base error
 #[derive(Debug, thiserror::Error)]
 pub enum TemplateServiceError {
+    #[error(transparent)]
+    Auth(#[from] AuthError),
     #[error("Bad Request: {0:?}")]
     BadRequest(Vec<String>),
     #[error("Unauthorized")]
@@ -78,6 +81,21 @@ impl From<TemplateServiceError> for worker_error::Error {
         use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 
         match value {
+            TemplateServiceError::Auth(error) => match error {
+                AuthError::Unauthorized(error) => {
+                    worker_error::Error::Unauthorized(ErrorBody { error })
+                }
+                AuthError::Forbidden(error) => {
+                    worker_error::Error::LimitExceeded(ErrorBody { error })
+                }
+                AuthError::Internal(error) => {
+                    worker_error::Error::InternalError(worker::WorkerExecutionError {
+                        error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                            details: error.to_string(),
+                        })),
+                    })
+                }
+            },
             TemplateServiceError::AlreadyExists(error) => {
                 worker_error::Error::AlreadyExists(ErrorBody { error })
             }

@@ -112,14 +112,14 @@ pub enum ApiRegistrationError {
 pub struct RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
     pub register_repo: Arc<dyn ApiDefinitionRepo<Namespace> + Sync + Send>,
-    pub api_definition_validator: Arc<dyn ApiDefinitionValidatorService + Sync + Send>,
+    pub api_definition_validator: Arc<dyn ApiDefinitionValidatorService<AuthCtx> + Sync + Send>,
 }
 
 impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub fn new(
         auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
         register_repo: Arc<dyn ApiDefinitionRepo<Namespace> + Sync + Send>,
-        api_definition_validator: Arc<dyn ApiDefinitionValidatorService + Sync + Send>,
+        api_definition_validator: Arc<dyn ApiDefinitionValidatorService<AuthCtx> + Sync + Send>,
     ) -> Self {
         Self {
             auth_service,
@@ -161,7 +161,9 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
     ) -> ApiResult<ApiDefinitionId, Namespace> {
         let namespace = self.is_authorized(Permission::Create, &auth_ctx).await?;
 
-        self.api_definition_validator.validate(definition).await?;
+        self.api_definition_validator
+            .validate(definition, &auth_ctx)
+            .await?;
 
         let key = ApiDefinitionKey {
             namespace: namespace.clone(),

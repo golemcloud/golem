@@ -1,3 +1,4 @@
+pub mod template;
 pub mod worker;
 
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
@@ -24,9 +25,7 @@ use golem_worker_service_base::service::api_definition_validator::{
 use golem_worker_service_base::service::http_request_definition_lookup::{
     ApiDefinitionLookupError, HttpRequestDefinitionLookup,
 };
-use golem_worker_service_base::service::template::{
-    TemplateService, TemplateServiceDefault, TemplateServiceNoop,
-};
+use golem_worker_service_base::service::template::TemplateServiceDefault;
 use golem_worker_service_base::service::worker::{WorkerServiceDefault, WorkerServiceNoOp};
 use golem_worker_service_base::worker_request_to_response::WorkerRequestToResponse;
 use http::HeaderMap;
@@ -34,31 +33,25 @@ use poem::Response;
 use std::sync::Arc;
 use tracing::error;
 
+use self::template::TemplateServiceNoop;
 use self::worker::{NoopWorkerAuthService, WorkerNamespace};
 
 #[derive(Clone)]
 pub struct Services {
-    pub worker_service: crate::service::worker::WorkerService,
+    pub worker_service: worker::WorkerService,
+    pub template_service: template::TemplateService,
     pub definition_service:
         Arc<dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
     pub definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
-    pub template_service: Arc<dyn TemplateService + Sync + Send>,
     pub auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
-    pub api_definition_validator_service: Arc<dyn ApiDefinitionValidatorService + Sync + Send>,
+    pub api_definition_validator_service:
+        Arc<dyn ApiDefinitionValidatorService<EmptyAuthCtx> + Sync + Send>,
 }
 
 impl Services {
     pub async fn new(config: &WorkerServiceBaseConfig) -> Result<Services, String> {
-        let template_service: Arc<dyn TemplateService + Sync + Send> = {
-            let config = &config.template_service;
-            let uri = config.uri();
-            let retries = config.retries.clone();
-
-            Arc::new(TemplateServiceDefault::new(uri, retries))
-        };
-
         let auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send> =
             Arc::new(AuthServiceNoop {});
 
@@ -80,6 +73,18 @@ impl Services {
         );
 
         let worker_auth_service = Arc::new(NoopWorkerAuthService {});
+
+        let template_service: template::TemplateService = {
+            let config = &config.template_service;
+            let uri = config.uri();
+            let retry_config = config.retries.clone();
+
+            Arc::new(TemplateServiceDefault::new(
+                uri,
+                retry_config,
+                worker_auth_service.clone(),
+            ))
+        };
 
         let worker_service: crate::service::worker::WorkerService =
             Arc::new(WorkerServiceDefault::new(
@@ -103,8 +108,9 @@ impl Services {
             definition_repo.clone(),
         ));
 
-        let api_definition_validator_service: Arc<dyn ApiDefinitionValidatorService + Sync + Send> =
-            Arc::new(ApiDefinitionValidatorDefault::new(template_service.clone()));
+        let api_definition_validator_service: Arc<
+            dyn ApiDefinitionValidatorService<EmptyAuthCtx> + Sync + Send,
+        > = Arc::new(ApiDefinitionValidatorDefault::new(template_service.clone()));
 
         let definition_service: Arc<
             dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send,
@@ -126,8 +132,7 @@ impl Services {
     }
 
     pub fn noop() -> Services {
-        let template_service: Arc<dyn TemplateService + Sync + Send> =
-            Arc::new(TemplateServiceNoop {});
+        let template_service: template::TemplateService = Arc::new(TemplateServiceNoop {});
 
         let worker_service: crate::service::worker::WorkerService = Arc::new(WorkerServiceNoOp {
             namespace: WorkerNamespace::default(),
@@ -154,8 +159,9 @@ impl Services {
         let auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send> =
             Arc::new(AuthServiceNoop {});
 
-        let api_definition_validator_service: Arc<dyn ApiDefinitionValidatorService + Sync + Send> =
-            Arc::new(ApiDefinitionValidatorNoop {});
+        let api_definition_validator_service: Arc<
+            dyn ApiDefinitionValidatorService<EmptyAuthCtx> + Sync + Send,
+        > = Arc::new(ApiDefinitionValidatorNoop {});
 
         Services {
             worker_service,

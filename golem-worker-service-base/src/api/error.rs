@@ -110,6 +110,7 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
 
 impl From<TemplateServiceError> for WorkerApiBaseError {
     fn from(value: TemplateServiceError) -> Self {
+        use golem_service_base::service::auth::AuthError;
         match value {
             TemplateServiceError::BadRequest(errors) => {
                 WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors }))
@@ -133,6 +134,19 @@ impl From<TemplateServiceError> for WorkerApiBaseError {
                     }),
                 }))
             }
+            TemplateServiceError::Auth(error) => match error {
+                AuthError::Unauthorized(error) => {
+                    WorkerApiBaseError::Unauthorized(Json(ErrorBody { error }))
+                }
+                AuthError::Forbidden(error) => {
+                    WorkerApiBaseError::Forbidden(Json(ErrorBody { error }))
+                }
+                AuthError::Internal(error) => {
+                    WorkerApiBaseError::InternalError(Json(GolemErrorBody {
+                        golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
+                    }))
+                }
+            },
         }
     }
 }
