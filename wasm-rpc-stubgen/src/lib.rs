@@ -37,7 +37,7 @@ use tempdir::TempDir;
 use wasm_compose::config::Dependency;
 
 #[derive(Parser, Debug)]
-#[command(name = "wasm-rpc-stubgen")]
+#[command(name = "wasm-rpc-stubgen", version)]
 #[command(bin_name = "wasm-rpc-stubgen")]
 pub enum Command {
     /// Generate a Rust RPC stub crate for a WASM component
@@ -272,13 +272,13 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
 
     if let Some(target_parent) = args.dest_wit_root.parent() {
         let target_cargo_toml = target_parent.join("Cargo.toml");
-        if target_cargo_toml.exists()
-            && target_cargo_toml.is_file()
-            && cargo::is_cargo_component_toml(&target_cargo_toml).is_ok()
-        {
+        if target_cargo_toml.exists() && target_cargo_toml.is_file() {
             if !args.update_cargo_toml {
                 eprintln!("Warning: the newly copied dependencies have to be added to {}. Use the --update-cargo-toml flag to update it automatically.", target_cargo_toml.to_string_lossy());
             } else {
+                cargo::is_cargo_component_toml(&target_cargo_toml).context(format!(
+                    "The file {target_cargo_toml:?} is not a valid cargo-component project"
+                ))?;
                 let mut names = Vec::new();
                 for action in actions {
                     names.push(action.get_dep_dir_name()?);
