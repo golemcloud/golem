@@ -1,7 +1,7 @@
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 
 pub fn get_config() -> WorkerServiceBaseConfig {
-    WorkerServiceBaseConfig::default()
+    WorkerServiceBaseConfig::new()
 }
 
 #[cfg(test)]

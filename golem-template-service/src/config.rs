@@ -31,6 +31,15 @@ pub struct WorkerExecutorClientCacheConfig {
     pub time_to_idle: Duration,
 }
 
+impl Default for WorkerExecutorClientCacheConfig {
+    fn default() -> Self {
+        Self {
+            max_capacity: 1000,
+            time_to_idle: Duration::from_secs(60 * 60 * 4),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct TemplateServiceConfig {
     pub enable_tracing_console: bool,
@@ -50,6 +59,15 @@ pub enum DbConfig {
     Sqlite(DbSqliteConfig),
 }
 
+impl Default for DbConfig {
+    fn default() -> Self {
+        DbConfig::Sqlite(DbSqliteConfig {
+            database: "golem_template_service.db".to_string(),
+            max_connections: 10,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct DbPostgresConfig {
     pub host: String,
@@ -63,8 +81,10 @@ pub struct DbPostgresConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
+#[derive(Default)]
 pub enum TemplateCompilationConfig {
     Enabled(TemplateCompilationEnabledConfig),
+    #[default]
     Disabled,
 }
 
@@ -86,7 +106,16 @@ impl TemplateServiceConfig {
 
 impl Default for TemplateServiceConfig {
     fn default() -> Self {
-        Self::new()
+        Self {
+            enable_tracing_console: false,
+            enable_json_log: false,
+            http_port: 8081,
+            grpc_port: 9091,
+            db: DbConfig::default(),
+            template_store: TemplateStoreConfig::default(),
+            compilation: TemplateCompilationConfig::default(),
+            worker_executor_client_cache: WorkerExecutorClientCacheConfig::default(),
+        }
     }
 }
 
