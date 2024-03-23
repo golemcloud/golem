@@ -1,6 +1,7 @@
 use crate::service::template::TemplateServiceError;
 use crate::service::worker::WorkerServiceError;
 use golem_service_base::model::*;
+use golem_service_base::service::auth::AuthError;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tonic::Status;
@@ -56,8 +57,7 @@ impl From<String> for WorkerApiBaseError {
 }
 
 impl From<WorkerServiceError> for WorkerApiBaseError {
-    fn from(value: WorkerServiceError) -> Self {
-        use golem_service_base::service::auth::AuthError;
+    fn from(error: WorkerServiceError) -> Self {
         use WorkerServiceError as ServiceError;
 
         fn internal(details: String) -> WorkerApiBaseError {
@@ -66,40 +66,18 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
             }))
         }
 
-        match value {
-            ServiceError::Auth(error) => match error {
-                AuthError::Unauthorized(error) => {
-                    WorkerApiBaseError::Unauthorized(Json(ErrorBody { error }))
-                }
-                AuthError::Forbidden(error) => {
-                    WorkerApiBaseError::Forbidden(Json(ErrorBody { error }))
-                }
-                AuthError::Internal(error) => internal(error.to_string()),
-            },
-            ServiceError::Internal(error) => internal(error.to_string()),
-            ServiceError::TypeChecker(error) => WorkerApiBaseError::BadRequest(Json(ErrorsBody {
-                errors: vec![format!("Type checker error: {error}")],
+        match error {
+            ServiceError::Auth(error) => error.into(),
+            ServiceError::Internal(_) => internal(error.to_string()),
+            ServiceError::TypeChecker(_) => WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                errors: vec![error.to_string()],
             })),
-            ServiceError::VersionedTemplateIdNotFound(template_id) => {
-                WorkerApiBaseError::NotFound(Json(ErrorBody {
-                    error: format!("Template not found: {template_id}"),
-                }))
-            }
-            ServiceError::TemplateNotFound(template_id) => {
-                WorkerApiBaseError::NotFound(Json(ErrorBody {
-                    error: format!("Template not found: {template_id}"),
-                }))
-            }
-            ServiceError::AccountIdNotFound(account_id) => {
-                WorkerApiBaseError::NotFound(Json(ErrorBody {
-                    error: format!("Account not found: {account_id}"),
-                }))
-            }
-            ServiceError::WorkerNotFound(worker_id) => {
-                WorkerApiBaseError::NotFound(Json(ErrorBody {
-                    error: format!("Worker not found: {worker_id}"),
-                }))
-            }
+            ServiceError::VersionedTemplateIdNotFound(_)
+            | ServiceError::TemplateNotFound(_)
+            | ServiceError::AccountIdNotFound(_)
+            | ServiceError::WorkerNotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {
+                error: error.to_string(),
+            })),
             ServiceError::Golem(golem_error) => {
                 WorkerApiBaseError::InternalError(Json(GolemErrorBody { golem_error }))
             }
@@ -110,7 +88,6 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
 
 impl From<TemplateServiceError> for WorkerApiBaseError {
     fn from(value: TemplateServiceError) -> Self {
-        use golem_service_base::service::auth::AuthError;
         match value {
             TemplateServiceError::BadRequest(errors) => {
                 WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors }))
@@ -134,19 +111,28 @@ impl From<TemplateServiceError> for WorkerApiBaseError {
                     }),
                 }))
             }
-            TemplateServiceError::Auth(error) => match error {
-                AuthError::Unauthorized(error) => {
-                    WorkerApiBaseError::Unauthorized(Json(ErrorBody { error }))
-                }
-                AuthError::Forbidden(error) => {
-                    WorkerApiBaseError::Forbidden(Json(ErrorBody { error }))
-                }
-                AuthError::Internal(error) => {
-                    WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                        golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
-                    }))
-                }
-            },
+            TemplateServiceError::Auth(error) => error.into(),
+        }
+    }
+}
+
+impl From<AuthError> for WorkerApiBaseError {
+    fn from(error: AuthError) -> Self {
+        match error {
+            AuthError::Unauthorized(_) => WorkerApiBaseError::Unauthorized(Json(ErrorBody {
+                error: error.to_string(),
+            })),
+            AuthError::Forbidden(_) => WorkerApiBaseError::Forbidden(Json(ErrorBody {
+                error: error.to_string(),
+            })),
+            AuthError::NotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {
+                error: error.to_string(),
+            })),
+            AuthError::Internal(_) => WorkerApiBaseError::InternalError(Json(GolemErrorBody {
+                golem_error: GolemError::Unknown(GolemErrorUnknown {
+                    details: error.to_string(),
+                }),
+            })),
         }
     }
 }

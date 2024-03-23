@@ -12,7 +12,7 @@ pub enum TemplateServiceError {
     Auth(#[from] AuthError),
     #[error("Bad Request: {0:?}")]
     BadRequest(Vec<String>),
-    #[error("Unauthorized")]
+    #[error("Unauthorized: {0}")]
     Unauthorized(String),
     #[error("Limit Exceeded: {0}")]
     LimitExceeded(String),
@@ -82,13 +82,16 @@ impl From<TemplateServiceError> for worker_error::Error {
 
         match value {
             TemplateServiceError::Auth(error) => match error {
-                AuthError::Unauthorized(error) => {
-                    worker_error::Error::Unauthorized(ErrorBody { error })
-                }
-                AuthError::Forbidden(error) => {
-                    worker_error::Error::LimitExceeded(ErrorBody { error })
-                }
-                AuthError::Internal(error) => {
+                AuthError::Unauthorized(_) => worker_error::Error::Unauthorized(ErrorBody {
+                    error: error.to_string(),
+                }),
+                AuthError::Forbidden(_) => worker_error::Error::LimitExceeded(ErrorBody {
+                    error: error.to_string(),
+                }),
+                AuthError::NotFound(_) => worker_error::Error::NotFound(ErrorBody {
+                    error: error.to_string(),
+                }),
+                AuthError::Internal(_) => {
                     worker_error::Error::InternalError(worker::WorkerExecutionError {
                         error: Some(worker_execution_error::Error::Unknown(UnknownError {
                             details: error.to_string(),

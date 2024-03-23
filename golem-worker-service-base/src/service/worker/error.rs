@@ -52,19 +52,22 @@ impl From<WorkerServiceError> for GrpcWorkerError {
 }
 
 impl From<WorkerServiceError> for worker_error::Error {
-    fn from(value: WorkerServiceError) -> Self {
+    fn from(error: WorkerServiceError) -> Self {
         use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
         use golem_api_grpc::proto::golem::worker::WorkerExecutionError;
 
-        match value {
+        match error {
             WorkerServiceError::Auth(error) => match error {
-                AuthError::Unauthorized(error) => worker_error::Error::Unauthorized(ErrorBody {
+                AuthError::Unauthorized(_) => worker_error::Error::Unauthorized(ErrorBody {
                     error: error.to_string(),
                 }),
-                AuthError::Forbidden(error) => worker_error::Error::LimitExceeded(ErrorBody {
+                AuthError::Forbidden(_) => worker_error::Error::LimitExceeded(ErrorBody {
                     error: error.to_string(),
                 }),
-                AuthError::Internal(error) => {
+                AuthError::NotFound(_) => worker_error::Error::NotFound(ErrorBody {
+                    error: error.to_string(),
+                }),
+                AuthError::Internal(_) => {
                     worker_error::Error::InternalError(WorkerExecutionError {
                         error: Some(worker_execution_error::Error::Unknown(UnknownError {
                             details: error.to_string(),
@@ -72,27 +75,13 @@ impl From<WorkerServiceError> for worker_error::Error {
                     })
                 }
             },
-            error @ WorkerServiceError::TemplateNotFound(_) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: error.to_string(),
-                })
-            }
-            error @ WorkerServiceError::AccountIdNotFound(_) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: error.to_string(),
-                })
-            }
-            WorkerServiceError::VersionedTemplateIdNotFound(template_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Versioned template not found: {template_id}"),
-                })
-            }
-            WorkerServiceError::WorkerNotFound(worker_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Worker not found: {worker_id}"),
-                })
-            }
-            WorkerServiceError::Internal(error) => {
+            error @ (WorkerServiceError::TemplateNotFound(_)
+            | WorkerServiceError::AccountIdNotFound(_)
+            | WorkerServiceError::VersionedTemplateIdNotFound(_)
+            | WorkerServiceError::WorkerNotFound(_)) => worker_error::Error::NotFound(ErrorBody {
+                error: error.to_string(),
+            }),
+            WorkerServiceError::Internal(_) => {
                 worker_error::Error::InternalError(WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
                         details: error.to_string(),

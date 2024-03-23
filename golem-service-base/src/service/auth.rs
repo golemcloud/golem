@@ -16,6 +16,8 @@ pub enum AuthError {
     Unauthorized(String),
     #[error("Forbidden: {0}")]
     Forbidden(String),
+    #[error("Not found: {0}")]
+    NotFound(String),
     #[error("Internal error: {0}")]
     Internal(String),
 }
