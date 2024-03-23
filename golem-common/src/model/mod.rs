@@ -778,12 +778,8 @@ pub fn parse_function_name(name: &str) -> ParsedFunctionName {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
-pub struct WorkerFilter {
-    pub filters: Vec<WorkerAttributeFilter>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
-pub enum WorkerAttributeFilter {
+pub enum WorkerFilter {
+    Empty,
     Name {
         comparator: FilterStringComparator,
         value: String,
@@ -793,17 +789,156 @@ pub enum WorkerAttributeFilter {
     },
     Version {
         comparator: FilterComparator,
-        value: String,
+        value: i32,
     },
-    CreatedAt {
-        comparator: FilterComparator,
-        value: String,
-    },
+    // CreatedAt {
+    //     comparator: FilterComparator,
+    //     value: String,
+    // },
     Env {
         name: String,
         comparator: FilterStringComparator,
         value: String,
     },
+    And(Vec<WorkerFilter>),
+    Or(Vec<WorkerFilter>),
+    Not(Box<WorkerFilter>),
+}
+
+impl WorkerFilter {
+    pub fn and(&self, filters: Vec<WorkerFilter>) -> Self {
+        match self {
+            WorkerFilter::Empty => Self::new_and(filters),
+            _ => {
+                let new_filters = [vec![self.clone()], filters].concat();
+
+                Self::new_and(new_filters)
+            }
+        }
+    }
+
+    pub fn or(&self, filters: Vec<WorkerFilter>) -> Self {
+        match self {
+            WorkerFilter::Empty => Self::new_or(filters),
+            _ => {
+                let new_filters = [vec![self.clone()], filters].concat();
+                Self::new_or(new_filters)
+            }
+        }
+    }
+
+    pub fn not(&self) -> Self {
+        match self {
+            WorkerFilter::Empty => self.clone(),
+            _ => Self::new_not(self.clone()),
+        }
+    }
+
+    pub fn eval(&self, metadata: &WorkerMetadata) -> bool {
+        match self.clone() {
+            WorkerFilter::Empty => true,
+            WorkerFilter::Name { comparator, value } => {
+                match comparator {
+                    FilterStringComparator::Equal => {
+                        metadata.worker_id.worker_id.worker_name == value
+                    }
+                    FilterStringComparator::Like => metadata
+                        .worker_id
+                        .worker_id
+                        .worker_name
+                        .contains(value.as_str()), // FIXME
+                }
+            }
+            WorkerFilter::Version { comparator, value } => {
+                let version = metadata.worker_id.template_version;
+                match comparator {
+                    FilterComparator::Equal => version == value,
+                    FilterComparator::NotEqual => version != value,
+                    FilterComparator::Less => version < value,
+                    FilterComparator::LessEqual => version <= value,
+                    FilterComparator::Greater => version > value,
+                    FilterComparator::GreaterEqual => version >= value,
+                }
+            }
+            WorkerFilter::Env {
+                name,
+                comparator,
+                value,
+            } => {
+                let mut result = false;
+                for env_value in metadata.env.clone() {
+                    if env_value.0 == name {
+                        result = match comparator {
+                            FilterStringComparator::Equal => env_value.1 == value,
+                            FilterStringComparator::Like => env_value.1.contains(value.as_str()), // FIXME
+                        };
+
+                        if result == false {
+                            break;
+                        }
+                    }
+                }
+                result
+            }
+            WorkerFilter::Not(filter) => !filter.eval(metadata),
+            WorkerFilter::Status { value } => metadata.last_known_status.status == value,
+            WorkerFilter::And(filters) => {
+                let mut result = true;
+                for filter in filters {
+                    result = filter.eval(metadata);
+                    if result == false {
+                        break;
+                    }
+                }
+                result
+            }
+            WorkerFilter::Or(filters) => {
+                let mut result = true;
+                if !filters.is_empty() {
+                    result = false;
+                    for filter in filters {
+                        result = filter.eval(metadata);
+                        if result == true {
+                            break;
+                        }
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    pub fn new_and(filters: Vec<WorkerFilter>) -> Self {
+        WorkerFilter::And(filters)
+    }
+
+    pub fn new_or(filters: Vec<WorkerFilter>) -> Self {
+        WorkerFilter::Or(filters)
+    }
+
+    pub fn new_not(filter: WorkerFilter) -> Self {
+        WorkerFilter::Not(Box::new(filter))
+    }
+
+    pub fn new_name(comparator: FilterStringComparator, value: String) -> Self {
+        WorkerFilter::Name { comparator, value }
+    }
+
+    pub fn new_env(name: String, comparator: FilterStringComparator, value: String) -> Self {
+        WorkerFilter::Env {
+            name,
+            comparator,
+            value,
+        }
+    }
+
+    pub fn new_version(comparator: FilterComparator, value: i32) -> Self {
+        WorkerFilter::Version { comparator, value }
+    }
+
+    pub fn new_status(value: WorkerStatus) -> Self {
+        WorkerFilter::Status { value }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
