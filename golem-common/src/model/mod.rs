@@ -777,6 +777,51 @@ pub fn parse_function_name(name: &str) -> ParsedFunctionName {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+pub struct WorkerFilter {
+    pub filters: Vec<WorkerAttributeFilter>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+pub enum WorkerAttributeFilter {
+    Name {
+        comparator: FilterStringComparator,
+        value: String,
+    },
+    Status {
+        value: WorkerStatus,
+    },
+    Version {
+        comparator: FilterComparator,
+        value: String,
+    },
+    CreatedAt {
+        comparator: FilterComparator,
+        value: String,
+    },
+    Env {
+        name: String,
+        comparator: FilterStringComparator,
+        value: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+pub enum FilterStringComparator {
+    Equal,
+    Like,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+pub enum FilterComparator {
+    Equal,
+    NotEqual,
+    GreaterEqual,
+    Greater,
+    LessEqual,
+    Less,
+}
+
 #[cfg(test)]
 mod tests {
     use bincode::{Decode, Encode};
