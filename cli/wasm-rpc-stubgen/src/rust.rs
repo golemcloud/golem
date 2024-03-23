@@ -769,7 +769,7 @@ fn wit_enum_value_builder(
 
     let mut cases = Vec::new();
     for (n, case) in enum_def.cases.iter().enumerate() {
-        let case_name = Ident::new(&case.name.to_shouty_snake_case(), Span::call_site());
+        let case_name = Ident::new(&case.name.to_upper_camel_case(), Span::call_site());
         let case_idx = n as u32;
         cases.push(quote! {
             #enum_type::#case_name => #case_idx
@@ -1074,7 +1074,7 @@ fn extract_from_enum_value(
 
     let mut case_extractors = Vec::new();
     for (n, case) in enum_def.cases.iter().enumerate() {
-        let case_name = Ident::new(&case.name.to_shouty_snake_case(), Span::call_site());
+        let case_name = Ident::new(&case.name.to_upper_camel_case(), Span::call_site());
         let case_idx = n as u32;
         case_extractors.push(quote! {
             #case_idx => #enum_type::#case_name
