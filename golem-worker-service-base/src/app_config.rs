@@ -32,19 +32,43 @@ pub struct WorkerExecutorClientCacheConfig {
     pub time_to_idle: Duration,
 }
 
+impl Default for WorkerExecutorClientCacheConfig {
+    fn default() -> Self {
+        Self {
+            max_capacity: 1000,
+            time_to_idle: Duration::from_secs(60 * 60 * 4),
+        }
+    }
+}
+
 impl WorkerServiceBaseConfig {
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"
     }
-}
 
-impl Default for WorkerServiceBaseConfig {
-    fn default() -> Self {
+    pub fn new() -> Self {
         Figment::new()
             .merge(Toml::file("config/worker-service.toml"))
             .merge(Env::prefixed("GOLEM__").split("__"))
             .extract()
             .expect("Failed to parse config")
+    }
+}
+
+impl Default for WorkerServiceBaseConfig {
+    fn default() -> Self {
+        Self {
+            environment: "local".to_string(),
+            redis: RedisConfig::default(),
+            template_service: TemplateServiceConfig::default(),
+            enable_tracing_console: false,
+            enable_json_log: false,
+            port: 9000,
+            custom_request_port: 9001,
+            worker_grpc_port: 9092,
+            routing_table: RoutingTableConfig::default(),
+            worker_executor_client_cache: WorkerExecutorClientCacheConfig::default(),
+        }
     }
 }
 
@@ -69,5 +93,16 @@ impl TemplateServiceConfig {
             .path_and_query("/")
             .build()
             .expect("Failed to build ComponentService URI")
+    }
+}
+
+impl Default for TemplateServiceConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 8080,
+            access_token: Uuid::new_v4(),
+            retries: RetryConfig::default(),
+        }
     }
 }

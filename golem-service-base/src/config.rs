@@ -21,6 +21,15 @@ pub enum TemplateStoreConfig {
     Local(TemplateStoreLocalConfig),
 }
 
+impl Default for TemplateStoreConfig {
+    fn default() -> Self {
+        TemplateStoreConfig::Local(TemplateStoreLocalConfig {
+            root_path: "/tmp".to_string(),
+            object_prefix: "".to_string(),
+        })
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct TemplateStoreS3Config {
     pub bucket_name: String,
