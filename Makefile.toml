@@ -231,7 +231,7 @@ args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
 [tasks.set-golem-client-version.mac]
 description = "Sets the version in golem-client/Cargo.toml to the value of the VERSION environment variable"
 command = "sed"
-args = ["-i", "''", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
+args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
 
 [tasks.publish-golem-client]
 description = "Publishes golem-client package to crates.io"
@@ -247,7 +247,7 @@ args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]
 [tasks.set-golem-cli-version.mac]
 description = "Sets the version in golem-cli/Cargo.toml to the value of the VERSION environment variable"
 command = "sed"
-args = ["-i", "''", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]
+args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]
 
 
 [tasks.publish-golem-cli]
