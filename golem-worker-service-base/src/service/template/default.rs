@@ -1,4 +1,4 @@
-use crate::service::error::TemplateServiceError;
+use crate::service::template::TemplateServiceError;
 use crate::UriBackConversion;
 
 use async_trait::async_trait;
@@ -60,7 +60,7 @@ impl TemplateService for TemplateServiceDefault {
                         .into_inner();
 
                     match response.result {
-                        None => Err(TemplateServiceError::Internal("Empty response".to_string())),
+                        None => Err(TemplateServiceError::internal("Empty response")),
                         Some(get_template_metadata_response::Result::Success(response)) => {
                             let template_view: Result<
                                 golem_service_base::model::Template,
@@ -69,15 +69,15 @@ impl TemplateService for TemplateServiceDefault {
                                 Some(template) => {
                                     let template: golem_service_base::model::Template =
                                         template.clone().try_into().map_err(|_| {
-                                            TemplateServiceError::Internal(
-                                                "Response conversion error".to_string(),
+                                            TemplateServiceError::internal(
+                                                "Response conversion error",
                                             )
                                         })?;
                                     Ok(template)
                                 }
-                                None => Err(TemplateServiceError::Internal(
-                                    "Empty template response".to_string(),
-                                )),
+                                None => {
+                                    Err(TemplateServiceError::internal("Empty template response"))
+                                }
                             };
                             Ok(template_view?)
                         }
@@ -115,7 +115,7 @@ impl TemplateService for TemplateServiceDefault {
                     let response = client.get_template_metadata(request).await?.into_inner();
 
                     match response.result {
-                        None => Err(TemplateServiceError::Internal("Empty response".to_string())),
+                        None => Err(TemplateServiceError::internal("Empty response")),
 
                         Some(get_template_metadata_response::Result::Success(response)) => {
                             let template_view: Result<
@@ -125,15 +125,15 @@ impl TemplateService for TemplateServiceDefault {
                                 Some(template) => {
                                     let template: golem_service_base::model::Template =
                                         template.clone().try_into().map_err(|_| {
-                                            TemplateServiceError::Internal(
-                                                "Response conversion error".to_string(),
+                                            TemplateServiceError::internal(
+                                                "Response conversion error",
                                             )
                                         })?;
                                     Ok(Some(template))
                                 }
-                                None => Err(TemplateServiceError::Internal(
-                                    "Empty template response".to_string(),
-                                )),
+                                None => {
+                                    Err(TemplateServiceError::internal("Empty template response"))
+                                }
                             };
                             Ok(template_view?)
                         }
@@ -165,8 +165,6 @@ impl TemplateService for TemplateServiceNoop {
         &self,
         _template_id: &TemplateId,
     ) -> Result<Template, TemplateServiceError> {
-        Err(TemplateServiceError::Internal(
-            "Not implemented".to_string(),
-        ))
+        Err(TemplateServiceError::internal("Not implemented"))
     }
 }

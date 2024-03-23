@@ -1,4 +1,4 @@
-use crate::service::error::TemplateServiceError;
+use crate::service::template::TemplateServiceError;
 use crate::service::worker::WorkerServiceError;
 use golem_service_base::model::*;
 use poem_openapi::payload::Json;
@@ -111,59 +111,27 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
 impl From<TemplateServiceError> for WorkerApiBaseError {
     fn from(value: TemplateServiceError) -> Self {
         match value {
-            TemplateServiceError::Connection(error) => WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Internal connection error: {error}") }),
-            })),
+            TemplateServiceError::BadRequest(errors) => {
+                WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors }))
+            }
+            TemplateServiceError::Unauthorized(error) => {
+                WorkerApiBaseError::Unauthorized(Json(ErrorBody { error }))
+            }
+            TemplateServiceError::LimitExceeded(error) => {
+                WorkerApiBaseError::Forbidden(Json(ErrorBody { error }))
+            }
+            TemplateServiceError::NotFound(error) => {
+                WorkerApiBaseError::NotFound(Json(ErrorBody { error }))
+            }
+            TemplateServiceError::AlreadyExists(error) => {
+                WorkerApiBaseError::AlreadyExists(Json(ErrorBody { error }))
+            }
             TemplateServiceError::Internal(error) => {
                 WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: format!("Internal error: {error}") }),
+                    golem_error: GolemError::Unknown(GolemErrorUnknown {
+                        details: error.to_string(),
+                    }),
                 }))
-            },
-            TemplateServiceError::Transport(_) => {
-                WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: "Transport Error when connecting to template service".to_string() }),
-                }))
-            },
-            TemplateServiceError::Server(template_error) => {
-                match template_error.error {
-                    Some(error) => match error {
-                        golem_api_grpc::proto::golem::template::template_error::Error::BadRequest(errors) => {
-                            WorkerApiBaseError::BadRequest(Json(ErrorsBody {
-                                errors: errors.errors,
-                            }))
-                        },
-                        golem_api_grpc::proto::golem::template::template_error::Error::InternalError(error) => {
-                            WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error.error }),
-                            }))
-                        },
-                        golem_api_grpc::proto::golem::template::template_error::Error::NotFound(error) => {
-                            WorkerApiBaseError::NotFound(Json(ErrorBody {
-                                error: error.error,
-                            }))
-                        },
-                        golem_api_grpc::proto::golem::template::template_error::Error::Unauthorized(error) => {
-                            WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error.error }),
-                            }))
-                        },
-                        golem_api_grpc::proto::golem::template::template_error::Error::LimitExceeded(error) => {
-                            WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error.error }),
-                            }))
-                        }
-                        golem_api_grpc::proto::golem::template::template_error::Error::AlreadyExists(error) => {
-                            WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error.error }),
-                            }))
-                        }
-                    }
-                    None => {
-                        WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                            golem_error: GolemError::Unknown(GolemErrorUnknown { details: "Unknown error connecting to template service".to_string() }),
-                        }))
-                    }
-                }
             }
         }
     }

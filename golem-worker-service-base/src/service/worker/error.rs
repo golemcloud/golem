@@ -7,7 +7,7 @@ use golem_service_base::{
     service::auth::AuthError,
 };
 
-use crate::service::error::TemplateServiceError;
+use crate::service::template::TemplateServiceError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerServiceError {
@@ -53,58 +53,55 @@ impl From<WorkerServiceError> for GrpcWorkerError {
 
 impl From<WorkerServiceError> for worker_error::Error {
     fn from(value: WorkerServiceError) -> Self {
+        use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
+        use golem_api_grpc::proto::golem::worker::WorkerExecutionError;
+
         match value {
             WorkerServiceError::Auth(error) => match error {
-                AuthError::Unauthorized(error) => worker_error::Error::Unauthorized(
-                    golem_api_grpc::proto::golem::common::ErrorBody {
-                        error: error.to_string(),
-                    },
-                ),
-                AuthError::Forbidden(error) => worker_error::Error::LimitExceeded(
-                    golem_api_grpc::proto::golem::common::ErrorBody {
-                        error: error.to_string(),
-                    },
-                ),
-                AuthError::Internal(error) => worker_error::Error::InternalError(
-                    golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+                AuthError::Unauthorized(error) => worker_error::Error::Unauthorized(ErrorBody {
+                    error: error.to_string(),
+                }),
+                AuthError::Forbidden(error) => worker_error::Error::LimitExceeded(ErrorBody {
+                    error: error.to_string(),
+                }),
+                AuthError::Internal(error) => {
+                    worker_error::Error::InternalError(WorkerExecutionError {
                         error: Some(worker_execution_error::Error::Unknown(UnknownError {
                             details: error.to_string(),
                         })),
-                    },
-                ),
+                    })
+                }
             },
-            WorkerServiceError::TemplateNotFound(template_id) => {
-                worker_error::Error::NotFound(golem_api_grpc::proto::golem::common::ErrorBody {
-                    error: format!("Template not found: {template_id}"),
+            error @ WorkerServiceError::TemplateNotFound(_) => {
+                worker_error::Error::NotFound(ErrorBody {
+                    error: error.to_string(),
                 })
             }
-            WorkerServiceError::AccountIdNotFound(account_id) => {
-                worker_error::Error::NotFound(golem_api_grpc::proto::golem::common::ErrorBody {
-                    error: format!("Account not found: {account_id}"),
+            error @ WorkerServiceError::AccountIdNotFound(_) => {
+                worker_error::Error::NotFound(ErrorBody {
+                    error: error.to_string(),
                 })
             }
             WorkerServiceError::VersionedTemplateIdNotFound(template_id) => {
-                worker_error::Error::NotFound(golem_api_grpc::proto::golem::common::ErrorBody {
+                worker_error::Error::NotFound(ErrorBody {
                     error: format!("Versioned template not found: {template_id}"),
                 })
             }
             WorkerServiceError::WorkerNotFound(worker_id) => {
-                worker_error::Error::NotFound(golem_api_grpc::proto::golem::common::ErrorBody {
+                worker_error::Error::NotFound(ErrorBody {
                     error: format!("Worker not found: {worker_id}"),
                 })
             }
-            WorkerServiceError::Internal(error) => worker_error::Error::InternalError(
-                golem_api_grpc::proto::golem::worker::WorkerExecutionError {
+            WorkerServiceError::Internal(error) => {
+                worker_error::Error::InternalError(WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
                         details: error.to_string(),
                     })),
-                },
-            ),
-            WorkerServiceError::TypeChecker(error) => {
-                worker_error::Error::BadRequest(golem_api_grpc::proto::golem::common::ErrorsBody {
-                    errors: vec![error],
                 })
             }
+            WorkerServiceError::TypeChecker(error) => worker_error::Error::BadRequest(ErrorsBody {
+                errors: vec![error],
+            }),
             WorkerServiceError::Template(template) => template.into(),
             WorkerServiceError::Golem(worker_execution_error) => {
                 worker_error::Error::InternalError(worker_execution_error.into())
