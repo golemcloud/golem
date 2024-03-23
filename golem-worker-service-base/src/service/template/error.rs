@@ -31,12 +31,6 @@ impl TemplateServiceError {
     {
         Self::Internal(anyhow::Error::msg(error))
     }
-    pub fn is_retriable(&self) -> bool {
-        match self {
-            TemplateServiceError::Internal(error) => error.is::<Status>(),
-            _ => false,
-        }
-    }
 }
 
 impl From<Status> for TemplateServiceError {

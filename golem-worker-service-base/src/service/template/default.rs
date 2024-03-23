@@ -126,7 +126,7 @@ where
                     }
                 })
             },
-            TemplateServiceError::is_retriable,
+            is_retriable,
         )
         .await?;
 
@@ -197,10 +197,17 @@ where
                     }
                 })
             },
-            TemplateServiceError::is_retriable,
+            is_retriable,
         )
         .await?;
 
         Ok(WithNamespace { value, namespace })
+    }
+}
+
+fn is_retriable(error: &TemplateServiceError) -> bool {
+    match error {
+        TemplateServiceError::Internal(error) => error.is::<tonic::Status>(),
+        _ => false,
     }
 }
