@@ -4,13 +4,17 @@ use crate::services::shard::ShardService;
 use crate::services::worker::{WorkerService, WorkerServiceInMemory, WorkerServiceRedis};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::{TemplateId, WorkerMetadata, WorkerStatus};
+use golem_common::model::{TemplateId, WorkerFilter, WorkerMetadata, WorkerStatus};
 use golem_common::redis::RedisPool;
 use std::sync::Arc;
 
 #[async_trait]
 pub trait RunningWorkerEnumerationService {
-    async fn get(&self, template_id: &TemplateId) -> Result<Vec<WorkerMetadata>, GolemError>;
+    async fn get(
+        &self,
+        template_id: &TemplateId,
+        filter: &WorkerFilter,
+    ) -> Result<Vec<WorkerMetadata>, GolemError>;
 }
 
 #[derive(Clone)]
@@ -22,13 +26,18 @@ pub struct RunningWorkerEnumerationServiceDefault<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
     for crate::services::worker_enumeration::RunningWorkerEnumerationServiceDefault<Ctx>
 {
-    async fn get(&self, template_id: &TemplateId) -> Result<Vec<WorkerMetadata>, GolemError> {
+    async fn get(
+        &self,
+        template_id: &TemplateId,
+        filter: &WorkerFilter,
+    ) -> Result<Vec<WorkerMetadata>, GolemError> {
         let active_workers = self.active_workers.enum_workers();
 
         let mut template_workers: Vec<WorkerMetadata> = vec![];
         for worker in active_workers {
             if worker.0.template_id == *template_id
                 && worker.1.metadata.last_known_status.status == WorkerStatus::Running
+                && filter.matches(&worker.1.metadata)
             {
                 template_workers.push(worker.1.metadata.clone());
             }
@@ -51,6 +60,7 @@ pub trait WorkerEnumerationService {
     async fn get(
         &self,
         template_id: &TemplateId,
+        filter: &WorkerFilter,
         precise: bool,
     ) -> Result<Vec<WorkerMetadata>, GolemError>;
 }
@@ -83,6 +93,7 @@ impl WorkerEnumerationService
     async fn get(
         &self,
         template_id: &TemplateId,
+        filter: &WorkerFilter,
         precise: bool,
     ) -> Result<Vec<WorkerMetadata>, GolemError> {
         todo!()
@@ -107,13 +118,14 @@ impl WorkerEnumerationService
     async fn get(
         &self,
         template_id: &TemplateId,
+        filter: &WorkerFilter,
         precise: bool,
     ) -> Result<Vec<WorkerMetadata>, GolemError> {
         let workers = self.worker_service.enumerate().await;
 
         let mut template_workers: Vec<WorkerMetadata> = vec![];
         for worker in workers {
-            if worker.worker_id.worker_id.template_id == *template_id {
+            if worker.worker_id.worker_id.template_id == *template_id && filter.matches(&worker) {
                 template_workers.push(worker);
             }
         }
