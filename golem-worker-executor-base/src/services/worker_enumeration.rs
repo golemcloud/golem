@@ -4,7 +4,7 @@ use crate::services::shard::ShardService;
 use crate::services::worker::{WorkerService, WorkerServiceInMemory, WorkerServiceRedis};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::{TemplateId, WorkerFilter, WorkerMetadata, WorkerStatus};
+use golem_common::model::{TemplateId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus};
 use golem_common::redis::RedisPool;
 use std::sync::Arc;
 
@@ -61,8 +61,9 @@ pub trait WorkerEnumerationService {
         &self,
         template_id: &TemplateId,
         filter: &WorkerFilter,
+        cursor: u32,
         precise: bool,
-    ) -> Result<Vec<WorkerMetadata>, GolemError>;
+    ) -> Result<(u32, Vec<WorkerMetadata>), GolemError>;
 }
 
 #[derive(Clone)]
@@ -94,10 +95,22 @@ impl WorkerEnumerationService
         &self,
         template_id: &TemplateId,
         filter: &WorkerFilter,
+        cursor: u32,
         precise: bool,
-    ) -> Result<Vec<WorkerMetadata>, GolemError> {
+    ) -> Result<(u32, Vec<WorkerMetadata>), GolemError> {
+        let worker_templates_redis_key = get_worker_details_redis_key(&template_id);
+        let (new_cursor, worker_redis_keys) = self
+            .redis
+            .with("instance", "scan")
+            .scan(worker_templates_redis_key, cursor, 20)
+            .await
+            .map_err(|e| GolemError::unknown(e.details()))?;
         todo!()
     }
+}
+
+fn get_worker_details_redis_key(template_id: &TemplateId) -> String {
+    format!("instance:instance:{}*", template_id.0)
 }
 
 #[derive(Clone)]
@@ -119,8 +132,10 @@ impl WorkerEnumerationService
         &self,
         template_id: &TemplateId,
         filter: &WorkerFilter,
+        cursor: u32,
         precise: bool,
-    ) -> Result<Vec<WorkerMetadata>, GolemError> {
+    ) -> Result<(u32, Vec<WorkerMetadata>), GolemError> {
+        // TODO implement precise and cursor
         let workers = self.worker_service.enumerate().await;
 
         let mut template_workers: Vec<WorkerMetadata> = vec![];
@@ -130,6 +145,6 @@ impl WorkerEnumerationService
             }
         }
 
-        Ok(template_workers)
+        Ok((template_workers.len() as u32, template_workers))
     }
 }
