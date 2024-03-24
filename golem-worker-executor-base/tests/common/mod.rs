@@ -55,7 +55,7 @@ use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::OplogService;
 use golem_worker_executor_base::services::promise::PromiseService;
 use golem_worker_executor_base::services::recovery::{
-    RecoveryManagement, RecoveryManagementDefault,
+    RecoveryManagement, RecoveryManagementDefault, TrapType,
 };
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
@@ -79,6 +79,7 @@ use tokio::task::JoinHandle;
 
 use golem::api;
 use golem_common::config::RedisConfig;
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::regions::DeletedRegions;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::rpc::{
@@ -1080,7 +1081,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> u64 {
+    ) -> Option<(WorkerError, u64)> {
         DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(this, worker_id).await
     }
 
@@ -1210,16 +1211,16 @@ impl InvocationHooks for TestWorkerCtx {
             .await
     }
 
-    async fn on_invocation_failure(&mut self, error: &Error) -> Result<(), Error> {
-        self.durable_ctx.on_invocation_failure(error).await
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> Result<(), Error> {
+        self.durable_ctx.on_invocation_failure(trap_type).await
     }
 
     async fn on_invocation_failure_deactivated(
         &mut self,
-        error: &Error,
+        trap_type: &TrapType,
     ) -> Result<WorkerStatus, Error> {
         self.durable_ctx
-            .on_invocation_failure_deactivated(error)
+            .on_invocation_failure_deactivated(trap_type)
             .await
     }
 

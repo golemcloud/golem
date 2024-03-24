@@ -523,6 +523,7 @@ impl RecoveryManagementMock {
 impl RecoveryManagement for RecoveryManagementMock {
     async fn schedule_recovery_on_trap(
         &self,
+        _worker_id: &VersionedWorkerId,
         _previous_tries: u64,
         _trap_type: &TrapType,
     ) -> RecoveryDecision {
@@ -531,9 +532,13 @@ impl RecoveryManagement for RecoveryManagementMock {
 
     async fn schedule_recovery_on_startup(
         &self,
-        _previous_tries: u64,
-        _error: &WorkerError,
+        _worker_id: &VersionedWorkerId,
+        _previous_error: &Option<(WorkerError, u64)>,
     ) -> RecoveryDecision {
+        todo!()
+    }
+
+    fn is_retriable(&self, _previous_tries: u64, _error: &WorkerError) -> bool {
         todo!()
     }
 }
@@ -579,7 +584,7 @@ mod tests {
     use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
     use crate::services::oplog::{OplogService, OplogServiceMock};
-    use crate::services::recovery::{RecoveryManagement, RecoveryManagementDefault};
+    use crate::services::recovery::{RecoveryManagement, RecoveryManagementDefault, TrapType};
     use crate::services::rpc::Rpc;
     use crate::services::scheduler;
     use crate::services::scheduler::SchedulerService;
@@ -699,13 +704,13 @@ mod tests {
             unimplemented!()
         }
 
-        async fn on_invocation_failure(&mut self, _error: &Error) -> Result<(), Error> {
+        async fn on_invocation_failure(&mut self, _trap_type: &TrapType) -> Result<(), Error> {
             unimplemented!()
         }
 
         async fn on_invocation_failure_deactivated(
             &mut self,
-            _error: &Error,
+            _trap_type: &TrapType,
         ) -> Result<WorkerStatus, Error> {
             unimplemented!()
         }
@@ -736,7 +741,7 @@ mod tests {
         async fn get_last_error_and_retry_count<T: HasAll<Self> + Send + Sync>(
             _this: &T,
             _worker_id: &WorkerId,
-        ) -> u64 {
+        ) -> Option<(WorkerError, u64)> {
             unimplemented!()
         }
 
@@ -916,6 +921,7 @@ mod tests {
 
     #[tokio::test]
     async fn immediately_recovers_worker_on_startup_with_no_errors() {
+        let test_id = create_test_id();
         let start_time = Instant::now();
         let (sender, mut receiver) =
             tokio::sync::broadcast::channel::<(VersionedWorkerId, Duration)>(1);
@@ -925,9 +931,7 @@ mod tests {
             sender.send((id, elapsed)).unwrap();
         })
         .await;
-        let _ = svc
-            .schedule_recovery_on_startup(0, &WorkerError::Unknown("x".to_string()))
-            .await;
+        let _ = svc.schedule_recovery_on_startup(&test_id, &None).await;
         let (id, elapsed) = receiver.recv().await.unwrap();
         assert_eq!(id, test_id);
         assert!(elapsed.as_millis() < 100, "elapsed time was {:?}", elapsed);
@@ -945,7 +949,12 @@ mod tests {
             sender.send((id, elapsed)).unwrap();
         })
         .await;
-        let _ = svc.schedule_recovery_on_startup(&test_id, 100).await;
+        let _ = svc
+            .schedule_recovery_on_startup(
+                &test_id,
+                &Some((WorkerError::Unknown("x".to_string()), 100)),
+            )
+            .await;
         let res = timeout(Duration::from_secs(1), receiver.recv()).await;
         assert!(res.is_err());
     }
