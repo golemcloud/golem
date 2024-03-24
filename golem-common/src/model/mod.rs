@@ -806,24 +806,23 @@ pub enum WorkerFilter {
 }
 
 impl WorkerFilter {
-    pub fn and(&self, filters: Vec<WorkerFilter>) -> Self {
+    pub fn and(&self, filter: WorkerFilter) -> Self {
         match self {
-            WorkerFilter::Empty => Self::new_and(filters),
-            _ => {
-                let new_filters = [vec![self.clone()], filters].concat();
-
-                Self::new_and(new_filters)
-            }
+            WorkerFilter::Empty => filter,
+            _ => match filter {
+                WorkerFilter::And(filters) => Self::new_and([vec![self.clone()], filters].concat()),
+                _ => Self::new_and(vec![self.clone(), filter]),
+            },
         }
     }
 
-    pub fn or(&self, filters: Vec<WorkerFilter>) -> Self {
+    pub fn or(&self, filter: WorkerFilter) -> Self {
         match self {
-            WorkerFilter::Empty => Self::new_or(filters),
-            _ => {
-                let new_filters = [vec![self.clone()], filters].concat();
-                Self::new_or(new_filters)
-            }
+            WorkerFilter::Empty => filter,
+            _ => match filter {
+                WorkerFilter::Or(filters) => Self::new_or([vec![self.clone()], filters].concat()),
+                _ => Self::new_or(vec![self.clone(), filter]),
+            },
         }
     }
 
@@ -834,7 +833,7 @@ impl WorkerFilter {
         }
     }
 
-    pub fn eval(&self, metadata: &WorkerMetadata) -> bool {
+    pub fn matches(&self, metadata: &WorkerMetadata) -> bool {
         match self.clone() {
             WorkerFilter::Empty => true,
             WorkerFilter::Name { comparator, value } => {
@@ -873,19 +872,17 @@ impl WorkerFilter {
                             FilterStringComparator::Like => env_value.1.contains(value.as_str()), // FIXME
                         };
 
-                        if result == false {
-                            break;
-                        }
+                        break;
                     }
                 }
                 result
             }
-            WorkerFilter::Not(filter) => !filter.eval(metadata),
             WorkerFilter::Status { value } => metadata.last_known_status.status == value,
+            WorkerFilter::Not(filter) => !filter.matches(metadata),
             WorkerFilter::And(filters) => {
                 let mut result = true;
                 for filter in filters {
-                    result = filter.eval(metadata);
+                    result = filter.matches(metadata);
                     if result == false {
                         break;
                     }
@@ -897,7 +894,7 @@ impl WorkerFilter {
                 if !filters.is_empty() {
                     result = false;
                     for filter in filters {
-                        result = filter.eval(metadata);
+                        result = filter.matches(metadata);
                         if result == true {
                             break;
                         }
@@ -962,7 +959,7 @@ mod tests {
     use bincode::{Decode, Encode};
     use serde::{Deserialize, Serialize};
 
-    use crate::model::{parse_function_name, AccountId};
+    use crate::model::{parse_function_name, AccountId, FilterComparator, FilterStringComparator, TemplateId, VersionedWorkerId, WorkerFilter, WorkerMetadata, WorkerStatus, WorkerStatusRecord, WorkerId};
 
     #[test]
     fn parse_function_name_global() {
@@ -1084,5 +1081,73 @@ mod tests {
         };
         let json = serde_json::to_string(&example).unwrap();
         assert_eq!(json, "{\"account_id\":\"account-1\"}");
+    }
+
+    #[test]
+    fn worker_filter_matches() {
+        let template_id = TemplateId::new_v4();
+        let worker_metadata = WorkerMetadata {
+            worker_id: VersionedWorkerId {
+                worker_id: WorkerId {
+                    worker_name: "worker-1".to_string(),
+                    template_id,
+                },
+                template_version: 1,
+            },
+            args: vec![],
+            env: vec![
+                ("env1".to_string(), "value1".to_string()),
+                ("env2".to_string(), "value2".to_string()),
+            ],
+            account_id: AccountId {
+                value: "account-1".to_string(),
+            },
+            last_known_status: WorkerStatusRecord::default(),
+        };
+
+        assert!(WorkerFilter::Empty.matches(&worker_metadata));
+
+        assert!(
+            WorkerFilter::new_name(FilterStringComparator::Equal, "worker-1".to_string())
+                .and(WorkerFilter::new_status(WorkerStatus::Idle))
+                .matches(&worker_metadata)
+        );
+
+        assert!(WorkerFilter::new_env(
+            "env1".to_string(),
+            FilterStringComparator::Equal,
+            "value1".to_string()
+        )
+        .and(WorkerFilter::new_status(WorkerStatus::Idle))
+        .matches(&worker_metadata));
+
+        assert!(WorkerFilter::new_env(
+            "env1".to_string(),
+            FilterStringComparator::Equal,
+            "value2".to_string()
+        )
+        .not()
+        .and(WorkerFilter::new_status(WorkerStatus::Idle))
+        .matches(&worker_metadata));
+
+        assert!(
+            WorkerFilter::new_name(FilterStringComparator::Equal, "worker-1".to_string())
+                .and(WorkerFilter::new_version(FilterComparator::Equal, 1))
+                .matches(&worker_metadata)
+        );
+
+        assert!(
+            WorkerFilter::new_name(FilterStringComparator::Equal, "worker-2".to_string())
+                .or(WorkerFilter::new_version(FilterComparator::Equal, 1))
+                .matches(&worker_metadata)
+        );
+
+        assert!(WorkerFilter::new_version(FilterComparator::GreaterEqual, 1)
+            .and(WorkerFilter::new_version(FilterComparator::Less, 2))
+            .or(WorkerFilter::new_name(
+                FilterStringComparator::Equal,
+                "worker-2".to_string()
+            ))
+            .matches(&worker_metadata));
     }
 }
