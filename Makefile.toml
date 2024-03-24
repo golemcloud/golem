@@ -202,12 +202,12 @@ dependencies = [
 [tasks.generate-worker-service-openapi]
 description = "Generates openapi spec for worker service"
 dependencies = ["build"]
-script = "./target/debug/golem-worker-service-yaml > ./target/golem-worker-service.yaml"
+script = "./target/debug/golem-worker-service --dump-openapi-yaml > ./target/golem-worker-service.yaml"
 
 [tasks.generate-template-service-openapi]
 description = "Generates openapi spec for template service"
 dependencies = ["build"]
-script = "./target/debug/golem-template-service-yaml > ./target/golem-template-service.yaml"
+script = "./target/debug/golem-template-service --dump-openapi-yaml > ./target/golem-template-service.yaml"
 
 [tasks.merge-openapi]
 install_crate = { crate_name = "golem-openapi-client-generator", version = "0.0.4" }

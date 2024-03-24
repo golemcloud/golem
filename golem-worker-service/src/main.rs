@@ -1,4 +1,5 @@
 use golem_worker_service::api;
+use golem_worker_service::api::make_open_api_service;
 use golem_worker_service::service::Services;
 use golem_worker_service::{config, grpcapi};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
@@ -15,11 +16,16 @@ use tokio::select;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let prometheus = metrics::register_all();
-
-    let config: WorkerServiceBaseConfig = config::get_config();
-
-    app(&config, prometheus).await
+    if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
+        let services = Services::noop();
+        let api_service = make_open_api_service(&services);
+        println!("{}", api_service.spec_yaml());
+        Ok(())
+    } else {
+        let prometheus = metrics::register_all();
+        let config: WorkerServiceBaseConfig = config::get_config();
+        app(&config, prometheus).await
+    }
 }
 
 pub async fn app(
