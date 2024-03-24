@@ -642,9 +642,9 @@ impl<'a> RedisLabelledApi<'a> {
         pattern: K,
         cursor: u32,
         count: u32,
-    ) -> RedisResult<(u32, Vec<RedisKey>)>
-        where
-            K: AsRef<str>,
+    ) -> RedisResult<(u32, Vec<String>)>
+    where
+        K: AsRef<str>,
     {
         self.ensure_connected().await?;
         let start = Instant::now();
@@ -670,20 +670,22 @@ impl<'a> RedisLabelledApi<'a> {
         )
     }
 
-    // FIXME
-    fn parse_key_scan_frame(frame: Resp3Frame) -> RedisResult<(u32, Vec<RedisKey>)> {
+    fn parse_key_scan_frame(&self, frame: Resp3Frame) -> RedisResult<(u32, Vec<String>)> {
         use fred::prelude::*;
-        use std::convert::TryInto;
         if let Resp3Frame::Array { mut data, .. } = frame {
             if data.len() == 2 {
-                let cursor: u32 = (data[0].clone()).try_into()?;
-
+                let cursor: u32 = data[0]
+                    .clone()
+                    .try_into()
+                    .and_then(|value: RedisValue| value.convert())?;
 
                 if let Some(Resp3Frame::Array { data, .. }) = data.pop() {
                     let mut keys = Vec::with_capacity(data.len());
 
                     for frame in data.into_iter() {
-                        let key: RedisKey = (frame).try_into()?;
+                        let key: String = frame
+                            .try_into()
+                            .and_then(|value: RedisValue| value.convert())?;
                         keys.push(key);
                     }
 
