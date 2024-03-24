@@ -19,7 +19,6 @@ use std::time::Instant;
 
 use bincode::{Decode, Encode};
 use bytes::Bytes;
-use fred::bytes_utils::Str;
 use fred::clients::Transaction;
 use fred::cmd;
 use fred::prelude::{RedisPool as FredRedisPool, *};

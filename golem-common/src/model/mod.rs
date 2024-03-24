@@ -959,7 +959,11 @@ mod tests {
     use bincode::{Decode, Encode};
     use serde::{Deserialize, Serialize};
 
-    use crate::model::{parse_function_name, AccountId, FilterComparator, FilterStringComparator, TemplateId, VersionedWorkerId, WorkerFilter, WorkerMetadata, WorkerStatus, WorkerStatusRecord, WorkerId};
+    use crate::model::{
+        parse_function_name, AccountId, FilterComparator, FilterStringComparator, TemplateId,
+        VersionedWorkerId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+        WorkerStatusRecord,
+    };
 
     #[test]
     fn parse_function_name_global() {
@@ -1116,7 +1120,7 @@ mod tests {
         assert!(WorkerFilter::new_env(
             "env1".to_string(),
             FilterStringComparator::Equal,
-            "value1".to_string()
+            "value1".to_string(),
         )
         .and(WorkerFilter::new_status(WorkerStatus::Idle))
         .matches(&worker_metadata));
@@ -1124,10 +1128,13 @@ mod tests {
         assert!(WorkerFilter::new_env(
             "env1".to_string(),
             FilterStringComparator::Equal,
-            "value2".to_string()
+            "value2".to_string(),
         )
         .not()
-        .and(WorkerFilter::new_status(WorkerStatus::Idle))
+        .and(
+            WorkerFilter::new_status(WorkerStatus::Running)
+                .or(WorkerFilter::new_status(WorkerStatus::Idle))
+        )
         .matches(&worker_metadata));
 
         assert!(
@@ -1146,7 +1153,7 @@ mod tests {
             .and(WorkerFilter::new_version(FilterComparator::Less, 2))
             .or(WorkerFilter::new_name(
                 FilterStringComparator::Equal,
-                "worker-2".to_string()
+                "worker-2".to_string(),
             ))
             .matches(&worker_metadata));
     }
