@@ -56,6 +56,9 @@ dependencies = [
 [tasks.build-release-default]
 description = "Build the project in release mode"
 condition = { env_not_set = ["PLATFORM_OVERRIDE"] }
+dependencies = [
+    "set-golem-client-version", "set-golem-cli-version", # these need to be set before the build for publishing
+]
 command = "cargo"
 args = ["build", "--release"]
 
@@ -71,6 +74,11 @@ condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
 command = "cargo"
 args = [
     "build",
+    "-p", "golem-shard-manager", # NOTE: Not all projects are cross-compilable because of an openssl dependency
+    "-p", "golem-worker-executor",
+    "-p", "golem-template-service",
+    "-p", "golem-worker-service",
+    "-p", "golem-template-compilation-service",
     "--release",
     "--target",
     "aarch64-unknown-linux-gnu",
@@ -194,12 +202,12 @@ dependencies = [
 [tasks.generate-worker-service-openapi]
 description = "Generates openapi spec for worker service"
 dependencies = ["build"]
-script = "./target/debug/golem-worker-service-yaml > ./target/golem-worker-service.yaml"
+script = "./target/debug/golem-worker-service --dump-openapi-yaml > ./target/golem-worker-service.yaml"
 
 [tasks.generate-template-service-openapi]
 description = "Generates openapi spec for template service"
 dependencies = ["build"]
-script = "./target/debug/golem-template-service-yaml > ./target/golem-template-service.yaml"
+script = "./target/debug/golem-template-service --dump-openapi-yaml > ./target/golem-template-service.yaml"
 
 [tasks.merge-openapi]
 install_crate = { crate_name = "golem-openapi-client-generator", version = "0.0.4" }
@@ -216,27 +224,45 @@ args = ["-v", "./target/golem-service.yaml", "./openapi/golem-service.yaml"]
 ## ** PUBLISH **
 [tasks.publish]
 description = "Publishes packages to crates.io"
-dependencies = ["publish-golem-client", "publish-golem-cli"]
+dependencies = [
+    "publish-golem-client",
+    "publish-golem-cli"
+]
 
 [tasks.set-golem-client-version]
 description = "Sets the version in golem-client/Cargo.toml to the value of the VERSION environment variable"
+condition = { env_set = ["VERSION"] }
 command = "sed"
-args = ["-i", "s/0\\.0\\.0/$VERSION/g", "golem-client/Cargo.toml"]
+args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
+
+[tasks.set-golem-client-version.mac]
+description = "Sets the version in golem-client/Cargo.toml to the value of the VERSION environment variable"
+condition = { env_set = ["VERSION"] }
+command = "sed"
+args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
 
 [tasks.publish-golem-client]
 description = "Publishes golem-client package to crates.io"
-dependencies = ["set-golem-client-version", "build-release"]
+dependencies = ["set-golem-client-version", "set-golem-cli-version", "build-release"]
 command = "cargo"
 args = ["publish", "-p", "golem-client", "--all-features", "--allow-dirty"]
 
 [tasks.set-golem-cli-version]
 description = "Sets the version in golem-cli/Cargo.toml to the value of the VERSION environment variable"
+condition = { env_set = ["VERSION"] }
 command = "sed"
-args = ["-i", "s/0\\.0\\.0/$VERSION/g", "golem-cli/Cargo.toml"]
+args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]
+
+[tasks.set-golem-cli-version.mac]
+description = "Sets the version in golem-cli/Cargo.toml to the value of the VERSION environment variable"
+condition = { env_set = ["VERSION"] }
+command = "sed"
+args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]
+
 
 [tasks.publish-golem-cli]
 description = "Publishes golem-cli package to crates.io"
-dependencies = ["set-golem-cli-version", "build-release"]
+dependencies = ["set-golem-cli-version", "set-golem-client-version", "build-release"]
 command = "cargo"
 args = ["publish", "-p", "golem-cli", "--all-features", "--allow-dirty"]
 
