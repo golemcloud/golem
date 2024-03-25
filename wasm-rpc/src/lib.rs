@@ -639,8 +639,8 @@ impl WasmValue for TypeAnnotatedValue {
                     Err(Some(v)) => Err(Some(Box::new(v))),
                     Err(None) => Err(None),
                 },
-                ok: ok.clone(),
-                error: error.clone(),
+                ok: ok.clone().map(|ty| Box::new(AnalysedType(*ty))),
+                error: error.clone().map(|ty| Box::new(AnalysedType(*ty))),
             }))
         } else {
             Err(WasmValueError::WrongTypeKind {
