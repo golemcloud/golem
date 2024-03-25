@@ -45,11 +45,11 @@ mod text;
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
 
-use std::borrow::Cow;
-use std::collections::HashSet;
 use crate::builder::WitValueBuilder;
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 pub use extractor::{WitNodePointer, WitValueExtractor};
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::ops::Deref;
 
 #[cfg(not(feature = "host"))]
@@ -266,8 +266,30 @@ impl From<TypeAnnotatedValue> for Value {
                     .map(|(name, value)| value.into())
                     .collect::<Vec<Value>>(),
             ),
-            TypeAnnotatedValue::Flags(flag_value) => Value::Flags(flag_value.value),
-            TypeAnnotatedValue::Enum(enum_value) => Value::Enum(enum_value.value),
+            TypeAnnotatedValue::Flags(flag_value) => {
+                let expected_flags = flag_value.typ;
+                let flags = flag_value.value;
+                let mut bools = Vec::new();
+
+                for expected_flag in expected_flags {
+                    if flags.contains(&expected_flag) {
+                        bools.push(true);
+                    } else {
+                        bools.push(false);
+                    }
+                }
+                Value::Flags(bools)
+            }
+            TypeAnnotatedValue::Enum(enum_value) => {
+                let enums = enum_value.typ;
+                for (index, expected_enum) in enums.iter().enumerate() {
+                    if expected_enum.clone() == enum_value.value {
+                        return Value::Enum(index as u32)
+                    }
+                }
+
+                panic!("Enum value not found in the list of expected enums")
+            }
             TypeAnnotatedValue::Option(optional_value) => {
                 Value::Option(match optional_value.value {
                     Some(value) => Some(Box::new(value.deref().clone().into())),
@@ -275,8 +297,8 @@ impl From<TypeAnnotatedValue> for Value {
                 })
             }
             TypeAnnotatedValue::Result(result_value) => Value::Result(match result_value.value {
-                Ok(value) => Ok(Some(Box::new(value.deref().clone().into()))),
-                Err(value) => Err(Some(Box::new(value.deref().clone().into()))),
+                Ok(value) => Ok(value.map(|value| Box::new(value.deref().clone().into()))),
+                Err(value) => Err(value.map(|value| Box::new(value.deref().clone().into()))),
             }),
             TypeAnnotatedValue::Handle(value) => todo!(),
         }
@@ -417,7 +439,9 @@ impl TypeAnnotatedValue {
             TypeAnnotatedValue::Flags(value) => AnalysedType(
                 golem_wasm_ast::analysis::AnalysedType::Flags(value.clone().typ),
             ),
-            TypeAnnotatedValue::Enum(value) => value.clone().typ,
+            TypeAnnotatedValue::Enum(value) => {
+                AnalysedType(golem_wasm_ast::analysis::AnalysedType::Enum(value.clone().typ))
+            }
             TypeAnnotatedValue::Option(value) => value.clone().typ,
             TypeAnnotatedValue::Result(value) => {
                 AnalysedType(golem_wasm_ast::analysis::AnalysedType::Result {
@@ -433,7 +457,12 @@ impl TypeAnnotatedValue {
             }
             TypeAnnotatedValue::Variant(value) => {
                 AnalysedType(golem_wasm_ast::analysis::AnalysedType::Variant(
-                    value.clone().typ.into_iter().map(|(name, ty)| (name, ty.map(|t| t.0))).collect(),
+                    value
+                        .clone()
+                        .typ
+                        .into_iter()
+                        .map(|(name, ty)| (name, ty.map(|t| t.0)))
+                        .collect(),
                 ))
             }
         }
@@ -501,13 +530,13 @@ impl WasmValue for TypeAnnotatedValue {
         TypeAnnotatedValue::Chr(val)
     }
 
-    fn make_string(val: String) -> Self {
-        TypeAnnotatedValue::Str(val)
+    fn make_string(val: Cow<str>) -> Self {
+        TypeAnnotatedValue::Str(val.to_string())
     }
 
     fn make_list(
         ty: &Self::Type,
-        vals: impl IntoIterator<Item=Self>,
+        vals: impl IntoIterator<Item = Self>,
     ) -> Result<Self, WasmValueError> {
         Ok(TypeAnnotatedValue::List(ListValue {
             values: vals.into_iter().collect(),
@@ -517,7 +546,7 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn make_record<'a>(
         ty: &Self::Type,
-        fields: impl IntoIterator<Item=(&'a str, Self)>,
+        fields: impl IntoIterator<Item = (&'a str, Self)>,
     ) -> Result<Self, WasmValueError> {
         Ok(TypeAnnotatedValue::Record(RecordValue {
             value: fields
@@ -530,7 +559,7 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn make_tuple(
         ty: &Self::Type,
-        vals: impl IntoIterator<Item=Self>,
+        vals: impl IntoIterator<Item = Self>,
     ) -> Result<Self, WasmValueError> {
         Ok(TypeAnnotatedValue::Tuple(TupleValue {
             value: vals.into_iter().collect(),
@@ -576,12 +605,10 @@ impl WasmValue for TypeAnnotatedValue {
     fn make_enum(ty: &Self::Type, case: &str) -> Result<Self, WasmValueError> {
         if let golem_wasm_ast::analysis::AnalysedType::Enum(cases) = &ty.0 {
             if cases.contains(&case.to_string()) {
-                Ok(TypeAnnotatedValue::Enum(
-                    EnumValue {
-                        typ: cases.clone(),
-                        value: case.to_string(),
-                    },
-                ))
+                Ok(TypeAnnotatedValue::Enum(EnumValue {
+                    typ: cases.clone(),
+                    value: case.to_string(),
+                }))
             } else {
                 Err(WasmValueError::UnknownCase(case.to_string()))
             }
@@ -625,20 +652,19 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn make_flags<'a>(
         ty: &Self::Type,
-        names: impl IntoIterator<Item=&'a str>,
+        names: impl IntoIterator<Item = &'a str>,
     ) -> Result<Self, WasmValueError> {
         if let golem_wasm_ast::analysis::AnalysedType::Flags(all_names) = &ty.0 {
-            let invalid_names: Vec<&String> = names.iter()
+            let invalid_names: Vec<&String> = names
+                .iter()
                 .filter(|name| !all_names.contains(*name))
                 .collect();
 
             if invalid_names.is_empty() {
-                Ok(
-                    TypeAnnotatedValue::Flags(FlagValue {
-                        typ: all_names.clone(),
-                        value: names.into_iter().map(|name| name.to_string()).collect()
-                    })
-                )
+                Ok(TypeAnnotatedValue::Flags(FlagValue {
+                    typ: all_names.clone(),
+                    value: names.into_iter().map(|name| name.to_string()).collect(),
+                }))
             } else {
                 Err(WasmValueError::UnknownCase(invalid_names.join(", ")))
             }
@@ -653,95 +679,95 @@ impl WasmValue for TypeAnnotatedValue {
     fn unwrap_bool(&self) -> bool {
         match self {
             TypeAnnotatedValue::Bool(value) => *value,
-            _ => panic!("Expected bool, found {:?}", self)
+            _ => panic!("Expected bool, found {:?}", self),
         }
     }
 
     fn unwrap_s8(&self) -> i8 {
         match self {
             TypeAnnotatedValue::S8(value) => *value,
-            _ => panic!("Expected s8, found {:?}", self)
+            _ => panic!("Expected s8, found {:?}", self),
         }
     }
 
     fn unwrap_s16(&self) -> i16 {
         match self {
             TypeAnnotatedValue::S16(value) => *value,
-            _ => panic!("Expected s16, found {:?}", self)
+            _ => panic!("Expected s16, found {:?}", self),
         }
     }
 
     fn unwrap_s32(&self) -> i32 {
         match self {
             TypeAnnotatedValue::S32(value) => *value,
-            _ => panic!("Expected s32, found {:?}", self)
+            _ => panic!("Expected s32, found {:?}", self),
         }
     }
 
     fn unwrap_s64(&self) -> i64 {
         match self {
             TypeAnnotatedValue::S64(value) => *value,
-            _ => panic!("Expected s64, found {:?}", self)
+            _ => panic!("Expected s64, found {:?}", self),
         }
     }
 
     fn unwrap_u8(&self) -> u8 {
         match self {
             TypeAnnotatedValue::U8(value) => *value,
-            _ => panic!("Expected u8, found {:?}", self)
+            _ => panic!("Expected u8, found {:?}", self),
         }
     }
 
     fn unwrap_u16(&self) -> u16 {
         match self {
             TypeAnnotatedValue::U16(value) => *value,
-            _ => panic!("Expected u16, found {:?}", self)
+            _ => panic!("Expected u16, found {:?}", self),
         }
     }
 
     fn unwrap_u32(&self) -> u32 {
         match self {
             TypeAnnotatedValue::U32(value) => *value,
-            _ => panic!("Expected u32, found {:?}", self)
+            _ => panic!("Expected u32, found {:?}", self),
         }
     }
 
     fn unwrap_u64(&self) -> u64 {
         match self {
             TypeAnnotatedValue::U64(value) => *value,
-            _ => panic!("Expected u64, found {:?}", self)
+            _ => panic!("Expected u64, found {:?}", self),
         }
     }
 
     fn unwrap_float32(&self) -> f32 {
         match self {
             TypeAnnotatedValue::F32(value) => *value,
-            _ => panic!("Expected f32, found {:?}", self)
+            _ => panic!("Expected f32, found {:?}", self),
         }
     }
 
     fn unwrap_float64(&self) -> f64 {
         match self {
             TypeAnnotatedValue::F64(value) => *value,
-            _ => panic!("Expected f64, found {:?}", self)
+            _ => panic!("Expected f64, found {:?}", self),
         }
     }
 
     fn unwrap_char(&self) -> char {
         match self {
             TypeAnnotatedValue::Chr(value) => *value,
-            _ => panic!("Expected chr, found {:?}", self)
+            _ => panic!("Expected chr, found {:?}", self),
         }
     }
 
-    fn unwrap_string(&self) -> String {
+    fn unwrap_string(&self) -> Cow<str> {
         match self {
-            TypeAnnotatedValue::Str(value) => value.clone(),
-            _ => panic!("Expected str, found {:?}", self)
+            TypeAnnotatedValue::Str(value) => Cow::Borrowed(value),
+            _ => panic!("Expected string, found {:?}", self),
         }
     }
 
-    fn unwrap_list(&self) -> Box<dyn Iterator<Item=Cow<Self>> + '_> {
+    fn unwrap_list(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
         match self {
             TypeAnnotatedValue::List(value) => {
                 Box::new(value.values.iter().map(|v| Cow::Borrowed(v)))
@@ -750,18 +776,19 @@ impl WasmValue for TypeAnnotatedValue {
         }
     }
 
-    fn unwrap_record(&self) -> Box<dyn Iterator<Item=(Cow<str>, Cow<Self>)> + '_> {
+    fn unwrap_record(&self) -> Box<dyn Iterator<Item = (Cow<str>, Cow<Self>)> + '_> {
         match self {
-            TypeAnnotatedValue::Record(value) => {
-                Box::new(value.value.iter().map(|(name, value)| {
-                    (Cow::Borrowed(name), Cow::Borrowed(value))
-                }))
-            }
+            TypeAnnotatedValue::Record(value) => Box::new(
+                value
+                    .value
+                    .iter()
+                    .map(|(name, value)| (Cow::Borrowed(name), Cow::Borrowed(value))),
+            ),
             _ => panic!("Expected record, found {:?}", self),
         }
     }
 
-    fn unwrap_tuple(&self) -> Box<dyn Iterator<Item=Cow<Self>> + '_> {
+    fn unwrap_tuple(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
         match self {
             TypeAnnotatedValue::Tuple(value) => {
                 Box::new(value.value.iter().map(|v| Cow::Borrowed(v)))
@@ -790,23 +817,19 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn unwrap_option(&self) -> Option<Cow<Self>> {
         match self {
-            TypeAnnotatedValue::Option(value) => {
-                value.value.as_ref().map(|v| Cow::Owned(*v))
-            }
+            TypeAnnotatedValue::Option(value) => value.value.as_ref().map(|v| Cow::Owned(*v)),
             _ => panic!("Expected option, found {:?}", self),
         }
     }
 
     fn unwrap_result(&self) -> Result<Option<Cow<Self>>, Option<Cow<Self>>> {
         match self {
-            TypeAnnotatedValue::Result(value) => {
-                match value.clone().value {
-                    Ok(Some(v)) => Ok(Some(Cow::Owned(*v))),
-                    Ok(None) => Ok(None),
-                    Err(Some(v)) => Err(Some(Cow::Owned(*v))),
-                    Err(None) => Err(None),
-                }
-            }
+            TypeAnnotatedValue::Result(value) => match value.clone().value {
+                Ok(Some(v)) => Ok(Some(Cow::Owned(*v))),
+                Ok(None) => Ok(None),
+                Err(Some(v)) => Err(Some(Cow::Owned(*v))),
+                Err(None) => Err(None),
+            },
             _ => panic!("Expected result, found {:?}", self),
         }
     }
