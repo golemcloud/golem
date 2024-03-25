@@ -16,13 +16,14 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use tracing::debug;
 use uuid::Uuid;
+use wasmtime::component::Resource;
 
 use crate::durable_host::wasm_rpc::UriExtensions;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
-use crate::preview2::golem::api::host::OplogIndex;
+use crate::preview2::golem::api::host::{AtomicOperation, HostAtomicOperation, OplogIndex, PersistenceLevel, RetryPolicy};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::OplogRegion;
@@ -137,6 +138,49 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             debug!("Ignoring replayed set_oplog_index for {}", self.worker_id);
             Ok(())
         }
+    }
+
+    async fn oplog_commit(&mut self, replicas: u8) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    async fn get_retry_policy(&mut self) -> anyhow::Result<RetryPolicy> {
+        unimplemented!()
+    }
+
+    async fn set_retry_policy(&mut self, new_retry_policy: RetryPolicy) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    async fn get_oplog_persistence_level(&mut self) -> anyhow::Result<PersistenceLevel> {
+        unimplemented!()
+    }
+
+    async fn set_oplog_persistence_level(&mut self, new_persistence_level: PersistenceLevel) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    async fn get_idempotence_mode(&mut self) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
+
+    async fn set_idempotence_mode(&mut self, idempotent: bool) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostAtomicOperation for DurableWorkerCtx<Ctx> {
+    async fn new(&mut self) -> anyhow::Result<Resource<AtomicOperation>> {
+        unimplemented!()
+    }
+
+    async fn commit(&mut self, self_: Resource<AtomicOperation>) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    fn drop(&mut self, rep: Resource<AtomicOperation>) -> anyhow::Result<()> {
+        unimplemented!()
     }
 }
 
