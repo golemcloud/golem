@@ -57,7 +57,7 @@ pub use bindings::golem::rpc::types::{NodeIndex, RpcError, Uri, WasmRpc, WitNode
 #[cfg(feature = "host")]
 use ::wasmtime::component::bindgen;
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
-use wasm_wave::wasm::WasmValue;
+use wasm_wave::wasm::{WasmValue, WasmValueError};
 
 #[cfg(feature = "host")]
 bindgen!({
@@ -72,7 +72,7 @@ bindgen!({
     }
 });
 
-use crate::text::AnalysedType;
+use crate::text::{AnalysedType, TypedValue};
 #[cfg(feature = "host")]
 pub use golem::rpc::types::{Host, HostWasmRpc, NodeIndex, RpcError, Uri, WitNode, WitValue};
 
@@ -432,11 +432,99 @@ impl TypeAnnotatedValue {
     }
 }
 
-
 impl From<TypeAnnotatedValue> for WitValue {
     fn from(value: TypeAnnotatedValue) -> Self {
         let value: Value = value.into();
         value.into()
+    }
+}
+
+impl WasmValue for TypeAnnotatedValue {
+    type Type = AnalysedType;
+    fn ty(&self) -> Self::Type {
+        self.typ.clone()
+    }
+
+    fn make_bool(val: bool) -> Self {
+       TypeAnnotatedValue::Bool(val)
+    }
+
+    fn make_s8(val: i8) -> Self {
+        TypeAnnotatedValue::S8(val)
+    }
+
+    fn make_s16(val: i16) -> Self {
+        TypeAnnotatedValue::S16(val)
+    }
+
+    fn make_s32(val: i32) -> Self {
+        TypeAnnotatedValue::S32(val)
+    }
+
+    fn make_s64(val: i64) -> Self {
+        TypeAnnotatedValue::S64(val)
+    }
+
+    fn make_u8(val: u8) -> Self {
+        TypeAnnotatedValue::U8(val)
+    }
+
+    fn make_u16(val: u16) -> Self {
+        TypeAnnotatedValue::U16(val)
+    }
+
+     fn make_u32(val: u32) -> Self {
+        TypeAnnotatedValue::U32(val)
+    }
+
+    fn make_u64(val: u64) -> Self {
+        TypeAnnotatedValue::U64(val)
+    }
+
+    fn make_float32(val: f32) -> Self {
+        TypeAnnotatedValue::F32(val)
+    }
+
+    fn make_float64(val: f64) -> Self {
+        TypeAnnotatedValue::F64(val)
+    }
+
+    fn make_char(val: char) -> Self {
+        TypeAnnotatedValue::Chr(val)
+    }
+
+    fn make_string(val: String) -> Self {
+        TypeAnnotatedValue::Str(val)
+    }
+
+    fn make_list(
+        ty: &Self::Type,
+        vals: impl IntoIterator<Item = Self>,
+    ) -> Result<Self, WasmValueError> {
+        Ok(TypeAnnotatedValue::List(ListValue{
+            values: vals.into_iter().collect(),
+            typ: ty.clone(),
+        }))
+    }
+
+    fn make_record<'a>(
+        ty: &Self::Type,
+        fields: impl IntoIterator<Item = (&'a str, Self)>,
+    ) -> Result<Self, WasmValueError> {
+        Ok(TypeAnnotatedValue::Record(RecordValue{
+            value: fields.into_iter().map(|(name, value)| (name.to_string(), value)).collect(),
+            typ: ty.clone(),
+        }))
+    }
+
+    fn make_tuple(
+        ty: &Self::Type,
+        vals: impl IntoIterator<Item = Self>,
+    ) -> Result<Self, WasmValueError> {
+        Ok(TypeAnnotatedValue::Tuple(TupleValue{
+            value: vals.into_iter().collect(),
+            typ: ty.clone(),
+        }))
     }
 }
 
