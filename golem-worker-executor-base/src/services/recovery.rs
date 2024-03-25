@@ -20,10 +20,10 @@ use crate::model::{InterruptKind, LastError, TrapType};
 use crate::services::rpc::Rpc;
 use crate::services::{
     active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, scheduler,
-    template, worker, HasActiveWorkers, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps,
-    HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
-    HasRecoveryManagement, HasRpc, HasSchedulerService, HasTemplateService, HasWasmtimeEngine,
-    HasWorkerService,
+    template, worker, worker_enumeration, HasActiveWorkers, HasAll, HasBlobStoreService, HasConfig,
+    HasExtraDeps, HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
+    HasRecoveryManagement, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasTemplateService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -83,6 +83,9 @@ pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
     runtime: Handle,
     template_service: Arc<dyn template::TemplateService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+    worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
+    running_worker_enumeration_service:
+        Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
     oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
     promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
@@ -105,6 +108,8 @@ impl<Ctx: WorkerCtx> Clone for RecoveryManagementDefault<Ctx> {
             runtime: self.runtime.clone(),
             template_service: self.template_service.clone(),
             worker_service: self.worker_service.clone(),
+            worker_enumeration_service: self.worker_enumeration_service.clone(),
+            running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
             oplog_service: self.oplog_service.clone(),
             promise_service: self.promise_service.clone(),
             scheduler_service: self.scheduler_service.clone(),
@@ -140,6 +145,22 @@ impl<Ctx: WorkerCtx> HasConfig for RecoveryManagementDefault<Ctx> {
 impl<Ctx: WorkerCtx> HasWorkerService for RecoveryManagementDefault<Ctx> {
     fn worker_service(&self) -> Arc<dyn worker::WorkerService + Send + Sync> {
         self.worker_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasWorkerEnumerationService for RecoveryManagementDefault<Ctx> {
+    fn worker_enumeration_service(
+        &self,
+    ) -> Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync> {
+        self.worker_enumeration_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasRunningWorkerEnumerationService for RecoveryManagementDefault<Ctx> {
+    fn running_worker_enumeration_service(
+        &self,
+    ) -> Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync> {
+        self.running_worker_enumeration_service.clone()
     }
 }
 
@@ -221,6 +242,12 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         runtime: Handle,
         template_service: Arc<dyn template::TemplateService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
+        running_worker_enumeration_service: Arc<
+            dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync,
+        >,
         oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
         promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
@@ -239,6 +266,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             runtime,
             template_service,
             worker_service,
+            worker_enumeration_service,
+            running_worker_enumeration_service,
             oplog_service,
             promise_service,
             scheduler_service,
@@ -260,6 +289,12 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         runtime: Handle,
         template_service: Arc<dyn template::TemplateService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
+        running_worker_enumeration_service: Arc<
+            dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync,
+        >,
         oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
         promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
@@ -282,6 +317,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             runtime,
             template_service,
             worker_service,
+            worker_enumeration_service,
+            running_worker_enumeration_service,
             oplog_service,
             promise_service,
             scheduler_service,

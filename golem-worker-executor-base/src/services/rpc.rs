@@ -16,10 +16,11 @@ use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, UriBackConversion};
 use crate::services::{
     active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, recovery,
-    scheduler, shard, shard_manager, template, worker, HasActiveWorkers, HasBlobStoreService,
-    HasConfig, HasExtraDeps, HasInvocationKeyService, HasKeyValueService, HasOplogService,
-    HasPromiseService, HasRecoveryManagement, HasRpc, HasSchedulerService, HasShardService,
-    HasTemplateService, HasWasmtimeEngine, HasWorkerService,
+    scheduler, shard, shard_manager, template, worker, worker_enumeration, HasActiveWorkers,
+    HasBlobStoreService, HasConfig, HasExtraDeps, HasInvocationKeyService, HasKeyValueService,
+    HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardService, HasTemplateService,
+    HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
 };
 use crate::worker::{invoke_and_await, Worker};
 use crate::workerctx::WorkerCtx;
@@ -280,6 +281,9 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     template_service: Arc<dyn template::TemplateService + Send + Sync>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+    worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
+    running_worker_enumeration_service:
+        Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
     promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
     golem_config: Arc<golem_config::GolemConfig>,
     invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
@@ -303,6 +307,8 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             template_service: self.template_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
             worker_service: self.worker_service.clone(),
+            worker_enumeration_service: self.worker_enumeration_service.clone(),
+            running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
             promise_service: self.promise_service.clone(),
             golem_config: self.golem_config.clone(),
             invocation_key_service: self.invocation_key_service.clone(),
@@ -338,6 +344,22 @@ impl<Ctx: WorkerCtx> HasConfig for DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> HasWorkerService for DirectWorkerInvocationRpc<Ctx> {
     fn worker_service(&self) -> Arc<dyn worker::WorkerService + Send + Sync> {
         self.worker_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasWorkerEnumerationService for DirectWorkerInvocationRpc<Ctx> {
+    fn worker_enumeration_service(
+        &self,
+    ) -> Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync> {
+        self.worker_enumeration_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasRunningWorkerEnumerationService for DirectWorkerInvocationRpc<Ctx> {
+    fn running_worker_enumeration_service(
+        &self,
+    ) -> Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync> {
+        self.running_worker_enumeration_service.clone()
     }
 }
 
@@ -431,6 +453,12 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         runtime: Handle,
         template_service: Arc<dyn template::TemplateService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
+        running_worker_enumeration_service: Arc<
+            dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync,
+        >,
         promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
         invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
@@ -451,6 +479,8 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             template_service,
             shard_manager_service,
             worker_service,
+            worker_enumeration_service,
+            running_worker_enumeration_service,
             promise_service,
             golem_config,
             invocation_key_service,

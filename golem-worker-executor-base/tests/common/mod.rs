@@ -84,6 +84,9 @@ use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
 };
+use golem_worker_executor_base::services::worker_enumeration::{
+    RunningWorkerEnumerationService, WorkerEnumerationService,
+};
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -1367,6 +1370,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         template_service: Arc<dyn TemplateService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
+        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         golem_config: Arc<GolemConfig>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
@@ -1392,6 +1397,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             runtime.clone(),
             template_service.clone(),
             worker_service.clone(),
+            worker_enumeration_service.clone(),
+            running_worker_enumeration_service.clone(),
             promise_service.clone(),
             golem_config.clone(),
             invocation_key_service.clone(),
@@ -1410,6 +1417,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             runtime.clone(),
             template_service.clone(),
             worker_service.clone(),
+            worker_enumeration_service.clone(),
+            running_worker_enumeration_service.clone(),
             oplog_service.clone(),
             promise_service.clone(),
             scheduler_service.clone(),
@@ -1430,6 +1439,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             template_service,
             shard_manager_service,
             worker_service,
+            worker_enumeration_service,
+            running_worker_enumeration_service,
             promise_service,
             golem_config,
             invocation_key_service,
