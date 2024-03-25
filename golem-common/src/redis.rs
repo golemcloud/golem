@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{atomic, Arc};
 use std::time::Instant;
@@ -21,11 +22,11 @@ use bytes::Bytes;
 use fred::clients::Transaction;
 use fred::prelude::{RedisPool as FredRedisPool, *};
 use fred::types::{
-    Limit, MultipleKeys, MultipleOrderedPairs, MultipleValues, MultipleZaddValues, Ordering,
-    RedisKey, RedisMap, XCap, ZRange, ZSort, XID,
+    InfoKind, Limit, MultipleKeys, MultipleOrderedPairs, MultipleValues, MultipleZaddValues,
+    Ordering, RedisKey, RedisMap, XCap, ZRange, ZSort, XID,
 };
 use serde::de::DeserializeOwned;
-use tracing::Level;
+use tracing::{debug, Level};
 
 use crate::metrics::redis::{record_redis_failure, record_redis_success};
 use crate::serialization::{deserialize, serialize};
@@ -608,6 +609,30 @@ impl<'a> RedisLabelledApi<'a> {
         let trx = func(trx).await?;
 
         self.record(start, "MULTI", trx.trx.exec(true).await)
+    }
+
+    pub async fn wait(&self, replicas: i64, timeout: i64) -> RedisResult<i64> {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(start, "WAIT", self.pool.wait(replicas, timeout).await)
+    }
+
+    pub async fn info_connected_slaves(&self) -> RedisResult<u8> {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let info: String = self.record(
+            start,
+            "INFO",
+            self.pool.info(Some(InfoKind::Replication)).await,
+        )?;
+        let info: HashMap<&str, &str> =
+            HashMap::from_iter(info.lines().filter_map(|line| line.trim().split_once(':')));
+        debug!("Redis replication info: {:?}", info);
+        let connected_slaves = info
+            .get("connected_slaves")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        Ok(connected_slaves)
     }
 }
 

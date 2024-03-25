@@ -14,6 +14,7 @@
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
@@ -23,7 +24,9 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
-use crate::preview2::golem::api::host::{AtomicOperation, HostAtomicOperation, OplogIndex, PersistenceLevel, RetryPolicy};
+use crate::preview2::golem::api::host::{
+    AtomicOperation, HostAtomicOperation, OplogIndex, PersistenceLevel, RetryPolicy,
+};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::OplogRegion;
@@ -141,14 +144,37 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn oplog_commit(&mut self, replicas: u8) -> anyhow::Result<()> {
-        unimplemented!()
+        let timeout = Duration::from_secs(1);
+        debug!(
+            "Worker {} committing oplog to {} replicas",
+            self.worker_id, replicas
+        );
+        loop {
+            // Applying a timeout to make sure the worker remains interruptible
+            if self.commit_oplog_to_replicas(replicas, timeout).await {
+                debug!(
+                    "Worker {} committed oplog to {} replicas",
+                    self.worker_id, replicas
+                );
+                return Ok(());
+            } else {
+                debug!(
+                    "Worker {} failed to commit oplog to {} replicas, retrying",
+                    self.worker_id, replicas
+                );
+            }
+
+            if let Some(kind) = self.check_interrupt() {
+                return Err(kind.into());
+            }
+        }
     }
 
     async fn get_retry_policy(&mut self) -> anyhow::Result<RetryPolicy> {
         unimplemented!()
     }
 
-    async fn set_retry_policy(&mut self, new_retry_policy: RetryPolicy) -> anyhow::Result<()> {
+    async fn set_retry_policy(&mut self, _new_retry_policy: RetryPolicy) -> anyhow::Result<()> {
         unimplemented!()
     }
 
@@ -156,7 +182,10 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         unimplemented!()
     }
 
-    async fn set_oplog_persistence_level(&mut self, new_persistence_level: PersistenceLevel) -> anyhow::Result<()> {
+    async fn set_oplog_persistence_level(
+        &mut self,
+        _new_persistence_level: PersistenceLevel,
+    ) -> anyhow::Result<()> {
         unimplemented!()
     }
 
@@ -164,7 +193,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         unimplemented!()
     }
 
-    async fn set_idempotence_mode(&mut self, idempotent: bool) -> anyhow::Result<()> {
+    async fn set_idempotence_mode(&mut self, _idempotent: bool) -> anyhow::Result<()> {
         unimplemented!()
     }
 }
@@ -175,11 +204,11 @@ impl<Ctx: WorkerCtx> HostAtomicOperation for DurableWorkerCtx<Ctx> {
         unimplemented!()
     }
 
-    async fn commit(&mut self, self_: Resource<AtomicOperation>) -> anyhow::Result<()> {
+    async fn commit(&mut self, _self_: Resource<AtomicOperation>) -> anyhow::Result<()> {
         unimplemented!()
     }
 
-    fn drop(&mut self, rep: Resource<AtomicOperation>) -> anyhow::Result<()> {
+    fn drop(&mut self, _rep: Resource<AtomicOperation>) -> anyhow::Result<()> {
         unimplemented!()
     }
 }
