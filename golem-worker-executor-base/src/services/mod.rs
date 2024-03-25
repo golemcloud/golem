@@ -16,6 +16,7 @@ use std::sync::Arc;
 #[cfg(any(feature = "mocks", test))]
 use std::time::Duration;
 
+use crate::services::worker_enumeration::RunningWorkerEnumerationServiceDefault;
 use tokio::runtime::Handle;
 
 use crate::workerctx::WorkerCtx;
@@ -126,6 +127,8 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasTemplateService
     + HasConfig
     + HasWorkerService
+    + HasWorkerEnumerationService
+    + HasRunningWorkerEnumerationService
     + HasInvocationKeyService
     + HasPromiseService
     + HasWasmtimeEngine<Ctx>
@@ -146,6 +149,8 @@ impl<
             + HasTemplateService
             + HasConfig
             + HasWorkerService
+            + HasWorkerEnumerationService
+            + HasRunningWorkerEnumerationService
             + HasInvocationKeyService
             + HasPromiseService
             + HasWasmtimeEngine<Ctx>
@@ -171,6 +176,9 @@ pub struct All<Ctx: WorkerCtx> {
     template_service: Arc<dyn template::TemplateService + Send + Sync>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+    worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
+    running_worker_enumeration_service:
+        Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
     promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
     golem_config: Arc<golem_config::GolemConfig>,
     invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
@@ -194,6 +202,8 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             template_service: self.template_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
             worker_service: self.worker_service.clone(),
+            worker_enumeration_service: self.worker_enumeration_service.clone(),
+            running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
             promise_service: self.promise_service.clone(),
             golem_config: self.golem_config.clone(),
             invocation_key_service: self.invocation_key_service.clone(),
@@ -218,6 +228,12 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         template_service: Arc<dyn template::TemplateService + Send + Sync>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
+        running_worker_enumeration_service: Arc<
+            dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync,
+        >,
         promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
         invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
@@ -238,6 +254,8 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             template_service,
             shard_manager_service,
             worker_service,
+            worker_enumeration_service,
+            running_worker_enumeration_service,
             promise_service,
             golem_config,
             invocation_key_service,
@@ -264,6 +282,10 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         let runtime = Handle::current();
         let template_service = Arc::new(template::TemplateServiceMock::new());
         let worker_service = Arc::new(worker::WorkerServiceMock::new());
+        let worker_enumeration_service =
+            Arc::new(worker_enumeration::WorkerEnumerationServiceMock::new());
+        let running_worker_enumeration_service =
+            Arc::new(worker_enumeration::RunningWorkerEnumerationServiceMock::new());
         let promise_service = Arc::new(promise::PromiseServiceMock::new());
         let golem_config = Arc::new(golem_config::GolemConfig::default());
         let invocation_key_service =
@@ -284,6 +306,8 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             template_service,
             shard_manager_service,
             worker_service,
+            worker_enumeration_service,
+            running_worker_enumeration_service,
             promise_service,
             golem_config,
             invocation_key_service,
@@ -340,6 +364,22 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasConfig for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerService for T {
     fn worker_service(&self) -> Arc<dyn worker::WorkerService + Send + Sync> {
         self.all().worker_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerEnumerationService for T {
+    fn worker_enumeration_service(
+        &self,
+    ) -> Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync> {
+        self.all().worker_enumeration_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasRunningWorkerEnumerationService for T {
+    fn running_worker_enumeration_service(
+        &self,
+    ) -> Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync> {
+        self.all().running_worker_enumeration_service.clone()
     }
 }
 

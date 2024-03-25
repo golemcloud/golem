@@ -1,6 +1,6 @@
 use crate::error::GolemError;
 use crate::services::active_workers::ActiveWorkers;
-use crate::services::shard::ShardService;
+use crate::services::oplog::OplogServiceDefault;
 use crate::services::worker::{WorkerService, WorkerServiceInMemory, WorkerServiceRedis};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -55,6 +55,39 @@ impl<Ctx: WorkerCtx>
     }
 }
 
+#[cfg(any(feature = "mocks", test))]
+pub struct RunningWorkerEnumerationServiceMock<Ctx: WorkerCtx> {}
+
+#[cfg(any(feature = "mocks", test))]
+impl<Ctx: WorkerCtx> Default
+    for crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock<Ctx>
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(any(feature = "mocks", test))]
+impl<Ctx: WorkerCtx> crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock<Ctx> {
+    pub fn new<Ctx>() -> Self {
+        Self {}
+    }
+}
+
+#[cfg(any(feature = "mocks", test))]
+#[async_trait]
+impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
+    for crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock<Ctx>
+{
+    async fn get(
+        &self,
+        _template_id: &TemplateId,
+        _filter: &WorkerFilter,
+    ) -> Result<Vec<WorkerMetadata>, GolemError> {
+        unimplemented!()
+    }
+}
+
 #[async_trait]
 pub trait WorkerEnumerationService {
     async fn get(
@@ -71,13 +104,19 @@ pub trait WorkerEnumerationService {
 pub struct WorkerEnumerationServiceRedis {
     redis: RedisPool,
     worker_service: Arc<WorkerServiceRedis>,
+    oplog_service: Arc<OplogServiceDefault>,
 }
 
 impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
-    pub fn new(redis: RedisPool, worker_service: Arc<WorkerServiceRedis>) -> Self {
+    pub fn new(
+        redis: RedisPool,
+        worker_service: Arc<WorkerServiceRedis>,
+        oplog_service: Arc<OplogServiceDefault>,
+    ) -> Self {
         Self {
             redis,
             worker_service,
+            oplog_service,
         }
     }
 
@@ -89,6 +128,7 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
         count: usize,
         precise: bool,
     ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
+        // TODO implement precise
         let mut new_cursor: Option<usize> = None;
         let mut template_workers: Vec<WorkerMetadata> = vec![];
 
@@ -137,14 +177,14 @@ impl WorkerEnumerationService
         let mut template_workers: Vec<WorkerMetadata> = vec![];
 
         while new_cursor.is_some() && template_workers.len() < count {
-            let next_count = template_workers.len() - count;
+            let new_count = template_workers.len() - count;
 
             let (next_cursor, workers) = self
                 .get_internal(
                     &template_id,
                     &filter,
                     new_cursor.unwrap_or(0),
-                    next_count,
+                    new_count,
                     precise,
                 )
                 .await?;
@@ -236,5 +276,39 @@ impl WorkerEnumerationService
             None
         };
         Ok((new_cursor, template_workers))
+    }
+}
+
+#[cfg(any(feature = "mocks", test))]
+pub struct WorkerEnumerationServiceMock {}
+
+#[cfg(any(feature = "mocks", test))]
+impl Default for crate::services::worker_enumeration::WorkerEnumerationServiceMock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(any(feature = "mocks", test))]
+impl crate::services::worker_enumeration::WorkerEnumerationServiceMock {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[cfg(any(feature = "mocks", test))]
+#[async_trait]
+impl WorkerEnumerationService
+    for crate::services::worker_enumeration::WorkerEnumerationServiceMock
+{
+    async fn get(
+        &self,
+        _template_id: &TemplateId,
+        _filter: &WorkerFilter,
+        _cursor: usize,
+        _count: usize,
+        _precise: bool,
+    ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
+        unimplemented!()
     }
 }
