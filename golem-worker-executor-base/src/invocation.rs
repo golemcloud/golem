@@ -264,7 +264,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
                 .store_worker_status(result_status.clone())
                 .await;
 
-            if result_status == WorkerStatus::Retrying {
+            if result_status == WorkerStatus::Retrying || result_status == WorkerStatus::Running {
                 Ok(None)
             } else {
                 Err(err)

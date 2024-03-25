@@ -34,7 +34,7 @@ use golem_common::model::{VersionedWorkerId, WorkerId, WorkerStatus};
 use golem_common::retries::get_delay;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use wasmtime::Trap;
 
 // TODO: move to crate::model?
@@ -375,6 +375,9 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                                 .is_marked_as_interrupted(&worker_id_clone.worker_id)
                                 .await;
                             if !interrupted {
+                                info!(
+                                    "Initiating immediate recovery for worker: {worker_id_clone}"
+                                );
                                 recover_worker(&clone, &worker_id_clone).await;
                             }
                         }
@@ -403,6 +406,9 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                                 .is_marked_as_interrupted(&worker_id_clone.worker_id)
                                 .await;
                             if !interrupted {
+                                info!(
+                                    "Initiating scheduled recovery for worker: {worker_id_clone}"
+                                );
                                 recover_worker(&clone, &worker_id_clone).await;
                             }
                         }
@@ -467,7 +473,7 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
             WorkerError::Unknown(_) => {
                 previous_tries < (self.golem_config.retry.max_attempts as u64)
             }
-            WorkerError::StackOverflow => true,
+            WorkerError::StackOverflow => false,
         }
     }
 }
@@ -476,7 +482,7 @@ async fn recover_worker<Ctx: WorkerCtx, T>(this: &T, worker_id: &VersionedWorker
 where
     T: HasAll<Ctx> + Clone + Send + Sync + 'static,
 {
-    info!("Recovering instance: {worker_id}");
+    info!("Recovering worker: {worker_id}");
 
     match this.worker_service().get(&worker_id.worker_id).await {
         Some(worker) => {

@@ -731,11 +731,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn on_invocation_failure(&mut self, error: &TrapType) -> Result<(), anyhow::Error> {
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> Result<(), anyhow::Error> {
         self.consume_hint_entries().await;
 
         if self.is_live() {
-            let needs_commit = match error {
+            let needs_commit = match trap_type {
                 TrapType::Error(error) => {
                     self.set_oplog_entry(OplogEntry::Error {
                         timestamp: Timestamp::now_utc(),
@@ -1021,8 +1021,8 @@ async fn last_error_and_retry_count<T: HasOplogService>(
     if idx == 0 {
         None
     } else {
+        let mut first_error = None;
         loop {
-            let mut first_error = None;
             let oplog_entry = this.oplog_service().read(worker_id, idx - 1, 1).await;
             match oplog_entry.first()
                 .unwrap_or_else(|| panic!("Internal error: op log for {} has size greater than zero but no entry at last index", worker_id)) {
@@ -1038,11 +1038,12 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                         break Some((first_error.unwrap(), count));
                     }
                 }
-                _ =>
+                other => {
                     match first_error {
                         Some(error) => break Some((error, count)),
                         None => break None
                     }
+                }
             }
         }
     }

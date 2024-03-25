@@ -17,6 +17,7 @@ use tracing::info;
 use warp::Filter;
 
 #[tokio::test]
+#[tracing::instrument]
 async fn write_stdout() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -38,6 +39,7 @@ async fn write_stdout() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn write_stderr() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -64,6 +66,7 @@ async fn write_stderr() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn read_stdin() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -79,6 +82,7 @@ async fn read_stdin() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn clocks() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -136,6 +140,7 @@ async fn clocks() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn file_write_read_delete() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -167,6 +172,7 @@ async fn file_write_read_delete() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn directories() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -220,6 +226,7 @@ async fn directories() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn directories_replay() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -281,6 +288,7 @@ async fn directories_replay() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn file_write_read() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -316,6 +324,7 @@ async fn file_write_read() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn http_client() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -374,6 +383,7 @@ async fn http_client() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn http_client_using_reqwest() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -436,6 +446,7 @@ async fn http_client_using_reqwest() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn environment_service() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -492,6 +503,7 @@ async fn environment_service() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn http_client_response_persisted_between_invocations() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -566,6 +578,7 @@ async fn http_client_response_persisted_between_invocations() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn sleep() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -592,6 +605,7 @@ async fn sleep() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn resuming_sleep() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -635,6 +649,7 @@ async fn resuming_sleep() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn failing_worker() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -687,6 +702,7 @@ async fn failing_worker() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn file_service_write_direct() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -722,6 +738,7 @@ async fn file_service_write_direct() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn filesystem_write_replay_restores_file_times() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -765,6 +782,7 @@ async fn filesystem_write_replay_restores_file_times() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn filesystem_create_dir_replay_restores_file_times() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -805,6 +823,7 @@ async fn filesystem_create_dir_replay_restores_file_times() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn file_hard_link() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -849,6 +868,7 @@ async fn file_hard_link() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn filesystem_link_replay_restores_file_times() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -937,6 +957,7 @@ async fn filesystem_link_replay_restores_file_times() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn filesystem_remove_dir_replay_restores_file_times() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -993,6 +1014,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn filesystem_symlink_replay_restores_file_times() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1082,6 +1104,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn filesystem_rename_replay_restores_file_times() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1187,6 +1210,7 @@ async fn filesystem_rename_replay_restores_file_times() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn filesystem_remove_file_replay_restores_file_times() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1246,6 +1270,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn filesystem_write_via_stream_replay_restores_file_times() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1289,6 +1314,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn filesystem_metadata_hash() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1332,6 +1358,7 @@ async fn filesystem_metadata_hash() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn ip_address_resolve() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
