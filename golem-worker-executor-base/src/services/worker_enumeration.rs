@@ -70,21 +70,54 @@ pub trait WorkerEnumerationService {
 #[derive(Clone)]
 pub struct WorkerEnumerationServiceRedis {
     redis: RedisPool,
-    shard_service: Arc<dyn ShardService + Send + Sync>,
     worker_service: Arc<WorkerServiceRedis>,
 }
 
 impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
-    pub fn new(
-        redis: RedisPool,
-        shard_service: Arc<dyn ShardService + Send + Sync>,
-        worker_service: Arc<WorkerServiceRedis>,
-    ) -> Self {
+    pub fn new(redis: RedisPool, worker_service: Arc<WorkerServiceRedis>) -> Self {
         Self {
             redis,
-            shard_service,
             worker_service,
         }
+    }
+
+    async fn get_internal(
+        &self,
+        template_id: &TemplateId,
+        filter: &WorkerFilter,
+        cursor: usize,
+        count: usize,
+        precise: bool,
+    ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
+        let mut new_cursor: Option<usize> = None;
+        let mut template_workers: Vec<WorkerMetadata> = vec![];
+
+        let template_worker_redis_key = get_template_worker_redis_key(&template_id);
+
+        let (new_redis_cursor, worker_redis_keys) = self
+            .redis
+            .with("instance", "scan")
+            .scan(template_worker_redis_key, cursor, count)
+            .await
+            .map_err(|e| GolemError::unknown(e.details()))?;
+
+        for worker_redis_key in worker_redis_keys {
+            let worker_id = get_worker_id_from_redis_key(&worker_redis_key, &template_id)?;
+
+            let worker_metadata = self.worker_service.get(&worker_id).await;
+
+            if let Some(worker_metadata) = worker_metadata {
+                if filter.matches(&worker_metadata) {
+                    template_workers.push(worker_metadata);
+                }
+            }
+        }
+
+        if new_redis_cursor > 0 {
+            new_cursor = Some(new_redis_cursor);
+        }
+
+        Ok((new_cursor, template_workers))
     }
 }
 
@@ -100,14 +133,28 @@ impl WorkerEnumerationService
         count: usize,
         precise: bool,
     ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
-        let template_worker_redis_key = get_template_worker_redis_key(&template_id);
-        let (new_cursor, worker_redis_keys) = self
-            .redis
-            .with("instance", "scan")
-            .scan(template_worker_redis_key, cursor, count)
-            .await
-            .map_err(|e| GolemError::unknown(e.details()))?;
-        todo!()
+        let mut new_cursor: Option<usize> = Some(cursor);
+        let mut template_workers: Vec<WorkerMetadata> = vec![];
+
+        while new_cursor.is_some() && template_workers.len() < count {
+            let next_count = template_workers.len() - count;
+
+            let (next_cursor, workers) = self
+                .get_internal(
+                    &template_id,
+                    &filter,
+                    new_cursor.unwrap_or(0),
+                    next_count,
+                    precise,
+                )
+                .await?;
+
+            template_workers.extend(workers);
+
+            new_cursor = next_cursor;
+        }
+
+        Ok((new_cursor, template_workers))
     }
 }
 
@@ -123,7 +170,6 @@ fn get_worker_id_from_redis_key(
 
     if worker_redis_key.starts_with(&template_prefix) {
         let worker_name = &worker_redis_key[template_prefix.len()..];
-
         Ok(WorkerId {
             worker_name: worker_name.to_string(),
             template_id: template_id.clone(),
