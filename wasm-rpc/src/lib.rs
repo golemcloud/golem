@@ -381,15 +381,62 @@ pub enum TypeAnnotatedValue {
     F64(f64),
     Chr(char),
     Str(String),
-    List(Vec<TypeAnnotatedValue>), // It is upto the constuctor to make sure that the type of all elements is same
-    Tuple(Vec<TypeAnnotatedValue>,),
-    Record(Vec<(String, TypeAnnotatedValue)>,),
-    Flags(Vec<String>),
+    List(ListValue),
+    Tuple(TupleValue),
+    Record(RecordValue),
+    Flags(FlagValue),
     Variant(VariantValue),
-    Enum(String), // It is upto the constructor to make sure that the value is one of the enum cases
-    Option(Option<Box<TypeAnnotatedValue>>,),
-    Result(Result<Box<TypeAnnotatedValue>, Box<TypeAnnotatedValue>>),
+    Enum(EnumValue),
+    Option(OptionValue),
+    Result(ResultValue),
     Handle(ResourceValue),
+}
+
+impl TypeAnnotatedValue {
+    pub fn analysed_typ(&self) -> AnalysedType {
+        match self {
+            TypeAnnotatedValue::Bool(_) => {
+                AnalysedType(golem_wasm_ast::analysis::AnalysedType::Bool)
+            }
+            TypeAnnotatedValue::S8(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::S8),
+            TypeAnnotatedValue::U8(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::U8),
+            TypeAnnotatedValue::S16(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::S16),
+            TypeAnnotatedValue::U16(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::U16),
+            TypeAnnotatedValue::S32(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::S32),
+            TypeAnnotatedValue::U32(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::U32),
+            TypeAnnotatedValue::S64(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::S64),
+            TypeAnnotatedValue::U64(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::U64),
+            TypeAnnotatedValue::F32(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::F32),
+            TypeAnnotatedValue::F64(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::F64),
+            TypeAnnotatedValue::Chr(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::Chr),
+            TypeAnnotatedValue::Str(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::Str),
+            TypeAnnotatedValue::List(value) => value.clone().typ,
+            TypeAnnotatedValue::Tuple(value) => value.clone().typ,
+            TypeAnnotatedValue::Record(value) => value.clone().typ,
+            TypeAnnotatedValue::Flags(value) => AnalysedType(
+                golem_wasm_ast::analysis::AnalysedType::Flags(value.clone().typ),
+            ),
+            TypeAnnotatedValue::Enum(value) => value.clone().typ,
+            TypeAnnotatedValue::Option(value) => value.clone().typ,
+            TypeAnnotatedValue::Result(value) => {
+                AnalysedType(golem_wasm_ast::analysis::AnalysedType::Result {
+                    ok: value.clone().ok.map(|value| Box::new(value.0)),
+                    error: value.clone().error.map(|value| Box::new(value.0)),
+                })
+            }
+            TypeAnnotatedValue::Handle(value) => {
+                AnalysedType(golem_wasm_ast::analysis::AnalysedType::Resource {
+                    id: value.clone().id,
+                    resource_mode: value.clone().resource_mode,
+                })
+            }
+            TypeAnnotatedValue::Variant(value) => {
+                AnalysedType(golem_wasm_ast::analysis::AnalysedType::Variant(
+                    value.clone().typ.into_iter().map(|(name, ty)| (name, ty.map(|t| t.0))).collect(),
+                ))
+            }
+        }
+    }
 }
 
 impl From<TypeAnnotatedValue> for WitValue {
@@ -595,10 +642,16 @@ pub struct FlagValue {
 }
 
 pub struct VariantValue {
+    typ: Vec<(String, Option<AnalysedType>)>,
     case_name: String,
-    case_value: Option<Box<TypeAnnotatedValue>>, // it is upto the constructor the value type is same as the case type of case_name
+    case_value: Option<Box<TypeAnnotatedValue>>,
 }
 
+#[derive(Clone)]
+pub struct TupleValue {
+    typ: AnalysedType,
+    value: Vec<TypeAnnotatedValue>,
+}
 
 #[derive(Clone)]
 pub struct RecordValue {
@@ -606,13 +659,32 @@ pub struct RecordValue {
     value: Vec<(String, TypeAnnotatedValue)>,
 }
 
+//
+// The law here is:
+//     let mut types = Vec::new();
+//       for value in values {
+//          types.push(value.analysed_typ());
+//       }
+//       let head = types.map(|value| value.into())).head
+//       types.forall(types == head)
+//
+#[derive(Clone)]
+pub struct ListValue {
+    typ: AnalysedType,
+    values: Vec<TypeAnnotatedValue>,
+}
+
 #[derive(Clone)]
 pub struct ResultValue {
+    ok: Option<Box<AnalysedType>>,
+    error: Option<Box<AnalysedType>>,
     value: Result<Box<TypeAnnotatedValue>, Box<TypeAnnotatedValue>>,
 }
 
 #[derive(Clone)]
 pub struct ResourceValue {
+    id: AnalysedResourceId,
+    resource_mode: AnalysedResourceMode,
     uri: Uri,
     resource_id: u64,
 }
