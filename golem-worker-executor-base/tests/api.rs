@@ -1,4 +1,4 @@
-use crate::common;
+use crate::{common, REDIS};
 use std::collections::HashMap;
 use std::env;
 use std::io::Write;
@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use assert2::check;
 use http_02::{Response, StatusCode};
+use redis::Commands;
 
 use golem_api_grpc::proto::golem::worker::{worker_execution_error, LogEvent, TemplateParseFailed};
 use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;
@@ -1633,4 +1634,56 @@ async fn counter_resource_test_1() {
                 common::val_u64(5)
             )])])
     );
+}
+
+#[tokio::test]
+async fn reconstruct_interrupted_state() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/interruption.wasm"));
+    let worker_id = executor.start_worker(&template_id, "interruption-1").await;
+
+    let mut executor_clone = executor.async_clone().await;
+    let worker_id_clone = worker_id.clone();
+    let fiber = tokio::spawn(async move {
+        executor_clone
+            .invoke_and_await(&worker_id_clone, "run", vec![])
+            .await
+    });
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let _ = executor.interrupt(&worker_id).await;
+    let result = fiber.await.unwrap();
+
+    // Explicitly deleting the status information from Redis to check if it can be
+    // reconstructed from Redis
+
+    let mut redis = REDIS.get_connection();
+    let _: () = redis
+        .del(format!(
+            "{}instance:status:{}",
+            context.redis_prefix(),
+            worker_id.to_redis_key()
+        ))
+        .unwrap();
+    debug!("Deleted status information from Redis");
+
+    let status = executor
+        .get_worker_metadata(&worker_id)
+        .await
+        .unwrap()
+        .last_known_status
+        .status;
+
+    drop(executor);
+
+    check!(result.is_err());
+    check!(result
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("Interrupted via the Golem API"));
+    check!(status == WorkerStatus::Interrupted);
 }

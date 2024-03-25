@@ -7,10 +7,6 @@ edition = "2021"
 name = "golem-template-service"
 path = "src/server.rs"
 
-[[bin]]
-name = "golem-template-service-yaml"
-path = "src/openapi_yaml.rs"
-
 [lib]
 
 [dependencies]

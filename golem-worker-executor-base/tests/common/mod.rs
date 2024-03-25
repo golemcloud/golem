@@ -1084,12 +1084,12 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         DurableWorkerCtx::<TestWorkerCtx>::get_worker_retry_count(this, worker_id).await
     }
 
-    async fn get_assumed_worker_status<T: HasAll<TestWorkerCtx> + Send + Sync>(
+    async fn compute_latest_worker_status<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
         metadata: &Option<WorkerMetadata>,
-    ) -> WorkerStatus {
-        DurableWorkerCtx::<TestWorkerCtx>::get_assumed_worker_status(this, worker_id, metadata)
+    ) -> Result<WorkerStatusRecord, GolemError> {
+        DurableWorkerCtx::<TestWorkerCtx>::compute_latest_worker_status(this, worker_id, metadata)
             .await
     }
 

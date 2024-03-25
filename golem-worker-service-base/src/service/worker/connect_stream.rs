@@ -6,11 +6,12 @@ use std::{
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tonic::{Status, Streaming};
 
 pub struct ConnectWorkerStream {
     receiver: mpsc::Receiver<Result<LogEvent, Status>>,
-    cancel: tokio_util::sync::CancellationToken,
+    cancel: CancellationToken,
 }
 
 impl ConnectWorkerStream {
@@ -20,7 +21,7 @@ impl ConnectWorkerStream {
         let (sender, receiver) = mpsc::channel(32);
         let mut streaming = streaming;
 
-        let cancel = tokio_util::sync::CancellationToken::new();
+        let cancel = CancellationToken::new();
 
         tokio::spawn({
             let cancel = cancel.clone();

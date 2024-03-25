@@ -24,10 +24,7 @@ impl CliConfig {
 }
 
 pub trait Cli {
-    fn run<'a, T: DeserializeOwned, S: AsRef<OsStr> + Debug>(
-        &self,
-        args: &[S],
-    ) -> Result<T, Failed>;
+    fn run<T: DeserializeOwned, S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<T, Failed>;
     fn run_json<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Value, Failed>;
     fn run_unit<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<(), Failed>;
     fn run_stdout<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Child, Failed>;

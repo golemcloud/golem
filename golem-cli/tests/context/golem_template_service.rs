@@ -66,6 +66,7 @@ pub struct GolemTemplateService<'docker_client> {
 
 enum GolemTemplateServiceInner<'docker_client> {
     Process(Child),
+    #[allow(dead_code)]
     Docker(Container<'docker_client, GolemTemplateServiceImage>),
 }
 

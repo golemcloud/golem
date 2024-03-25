@@ -20,7 +20,7 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatus,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -101,12 +101,12 @@ impl ExternalOperations<Context> for Context {
         DurableWorkerCtx::<Context>::get_worker_retry_count(this, worker_id).await
     }
 
-    async fn get_assumed_worker_status<T: HasAll<Context> + Send + Sync>(
+    async fn compute_latest_worker_status<T: HasAll<Context> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
         metadata: &Option<WorkerMetadata>,
-    ) -> WorkerStatus {
-        DurableWorkerCtx::<Context>::get_assumed_worker_status(this, worker_id, metadata).await
+    ) -> Result<WorkerStatusRecord, GolemError> {
+        DurableWorkerCtx::<Context>::compute_latest_worker_status(this, worker_id, metadata).await
     }
 
     async fn prepare_instance(
