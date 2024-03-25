@@ -11,14 +11,15 @@ description = "Command line interface for Golem Cloud"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+golem-cloud-client = { path = "../golem-cloud-client", version="0.0.0" }
+golem-gateway-client = { path = "../gateway-client", version="0.0.0" }
+
 async-trait = "0.1.76"
 chrono = { version = "0.4.31", features = ["serde"] }
 clap = { version = "4.4.12", features = ["derive"] }
 clap-verbosity-flag = "2.1.1"
 derive_more = "0.99.17"
 futures-util = "0.3.30"
-golem-cloud-client = { path = "../golem-cloud-client" }
-golem-gateway-client = { path = "../gateway-client" }
 golem-examples = "0.1.12"
 golem-wasm-rpc-stubgen = { version = "0.0.13", optional = true }
 http = "1.0.0"
