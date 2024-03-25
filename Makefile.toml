@@ -184,7 +184,7 @@ script = '''
       echo "Latest Golem OpenAPI spec version detected."
     else
       echo "openapi/golem-service.yaml is not the same as produced by golem-service-yaml." 1>&2
-      echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec." 1>&2
+      echo "Run cargo make generate-openapi to generate new spec." 1>&2
       exit 1
   fi
 '''
