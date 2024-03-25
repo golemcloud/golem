@@ -57,7 +57,7 @@ pub use bindings::golem::rpc::types::{NodeIndex, RpcError, Uri, WasmRpc, WitNode
 #[cfg(feature = "host")]
 use ::wasmtime::component::bindgen;
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
-use wasm_wave::wasm::{WasmValue, WasmValueError};
+use wasm_wave::wasm::{WasmType, WasmValue, WasmValueError};
 
 #[cfg(feature = "host")]
 bindgen!({
@@ -384,6 +384,7 @@ pub enum TypeAnnotatedValue {
     Tuple(TupleValue),
     Record(RecordValue),
     Flags(FlagValue),
+    Variant(VariantValue),
     Enum(EnumValue),
     Option(OptionValue),
     Result(ResultValue),
@@ -446,7 +447,7 @@ impl WasmValue for TypeAnnotatedValue {
     }
 
     fn make_bool(val: bool) -> Self {
-       TypeAnnotatedValue::Bool(val)
+        TypeAnnotatedValue::Bool(val)
     }
 
     fn make_s8(val: i8) -> Self {
@@ -473,7 +474,7 @@ impl WasmValue for TypeAnnotatedValue {
         TypeAnnotatedValue::U16(val)
     }
 
-     fn make_u32(val: u32) -> Self {
+    fn make_u32(val: u32) -> Self {
         TypeAnnotatedValue::U32(val)
     }
 
@@ -501,7 +502,7 @@ impl WasmValue for TypeAnnotatedValue {
         ty: &Self::Type,
         vals: impl IntoIterator<Item = Self>,
     ) -> Result<Self, WasmValueError> {
-        Ok(TypeAnnotatedValue::List(ListValue{
+        Ok(TypeAnnotatedValue::List(ListValue {
             values: vals.into_iter().collect(),
             typ: ty.clone(),
         }))
@@ -511,8 +512,11 @@ impl WasmValue for TypeAnnotatedValue {
         ty: &Self::Type,
         fields: impl IntoIterator<Item = (&'a str, Self)>,
     ) -> Result<Self, WasmValueError> {
-        Ok(TypeAnnotatedValue::Record(RecordValue{
-            value: fields.into_iter().map(|(name, value)| (name.to_string(), value)).collect(),
+        Ok(TypeAnnotatedValue::Record(RecordValue {
+            value: fields
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), value))
+                .collect(),
             typ: ty.clone(),
         }))
     }
@@ -521,10 +525,45 @@ impl WasmValue for TypeAnnotatedValue {
         ty: &Self::Type,
         vals: impl IntoIterator<Item = Self>,
     ) -> Result<Self, WasmValueError> {
-        Ok(TypeAnnotatedValue::Tuple(TupleValue{
+        Ok(TypeAnnotatedValue::Tuple(TupleValue {
             value: vals.into_iter().collect(),
             typ: ty.clone(),
         }))
+    }
+
+    fn make_variant(
+        ty: &Self::Type,
+        case: &str,
+        val: Option<Self>,
+    ) -> Result<Self, WasmValueError> {
+        if let golem_wasm_ast::analysis::AnalysedType::Variant(cases) = &ty.0 {
+            let case_type = cases
+                .iter()
+                .enumerate()
+                .find_map(
+                    |(idx, (name, case_type))| if name == case { Some(case_type) } else { None },
+                );
+            if let Some(case_type) = case_type {
+                Ok(TypeAnnotatedValue::Variant(VariantValue {
+                    typ: cases
+                        .clone()
+                        .iter()
+                        .map(|(name, case_type)| {
+                            (name.clone(), case_type.clone().map(|ty| AnalysedType(ty)))
+                        })
+                        .collect::<Vec<_>>(),
+                    case_name: case.to_string(),
+                    case_value: val.map(|v| Box::new(v)),
+                }))
+            } else {
+                Err(WasmValueError::UnknownCase(case.to_string()))
+            }
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
     }
 }
 
@@ -544,6 +583,12 @@ pub struct OptionValue {
 pub struct FlagValue {
     typ: Vec<String>,
     value: Vec<bool>,
+}
+
+pub struct VariantValue {
+    typ: Vec<(String, Option<AnalysedType>)>,
+    case_name: String,
+    case_value: Option<Box<TypeAnnotatedValue>>,
 }
 
 #[derive(Clone)]
