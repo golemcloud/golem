@@ -55,6 +55,7 @@ pub use bindings::golem::rpc::types::{NodeIndex, RpcError, Uri, WasmRpc, WitNode
 
 #[cfg(feature = "host")]
 use ::wasmtime::component::bindgen;
+use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 
 #[cfg(feature = "host")]
 bindgen!({
@@ -69,6 +70,7 @@ bindgen!({
     }
 });
 
+use crate::text::AnalysedType;
 #[cfg(feature = "host")]
 pub use golem::rpc::types::{Host, HostWasmRpc, NodeIndex, RpcError, Uri, WitNode, WitValue};
 
@@ -302,6 +304,134 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
             resource_id: *value,
         },
     }
+}
+
+// An efficient read representation of a value with type information at every node
+// Note that we do an extra annotation of AnalysedType at complex structures to fetch their type information with 0(1)
+// However the typical use of TypeAnnotatedValue is similar to using a complete json structure
+#[derive(Clone)]
+pub enum TypeAnnotatedValue {
+    Bool(bool),
+    S8(i8),
+    U8(u8),
+    S16(i16),
+    U16(u16),
+    S32(i32),
+    U32(u32),
+    S64(i64),
+    U64(u64),
+    F32(f32),
+    F64(f64),
+    Chr(char),
+    Str(String),
+    List(ListValue),
+    Tuple(TupleValue),
+    Record(RecordValue),
+    Flags(FlagValue),
+    Enum(EnumValue),
+    Option(OptionValue),
+    Result(ResultValue),
+    Handle(ResourceValue),
+}
+
+impl TypeAnnotatedValue {
+    pub fn analysed_typ(&self) -> AnalysedType {
+        match self {
+            TypeAnnotatedValue::Bool(_) => {
+                AnalysedType(golem_wasm_ast::analysis::AnalysedType::Bool)
+            }
+            TypeAnnotatedValue::S8(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::S8),
+            TypeAnnotatedValue::U8(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::U8),
+            TypeAnnotatedValue::S16(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::S16),
+            TypeAnnotatedValue::U16(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::U16),
+            TypeAnnotatedValue::S32(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::S32),
+            TypeAnnotatedValue::U32(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::U32),
+            TypeAnnotatedValue::S64(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::S64),
+            TypeAnnotatedValue::U64(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::U64),
+            TypeAnnotatedValue::F32(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::F32),
+            TypeAnnotatedValue::F64(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::F64),
+            TypeAnnotatedValue::Chr(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::Chr),
+            TypeAnnotatedValue::Str(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::Str),
+            TypeAnnotatedValue::List(value) => value.clone().typ,
+            TypeAnnotatedValue::Tuple(value) => value.clone().typ,
+            TypeAnnotatedValue::Record(value) => value.clone().typ,
+            TypeAnnotatedValue::Flags(value) => value.clone().typ,
+            TypeAnnotatedValue::Enum(value) => value.clone().typ,
+            TypeAnnotatedValue::Option(value) => value.clone().typ,
+            TypeAnnotatedValue::Result(value) => {
+                AnalysedType(golem_wasm_ast::analysis::AnalysedType::Result {
+                    ok: value.clone().ok.map(|value| Box::new(value.0)),
+                    error: value.clone().error.map(|value| Box::new(value.0)),
+                })
+            }
+            TypeAnnotatedValue::Handle(value) => {
+                AnalysedType(golem_wasm_ast::analysis::AnalysedType::Resource {
+                    id: value.clone().id,
+                    resource_mode: value.clone().resource_mode,
+                })
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct EnumValue {
+    typ: AnalysedType,
+    name: String,
+}
+
+#[derive(Clone)]
+pub struct OptionValue {
+    typ: AnalysedType,
+    value: Option<Box<TypeAnnotatedValue>>,
+}
+
+#[derive(Clone)]
+pub struct FlagValue {
+    typ: AnalysedType,
+    name: String,
+}
+
+#[derive(Clone)]
+pub struct TupleValue {
+    typ: AnalysedType,
+    value: Vec<TypeAnnotatedValue>,
+}
+
+#[derive(Clone)]
+pub struct RecordValue {
+    typ: AnalysedType,
+    value: Vec<(String, TypeAnnotatedValue)>,
+}
+
+//
+// The law here is:
+//     let mut types = Vec::new();
+//       for value in values {
+//          types.push(value.analysed_typ());
+//       }
+//       let head = types.map(|value| value.into())).head
+//       types.forall(types == head)
+//
+#[derive(Clone)]
+pub struct ListValue {
+    typ: AnalysedType,
+    values: Vec<TypeAnnotatedValue>,
+}
+
+#[derive(Clone)]
+pub struct ResultValue {
+    ok: Option<Box<AnalysedType>>,
+    error: Option<Box<AnalysedType>>,
+    value: Result<Box<TypeAnnotatedValue>, Box<TypeAnnotatedValue>>,
+}
+
+#[derive(Clone)]
+pub struct ResourceValue {
+    id: AnalysedResourceId,
+    resource_mode: AnalysedResourceMode,
+    uri: Uri,
+    resource_id: u64,
 }
 
 #[cfg(feature = "arbitrary")]
