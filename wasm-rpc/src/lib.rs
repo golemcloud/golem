@@ -429,6 +429,11 @@ impl TypeAnnotatedValue {
                     resource_mode: value.clone().resource_mode,
                 })
             }
+            TypeAnnotatedValue::Variant(value) => {
+                AnalysedType(golem_wasm_ast::analysis::AnalysedType::Variant(
+                    value.clone().typ.into_iter().map(|(name, ty)| (name, ty.map(|t| t.0))).collect(),
+                ))
+            }
         }
     }
 }
