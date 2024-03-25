@@ -61,9 +61,10 @@ pub trait WorkerEnumerationService {
         &self,
         template_id: &TemplateId,
         filter: &WorkerFilter,
-        cursor: u32,
+        cursor: usize,
+        count: usize,
         precise: bool,
-    ) -> Result<(u32, Vec<WorkerMetadata>), GolemError>;
+    ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError>;
 }
 
 #[derive(Clone)]
@@ -95,22 +96,43 @@ impl WorkerEnumerationService
         &self,
         template_id: &TemplateId,
         filter: &WorkerFilter,
-        cursor: u32,
+        cursor: usize,
+        count: usize,
         precise: bool,
-    ) -> Result<(u32, Vec<WorkerMetadata>), GolemError> {
-        let worker_templates_redis_key = get_worker_details_redis_key(&template_id);
+    ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
+        let template_worker_redis_key = get_template_worker_redis_key(&template_id);
         let (new_cursor, worker_redis_keys) = self
             .redis
             .with("instance", "scan")
-            .scan(worker_templates_redis_key, cursor, 20)
+            .scan(template_worker_redis_key, cursor, count)
             .await
             .map_err(|e| GolemError::unknown(e.details()))?;
         todo!()
     }
 }
 
-fn get_worker_details_redis_key(template_id: &TemplateId) -> String {
+fn get_template_worker_redis_key(template_id: &TemplateId) -> String {
     format!("instance:instance:{}*", template_id.0)
+}
+
+fn get_worker_id_from_redis_key(
+    worker_redis_key: &str,
+    template_id: &TemplateId,
+) -> Result<WorkerId, GolemError> {
+    let template_prefix = format!("instance:instance:{}:", template_id.0);
+
+    if worker_redis_key.starts_with(&template_prefix) {
+        let worker_name = &worker_redis_key[template_prefix.len()..];
+
+        Ok(WorkerId {
+            worker_name: worker_name.to_string(),
+            template_id: template_id.clone(),
+        })
+    } else {
+        Err(GolemError::unknown(
+            "Failed to get worker id from redis key",
+        ))
+    }
 }
 
 #[derive(Clone)]
@@ -132,19 +154,41 @@ impl WorkerEnumerationService
         &self,
         template_id: &TemplateId,
         filter: &WorkerFilter,
-        cursor: u32,
+        cursor: usize,
+        count: usize,
         precise: bool,
-    ) -> Result<(u32, Vec<WorkerMetadata>), GolemError> {
-        // TODO implement precise and cursor
+    ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
+        // TODO implement precise
         let workers = self.worker_service.enumerate().await;
 
-        let mut template_workers: Vec<WorkerMetadata> = vec![];
-        for worker in workers {
-            if worker.worker_id.worker_id.template_id == *template_id && filter.matches(&worker) {
-                template_workers.push(worker);
-            }
-        }
+        let all_workers_count = workers.len();
 
-        Ok((template_workers.len() as u32, template_workers))
+        let mut template_workers: Vec<WorkerMetadata> = vec![];
+
+        let new_cursor = if all_workers_count > cursor {
+            let mut index = 0;
+            for worker in workers {
+                if index >= cursor
+                    && worker.worker_id.worker_id.template_id == *template_id
+                    && filter.matches(&worker)
+                {
+                    template_workers.push(worker);
+                }
+
+                index = index + 1;
+
+                if template_workers.len() == count {
+                    break;
+                }
+            }
+            if index >= all_workers_count {
+                None
+            } else {
+                Some(index)
+            }
+        } else {
+            None
+        };
+        Ok((new_cursor, template_workers))
     }
 }

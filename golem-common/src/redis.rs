@@ -640,9 +640,9 @@ impl<'a> RedisLabelledApi<'a> {
     pub async fn scan<K>(
         &self,
         pattern: K,
-        cursor: u32,
-        count: u32,
-    ) -> RedisResult<(u32, Vec<String>)>
+        cursor: usize,
+        count: usize,
+    ) -> RedisResult<(usize, Vec<String>)>
     where
         K: AsRef<str>,
     {
@@ -650,12 +650,13 @@ impl<'a> RedisLabelledApi<'a> {
         let start = Instant::now();
 
         //https://redis.io/commands/scan/
-        let mut args: Vec<String> = Vec::with_capacity(5);
-        args.push(cursor.to_string());
-        args.push("MATCH".to_string());
-        args.push(self.prefixed_key(pattern));
-        args.push("COUNT".to_string());
-        args.push(count.to_string());
+        let args: Vec<String> = vec![
+            cursor.to_string(),
+            "MATCH".to_string(),
+            self.prefixed_key(pattern),
+            "COUNT".to_string(),
+            count.to_string(),
+        ];
 
         //https://github.com/aembke/fred.rs/blob/3a91ee9bc12faff9d32627c0db2c9b24c54efa03/examples/custom.rs#L7
 
@@ -670,11 +671,11 @@ impl<'a> RedisLabelledApi<'a> {
         )
     }
 
-    fn parse_key_scan_frame(&self, frame: Resp3Frame) -> RedisResult<(u32, Vec<String>)> {
+    fn parse_key_scan_frame(&self, frame: Resp3Frame) -> RedisResult<(usize, Vec<String>)> {
         use fred::prelude::*;
         if let Resp3Frame::Array { mut data, .. } = frame {
             if data.len() == 2 {
-                let cursor: u32 = data[0]
+                let cursor: usize = data[0]
                     .clone()
                     .try_into()
                     .and_then(|value: RedisValue| value.convert())?;
