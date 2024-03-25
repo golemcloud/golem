@@ -45,6 +45,7 @@ mod text;
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
 
+use std::collections::HashSet;
 use crate::builder::WitValueBuilder;
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 pub use extractor::{WitNodePointer, WitValueExtractor};
@@ -570,12 +571,62 @@ impl WasmValue for TypeAnnotatedValue {
             })
         }
     }
+
+    fn make_enum(ty: &Self::Type, case: &str) -> Result<Self, WasmValueError> {
+        if let golem_wasm_ast::analysis::AnalysedType::Enum(cases) = &ty.0 {
+            if cases.contains(&case.to_string()) {
+                Ok(TypeAnnotatedValue::Enum(
+                    EnumValue {
+                        typ: cases.clone(),
+                        value: case.to_string(),
+                    },
+                ))
+            } else {
+                Err(WasmValueError::UnknownCase(case.to_string()))
+            }
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
+    }
+
+    fn make_flags<'a>(
+        ty: &Self::Type,
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Self, WasmValueError> {
+        if let golem_wasm_ast::analysis::AnalysedType::Flags(all_names) = &ty.0 {
+
+            let invalid_names: Vec<&String> = names.iter()
+                .filter(|name| !all_names.contains(*name))
+                .collect();
+
+            if invalid_names.is_empty(){
+                Ok(
+                    TypeAnnotatedValue::Flags(FlagValue{
+                        typ: all_names.clone(),
+                        value: names.into_iter().map(|name| name.to_string()).collect()
+
+                    })
+                )
+            } else {
+                Err(WasmValueError::UnknownCase(invalid_names.join(", ")))
+            }
+
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct EnumValue {
-    typ: AnalysedType,
-    value: u32,
+    typ: Vec<String>,
+    value: String,
 }
 
 #[derive(Clone)]
@@ -587,7 +638,7 @@ pub struct OptionValue {
 #[derive(Clone)]
 pub struct FlagValue {
     typ: Vec<String>,
-    value: Vec<bool>,
+    value: Vec<String>, // value should be a subset of typ field here.
 }
 
 pub struct VariantValue {
