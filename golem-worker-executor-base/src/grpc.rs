@@ -177,7 +177,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .status;
 
         match worker_status {
-            WorkerStatus::Failed => Err(GolemError::PreviousInvocationFailed),
+            WorkerStatus::Failed => {
+                let error_and_retry_count =
+                    Ctx::get_last_error_and_retry_count(self, worker_id).await;
+                if let Some(last_error) = error_and_retry_count {
+                    Err(GolemError::PreviousInvocationFailed {
+                        details: format!("{}", last_error.error),
+                    })
+                } else {
+                    Err(GolemError::PreviousInvocationFailed {
+                        details: "".to_string(),
+                    })
+                }
+            }
             WorkerStatus::Exited => Err(GolemError::PreviousInvocationExited),
             _ => {
                 let error_and_retry_count =
@@ -186,8 +198,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "Last error and retry count for worker {}: {:?}",
                     worker_id, error_and_retry_count
                 );
-                if error_and_retry_count.is_some() {
-                    Err(GolemError::PreviousInvocationFailed) // TODO: add error details
+                if let Some(last_error) = error_and_retry_count {
+                    Err(GolemError::PreviousInvocationFailed {
+                        details: format!("{}", last_error.error),
+                    })
                 } else {
                     Ok(worker_status)
                 }
@@ -649,7 +663,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             template_version: metadata.worker_id.template_version,
             status: Into::<golem::worker::WorkerStatus>::into(latest_status).into(),
             retry_count: last_error_and_retry_count
-                .map(|(_, retry_count)| retry_count as i32)
+                .map(|last_error| last_error.retry_count as i32)
                 .unwrap_or_default(),
             // TODO: add error details
         })

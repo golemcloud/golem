@@ -635,7 +635,7 @@ mod tests {
             ".*".prop_map(|details| GolemError::Runtime { details }),
             (shardid_strat(), vec(shardid_strat(), 0..100)).prop_map(|(shard_id, shard_ids)| GolemError::InvalidShardId { shard_id, shard_ids }),
             Just(GolemError::InvalidAccount),
-            Just(GolemError::PreviousInvocationFailed),
+            ".*".prop_map(|details| GolemError::PreviousInvocationFailed { details }),
             Just(GolemError::PreviousInvocationExited),
             ".*".prop_map(|details| GolemError::Unknown { details }),
         }

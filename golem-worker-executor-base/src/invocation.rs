@@ -24,8 +24,7 @@ use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
-use crate::model::InterruptKind;
-use crate::services::recovery::TrapType;
+use crate::model::{InterruptKind, TrapType};
 use crate::workerctx::{FuelManagement, WorkerCtx};
 
 /// Invokes a function on a worker.
@@ -413,7 +412,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function_input: &[Value],
     context: &str,
-) -> Result<crate::invocation::InvokeResult, anyhow::Error> {
+) -> Result<InvokeResult, anyhow::Error> {
     let mut store = store.as_context_mut();
     let self_uri = store.data().self_uri();
     if function_input.len() != 1 {

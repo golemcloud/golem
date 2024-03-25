@@ -18,7 +18,6 @@ use std::sync::{Arc, RwLock};
 use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
@@ -30,7 +29,7 @@ use golem_worker_executor_base::durable_host::{
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
@@ -39,7 +38,7 @@ use golem_worker_executor_base::services::invocation_key::InvocationKeyService;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::OplogService;
 use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::recovery::{RecoveryManagement, TrapType};
+use golem_worker_executor_base::services::recovery::RecoveryManagement;
 use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
@@ -98,7 +97,7 @@ impl ExternalOperations<Context> for Context {
     async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> Option<(WorkerError, u64)> {
+    ) -> Option<LastError> {
         DurableWorkerCtx::<Context>::get_last_error_and_retry_count(this, worker_id).await
     }
 

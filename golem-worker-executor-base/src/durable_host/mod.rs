@@ -26,7 +26,9 @@ use std::time::{Duration, Instant};
 
 use crate::error::GolemError;
 use crate::invocation::invoke_worker;
-use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig};
+use crate::model::{
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
+};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
@@ -46,7 +48,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use cap_std::ambient_authority;
-use golem_common::model::oplog::{OplogEntry, WorkerError, WrappedFunctionType};
+use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
@@ -69,7 +71,7 @@ use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::wasm_rpc::UriExtensions;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::services::oplog::OplogService;
-use crate::services::recovery::{RecoveryManagement, TrapType};
+use crate::services::recovery::RecoveryManagement;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::HasOplogService;
@@ -887,7 +889,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> Option<(WorkerError, u64)> {
+    ) -> Option<LastError> {
         last_error_and_retry_count(this, worker_id).await
     }
 
@@ -995,16 +997,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         for worker in workers {
             let worker_id = worker.worker_id;
-            let previous_tries =
-                Self::get_last_error_and_retry_count(this, &worker_id.worker_id).await;
+            let last_error = Self::get_last_error_and_retry_count(this, &worker_id.worker_id).await;
             let decision = this
                 .recovery_management()
-                .schedule_recovery_on_startup(&worker_id, &previous_tries)
+                .schedule_recovery_on_startup(&worker_id, &last_error)
                 .await;
-            debug!(
-                "Recovery decision for {} after {:?} tries: {:?}",
-                worker_id, previous_tries, decision
-            ); // TODO: Proper type and Display instance for get_last_error_and_retry_count's result
+            if let Some(last_error) = last_error {
+                debug!("Recovery decision for {worker_id} after {last_error}: {decision:?}");
+            }
         }
 
         info!("Finished recovering workers");
@@ -1015,9 +1015,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 async fn last_error_and_retry_count<T: HasOplogService>(
     this: &T,
     worker_id: &WorkerId,
-) -> Option<(WorkerError, u64)> {
+) -> Option<LastError> {
     let mut idx = this.oplog_service().get_size(worker_id).await;
-    let mut count = 0;
+    let mut retry_count = 0;
     if idx == 0 {
         None
     } else {
@@ -1027,7 +1027,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
             match oplog_entry.first()
                 .unwrap_or_else(|| panic!("Internal error: op log for {} has size greater than zero but no entry at last index", worker_id)) {
                 OplogEntry::Error { error, .. } => {
-                    count += 1;
+                    retry_count += 1;
                     if first_error.is_none() {
                         first_error = Some(error.clone());
                     }
@@ -1035,12 +1035,17 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                         idx -= 1;
                         continue;
                     } else {
-                        break Some((first_error.unwrap(), count));
+                        break Some(
+                            LastError {
+                                error: first_error.unwrap(),
+                                retry_count
+                            }
+                        );
                     }
                 }
-                _other => {
+                _ => {
                     match first_error {
-                        Some(error) => break Some((error, count)),
+                        Some(error) => break Some(LastError { error, retry_count }),
                         None => break None
                     }
                 }
@@ -1345,7 +1350,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     pub async fn trailing_error_count(&self) -> u64 {
         last_error_and_retry_count(self, &self.worker_id)
             .await
-            .map(|(_, count)| count)
+            .map(|last_error| last_error.retry_count)
             .unwrap_or_default()
     }
 }

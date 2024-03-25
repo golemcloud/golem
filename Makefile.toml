@@ -236,7 +236,6 @@ command = "sed"
 args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
 
 [tasks.set-golem-client-version.mac]
-description = "Sets the version in golem-client/Cargo.toml to the value of the VERSION environment variable"
 condition = { env_set = ["VERSION"] }
 command = "sed"
 args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
@@ -254,7 +253,6 @@ command = "sed"
 args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]
 
 [tasks.set-golem-cli-version.mac]
-description = "Sets the version in golem-cli/Cargo.toml to the value of the VERSION environment variable"
 condition = { env_set = ["VERSION"] }
 command = "sed"
 args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]

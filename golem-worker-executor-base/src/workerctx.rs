@@ -17,7 +17,6 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
@@ -27,7 +26,9 @@ use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use crate::error::GolemError;
-use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig};
+use crate::model::{
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
+};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
@@ -35,7 +36,7 @@ use crate::services::invocation_key::InvocationKeyService;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::OplogService;
 use crate::services::promise::PromiseService;
-use crate::services::recovery::{RecoveryManagement, TrapType};
+use crate::services::recovery::RecoveryManagement;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
@@ -295,7 +296,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> Option<(WorkerError, u64)>;
+    ) -> Option<LastError>;
 
     /// Gets a best-effort current worker status without activating the worker
     async fn compute_latest_worker_status<T: HasAll<Ctx> + Send + Sync>(

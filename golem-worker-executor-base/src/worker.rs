@@ -34,10 +34,10 @@ use wasmtime::{Store, UpdateDeadline};
 use crate::error::GolemError;
 use crate::invocation::invoke_worker;
 use crate::metrics::wasm::{record_create_worker, record_create_worker_failure};
-use crate::model::{ExecutionStatus, InterruptKind, WorkerConfig};
+use crate::model::{ExecutionStatus, InterruptKind, TrapType, WorkerConfig};
 use crate::services::golem_config::GolemConfig;
 use crate::services::invocation_key::LookupResult;
-use crate::services::recovery::{RecoveryManagement, TrapType};
+use crate::services::recovery::RecoveryManagement;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
     HasAll, HasInvocationKeyService, HasOplogService, HasRecoveryManagement, HasWorkerService,
@@ -733,7 +733,7 @@ fn calculate_latest_worker_status(
             OplogEntry::Error { error, .. } => {
                 last_error_count += 1;
 
-                if recovery_manager.is_retriable(last_error_count, error) {
+                if recovery_manager.is_retriable(error, last_error_count) {
                     result = WorkerStatus::Retrying;
                 } else {
                     result = WorkerStatus::Failed;
@@ -778,7 +778,7 @@ pub fn calculate_worker_status(
         TrapType::Interrupt(InterruptKind::Restart) => WorkerStatus::Running,
         TrapType::Exit => WorkerStatus::Exited,
         TrapType::Error(error) => {
-            if recovery_management.is_retriable(previous_tries, error) {
+            if recovery_management.is_retriable(error, previous_tries) {
                 WorkerStatus::Retrying
             } else {
                 WorkerStatus::Failed

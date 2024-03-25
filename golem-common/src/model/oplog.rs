@@ -7,6 +7,7 @@ use bincode::{Decode, Encode};
 use bytes::Bytes;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub enum OplogEntry {
@@ -231,6 +232,15 @@ pub enum WrappedFunctionType {
 pub enum WorkerError {
     Unknown(String),
     StackOverflow,
+}
+
+impl Display for WorkerError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerError::Unknown(message) => write!(f, "{}", message),
+            WorkerError::StackOverflow => write!(f, "Stack overflow"),
+        }
+    }
 }
 
 #[cfg(test)]
