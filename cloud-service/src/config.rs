@@ -4,7 +4,7 @@ use std::time::Duration;
 use cloud_common::model::PlanId;
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
-use golem_service_base::config::TemplateStoreConfig;
+use golem_service_base::config::{TemplateStoreConfig, TemplateStoreLocalConfig};
 use golem_service_base::routing_table::RoutingTableConfig;
 use serde::Deserialize;
 use uuid::Uuid;
@@ -41,7 +41,22 @@ impl CloudServiceConfig {
 
 impl Default for CloudServiceConfig {
     fn default() -> Self {
-        Self::new()
+        Self {
+            environment: "dev".to_string(),
+            workspace: "release".to_string(),
+            enable_tracing_console: false,
+            enable_json_log: false,
+            http_port: 8080,
+            grpc_port: 8081,
+            db: DbConfig::default(),
+            plans: PlansConfig::default(),
+            templates: TemplatesConfig::default(),
+            routing_table: RoutingTableConfig::default(),
+            ed_dsa: EdDsaConfig::default(),
+            accounts: AccountsConfig::default(),
+            oauth2: OAuth2Config::default(),
+            worker_executor_client_cache: WorkerExecutorClientCacheConfig::default(),
+        }
     }
 }
 
@@ -51,9 +66,29 @@ pub struct EdDsaConfig {
     pub public_key: String,
 }
 
+impl Default for EdDsaConfig {
+    fn default() -> Self {
+        EdDsaConfig {
+            private_key: "".to_string(),
+            public_key: "".to_string(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct TemplatesConfig {
     pub store: TemplateStoreConfig,
+}
+
+impl Default for TemplatesConfig {
+    fn default() -> Self {
+        TemplatesConfig {
+            store: TemplateStoreConfig::Local(TemplateStoreLocalConfig {
+                root_path: "templates".to_string(),
+                object_prefix: "".to_string(),
+            }),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -61,6 +96,15 @@ pub struct TemplatesConfig {
 pub enum DbConfig {
     Postgres(DbPostgresConfig),
     Sqlite(DbSqliteConfig),
+}
+
+impl Default for DbConfig {
+    fn default() -> Self {
+        DbConfig::Sqlite(DbSqliteConfig {
+            database: "golem_cloud_service.db".to_string(),
+            max_connections: 10,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -82,6 +126,22 @@ pub struct DbSqliteConfig {
 #[derive(Clone, Debug, Deserialize)]
 pub struct PlansConfig {
     pub default: PlanConfig,
+}
+
+impl Default for PlansConfig {
+    fn default() -> Self {
+        PlansConfig {
+            default: PlanConfig {
+                plan_id: Uuid::nil(),
+                project_limit: 100,
+                template_limit: 100,
+                worker_limit: 10000,
+                storage_limit: 500000000,
+                monthly_gas_limit: 1000000000000,
+                monthly_upload_limit: 1000000000,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -116,8 +176,17 @@ pub struct OAuth2Config {
     pub github_client_id: String,
 }
 
+impl Default for OAuth2Config {
+    fn default() -> Self {
+        OAuth2Config {
+            github_client_id: "GITHUB_CLIENT_ID".to_string(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(transparent)]
+#[derive(Default)]
 pub struct AccountsConfig {
     pub accounts: HashMap<String, AccountConfig>,
 }
@@ -137,6 +206,15 @@ pub struct WorkerExecutorClientCacheConfig {
     pub max_capacity: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
+}
+
+impl Default for WorkerExecutorClientCacheConfig {
+    fn default() -> Self {
+        Self {
+            max_capacity: 1000,
+            time_to_idle: Duration::from_secs(60 * 60 * 4),
+        }
+    }
 }
 
 #[cfg(test)]

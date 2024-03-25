@@ -21,3 +21,4 @@ uuid = { version = "^1.6", features = ["serde"] }
 
 [build-dependencies]
 golem-openapi-client-generator = "0.0.4"
+relative-path = "1.9.2"

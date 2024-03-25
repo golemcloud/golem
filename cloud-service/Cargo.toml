@@ -7,10 +7,6 @@ edition = "2021"
 name = "cloud-service"
 path = "src/server.rs"
 
-[[bin]]
-name = "cloud-service-yaml"
-path = "src/openapi_yaml.rs"
-
 [lib]
 
 [dependencies]
