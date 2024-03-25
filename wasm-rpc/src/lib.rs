@@ -48,6 +48,7 @@ pub mod wasmtime;
 use crate::builder::WitValueBuilder;
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 pub use extractor::{WitNodePointer, WitValueExtractor};
+use std::ops::Deref;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
@@ -56,6 +57,7 @@ pub use bindings::golem::rpc::types::{NodeIndex, RpcError, Uri, WasmRpc, WitNode
 #[cfg(feature = "host")]
 use ::wasmtime::component::bindgen;
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
+use wasm_wave::wasm::WasmValue;
 
 #[cfg(feature = "host")]
 bindgen!({
@@ -225,6 +227,60 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
     }
 }
 
+impl From<TypeAnnotatedValue> for Value {
+    fn from(value: TypeAnnotatedValue) -> Self {
+        match value {
+            TypeAnnotatedValue::Bool(value) => Value::Bool(value),
+            TypeAnnotatedValue::S8(value) => Value::S8(value),
+            TypeAnnotatedValue::U8(value) => Value::U8(value),
+            TypeAnnotatedValue::S16(value) => Value::S16(value),
+            TypeAnnotatedValue::U16(value) => Value::U16(value),
+            TypeAnnotatedValue::S32(value) => Value::S32(value),
+            TypeAnnotatedValue::U32(value) => Value::U32(value),
+            TypeAnnotatedValue::S64(value) => Value::S64(value),
+            TypeAnnotatedValue::U64(value) => Value::U64(value),
+            TypeAnnotatedValue::F32(value) => Value::F32(value),
+            TypeAnnotatedValue::F64(value) => Value::F64(value),
+            TypeAnnotatedValue::Chr(value) => Value::Char(value),
+            TypeAnnotatedValue::Str(value) => Value::String(value),
+            TypeAnnotatedValue::List(list_value) => Value::List(
+                list_value
+                    .values
+                    .into_iter()
+                    .map(|value| value.into())
+                    .collect(),
+            ),
+            TypeAnnotatedValue::Tuple(tuple_value) => Value::Tuple(
+                tuple_value
+                    .value
+                    .into_iter()
+                    .map(|value| value.into())
+                    .collect(),
+            ),
+            TypeAnnotatedValue::Record(record_value) => Value::Record(
+                record_value
+                    .value
+                    .into_iter()
+                    .map(|(name, value)| value.into())
+                    .collect::<Vec<Value>>(),
+            ),
+            TypeAnnotatedValue::Flags(flag_value) => Value::Flags(flag_value.value),
+            TypeAnnotatedValue::Enum(enum_value) => Value::Enum(enum_value.value),
+            TypeAnnotatedValue::Option(optional_value) => {
+                Value::Option(match optional_value.value {
+                    Some(value) => Some(Box::new(value.deref().clone().into())),
+                    None => None,
+                })
+            }
+            TypeAnnotatedValue::Result(result_value) => Value::Result(match result_value.value {
+                Ok(value) => Ok(Some(Box::new(value.deref().clone().into()))),
+                Err(value) => Err(Some(Box::new(value.deref().clone().into()))),
+            }),
+            TypeAnnotatedValue::Handle(value) => todo!(),
+        }
+    }
+}
+
 impl From<WitValue> for Value {
     fn from(value: WitValue) -> Self {
         assert!(!value.nodes.is_empty());
@@ -355,7 +411,9 @@ impl TypeAnnotatedValue {
             TypeAnnotatedValue::List(value) => value.clone().typ,
             TypeAnnotatedValue::Tuple(value) => value.clone().typ,
             TypeAnnotatedValue::Record(value) => value.clone().typ,
-            TypeAnnotatedValue::Flags(value) => value.clone().typ,
+            TypeAnnotatedValue::Flags(value) => AnalysedType(
+                golem_wasm_ast::analysis::AnalysedType::Flags(value.clone().typ),
+            ),
             TypeAnnotatedValue::Enum(value) => value.clone().typ,
             TypeAnnotatedValue::Option(value) => value.clone().typ,
             TypeAnnotatedValue::Result(value) => {
@@ -374,10 +432,18 @@ impl TypeAnnotatedValue {
     }
 }
 
+
+impl From<TypeAnnotatedValue> for WitValue {
+    fn from(value: TypeAnnotatedValue) -> Self {
+        let value: Value = value.into();
+        value.into()
+    }
+}
+
 #[derive(Clone)]
 pub struct EnumValue {
     typ: AnalysedType,
-    name: String,
+    value: u32,
 }
 
 #[derive(Clone)]
@@ -388,8 +454,8 @@ pub struct OptionValue {
 
 #[derive(Clone)]
 pub struct FlagValue {
-    typ: AnalysedType,
-    name: String,
+    typ: Vec<String>,
+    value: Vec<bool>,
 }
 
 #[derive(Clone)]
