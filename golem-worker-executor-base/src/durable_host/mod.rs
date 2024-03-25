@@ -1038,7 +1038,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                         break Some((first_error.unwrap(), count));
                     }
                 }
-                other => {
+                _other => {
                     match first_error {
                         Some(error) => break Some((error, count)),
                         None => break None

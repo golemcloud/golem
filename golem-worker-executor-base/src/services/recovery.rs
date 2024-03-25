@@ -34,7 +34,7 @@ use golem_common::model::{VersionedWorkerId, WorkerId, WorkerStatus};
 use golem_common::retries::get_delay;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use wasmtime::Trap;
 
 // TODO: move to crate::model?
