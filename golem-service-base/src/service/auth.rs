@@ -4,9 +4,14 @@ use serde::{Deserialize, Serialize};
 // Every authorisation is based on a permission to a particular context.
 // A context can be a simple unit, to a user, namespace, project, account, or
 // a mere request from where we can fetch details.
+//
 #[async_trait]
-pub trait AuthService<AuthCtx, Namespace, P = Permission> {
-    async fn is_authorized(&self, permission: P, ctx: &AuthCtx) -> Result<Namespace, AuthError>;
+pub trait AuthService<AuthCtx, Namespace> {
+    async fn is_authorized(
+        &self,
+        permission: Permission,
+        ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthError>;
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -50,5 +55,17 @@ pub struct WithNamespace<T, Namespace> {
 impl<T, Namespace> WithNamespace<T, Namespace> {
     pub fn new(value: T, namespace: Namespace) -> Self {
         Self { value, namespace }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WithAuth<T, AuthCtx> {
+    pub value: T,
+    pub context: AuthCtx,
+}
+
+impl<T, AuthCtx> WithAuth<T, AuthCtx> {
+    pub fn new(value: T, context: AuthCtx) -> Self {
+        Self { value, context }
     }
 }

@@ -1,5 +1,4 @@
 use crate::service::template::TemplateServiceError;
-use crate::service::TemplatePermission;
 use crate::UriBackConversion;
 
 use async_trait::async_trait;
@@ -11,7 +10,7 @@ use golem_common::config::RetryConfig;
 use golem_common::model::TemplateId;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Template;
-use golem_service_base::service::auth::{AuthService, Permission, WithNamespace};
+use golem_service_base::service::auth::{AuthService, Permission, WithAuth, WithNamespace};
 use http::Uri;
 use std::sync::Arc;
 use tracing::info;
@@ -19,7 +18,7 @@ use tracing::info;
 pub type TemplateResult<T, Namespace> = Result<WithNamespace<T, Namespace>, TemplateServiceError>;
 
 #[async_trait]
-pub trait TemplateService<Namespace, AuthCtx> {
+pub trait TemplateService<AuthCtx, Namespace> {
     async fn get_by_version(
         &self,
         template_id: &TemplateId,
@@ -35,17 +34,20 @@ pub trait TemplateService<Namespace, AuthCtx> {
 }
 
 #[derive(Clone)]
-pub struct TemplateServiceDefault<Namespace, AuthCtx> {
+pub struct TemplateServiceDefault<AuthCtx, Namespace> {
     uri: Uri,
     retry_config: RetryConfig,
-    auth_service: Arc<dyn AuthService<AuthCtx, Namespace, TemplatePermission> + Send + Sync>,
+    auth_service: InnerAuthService<AuthCtx, Namespace>,
 }
 
-impl<Namespace, AuthCtx> TemplateServiceDefault<Namespace, AuthCtx> {
+type InnerAuthService<AuthCtx, Namespace> =
+    Arc<dyn AuthService<WithAuth<AuthCtx, TemplateId>, Namespace> + Send + Sync>;
+
+impl<AuthCtx, Namespace> TemplateServiceDefault<AuthCtx, Namespace> {
     pub fn new(
         uri: Uri,
         retry_config: RetryConfig,
-        auth_service: Arc<dyn AuthService<AuthCtx, Namespace, TemplatePermission> + Send + Sync>,
+        auth_service: InnerAuthService<AuthCtx, Namespace>,
     ) -> Self {
         Self {
             uri,
@@ -56,11 +58,11 @@ impl<Namespace, AuthCtx> TemplateServiceDefault<Namespace, AuthCtx> {
 }
 
 #[async_trait]
-impl<Namespace, AuthCtx> TemplateService<Namespace, AuthCtx>
-    for TemplateServiceDefault<Namespace, AuthCtx>
+impl<AuthCtx, Namespace> TemplateService<AuthCtx, Namespace>
+    for TemplateServiceDefault<AuthCtx, Namespace>
 where
     Namespace: Send + Sync,
-    AuthCtx: Send + Sync,
+    AuthCtx: Clone + Send + Sync,
 {
     async fn get_latest(
         &self,
@@ -69,15 +71,11 @@ where
     ) -> TemplateResult<Template, Namespace> {
         let desc = format!("Getting latest version of template: {}", template_id);
         info!("{}", &desc);
-
-        let permission = TemplatePermission {
-            template: template_id.clone(),
-            permission: Permission::View,
-        };
+        let auth_ctx = WithAuth::new(auth_ctx.clone(), template_id.clone());
 
         let namespace = self
             .auth_service
-            .is_authorized(permission, auth_ctx)
+            .is_authorized(Permission::View, &auth_ctx)
             .await?;
 
         let value = with_retries(
@@ -142,14 +140,11 @@ where
         let desc = format!("Getting template: {}", template_id);
         info!("{}", &desc);
 
-        let permission = TemplatePermission {
-            template: template_id.clone(),
-            permission: Permission::View,
-        };
+        let auth_ctx = WithAuth::new(auth_ctx.clone(), template_id.clone());
 
         let namespace = self
             .auth_service
-            .is_authorized(permission, auth_ctx)
+            .is_authorized(Permission::View, &auth_ctx)
             .await?;
 
         let value = with_retries(

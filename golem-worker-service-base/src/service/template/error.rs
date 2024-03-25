@@ -12,12 +12,6 @@ pub enum TemplateServiceError {
     Auth(#[from] AuthError),
     #[error("Bad Request: {0:?}")]
     BadRequest(Vec<String>),
-    #[error("Unauthorized: {0}")]
-    Unauthorized(String),
-    #[error("Limit Exceeded: {0}")]
-    LimitExceeded(String),
-    #[error("Not Found: {0}")]
-    NotFound(String),
     #[error("Already Exists: {0}")]
     AlreadyExists(String),
     #[error(transparent)]
@@ -50,9 +44,9 @@ impl From<golem_api_grpc::proto::golem::template::TemplateError> for TemplateSer
         use golem_api_grpc::proto::golem::template::template_error::Error;
         match error.error {
             Some(Error::BadRequest(errors)) => TemplateServiceError::BadRequest(errors.errors),
-            Some(Error::Unauthorized(error)) => TemplateServiceError::Unauthorized(error.error),
-            Some(Error::LimitExceeded(error)) => TemplateServiceError::LimitExceeded(error.error),
-            Some(Error::NotFound(error)) => TemplateServiceError::NotFound(error.error),
+            Some(Error::Unauthorized(error)) => AuthError::Unauthorized(error.error).into(),
+            Some(Error::LimitExceeded(error)) => AuthError::Forbidden(error.error).into(),
+            Some(Error::NotFound(error)) => AuthError::NotFound(error.error).into(),
             Some(Error::AlreadyExists(error)) => TemplateServiceError::AlreadyExists(error.error),
             Some(Error::InternalError(error)) => {
                 TemplateServiceError::Internal(anyhow::Error::msg(error.error))
@@ -98,15 +92,6 @@ impl From<TemplateServiceError> for worker_error::Error {
             }
             TemplateServiceError::BadRequest(errors) => {
                 worker_error::Error::BadRequest(ErrorsBody { errors })
-            }
-            TemplateServiceError::Unauthorized(error) => {
-                worker_error::Error::Unauthorized(ErrorBody { error })
-            }
-            TemplateServiceError::LimitExceeded(error) => {
-                worker_error::Error::LimitExceeded(ErrorBody { error })
-            }
-            TemplateServiceError::NotFound(error) => {
-                worker_error::Error::NotFound(ErrorBody { error })
             }
             TemplateServiceError::Internal(error) => {
                 worker_error::Error::InternalError(worker::WorkerExecutionError {

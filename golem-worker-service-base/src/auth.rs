@@ -1,12 +1,20 @@
 use std::fmt::{Display, Formatter};
 
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem::common::ResourceLimits;
+use golem_common::model::AccountId;
 use golem_service_base::service::auth::{AuthError, AuthService, Permission};
 use serde::Deserialize;
 
 pub struct AuthServiceNoop {}
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmptyAuthCtx {}
+
+impl Display for EmptyAuthCtx {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EmptyAuthCtx")
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, bincode::Encode, bincode::Decode, Deserialize)]
 pub struct CommonNamespace(String);
@@ -24,12 +32,35 @@ impl Display for CommonNamespace {
 }
 
 #[async_trait]
-impl AuthService<EmptyAuthCtx, CommonNamespace> for AuthServiceNoop {
+impl<AuthCtx, Namespace: Default> AuthService<AuthCtx, Namespace> for AuthServiceNoop {
     async fn is_authorized(
         &self,
         _permission: Permission,
-        _ctx: &EmptyAuthCtx,
-    ) -> Result<CommonNamespace, AuthError> {
-        Ok(CommonNamespace::default())
+        _ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthError> {
+        Ok(Namespace::default())
+    }
+}
+
+// TODO: Replace with metadata map
+// Should this be async trait? or too complicated?
+pub trait Metadata {
+    fn get_metadata(&self) -> NamespaceMetadata;
+}
+
+#[derive(Clone, Debug)]
+pub struct NamespaceMetadata {
+    pub account_id: Option<AccountId>,
+    pub limits: Option<ResourceLimits>,
+}
+
+impl Metadata for CommonNamespace {
+    fn get_metadata(&self) -> NamespaceMetadata {
+        NamespaceMetadata {
+            account_id: Some(golem_common::model::AccountId {
+                value: "-1".to_string(),
+            }),
+            limits: None,
+        }
     }
 }

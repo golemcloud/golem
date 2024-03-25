@@ -92,15 +92,6 @@ impl From<TemplateServiceError> for WorkerApiBaseError {
             TemplateServiceError::BadRequest(errors) => {
                 WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors }))
             }
-            TemplateServiceError::Unauthorized(error) => {
-                WorkerApiBaseError::Unauthorized(Json(ErrorBody { error }))
-            }
-            TemplateServiceError::LimitExceeded(error) => {
-                WorkerApiBaseError::Forbidden(Json(ErrorBody { error }))
-            }
-            TemplateServiceError::NotFound(error) => {
-                WorkerApiBaseError::NotFound(Json(ErrorBody { error }))
-            }
             TemplateServiceError::AlreadyExists(error) => {
                 WorkerApiBaseError::AlreadyExists(Json(ErrorBody { error }))
             }
