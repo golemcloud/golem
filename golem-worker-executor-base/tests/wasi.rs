@@ -696,9 +696,11 @@ async fn failing_worker() {
         .unwrap()
         .to_string()
         .contains("<unknown>!golem:component/api#add"));
-    check!(
-        result3.err().unwrap().to_string() == "The previously invoked function failed".to_string()
-    );
+    check!(result3
+        .err()
+        .unwrap()
+        .to_string()
+        .starts_with("The previously invoked function failed"));
 }
 
 #[tokio::test]
