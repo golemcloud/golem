@@ -49,7 +49,6 @@ use crate::builder::WitValueBuilder;
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 pub use extractor::{WitNodePointer, WitValueExtractor};
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::ops::Deref;
 
 #[cfg(not(feature = "host"))]
@@ -74,7 +73,7 @@ bindgen!({
     }
 });
 
-use crate::text::{AnalysedType, TypedValue};
+use crate::text::AnalysedType;
 #[cfg(feature = "host")]
 pub use golem::rpc::types::{Host, HostWasmRpc, NodeIndex, RpcError, Uri, WitNode, WitValue};
 
@@ -263,7 +262,7 @@ impl From<TypeAnnotatedValue> for Value {
                 record_value
                     .value
                     .into_iter()
-                    .map(|(name, value)| value.into())
+                    .map(|(_, value)| value.into())
                     .collect::<Vec<Value>>(),
             ),
             TypeAnnotatedValue::Flags(flag_value) => {
@@ -284,7 +283,7 @@ impl From<TypeAnnotatedValue> for Value {
                 let enums = enum_value.typ;
                 for (index, expected_enum) in enums.iter().enumerate() {
                     if expected_enum.clone() == enum_value.value {
-                        return Value::Enum(index as u32)
+                        return Value::Enum(index as u32);
                     }
                 }
 
@@ -300,7 +299,24 @@ impl From<TypeAnnotatedValue> for Value {
                 Ok(value) => Ok(value.map(|value| Box::new(value.deref().clone().into()))),
                 Err(value) => Err(value.map(|value| Box::new(value.deref().clone().into()))),
             }),
-            TypeAnnotatedValue::Handle(value) => todo!(),
+            TypeAnnotatedValue::Handle(handle_value) => Value::Handle {
+                uri: handle_value.uri,
+                resource_id: handle_value.resource_id,
+            },
+            TypeAnnotatedValue::Variant(variant_value) => {
+                let case_name = variant_value.case_name;
+                let case_value = variant_value
+                    .case_value
+                    .map(|value| Box::new(value.deref().clone().into()));
+                Value::Variant {
+                    case_idx: variant_value
+                        .typ
+                        .iter()
+                        .position(|(name, _)| name == &case_name)
+                        .unwrap() as u32,
+                    case_value,
+                }
+            }
         }
     }
 }
@@ -439,9 +455,9 @@ impl TypeAnnotatedValue {
             TypeAnnotatedValue::Flags(value) => AnalysedType(
                 golem_wasm_ast::analysis::AnalysedType::Flags(value.clone().typ),
             ),
-            TypeAnnotatedValue::Enum(value) => {
-                AnalysedType(golem_wasm_ast::analysis::AnalysedType::Enum(value.clone().typ))
-            }
+            TypeAnnotatedValue::Enum(value) => AnalysedType(
+                golem_wasm_ast::analysis::AnalysedType::Enum(value.clone().typ),
+            ),
             TypeAnnotatedValue::Option(value) => value.clone().typ,
             TypeAnnotatedValue::Result(value) => {
                 AnalysedType(golem_wasm_ast::analysis::AnalysedType::Result {
@@ -579,7 +595,7 @@ impl WasmValue for TypeAnnotatedValue {
                 .find_map(
                     |(idx, (name, case_type))| if name == case { Some(case_type) } else { None },
                 );
-            if let Some(case_type) = case_type {
+            if case_type.is_some() {
                 Ok(TypeAnnotatedValue::Variant(VariantValue {
                     typ: cases
                         .clone()
@@ -655,15 +671,18 @@ impl WasmValue for TypeAnnotatedValue {
         names: impl IntoIterator<Item = &'a str>,
     ) -> Result<Self, WasmValueError> {
         if let golem_wasm_ast::analysis::AnalysedType::Flags(all_names) = &ty.0 {
-            let invalid_names: Vec<&String> = names
+            let names: Vec<String> = names.into_iter().map(|name| name.to_string()).collect();
+
+            let invalid_names: Vec<String> = names
                 .iter()
-                .filter(|name| !all_names.contains(*name))
+                .cloned()
+                .filter(|name| !all_names.contains(&name.to_string()))
                 .collect();
 
             if invalid_names.is_empty() {
                 Ok(TypeAnnotatedValue::Flags(FlagValue {
                     typ: all_names.clone(),
-                    value: names.into_iter().map(|name| name.to_string()).collect(),
+                    value: names,
                 }))
             } else {
                 Err(WasmValueError::UnknownCase(invalid_names.join(", ")))
@@ -782,7 +801,7 @@ impl WasmValue for TypeAnnotatedValue {
                 value
                     .value
                     .iter()
-                    .map(|(name, value)| (Cow::Borrowed(name), Cow::Borrowed(value))),
+                    .map(|(name, value)| (Cow::Borrowed(name.as_str()), Cow::Borrowed(value))),
             ),
             _ => panic!("Expected record, found {:?}", self),
         }
@@ -800,7 +819,7 @@ impl WasmValue for TypeAnnotatedValue {
     fn unwrap_variant(&self) -> (Cow<str>, Option<Cow<Self>>) {
         match self {
             TypeAnnotatedValue::Variant(value) => {
-                let case_name = Cow::Borrowed(value.clone().case_name.as_str());
+                let case_name = Cow::Borrowed(value.case_name.as_str());
                 let case_value = value.clone().case_value.map(|v| Cow::Owned(*v));
                 (case_name, case_value)
             }
@@ -810,14 +829,14 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn unwrap_enum(&self) -> Cow<str> {
         match self {
-            TypeAnnotatedValue::Enum(value) => Cow::Borrowed(value.clone().value.as_str()),
+            TypeAnnotatedValue::Enum(value) => Cow::Borrowed(value.value.as_str()),
             _ => panic!("Expected enum, found {:?}", self),
         }
     }
 
     fn unwrap_option(&self) -> Option<Cow<Self>> {
         match self {
-            TypeAnnotatedValue::Option(value) => value.value.as_ref().map(|v| Cow::Owned(*v)),
+            TypeAnnotatedValue::Option(value) => value.clone().value.map(|v| Cow::Owned(*v)),
             _ => panic!("Expected option, found {:?}", self),
         }
     }
@@ -837,7 +856,7 @@ impl WasmValue for TypeAnnotatedValue {
     fn unwrap_flags(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
         match self {
             TypeAnnotatedValue::Flags(value) => {
-                Box::new(value.value.iter().map(|v| Cow::Borrowed(v)))
+                Box::new(value.value.iter().map(|v| Cow::Borrowed(v.as_str())))
             }
             _ => panic!("Expected flags, found {:?}", self),
         }
