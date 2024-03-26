@@ -18,7 +18,7 @@ use serde_json::{Number, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::{EnumValue, ListValue, OptionValue, RecordValue, text, TupleValue, TypeAnnotatedValue, Uri, Value};
+use crate::{EnumValue, ListValue, OptionValue, RecordValue, text, TupleValue, TypeAnnotatedValue, Uri, Value, VariantValue};
 
 pub fn function_parameters(
     value: &JsonValue,
@@ -695,12 +695,12 @@ fn validate_function_result(
                 }
 
                 let mut errors = vec![];
-                let mut results = serde_json::Map::new();
+                let mut results: Vec<(String, TypeAnnotatedValue)> = vec![];
 
                 for (value, (field_name, typ)) in values.into_iter().zip(fields) {
                     match validate_function_result(value, typ) {
                         Ok(res) => {
-                            results.insert(field_name.clone(), res);
+                            results.push((field_name.clone(), res));
                         }
                         Err(errs) => errors.extend(errs),
                     }
@@ -709,7 +709,7 @@ fn validate_function_result(
                 if errors.is_empty() {
                     Ok(TypeAnnotatedValue::Record(RecordValue{
                         typ: fields.clone().into_iter().map(|(name, tpe)| (name, text::AnalysedType(tpe))).collect(),
-                        values: results,
+                        value: results,
                     }))
                 } else {
                     Err(errors)
@@ -730,21 +730,28 @@ fn validate_function_result(
                         None => Err(vec!["Variant not found in the expected types.".to_string()]),
                     }?;
 
+                    let typ =
+                        cases.clone().into_iter().map(|(name, tpe)| (name, tpe.map(text::AnalysedType))).collect();
+
                     match case_type {
                         Some(tpe) => match case_value {
                             Some(case_value) => {
                                 let result = validate_function_result(*case_value, tpe)?;
-                                let mut map = serde_json::Map::new();
-                                map.insert(case_name.clone(), result);
-                                Ok(serde_json::Value::Object(map))
+                                Ok(TypeAnnotatedValue::Variant(VariantValue{
+                                    typ,
+                                    case_name: case_name.clone(),
+                                    case_value: Some(Box::new(result)),
+                                }))
                             }
                             None => Err(vec![format!("Missing value for case {case_name}")]),
                         },
-                        None => Ok(JsonValue::Object(
-                            vec![(case_name.clone(), JsonValue::Null)]
-                                .into_iter()
-                                .collect(),
-                        )),
+                        None => Ok(
+                            TypeAnnotatedValue::Variant(VariantValue{
+                                typ,
+                                case_name: case_name.clone(),
+                                case_value: None,
+                            })
+                        ),
                     }
                 } else {
                     Err(vec![
