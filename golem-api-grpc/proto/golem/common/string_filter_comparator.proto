@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package golem.common;
+
+
+enum StringFilterComparator {
+  STRING_EQUAL = 0;
+  STRING_LIKE = 1;
+}

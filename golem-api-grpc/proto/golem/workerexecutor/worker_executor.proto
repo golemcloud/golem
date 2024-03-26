@@ -12,6 +12,7 @@ import public "golem/template/template_id.proto";
 import public "golem/worker/worker_id.proto";
 import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/worker_status.proto";
+import public "golem/worker/worker_filter.proto";
 import public "golem/worker/worker_execution_error.proto";
 import public "wasm/rpc/val.proto";
 
@@ -184,6 +185,7 @@ message ResumeWorkerResponse {
 
 message GetRunningWorkerMetadatasRequest {
   golem.template.TemplateId template_id = 1;
+  golem.worker.WorkerFilter filter = 2;
 }
 
 
@@ -200,9 +202,10 @@ message GetRunningWorkerMetadatasSuccessResponse {
 
 message GetWorkerMetadatasRequest {
   golem.template.TemplateId template_id = 1;
-  uint64 cursor = 2;
-  uint64 count = 3;
-  bool precise = 4;
+  golem.worker.WorkerFilter filter = 2;
+  uint64 cursor = 3;
+  uint64 count = 4;
+  bool precise = 5;
 }
 
 

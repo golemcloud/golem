@@ -52,6 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/worker/worker_error.proto",
                 "proto/golem/worker/worker_id.proto",
                 "proto/golem/worker/worker_metadata.proto",
+                "proto/golem/worker/worker_filter.proto",
                 "proto/golem/worker/worker_status.proto",
                 "proto/golem/worker/worker_service.proto",
                 "proto/golem/workerexecutor/worker_executor.proto",
