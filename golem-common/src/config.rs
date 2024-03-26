@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use std::time::Duration;
+use bincode::{Decode, Encode};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -56,7 +57,7 @@ impl Default for RedisConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub struct RetryConfig {
     pub max_attempts: u32,
     #[serde(with = "humantime_serde")]

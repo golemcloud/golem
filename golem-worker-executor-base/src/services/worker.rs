@@ -23,6 +23,7 @@ use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord};
 use golem_common::redis::RedisPool;
 use tracing::debug;
+use golem_common::config::RetryConfig;
 
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
@@ -47,6 +48,7 @@ pub trait WorkerService {
         worker_id: &WorkerId,
         status: WorkerStatus,
         deleted_regions: DeletedRegions,
+        overridden_retry_config: Option<RetryConfig>,
         oplog_idx: u64,
     );
 }
@@ -324,6 +326,7 @@ impl WorkerService for WorkerServiceRedis {
         worker_id: &WorkerId,
         status: WorkerStatus,
         deleted_regions: DeletedRegions,
+        overridden_retry_config: Option<RetryConfig>,
         oplog_idx: u64,
     ) {
         record_worker_call("update_status");
@@ -332,6 +335,7 @@ impl WorkerService for WorkerServiceRedis {
         let status_value = WorkerStatusRecord {
             status: status.clone(),
             deleted_regions,
+            overridden_retry_config,
             oplog_idx,
         };
         let serialized_status_value = self.redis.serialize(&status_value).unwrap_or_else(|err| {
@@ -464,12 +468,14 @@ impl WorkerService for WorkerServiceInMemory {
         worker_id: &WorkerId,
         status: WorkerStatus,
         deleted_regions: DeletedRegions,
+        overridden_retry_config: Option<RetryConfig>,
         oplog_idx: u64,
     ) {
         self.workers.entry(worker_id.clone()).and_modify(|worker| {
             worker.last_known_status = WorkerStatusRecord {
                 status,
                 deleted_regions,
+                overridden_retry_config,
                 oplog_idx,
             }
         });
@@ -521,6 +527,7 @@ impl WorkerService for WorkerServiceMock {
         _worker_id: &WorkerId,
         _status: WorkerStatus,
         _deleted_regions: DeletedRegions,
+        _overridden_retry_config: Option<RetryConfig>,
         _oplog_idx: u64,
     ) {
         unimplemented!()

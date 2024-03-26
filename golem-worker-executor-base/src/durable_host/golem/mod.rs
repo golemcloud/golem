@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Duration;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use golem_common::config::RetryConfig;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
@@ -23,7 +25,9 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
-use crate::preview2::golem::api::host::{AtomicOperation, HostAtomicOperation, OplogIndex, PersistenceLevel, RetryPolicy};
+use crate::preview2::golem::api::host::{
+    AtomicOperation, HostAtomicOperation, OplogIndex, PersistenceLevel, RetryPolicy,
+};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::OplogRegion;
@@ -145,18 +149,33 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_retry_policy(&mut self) -> anyhow::Result<RetryPolicy> {
-        unimplemented!()
+        record_host_function_call("golem::api", "get_retry_policy");
+        match &self.private_state.overridden_retry_policy {
+            Some(policy) => Ok(policy.into()),
+            None => Ok((&self.private_state.config.retry).into()),
+        }
     }
 
     async fn set_retry_policy(&mut self, new_retry_policy: RetryPolicy) -> anyhow::Result<()> {
-        unimplemented!()
+        record_host_function_call("golem::api", "set_retry_policy");
+        let new_retry_policy: RetryConfig = new_retry_policy.into();
+        self.private_state.overridden_retry_policy = Some(new_retry_policy.clone());
+        self.set_oplog_entry(OplogEntry::ChangeRetryPolicy {
+            timestamp: Timestamp::now_utc(),
+            new_policy: new_retry_policy,
+        })
+        .await;
+        Ok(())
     }
 
     async fn get_oplog_persistence_level(&mut self) -> anyhow::Result<PersistenceLevel> {
         unimplemented!()
     }
 
-    async fn set_oplog_persistence_level(&mut self, new_persistence_level: PersistenceLevel) -> anyhow::Result<()> {
+    async fn set_oplog_persistence_level(
+        &mut self,
+        new_persistence_level: PersistenceLevel,
+    ) -> anyhow::Result<()> {
         unimplemented!()
     }
 
@@ -238,6 +257,28 @@ impl From<golem::api::host::PromiseId> for PromiseId {
         Self {
             worker_id: host.worker_id.into(),
             oplog_idx: host.oplog_idx,
+        }
+    }
+}
+
+impl From<&RetryConfig> for RetryPolicy {
+    fn from(value: &RetryConfig) -> Self {
+        Self {
+            max_attempts: value.max_attempts,
+            min_delay: value.min_delay.as_nanos() as u64,
+            max_delay: value.max_delay.as_nanos() as u64,
+            multiplier: value.multiplier,
+        }
+    }
+}
+
+impl From<RetryPolicy> for RetryConfig {
+    fn from(value: RetryPolicy) -> Self {
+        Self {
+            max_attempts: value.max_attempts,
+            min_delay: Duration::from_nanos(value.min_delay),
+            max_delay: Duration::from_nanos(value.max_delay),
+            multiplier: value.multiplier,
         }
     }
 }

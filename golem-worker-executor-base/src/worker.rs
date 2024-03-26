@@ -20,6 +20,7 @@ use std::time::Instant;
 use async_mutex::Mutex;
 use bytes::Bytes;
 use golem_common::cache::PendingOrFinal;
+use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder};
 use golem_common::model::{
@@ -683,10 +684,13 @@ where
 
         let status = calculate_latest_worker_status(&last_known.status, &new_entries);
         let deleted_regions = calculate_deleted_regions(last_known.deleted_regions, &new_entries);
+        let overridden_retry_config =
+            calculate_overridden_retry_policy(last_known.overridden_retry_config, &new_entries);
 
         Ok(WorkerStatusRecord {
             oplog_idx: last_oplog_index,
             status,
+            overridden_retry_config,
             deleted_regions,
         })
     }
@@ -727,6 +731,9 @@ fn calculate_latest_worker_status(initial: &WorkerStatus, entries: &[OplogEntry]
             OplogEntry::Interrupted { .. } => {
                 result = WorkerStatus::Interrupted;
             }
+            OplogEntry::ChangeRetryPolicy { .. } => {
+                result = WorkerStatus::Running;
+            }
         }
     }
     result
@@ -740,4 +747,17 @@ fn calculate_deleted_regions(initial: DeletedRegions, entries: &[OplogEntry]) ->
         }
     }
     builder.build()
+}
+
+fn calculate_overridden_retry_policy(
+    initial: Option<RetryConfig>,
+    entries: &[OplogEntry],
+) -> Option<RetryConfig> {
+    let mut result = initial;
+    for entry in entries {
+        if let OplogEntry::ChangeRetryPolicy { new_policy, .. } = entry {
+            result = Some(new_policy.clone());
+        }
+    }
+    result
 }

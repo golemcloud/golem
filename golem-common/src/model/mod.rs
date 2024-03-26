@@ -32,6 +32,7 @@ use poem_openapi::{Enum, Object};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
+use crate::config::RetryConfig;
 
 use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;
@@ -527,6 +528,7 @@ impl WorkerMetadata {
 pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
     pub deleted_regions: DeletedRegions,
+    pub overridden_retry_config: Option<RetryConfig>,
     pub oplog_idx: u64,
 }
 
@@ -535,6 +537,7 @@ impl Default for WorkerStatusRecord {
         WorkerStatusRecord {
             status: WorkerStatus::Idle,
             deleted_regions: DeletedRegions::new(),
+            overridden_retry_config: None,
             oplog_idx: 0,
         }
     }
@@ -554,7 +557,7 @@ pub enum WorkerStatus {
     Suspended,
     /// The last invocation was interrupted but will be resumed
     Interrupted,
-    /// The last invocation failed an a retry was scheduled
+    /// The last invocation failed and a retry was scheduled
     Retrying,
     /// The last invocation failed and the worker can no longer be used
     Failed,

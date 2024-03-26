@@ -35,6 +35,7 @@ use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use wasmtime::Trap;
+use golem_common::config::RetryConfig;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum RecoveryDecision {
@@ -48,12 +49,14 @@ pub trait RecoveryManagement {
     async fn schedule_recovery_for_error(
         &self,
         worker_id: &VersionedWorkerId,
+        retry_config: &RetryConfig,
         previous_tries: u64,
         current_error: &anyhow::Error,
     ) -> RecoveryDecision;
     async fn schedule_recovery_on_startup(
         &self,
         worker_id: &VersionedWorkerId,
+        retry_config: &RetryConfig,
         previous_tries: u64,
     ) -> RecoveryDecision;
 }
@@ -280,6 +283,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 
     fn get_recovery_decision_for_error(
         &self,
+        retry_config: &RetryConfig,
         previous_tries: u64,
         current_error: &anyhow::Error,
     ) -> RecoveryDecision {
@@ -297,7 +301,6 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                         RecoveryDecision::None
                     }
                     _ => {
-                        let retry_config = &self.golem_config.retry;
                         match get_delay(retry_config, previous_tries) {
                             Some(delay) => RecoveryDecision::Delayed(delay),
                             None => RecoveryDecision::None,
@@ -308,8 +311,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         }
     }
 
-    fn get_recovery_decision_on_startup(&self, previous_tries: u64) -> RecoveryDecision {
-        if previous_tries < (self.golem_config.retry.max_attempts as u64) {
+    fn get_recovery_decision_on_startup(&self, retry_config: &RetryConfig, previous_tries: u64) -> RecoveryDecision {
+        if previous_tries < (retry_config.max_attempts as u64) {
             RecoveryDecision::Immediate
         } else {
             RecoveryDecision::None
@@ -404,12 +407,13 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     async fn schedule_recovery_for_error(
         &self,
         worker_id: &VersionedWorkerId,
+        retry_config: &RetryConfig,
         previous_tries: u64,
         current_error: &anyhow::Error,
     ) -> RecoveryDecision {
         self.schedule_recovery(
             worker_id,
-            self.get_recovery_decision_for_error(previous_tries, current_error),
+            self.get_recovery_decision_for_error(retry_config, previous_tries, current_error),
         )
         .await
     }
@@ -417,11 +421,12 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     async fn schedule_recovery_on_startup(
         &self,
         worker_id: &VersionedWorkerId,
+        retry_config: &RetryConfig,
         previous_tries: u64,
     ) -> RecoveryDecision {
         self.schedule_recovery(
             worker_id,
-            self.get_recovery_decision_on_startup(previous_tries),
+            self.get_recovery_decision_on_startup(retry_config, previous_tries),
         )
         .await
     }
@@ -479,6 +484,7 @@ impl RecoveryManagement for RecoveryManagementMock {
     async fn schedule_recovery_for_error(
         &self,
         _worker_id: &VersionedWorkerId,
+        _retry_config: &RetryConfig,
         _previous_tries: u64,
         _current_error: &anyhow::Error,
     ) -> RecoveryDecision {
@@ -488,6 +494,7 @@ impl RecoveryManagement for RecoveryManagementMock {
     async fn schedule_recovery_on_startup(
         &self,
         _worker_id: &VersionedWorkerId,
+        _retry_config: &RetryConfig,
         _previous_tries: u64,
     ) -> RecoveryDecision {
         unimplemented!()
@@ -532,6 +539,7 @@ mod tests {
     use tokio::time::{timeout, Instant};
     use wasmtime::component::{Instance, ResourceAny};
     use wasmtime::{AsContextMut, ResourceLimiterAsync};
+    use golem_common::config::RetryConfig;
 
     use crate::services::oplog::{OplogService, OplogServiceMock};
     use crate::services::recovery::{RecoveryManagement, RecoveryManagementDefault};
@@ -881,7 +889,7 @@ mod tests {
             sender.send((id, elapsed)).unwrap();
         })
         .await;
-        let _ = svc.schedule_recovery_on_startup(&test_id, 0).await;
+        let _ = svc.schedule_recovery_on_startup(&test_id, &RetryConfig::default(), 0).await;
         let (id, elapsed) = receiver.recv().await.unwrap();
         assert_eq!(id, test_id);
         assert!(elapsed.as_millis() < 100, "elapsed time was {:?}", elapsed);
@@ -899,7 +907,7 @@ mod tests {
             sender.send((id, elapsed)).unwrap();
         })
         .await;
-        let _ = svc.schedule_recovery_on_startup(&test_id, 100).await;
+        let _ = svc.schedule_recovery_on_startup(&test_id, &RetryConfig::default(), 100).await;
         let res = timeout(Duration::from_secs(1), receiver.recv()).await;
         assert!(res.is_err());
     }
