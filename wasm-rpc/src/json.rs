@@ -18,10 +18,7 @@ use serde_json::{Number, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::{
-    text, EnumValue, FlagValue, ListValue, OptionValue, RecordValue, ResourceValue, ResultValue,
-    TupleValue, TypeAnnotatedValue, Uri, Value, VariantValue,
-};
+use crate::{TypeAnnotatedValue, TypeAnnotatedValueResult, Uri, Value};
 
 pub fn function_parameters(
     value: &JsonValue,
@@ -60,49 +57,20 @@ pub fn function_result(
     values: Vec<Value>,
     expected_types: &[AnalysedFunctionResult],
 ) -> Result<JsonValue, Vec<String>> {
-    if values.len() != expected_types.len() {
-        Err(vec![format!(
-            "Unexpected number of result values (got {}, expected: {})",
-            values.len(),
-            expected_types.len()
-        )])
-    } else {
-        let mut results = vec![];
-        let mut errors = vec![];
-
-        for (value, expected) in values.into_iter().zip(expected_types.iter()) {
-            let result = validate_function_result(value, &expected.typ);
-
-            match result {
-                Ok(value) => results.push(value),
-                Err(err) => errors.extend(err),
+    TypeAnnotatedValueResult::from_values(values, expected_types). map(|result| {
+        match result {
+            TypeAnnotatedValueResult::WithoutNames(values) => {
+                JsonValue::Array(values.into_iter().map(|v| v.into()).collect())
+            }
+            TypeAnnotatedValueResult::WithNames(values) => {
+                let mut map = serde_json::Map::new();
+                for (name, value) in values {
+                    map.insert(name, value.into());
+                }
+                JsonValue::Object(map)
             }
         }
-
-        let all_without_names = expected_types.iter().all(|t| t.name.is_none());
-
-        if all_without_names {
-            Ok(serde_json::Value::Array(results))
-        } else {
-            let mapped_values = results
-                .iter()
-                .zip(expected_types.iter())
-                .enumerate()
-                .map(|(idx, (json, result_def))| {
-                    (
-                        if let Some(name) = &result_def.name {
-                            name.clone()
-                        } else {
-                            idx.to_string()
-                        },
-                        json.clone(),
-                    )
-                })
-                .collect();
-
-            Ok(serde_json::Value::Object(mapped_values))
-        }
-    }
+    })
 }
 
 fn validate_function_parameter(
@@ -131,19 +99,12 @@ fn validate_function_parameter(
         AnalysedType::F32 => get_f32(input_json),
         AnalysedType::Chr => get_char(input_json).map(Value::Char),
         AnalysedType::Str => get_string(input_json).map(Value::String),
-
         AnalysedType::Enum(names) => get_enum(input_json, names).map(Value::Enum),
-
         AnalysedType::Flags(names) => get_flag(input_json, names).map(Value::Flags),
-
         AnalysedType::List(elem) => get_list(input_json, elem).map(Value::List),
-
         AnalysedType::Option(elem) => get_option(input_json, elem).map(Value::Option),
-
         AnalysedType::Result { ok, error } => get_result(input_json, ok, error).map(Value::Result),
-
         AnalysedType::Record(fields) => get_record(input_json, fields).map(Value::Record),
-
         AnalysedType::Variant(cases) => {
             get_variant(input_json, cases).map(|result| Value::Variant {
                 case_idx: result.0,
@@ -593,275 +554,9 @@ fn get_handle(value: &JsonValue) -> Result<Value, Vec<String>> {
 fn validate_function_result(
     val: Value,
     expected_type: &AnalysedType,
-) -> Result<TypeAnnotatedValue, Vec<String>> {
-    match val {
-        Value::Bool(bool) => Ok(TypeAnnotatedValue::Bool(bool)),
-        Value::S8(value) => Ok(TypeAnnotatedValue::S8(value)),
-        Value::U8(value) => Ok(TypeAnnotatedValue::U8(value)),
-        Value::U32(value) => Ok(TypeAnnotatedValue::U32(value)),
-        Value::S16(value) => Ok(TypeAnnotatedValue::S16(value)),
-        Value::U16(value) => Ok(TypeAnnotatedValue::U16(value)),
-        Value::S32(value) => Ok(TypeAnnotatedValue::S32(value)),
-        Value::S64(value) => Ok(TypeAnnotatedValue::S64(value)),
-        Value::U64(value) => Ok(TypeAnnotatedValue::U64(value)),
-        Value::F32(value) => Ok(TypeAnnotatedValue::F32(value)),
-        Value::F64(value) => Ok(TypeAnnotatedValue::F64(value)),
-        Value::Char(value) => Ok(TypeAnnotatedValue::Chr(value)),
-        Value::String(value) => Ok(TypeAnnotatedValue::Str(value)),
-
-        Value::Enum(value) => match expected_type {
-            AnalysedType::Enum(names) => match names.get(value as usize) {
-                Some(str) => Ok(TypeAnnotatedValue::Enum(EnumValue {
-                    typ: names.clone(),
-                    value: str.to_string(),
-                })),
-                None => Err(vec![format!("Invalid enum {}", value)]),
-            },
-            _ => Err(vec![format!("Unexpected enum {}", value)]),
-        },
-
-        Value::Option(value) => match expected_type {
-            AnalysedType::Option(elem) => Ok(TypeAnnotatedValue::Option(OptionValue {
-                typ: text::AnalysedType(*elem.clone()),
-                value: match value {
-                    Some(value) => Some(Box::new(validate_function_result(*value, elem)?)),
-                    None => None,
-                },
-            })),
-
-            _ => Err(vec!["Unexpected type; expected an Option type.".to_string()]),
-        },
-
-        Value::Tuple(values) => match expected_type {
-            AnalysedType::Tuple(types) => {
-                if values.len() != types.len() {
-                    return Err(vec![format!(
-                        "Tuple has unexpected number of elements: {} vs {}",
-                        values.len(),
-                        types.len(),
-                    )]);
-                }
-
-                let mut errors = vec![];
-                let mut results = vec![];
-
-                for (value, tpe) in values.into_iter().zip(types.iter()) {
-                    match validate_function_result(value, tpe) {
-                        Ok(result) => results.push(result),
-                        Err(errs) => errors.extend(errs),
-                    }
-                }
-
-                if errors.is_empty() {
-                    Ok(TypeAnnotatedValue::Tuple(TupleValue {
-                        typ: types.clone().into_iter().map(text::AnalysedType).collect(),
-                        value: results,
-                    }))
-                } else {
-                    Err(errors)
-                }
-            }
-
-            _ => Err(vec!["Unexpected type; expected a tuple type.".to_string()]),
-        },
-
-        Value::List(values) => match expected_type {
-            AnalysedType::List(elem) => {
-                let mut errors = vec![];
-                let mut results = vec![];
-
-                for value in values {
-                    match validate_function_result(value, elem) {
-                        Ok(value) => results.push(value),
-                        Err(errs) => errors.extend(errs),
-                    }
-                }
-
-                if errors.is_empty() {
-                    Ok(TypeAnnotatedValue::List(ListValue {
-                        typ: text::AnalysedType(*elem.clone()),
-                        values: results,
-                    }))
-                } else {
-                    Err(errors)
-                }
-            }
-
-            _ => Err(vec!["Unexpected type; expected a list type.".to_string()]),
-        },
-
-        Value::Record(values) => match expected_type {
-            AnalysedType::Record(fields) => {
-                if values.len() != fields.len() {
-                    return Err(vec!["The total number of field values is zero".to_string()]);
-                }
-
-                let mut errors = vec![];
-                let mut results: Vec<(String, TypeAnnotatedValue)> = vec![];
-
-                for (value, (field_name, typ)) in values.into_iter().zip(fields) {
-                    match validate_function_result(value, typ) {
-                        Ok(res) => {
-                            results.push((field_name.clone(), res));
-                        }
-                        Err(errs) => errors.extend(errs),
-                    }
-                }
-
-                if errors.is_empty() {
-                    Ok(TypeAnnotatedValue::Record(RecordValue {
-                        typ: fields
-                            .clone()
-                            .into_iter()
-                            .map(|(name, tpe)| (name, text::AnalysedType(tpe)))
-                            .collect(),
-                        value: results,
-                    }))
-                } else {
-                    Err(errors)
-                }
-            }
-
-            _ => Err(vec!["Unexpected type; expected a variant type.".to_string()]),
-        },
-
-        Value::Variant {
-            case_idx,
-            case_value,
-        } => match expected_type {
-            AnalysedType::Variant(cases) => {
-                if (case_idx as usize) < cases.len() {
-                    let (case_name, case_type) = match cases.get(case_idx as usize) {
-                        Some(tpe) => Ok(tpe),
-                        None => Err(vec!["Variant not found in the expected types.".to_string()]),
-                    }?;
-
-                    let typ = cases
-                        .clone()
-                        .into_iter()
-                        .map(|(name, tpe)| (name, tpe.map(text::AnalysedType)))
-                        .collect();
-
-                    match case_type {
-                        Some(tpe) => match case_value {
-                            Some(case_value) => {
-                                let result = validate_function_result(*case_value, tpe)?;
-                                Ok(TypeAnnotatedValue::Variant(VariantValue {
-                                    typ,
-                                    case_name: case_name.clone(),
-                                    case_value: Some(Box::new(result)),
-                                }))
-                            }
-                            None => Err(vec![format!("Missing value for case {case_name}")]),
-                        },
-                        None => Ok(TypeAnnotatedValue::Variant(VariantValue {
-                            typ,
-                            case_name: case_name.clone(),
-                            case_value: None,
-                        })),
-                    }
-                } else {
-                    Err(vec![
-                        "Invalid discriminant value for the variant.".to_string()
-                    ])
-                }
-            }
-
-            _ => Err(vec!["Unexpected type; expected a variant type.".to_string()]),
-        },
-
-        Value::Flags(values) => match expected_type {
-            AnalysedType::Flags(names) => {
-                let mut result = vec![];
-
-                if values.len() != names.len() {
-                    Err(vec![format!(
-                        "Unexpected number of flag states: {:?} vs {:?}",
-                        values, names
-                    )])
-                } else {
-                    for (enabled, name) in values.iter().zip(names) {
-                        if *enabled {
-                            result.push(name.clone());
-                        }
-                    }
-
-                    Ok(TypeAnnotatedValue::Flags(FlagValue {
-                        typ: names.clone(),
-                        value: result,
-                    }))
-                }
-            }
-            _ => Err(vec!["Unexpected type; expected a flags type.".to_string()]),
-        },
-
-        Value::Result(value) => match expected_type {
-            AnalysedType::Result { ok, error } => match (value, ok, error) {
-                (Ok(Some(value)), Some(ok_type), _) => {
-                    let result = validate_function_result(*value, ok_type)?;
-
-                    Ok(TypeAnnotatedValue::Result(ResultValue {
-                        value: Ok(Some(Box::new(result))),
-                        ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                        error: error
-                            .clone()
-                            .map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                    }))
-                }
-
-                (Ok(None), Some(_), _) => Err(vec!["Non-unit ok result has no value".to_string()]),
-
-                (Ok(None), None, _) => Ok(TypeAnnotatedValue::Result(ResultValue {
-                    value: Ok(None),
-                    ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                    error: error
-                        .clone()
-                        .map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                })),
-
-                (Ok(Some(_)), None, _) => Err(vec!["Unit ok result has a value".to_string()]),
-
-                (Err(Some(value)), _, Some(err_type)) => {
-                    let result = validate_function_result(*value, err_type)?;
-
-                    Ok(TypeAnnotatedValue::Result(ResultValue {
-                        value: Err(Some(Box::new(result))),
-                        ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                        error: error
-                            .clone()
-                            .map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                    }))
-                }
-
-                (Err(None), _, Some(_)) => {
-                    Err(vec!["Non-unit error result has no value".to_string()])
-                }
-
-                (Err(None), _, None) => Ok(TypeAnnotatedValue::Result(ResultValue {
-                    value: Err(None),
-                    ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                    error: error
-                        .clone()
-                        .map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                })),
-
-                (Err(Some(_)), _, None) => Err(vec!["Unit error result has a value".to_string()]),
-            },
-
-            _ => Err(vec!["Unexpected type; expected a Result type.".to_string()]),
-        },
-        Value::Handle { uri, resource_id } => match expected_type {
-            AnalysedType::Resource { id, resource_mode } => {
-                Ok(TypeAnnotatedValue::Handle(ResourceValue {
-                    id: id.clone(),
-                    resource_mode: resource_mode.clone(),
-                    uri,
-                    resource_id,
-                }))
-            }
-            _ => Err(vec!["Unexpected type; expected a Handle type.".to_string()]),
-        },
-    }
+) -> Result<JsonValue, Vec<String>> {
+    TypeAnnotatedValue::from_value(val, expected_type)
+        .map(|result| JsonFunctionResult::from(result).0)
 }
 
 pub struct JsonFunctionResult(pub serde_json::Value);
