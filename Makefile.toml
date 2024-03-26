@@ -184,7 +184,7 @@ script = '''
       echo "Latest Golem OpenAPI spec version detected."
     else
       echo "openapi/golem-service.yaml is not the same as produced by golem-service-yaml." 1>&2
-      echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec." 1>&2
+      echo "Run cargo make generate-openapi to generate new spec." 1>&2
       exit 1
   fi
 '''
@@ -236,7 +236,6 @@ command = "sed"
 args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
 
 [tasks.set-golem-client-version.mac]
-description = "Sets the version in golem-client/Cargo.toml to the value of the VERSION environment variable"
 condition = { env_set = ["VERSION"] }
 command = "sed"
 args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
@@ -254,7 +253,6 @@ command = "sed"
 args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]
 
 [tasks.set-golem-cli-version.mac]
-description = "Sets the version in golem-cli/Cargo.toml to the value of the VERSION environment variable"
 condition = { env_set = ["VERSION"] }
 command = "sed"
 args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]

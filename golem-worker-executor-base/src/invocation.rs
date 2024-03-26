@@ -22,8 +22,9 @@ use tracing::{debug, error, warn};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 
-use crate::error::{is_interrupt, is_jump, is_suspend, GolemError};
+use crate::error::GolemError;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
+use crate::model::{InterruptKind, TrapType};
 use crate::workerctx::{FuelManagement, WorkerCtx};
 
 /// Invokes a function on a worker.
@@ -74,52 +75,73 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     let invocation_key = store.data().get_current_invocation_key().await;
     match result {
         Err(err) => {
-            if is_interrupt(&err) {
-                // this invocation was interrupted and has to be resumed manually later
-                match invocation_key {
-                    Some(invocation_key) => {
-                        debug!(
+            let trap_type = TrapType::from_error::<Ctx>(&err);
+            match trap_type {
+                TrapType::Interrupt(InterruptKind::Interrupt) => {
+                    // this invocation was interrupted and has to be resumed manually later
+                    match invocation_key {
+                        Some(invocation_key) => {
+                            debug!(
                             "Storing interrupted status for invocation key {:?} in {worker_id}/{full_function_name}",
                             &invocation_key
                         );
-                        store
-                            .data_mut()
-                            .interrupt_invocation_key(&invocation_key)
-                            .await;
+                            store
+                                .data_mut()
+                                .interrupt_invocation_key(&invocation_key)
+                                .await;
+                        }
+                        None => {
+                            warn!("Fire-and-forget invocation of {worker_id}/{full_function_name} got interrupted");
+                        }
                     }
-                    None => {
-                        warn!("Fire-and-forget invocation of {worker_id}/{full_function_name} got interrupted");
-                    }
+                    record_invocation(was_live_before, "interrupted");
+                    false
                 }
-                record_invocation(was_live_before, "interrupted");
-                false
-            } else if is_suspend(&err) {
-                // this invocation was suspended and expected to be resumed by an external call or schedule
-                record_invocation(was_live_before, "suspended");
-                false
-            } else if is_jump(&err) {
-                // the worker needs to be restarted in order to jump to the past, but otherwise continues running
-                record_invocation(was_live_before, "jump");
-                false
-            } else {
-                // this invocation failed it won't be retried later
-                match invocation_key {
-                    Some(invocation_key) => {
-                        debug!(
+                TrapType::Interrupt(InterruptKind::Suspend) => {
+                    // this invocation was suspended and expected to be resumed by an external call or schedule
+                    record_invocation(was_live_before, "suspended");
+                    false
+                }
+                TrapType::Exit => {
+                    // this invocation finished by calling the WASI exit function
+                    match invocation_key {
+                        Some(invocation_key) => {
+                            debug!(
+                            "Storing exited result for invocation key {:?} in {worker_id}/{full_function_name}",
+                            &invocation_key
+                        );
+                            store
+                                .data_mut()
+                                .confirm_invocation_key(&invocation_key, Err(err.into()))
+                                .await;
+                        }
+                        None => {
+                            error!("Fire-and-forget invocation of {worker_id}/{full_function_name} exited: {}", err);
+                        }
+                    }
+                    record_invocation(was_live_before, "exited");
+                    true
+                }
+                _ => {
+                    // this invocation failed it won't be retried later
+                    match invocation_key {
+                        Some(invocation_key) => {
+                            debug!(
                             "Storing failed result for invocation key {:?} in {worker_id}/{full_function_name}",
                             &invocation_key
                         );
-                        store
-                            .data_mut()
-                            .confirm_invocation_key(&invocation_key, Err(err.into()))
-                            .await;
+                            store
+                                .data_mut()
+                                .confirm_invocation_key(&invocation_key, Err(err.into()))
+                                .await;
+                        }
+                        None => {
+                            error!("Fire-and-forget invocation of {worker_id}/{full_function_name} failed: {}", err);
+                        }
                     }
-                    None => {
-                        error!("Fire-and-forget invocation of {worker_id}/{full_function_name} failed: {}", err);
-                    }
+                    record_invocation(was_live_before, "failed");
+                    true
                 }
-                record_invocation(was_live_before, "failed");
-                true
             }
         }
         Ok(None) => {
@@ -229,18 +251,19 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 
     match call_result {
         Err(err) => {
-            store.data_mut().on_invocation_failure(&err).await?;
+            let trap_type = TrapType::from_error::<Ctx>(&err);
+            store.data_mut().on_invocation_failure(&trap_type).await?;
             store.data_mut().deactivate().await;
             let result_status = store
                 .data_mut()
-                .on_invocation_failure_deactivated(&err)
+                .on_invocation_failure_deactivated(&trap_type)
                 .await?;
             store
                 .data_mut()
                 .store_worker_status(result_status.clone())
                 .await;
 
-            if result_status == WorkerStatus::Retrying {
+            if result_status == WorkerStatus::Retrying || result_status == WorkerStatus::Running {
                 Ok(None)
             } else {
                 Err(err)
@@ -389,7 +412,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function_input: &[Value],
     context: &str,
-) -> Result<crate::invocation::InvokeResult, anyhow::Error> {
+) -> Result<InvokeResult, anyhow::Error> {
     let mut store = store.as_context_mut();
     let self_uri = store.data().self_uri();
     if function_input.len() != 1 {

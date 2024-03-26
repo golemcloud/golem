@@ -26,7 +26,9 @@ use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use crate::error::GolemError;
-use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig};
+use crate::model::{
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
+};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
@@ -249,12 +251,12 @@ pub trait InvocationHooks {
     ) -> anyhow::Result<()>;
 
     /// Called when a worker invocation fails, before the worker gets deactivated
-    async fn on_invocation_failure(&mut self, error: &anyhow::Error) -> Result<(), anyhow::Error>;
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> Result<(), anyhow::Error>;
 
     /// Called when a worker invocation fails, after the worker has been deactivated
     async fn on_invocation_failure_deactivated(
         &mut self,
-        error: &anyhow::Error,
+        trap_type: &TrapType,
     ) -> Result<WorkerStatus, anyhow::Error>;
 
     /// Called when a worker invocation succeeds
@@ -289,11 +291,12 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     ) -> Result<(), GolemError>;
 
     // TODO: move this to WorkerStatusRecord
-    /// Gets how many times the worker has been retried to recover from an error.
-    async fn get_worker_retry_count<T: HasAll<Ctx> + Send + Sync>(
+    /// Gets how many times the worker has been retried to recover from an error, and what
+    /// error was stored in the last entry.
+    async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> u64;
+    ) -> Option<LastError>;
 
     /// Gets a best-effort current worker status without activating the worker
     async fn compute_latest_worker_status<T: HasAll<Ctx> + Send + Sync>(

@@ -8,17 +8,10 @@ See [Golem Cloud](https://golem.cloud) for more information.
 
 ## Getting Started
 
-It is possible to start using Golem locally by using our published Docker containers. For compiling it for yourself please check [the contribution guide](CONTRIBUTING.md).
+It is possible to start using Golem locally by using our published Docker containers. Please refer to the document link below on how to get golem OSS running using docker.
+https://learn.golem.cloud/docs/quickstart#setting-up-golem
 
-Firstly, spin up golem services using docker-compose in [docker-examples](docker-examples) folder. Please note that there is .env file consisting 
-of common port configurations. You can override these variables in .env file in your local if there are port conflicts. Consider these examples as a simple reference for you to spin up the OSS golem services quickly and try things out. You may have a different approach and a different practice on how to configure docker!
-
-```
-curl -O https://raw.githubusercontent.com/golemcloud/golem-services/main/docker-examples/docker-compose-sqlite.yaml -O https://raw.githubusercontent.com/golemcloud/golem-services/main/docker-examples/.env
-docker-compose -f docker-compose-sqlite.yaml up
-
-```
-Afterwards in a separate terminal,
+Once you have Golem running locally, you can use `golem-cli` to interact with Golem services.
 
 ```bash
 

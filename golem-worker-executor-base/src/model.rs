@@ -17,11 +17,14 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{ShardAssignment, ShardId, VersionedWorkerId, WorkerId};
 use serde::{Deserialize, Serialize};
+use wasmtime::Trap;
 
 use crate::error::GolemError;
+use crate::workerctx::WorkerCtx;
 
 pub trait ShardAssignmentCheck {
     fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError>;
@@ -128,6 +131,48 @@ pub enum ExecutionStatus {
 impl ExecutionStatus {
     pub fn is_running(&self) -> bool {
         matches!(self, ExecutionStatus::Running)
+    }
+}
+
+/// Describes the various reasons a worker can run into a trap
+#[derive(Clone, Debug)]
+pub enum TrapType {
+    /// Interrupted through Golem (including user interrupts, suspends, jumps, etc)
+    Interrupt(InterruptKind),
+    /// Called the WASI exit function
+    Exit,
+    /// Failed with an error
+    Error(WorkerError),
+}
+
+impl TrapType {
+    pub fn from_error<Ctx: WorkerCtx>(error: &anyhow::Error) -> TrapType {
+        match error.root_cause().downcast_ref::<InterruptKind>() {
+            Some(kind) => TrapType::Interrupt(kind.clone()),
+            None => match Ctx::is_exit(error) {
+                Some(_) => TrapType::Exit,
+                None => match error.root_cause().downcast_ref::<Trap>() {
+                    Some(&Trap::StackOverflow) => TrapType::Error(WorkerError::StackOverflow),
+                    _ => TrapType::Error(WorkerError::Unknown(format!("{:?}", error))),
+                },
+            },
+        }
+    }
+}
+
+/// Encapsulates a worker error with the number of retries already attempted.
+///
+/// This can be calculated by reading the (end of the) oplog, and passed around for making
+/// decisions about retries/recovery.
+#[derive(Clone, Debug)]
+pub struct LastError {
+    pub error: WorkerError,
+    pub retry_count: u64,
+}
+
+impl Display for LastError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}, retried {} times", self.error, self.retry_count)
     }
 }
 
