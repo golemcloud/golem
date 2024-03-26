@@ -877,6 +877,22 @@ impl From<TypeAnnotatedValue> for JsonFunctionResult {
                 JsonFunctionResult(JsonValue::Object(map))
             }
 
+            TypeAnnotatedValue::Result(result) => {
+                let mut map = serde_json::Map::new();
+                match result.value {
+                    Ok(value) => {
+                        map.insert("ok".to_string(), value.map(JsonFunctionResult::from).map(|v| v.0).unwrap_or(JsonValue::Null));
+                    }
+                    Err(value) => {
+                        map.insert("err".to_string(), value.map(JsonFunctionResult::from).map(|v| v.0).unwrap_or(JsonValue::Null));
+                    }
+                }
+                JsonFunctionResult(JsonValue::Object(map))
+            }
+
+            TypeAnnotatedValue::Handle(handle) =>
+                JsonFunctionResult(JsonValue::String(format!("{}/{}", handle.uri.value, handle.resource_id))),
+
         }
     }
 }
