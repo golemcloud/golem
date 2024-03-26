@@ -123,6 +123,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.private_state.commit_oplog().await
     }
 
+    pub async fn commit_oplog_to_replicas(&mut self, replicas: u8, timeout: Duration) -> bool {
+        self.private_state
+            .commit_oplog_to_replicas(replicas, timeout)
+            .await
+    }
+
     async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {
         self.private_state.get_oplog_entry_marker().await
     }
@@ -1087,6 +1093,13 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         });
         self.buffer.clear();
         self.oplog_service.append(worker_id, &arrays).await
+    }
+
+    pub async fn commit_oplog_to_replicas(&mut self, replicas: u8, timeout: Duration) -> bool {
+        self.commit_oplog().await;
+        self.oplog_service
+            .wait_for_replicas(replicas, timeout)
+            .await
     }
 
     pub async fn get_oplog_size(&mut self) -> u64 {

@@ -4,6 +4,7 @@ package golem:api@0.2.0;
 /// the durability and transactional guarantees the executor provides.
 interface host {
   use golem:rpc/types@0.1.0.{uri};
+  use wasi:clocks/monotonic-clock@0.2.0.{duration};
 
   /// An index into the persistent log storing all performed operations of a worker
   type oplog-index = u64;
@@ -33,6 +34,25 @@ interface host {
     low-bits: u64
   }
 
+  /// Configures how the executor retries failures
+  record retry-policy {
+    /// The maximum number of retries before the worker becomes permanently failed
+    max-attempts: u32,
+      /// The minimum delay between retries (applied to the first retry)
+    min-delay: duration,
+      /// The maximum delay between retries
+    max-delay: duration,
+      /// Multiplier applied to the delay on each retry to implement exponential backoff
+    multiplier: u32
+  }
+
+  /// Configurable persistence level for workers
+  variant persistence-level {
+    persist-nothing,
+    persist-remote-side-effects,
+    smart
+  }
+
   /// Create a new promise
   golem-create-promise: func() -> promise-id;
 
@@ -56,6 +76,46 @@ interface host {
   /// Makes the current worker travel back in time and continue execution from the given position in the persistent
   /// op log.
   set-oplog-index: func(oplog-idx: oplog-index) -> ();
+
+  /// Blocks the execution until the oplog has been written to at least the specified number of replicas,
+  /// or the maximum number of replicas if the requested number is higher.
+  oplog-commit: func(replicas: u8) -> ();
+
+  /// Marks the beginning and end of an atomic operation.
+  /// In case of a failure within the region selected by the lifecycle of `atomic-operation`,
+  /// the whole region will be reexecuted on retry.
+  /// The end of the region is either when the resource is dropped, or when the explicit `commit` method is called on it.
+  resource atomic-operation {
+constructor();
+
+    /// Commits this atomic operation. After `commit` is called, the resource has no more effect on the execution
+    /// and future `commit` calls will cause a fatal error.
+    /// The atomic operation is automatically committed in case `commit` was not called when the resource is dropped.
+    commit: func() -> ();
+  }
+
+  /// Gets the current retry policy associated with the worker
+  get-retry-policy: func() -> retry-policy;
+
+  /// Overrides the current retry policy associated with the worker. Following this call, `get-retry-policy` will return the
+  /// new retry policy.
+  set-retry-policy: func(new-retry-policy: retry-policy) -> ();
+
+  /// Gets the worker's current persistence level.
+  get-oplog-persistence-level: func() -> persistence-level;
+
+  /// Sets the worker's current persistence level. This can increase the performance of execution in cases where durable
+  /// execution is not required.
+  set-oplog-persistence-level: func(new-persistence-level: persistence-level) -> ();
+
+  /// Gets the current idempotence mode. See `set-idempotence-mode` for details.
+  get-idempotence-mode: func() -> bool;
+
+  /// Sets the current idempotence mode. The default is true.
+  /// True means side-effects are treated idempotent and Golem guarantees at-least-once semantics.
+  /// In case of false the executor provides at-most-once semantics, failing the worker in case it is
+  /// not known if the side effect was already executed.
+  set-idempotence-mode: func(idempotent: bool) -> ();
 }
 
 world golem-host {

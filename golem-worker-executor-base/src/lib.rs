@@ -175,7 +175,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let blob_store_service = blob_store::configured(&golem_config.blob_store_service).await;
 
-        let oplog_service = Arc::new(OplogServiceDefault::new(pool.clone()));
+        let oplog_service = Arc::new(OplogServiceDefault::new(pool.clone()).await);
 
         let scheduler_service = SchedulerServiceDefault::new(
             pool.clone(),
