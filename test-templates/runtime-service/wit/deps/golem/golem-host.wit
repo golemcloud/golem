@@ -4,6 +4,7 @@ package golem:api@0.2.0;
 /// the durability and transactional guarantees the executor provides.
 interface host {
   use golem:rpc/types@0.1.0.{uri};
+  use wasi:clocks/monotonic-clock@0.2.0.{duration};
 
   /// An index into the persistent log storing all performed operations of a worker
   type oplog-index = u64;
@@ -33,6 +34,18 @@ interface host {
     low-bits: u64
   }
 
+  /// Configures how the executor retries failures
+  record retry-policy {
+    /// The maximum number of retries before the worker becomes permanently failed
+    max-attempts: u32,
+      /// The minimum delay between retries (applied to the first retry)
+    min-delay: duration,
+      /// The maximum delay between retries
+    max-delay: duration,
+      /// Multiplier applied to the delay on each retry to implement exponential backoff
+    multiplier: u32
+  }
+
   /// Create a new promise
   golem-create-promise: func() -> promise-id;
 
@@ -56,6 +69,13 @@ interface host {
   /// Makes the current worker travel back in time and continue execution from the given position in the persistent
   /// op log.
   set-oplog-index: func(oplog-idx: oplog-index) -> ();
+
+  /// Gets the current retry policy associated with the worker
+  get-retry-policy: func() -> retry-policy;
+
+  /// Overrides the current retry policy associated with the worker. Following this call, `get-retry-policy` will return the
+  /// new retry policy.
+  set-retry-policy: func(new-retry-policy: retry-policy) -> ();
 }
 
 world golem-host {

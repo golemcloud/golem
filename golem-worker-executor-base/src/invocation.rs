@@ -465,10 +465,13 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
         .data_mut()
         .return_fuel(current_fuel_level as i64)
         .await?;
-    debug!(
-        "fuel consumed for call {context}: {}",
-        consumed_fuel_for_call
-    );
+
+    if consumed_fuel_for_call > 0 {
+        debug!(
+            "fuel consumed for call {context}: {}",
+            consumed_fuel_for_call
+        );
+    }
     record_invocation_consumption(consumed_fuel_for_call);
 
     Ok((result.map(|_| results), consumed_fuel_for_call))

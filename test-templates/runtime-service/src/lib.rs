@@ -52,6 +52,21 @@ impl Guest for Component {
 
         state // final value is 5
     }
+
+    fn fail_with_custom_max_retries(max_retries: u64) {
+        let initial_retry_policy = get_retry_policy();
+        println!("Initial retry policy: {initial_retry_policy:?}");
+        set_retry_policy(RetryPolicy {
+            max_attempts: max_retries as u32,
+            min_delay: 1000000000, // 1s
+            max_delay: 1000000000, // 1s
+            multiplier: 1,
+        });
+        let overridden_retry_policy = get_retry_policy();
+        println!("Overridden retry policy: {overridden_retry_policy:?}");
+
+        panic!("Fail now");
+    }
 }
 
 fn remote_call(param: u64) -> bool {

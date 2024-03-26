@@ -126,6 +126,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.private_state.get_oplog_entry_marker().await
     }
 
+    async fn get_oplog_entry_change_retry_policy(&mut self) -> Result<(), GolemError> {
+        self.private_state
+            .get_oplog_entry_change_retry_policy()
+            .await
+    }
+
     async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
     where
         R: Decode + DeserializeOwned,
@@ -1172,6 +1178,24 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 _ => {
                     break Err(GolemError::unexpected_oplog_entry(
                         "NoOp",
+                        format!("{:?}", oplog_entry),
+                    ));
+                }
+            }
+        }
+    }
+
+    async fn get_oplog_entry_change_retry_policy(&mut self) -> Result<(), GolemError> {
+        loop {
+            let oplog_entry = self.get_oplog_entry().await;
+            match oplog_entry {
+                OplogEntry::ChangeRetryPolicy { .. } => {
+                    break Ok(());
+                }
+                entry if entry.is_hint() => {}
+                _ => {
+                    break Err(GolemError::unexpected_oplog_entry(
+                        "ChangeRetryPolicy",
                         format!("{:?}", oplog_entry),
                     ));
                 }

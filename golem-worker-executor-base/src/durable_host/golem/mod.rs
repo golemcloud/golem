@@ -160,11 +160,17 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         record_host_function_call("golem::api", "set_retry_policy");
         let new_retry_policy: RetryConfig = new_retry_policy.into();
         self.private_state.overridden_retry_policy = Some(new_retry_policy.clone());
-        self.set_oplog_entry(OplogEntry::ChangeRetryPolicy {
-            timestamp: Timestamp::now_utc(),
-            new_policy: new_retry_policy,
-        })
-        .await;
+
+        self.consume_hint_entries().await;
+        if self.is_live() {
+            self.set_oplog_entry(OplogEntry::ChangeRetryPolicy {
+                timestamp: Timestamp::now_utc(),
+                new_policy: new_retry_policy,
+            })
+            .await;
+        } else {
+            self.get_oplog_entry_change_retry_policy().await?;
+        }
         Ok(())
     }
 
