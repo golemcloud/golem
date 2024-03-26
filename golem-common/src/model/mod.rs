@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::str::FromStr;
@@ -27,6 +27,7 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
+use golem_api_grpc::proto::golem;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
 use poem_openapi::{Enum, Object};
@@ -520,6 +521,21 @@ impl WorkerMetadata {
     }
 }
 
+impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
+    fn from(value: WorkerMetadata) -> Self {
+        golem_api_grpc::proto::golem::worker::WorkerMetadata {
+            worker_id: Some(value.worker_id.worker_id.into_proto()),
+            account_id: Some(value.account_id.into()),
+            args: value.args,
+            env: HashMap::from_iter(value.env.iter().cloned()),
+            template_version: value.worker_id.template_version,
+            status: Into::<golem::worker::WorkerStatus>::into(value.last_known_status.status)
+                .into(),
+            retry_count: 0, // FIXME
+        }
+    }
+}
+
 /// Contains status information about a worker according to a given oplog index.
 /// This status is just cached information, all fields must be computable by the oplog alone.
 /// By having an associated oplog_idx, the cached information can be used together with the
@@ -948,18 +964,12 @@ pub enum FilterComparator {
 impl FilterComparator {
     pub fn matches<T: Ord>(&self, value1: &T, value2: &T) -> bool {
         match self {
-            FilterComparator::Equal => value1.cmp(value2) == std::cmp::Ordering::Equal,
-            FilterComparator::NotEqual => value1.cmp(value2) != std::cmp::Ordering::Equal,
-            FilterComparator::Less => value1.cmp(value2) == std::cmp::Ordering::Less,
-            FilterComparator::LessEqual => {
-                let r = value1.cmp(value2);
-                r == std::cmp::Ordering::Equal || r == std::cmp::Ordering::Less
-            }
-            FilterComparator::Greater => value1.cmp(value2) == std::cmp::Ordering::Greater,
-            FilterComparator::GreaterEqual => {
-                let r = value1.cmp(value2);
-                r == std::cmp::Ordering::Equal || r == std::cmp::Ordering::Greater
-            }
+            FilterComparator::Equal => value1 == value2,
+            FilterComparator::NotEqual => value1 != value2,
+            FilterComparator::Less => value1 < value2,
+            FilterComparator::LessEqual => value1 <= value2,
+            FilterComparator::Greater => value1 > value2,
+            FilterComparator::GreaterEqual => value1 >= value2,
         }
     }
 }
