@@ -18,7 +18,7 @@ use serde_json::{Number, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::{TypeAnnotatedValue, Uri, Value};
+use crate::{EnumValue, OptionValue, text, TypeAnnotatedValue, Uri, Value};
 
 pub fn function_parameters(
     value: &JsonValue,
@@ -590,41 +590,42 @@ fn get_handle(value: &JsonValue) -> Result<Value, Vec<String>> {
 fn validate_function_result(
     val: Value,
     expected_type: &AnalysedType,
-) -> Result<JsonValue, Vec<String>> {
+) -> Result<TypeAnnotatedValue, Vec<String>> {
     match val {
-        Value::Bool(bool) => Ok(serde_json::Value::Bool(bool)),
-        Value::S8(value) => Ok(serde_json::Value::Number(Number::from(value))),
-        Value::U8(value) => Ok(serde_json::Value::Number(Number::from(value))),
-        Value::U32(value) => Ok(serde_json::Value::Number(Number::from(value))),
-        Value::S16(value) => Ok(serde_json::Value::Number(Number::from(value))),
-        Value::U16(value) => Ok(serde_json::Value::Number(Number::from(value))),
-        Value::S32(value) => Ok(serde_json::Value::Number(Number::from(value))),
-        Value::S64(value) => Ok(serde_json::Value::Number(Number::from(value))),
-        Value::U64(value) => Ok(serde_json::Value::Number(Number::from(value))),
-        Value::F32(value) => Ok(serde_json::Value::Number(
-            Number::from_f64(value as f64)
-                .ok_or(vec![format!("Unsupported floating point value: {value}")])?,
-        )),
-        Value::F64(value) => Ok(serde_json::Value::Number(
-            Number::from_f64(value)
-                .ok_or(vec![format!("Unsupported floating point value: {value}")])?,
-        )),
-        Value::Char(value) => Ok(serde_json::Value::Number(Number::from(value as u32))),
-        Value::String(value) => Ok(serde_json::Value::String(value.to_string())),
+        Value::Bool(bool) => Ok(TypeAnnotatedValue::Bool(bool)),
+        Value::S8(value) => Ok(TypeAnnotatedValue::S8(value)),
+        Value::U8(value) => Ok(TypeAnnotatedValue::U8(value)),
+        Value::U32(value) => Ok(TypeAnnotatedValue::U32(value)),
+        Value::S16(value) => Ok(TypeAnnotatedValue::S16(value)),
+        Value::U16(value) => Ok(TypeAnnotatedValue::U16(value)),
+        Value::S32(value) => Ok(TypeAnnotatedValue::S32(value)),
+        Value::S64(value) => Ok(TypeAnnotatedValue::S64(value)),
+        Value::U64(value) => Ok(TypeAnnotatedValue::U64(value)),
+        Value::F32(value) => Ok(TypeAnnotatedValue::F32(value)),
+        Value::F64(value) => Ok(TypeAnnotatedValue::F64(value)),
+        Value::Char(value) => Ok(TypeAnnotatedValue::Chr(value)),
+        Value::String(value) => Ok(TypeAnnotatedValue::Str(value)),
 
         Value::Enum(value) => match expected_type {
             AnalysedType::Enum(names) => match names.get(value as usize) {
-                Some(str) => Ok(serde_json::Value::String(str.clone())),
+                Some(str) => Ok(TypeAnnotatedValue::Enum(EnumValue{
+                    typ: names.clone(),
+                    value: str.to_string(),
+                })),
                 None => Err(vec![format!("Invalid enum {}", value)]),
             },
             _ => Err(vec![format!("Unexpected enum {}", value)]),
         },
 
         Value::Option(value) => match expected_type {
-            AnalysedType::Option(elem) => match value {
-                Some(value) => validate_function_result(*value, elem),
-                None => Ok(serde_json::Value::Null),
-            },
+            AnalysedType::Option(elem) =>
+                Ok(TypeAnnotatedValue::Option(OptionValue{
+                    typ: text::AnalysedType(*elem.clone()),
+                    value: match value {
+                        Some(value) => Some(Box::new(validate_function_result(*value, elem)?)),
+                        None => None,
+                    },
+                })),
 
             _ => Err(vec!["Unexpected type; expected an Option type.".to_string()]),
         },
