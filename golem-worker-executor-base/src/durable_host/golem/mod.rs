@@ -18,16 +18,13 @@ use golem_common::config::RetryConfig;
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
-use wasmtime::component::Resource;
 
 use crate::durable_host::wasm_rpc::UriExtensions;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
-use crate::preview2::golem::api::host::{
-    AtomicOperation, HostAtomicOperation, OplogIndex, PersistenceLevel, RetryPolicy,
-};
+use crate::preview2::golem::api::host::{OplogIndex, PersistenceLevel, RetryPolicy};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::OplogRegion;
@@ -148,6 +145,14 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         unimplemented!()
     }
 
+    async fn mark_begin_operation(&mut self) -> anyhow::Result<OplogIndex> {
+        unimplemented!()
+    }
+
+    async fn mark_end_operation(&mut self, _begin: OplogIndex) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
     async fn get_retry_policy(&mut self) -> anyhow::Result<RetryPolicy> {
         record_host_function_call("golem::api", "get_retry_policy");
         match &self.private_state.overridden_retry_policy {
@@ -190,21 +195,6 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn set_idempotence_mode(&mut self, _idempotent: bool) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> HostAtomicOperation for DurableWorkerCtx<Ctx> {
-    async fn new(&mut self) -> anyhow::Result<Resource<AtomicOperation>> {
-        unimplemented!()
-    }
-
-    async fn commit(&mut self, _self_: Resource<AtomicOperation>) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-
-    fn drop(&mut self, _rep: Resource<AtomicOperation>) -> anyhow::Result<()> {
         unimplemented!()
     }
 }

@@ -29,6 +29,7 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_mutex::Mutex;
 use async_trait::async_trait;
+use golem_common::config::RetryConfig;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{VersionedWorkerId, WorkerId, WorkerStatus};
 use golem_common::retries::get_delay;
@@ -535,7 +536,12 @@ impl RecoveryManagement for RecoveryManagementMock {
         todo!()
     }
 
-    fn is_retriable(&self, _error: &WorkerError, _previous_tries: u64) -> bool {
+    fn is_retriable(
+        &self,
+        _retry_config: &RetryConfig,
+        _error: &WorkerError,
+        _previous_tries: u64,
+    ) -> bool {
         todo!()
     }
 }

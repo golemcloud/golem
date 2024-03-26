@@ -41,7 +41,8 @@ use crate::services::invocation_key::LookupResult;
 use crate::services::recovery::RecoveryManagement;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    HasAll, HasInvocationKeyService, HasOplogService, HasRecoveryManagement, HasWorkerService,
+    HasAll, HasConfig, HasInvocationKeyService, HasOplogService, HasRecoveryManagement,
+    HasWorkerService,
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
@@ -665,7 +666,7 @@ pub async fn calculate_last_known_status<T>(
     metadata: &Option<WorkerMetadata>,
 ) -> Result<WorkerStatusRecord, GolemError>
 where
-    T: HasOplogService + HasWorkerService + HasRecoveryManagement,
+    T: HasOplogService + HasWorkerService + HasRecoveryManagement + HasConfig,
 {
     let last_known = metadata
         .as_ref()
@@ -685,14 +686,18 @@ where
             )
             .await;
 
+        let overridden_retry_config = calculate_overridden_retry_policy(
+            last_known.overridden_retry_config.clone(),
+            &new_entries,
+        );
         let status = calculate_latest_worker_status(
             this.recovery_management().clone(),
             &last_known.status,
+            &this.config().retry,
+            last_known.overridden_retry_config.clone(),
             &new_entries,
         );
         let deleted_regions = calculate_deleted_regions(last_known.deleted_regions, &new_entries);
-        let overridden_retry_config =
-            calculate_overridden_retry_policy(last_known.overridden_retry_config, &new_entries);
 
         Ok(WorkerStatusRecord {
             oplog_idx: last_oplog_index,
@@ -706,10 +711,13 @@ where
 fn calculate_latest_worker_status(
     recovery_manager: Arc<dyn RecoveryManagement + Send + Sync>,
     initial: &WorkerStatus,
+    default_retry_policy: &RetryConfig,
+    initial_retry_policy: Option<RetryConfig>,
     entries: &[OplogEntry],
 ) -> WorkerStatus {
     let mut result = initial.clone();
     let mut last_error_count = 0;
+    let mut current_retry_policy = initial_retry_policy;
     for entry in entries {
         if !matches!(entry, OplogEntry::Error { .. }) {
             last_error_count = 0;
@@ -737,7 +745,13 @@ fn calculate_latest_worker_status(
             OplogEntry::Error { error, .. } => {
                 last_error_count += 1;
 
-                if recovery_manager.is_retriable(error, last_error_count) {
+                if recovery_manager.is_retriable(
+                    current_retry_policy
+                        .as_ref()
+                        .unwrap_or(default_retry_policy),
+                    error,
+                    last_error_count,
+                ) {
                     result = WorkerStatus::Retrying;
                 } else {
                     result = WorkerStatus::Failed;
@@ -755,7 +769,8 @@ fn calculate_latest_worker_status(
             OplogEntry::Exited { .. } => {
                 result = WorkerStatus::Exited;
             }
-            OplogEntry::ChangeRetryPolicy { .. } => {
+            OplogEntry::ChangeRetryPolicy { new_policy, .. } => {
+                current_retry_policy = Some(new_policy.clone());
                 result = WorkerStatus::Running;
             }
         }
@@ -775,6 +790,7 @@ fn calculate_deleted_regions(initial: DeletedRegions, entries: &[OplogEntry]) ->
 
 pub fn calculate_worker_status(
     recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+    retry_config: &RetryConfig,
     trap_type: &TrapType,
     previous_tries: u64,
 ) -> WorkerStatus {
@@ -785,7 +801,7 @@ pub fn calculate_worker_status(
         TrapType::Interrupt(InterruptKind::Restart) => WorkerStatus::Running,
         TrapType::Exit => WorkerStatus::Exited,
         TrapType::Error(error) => {
-            if recovery_management.is_retriable(error, previous_tries) {
+            if recovery_management.is_retriable(retry_config, error, previous_tries) {
                 WorkerStatus::Retrying
             } else {
                 WorkerStatus::Failed

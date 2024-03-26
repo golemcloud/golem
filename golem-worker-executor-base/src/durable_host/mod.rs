@@ -786,18 +786,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> Result<WorkerStatus, anyhow::Error> {
         let previous_tries = self.private_state.trailing_error_count().await;
         let default_retry_config = &self.private_state.config.retry;
+        let retry_config = self
+            .private_state
+            .overridden_retry_policy
+            .as_ref()
+            .unwrap_or(default_retry_config)
+            .clone();
         let decision = self
             .private_state
             .recovery_management
-            .schedule_recovery_on_trap(
-                &self.worker_id,
-                self.private_state
-                    .overridden_retry_policy
-                    .as_ref()
-                    .unwrap_or(default_retry_config),
-                previous_tries,
-                error,
-            )
+            .schedule_recovery_on_trap(&self.worker_id, &retry_config, previous_tries, error)
             .await;
 
         let oplog_idx = self.private_state.get_oplog_size().await;
@@ -808,6 +806,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         Ok(calculate_worker_status(
             self.private_state.recovery_management.clone(),
+            &retry_config,
             error,
             previous_tries,
         ))
