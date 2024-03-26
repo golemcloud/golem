@@ -81,18 +81,15 @@ interface host {
   /// or the maximum number of replicas if the requested number is higher.
   oplog-commit: func(replicas: u8) -> ();
 
-  /// Marks the beginning and end of an atomic operation.
-  /// In case of a failure within the region selected by the lifecycle of `atomic-operation`,
+  /// Marks the beginning of an atomic operation.
+  /// In case of a failure within the region selected by `mark-begin-operation` and `mark-end-operation`
   /// the whole region will be reexecuted on retry.
-  /// The end of the region is either when the resource is dropped, or when the explicit `commit` method is called on it.
-  resource atomic-operation {
-constructor();
+  /// The end of the region is when `mark-end-operation` is called with the returned oplog-index.
+  mark-begin-operation: func() -> oplog-index;
 
-    /// Commits this atomic operation. After `commit` is called, the resource has no more effect on the execution
-    /// and future `commit` calls will cause a fatal error.
-    /// The atomic operation is automatically committed in case `commit` was not called when the resource is dropped.
-    commit: func() -> ();
-  }
+  /// Commits this atomic operation. After `mark-end-operation` is called for a given index, further calls
+  /// with the same parameter will do nothing.
+  mark-end-operation: func(begin: oplog-index) -> ();
 
   /// Gets the current retry policy associated with the worker
   get-retry-policy: func() -> retry-policy;

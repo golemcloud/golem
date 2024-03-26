@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 use tonic::transport::Body;
 use warp::Filter;
 
@@ -119,4 +120,52 @@ async fn explicit_oplog_commit() {
 
     drop(executor);
     check!(result.is_ok());
+}
+
+#[tokio::test]
+async fn set_retry_policy() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+    let worker_id = executor
+        .start_worker(&template_id, "set-retry-policy-1")
+        .await;
+
+    executor.log_output(&worker_id).await;
+
+    let start = SystemTime::now();
+    let result1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/fail-with-custom-max-retries",
+            vec![common::val_u64(2)],
+        )
+        .await;
+    let elapsed = start.elapsed().unwrap();
+
+    let result2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/fail-with-custom-max-retries",
+            vec![common::val_u64(1)],
+        )
+        .await;
+
+    drop(executor);
+
+    check!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
+    check!(result1.is_err());
+    check!(result2.is_err());
+    check!(result1
+        .clone()
+        .err()
+        .unwrap()
+        .to_string()
+        .starts_with("Runtime error: error while executing at wasm backtrace:"));
+    check!(result2
+        .err()
+        .unwrap()
+        .to_string()
+        .starts_with("The previously invoked function failed"));
 }

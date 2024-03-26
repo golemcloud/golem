@@ -29,6 +29,7 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_mutex::Mutex;
 use async_trait::async_trait;
+use golem_common::config::RetryConfig;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{VersionedWorkerId, WorkerId, WorkerStatus};
 use golem_common::retries::get_delay;
@@ -50,6 +51,7 @@ pub trait RecoveryManagement {
     async fn schedule_recovery_on_trap(
         &self,
         worker_id: &VersionedWorkerId,
+        retry_config: &RetryConfig,
         previous_tries: u64,
         trap_type: &TrapType,
     ) -> RecoveryDecision;
@@ -61,10 +63,16 @@ pub trait RecoveryManagement {
     async fn schedule_recovery_on_startup(
         &self,
         worker_id: &VersionedWorkerId,
+        retry_config: &RetryConfig,
         last_error: &Option<LastError>,
     ) -> RecoveryDecision;
 
-    fn is_retriable(&self, error: &WorkerError, retry_count: u64) -> bool;
+    fn is_retriable(
+        &self,
+        retry_config: &RetryConfig,
+        error: &WorkerError,
+        retry_count: u64,
+    ) -> bool;
 }
 
 pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
@@ -289,6 +297,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 
     fn get_recovery_decision_on_trap(
         &self,
+        retry_config: &RetryConfig,
         previous_tries: u64,
         trap_type: &TrapType,
     ) -> RecoveryDecision {
@@ -299,8 +308,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             TrapType::Interrupt(InterruptKind::Jump) => RecoveryDecision::Immediate,
             TrapType::Exit => RecoveryDecision::None,
             TrapType::Error(error) => {
-                if self.is_retriable(error, previous_tries) {
-                    let retry_config = &self.golem_config.retry;
+                if self.is_retriable(retry_config, error, previous_tries) {
                     match get_delay(retry_config, previous_tries) {
                         Some(delay) => RecoveryDecision::Delayed(delay),
                         None => RecoveryDecision::None,
@@ -312,10 +320,14 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         }
     }
 
-    fn get_recovery_decision_on_startup(&self, last_error: &Option<LastError>) -> RecoveryDecision {
+    fn get_recovery_decision_on_startup(
+        &self,
+        retry_config: &RetryConfig,
+        last_error: &Option<LastError>,
+    ) -> RecoveryDecision {
         match last_error {
             Some(last_error) => {
-                if self.is_retriable(&last_error.error, last_error.retry_count) {
+                if self.is_retriable(retry_config, &last_error.error, last_error.retry_count) {
                     RecoveryDecision::Immediate
                 } else {
                     RecoveryDecision::None
@@ -419,12 +431,13 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     async fn schedule_recovery_on_trap(
         &self,
         worker_id: &VersionedWorkerId,
+        retry_config: &RetryConfig,
         previous_tries: u64,
         trap_type: &TrapType,
     ) -> RecoveryDecision {
         self.schedule_recovery(
             worker_id,
-            self.get_recovery_decision_on_trap(previous_tries, trap_type),
+            self.get_recovery_decision_on_trap(retry_config, previous_tries, trap_type),
         )
         .await
     }
@@ -432,18 +445,24 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     async fn schedule_recovery_on_startup(
         &self,
         worker_id: &VersionedWorkerId,
+        retry_config: &RetryConfig,
         previous_error: &Option<LastError>,
     ) -> RecoveryDecision {
         self.schedule_recovery(
             worker_id,
-            self.get_recovery_decision_on_startup(previous_error),
+            self.get_recovery_decision_on_startup(retry_config, previous_error),
         )
         .await
     }
 
-    fn is_retriable(&self, error: &WorkerError, retry_count: u64) -> bool {
+    fn is_retriable(
+        &self,
+        retry_config: &RetryConfig,
+        error: &WorkerError,
+        retry_count: u64,
+    ) -> bool {
         match error {
-            WorkerError::Unknown(_) => retry_count < (self.golem_config.retry.max_attempts as u64),
+            WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
             WorkerError::StackOverflow => false,
         }
     }
@@ -501,6 +520,7 @@ impl RecoveryManagement for RecoveryManagementMock {
     async fn schedule_recovery_on_trap(
         &self,
         _worker_id: &VersionedWorkerId,
+        _retry_config: &RetryConfig,
         _previous_tries: u64,
         _trap_type: &TrapType,
     ) -> RecoveryDecision {
@@ -510,12 +530,18 @@ impl RecoveryManagement for RecoveryManagementMock {
     async fn schedule_recovery_on_startup(
         &self,
         _worker_id: &VersionedWorkerId,
+        _retry_config: &RetryConfig,
         _previous_error: &Option<LastError>,
     ) -> RecoveryDecision {
         todo!()
     }
 
-    fn is_retriable(&self, _error: &WorkerError, _previous_tries: u64) -> bool {
+    fn is_retriable(
+        &self,
+        _retry_config: &RetryConfig,
+        _error: &WorkerError,
+        _previous_tries: u64,
+    ) -> bool {
         todo!()
     }
 }
@@ -550,6 +576,7 @@ mod tests {
     use anyhow::Error;
     use async_trait::async_trait;
     use bytes::Bytes;
+    use golem_common::config::RetryConfig;
     use golem_common::model::oplog::WorkerError;
     use golem_common::model::{
         AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerId,
@@ -910,7 +937,9 @@ mod tests {
             sender.send((id, elapsed)).unwrap();
         })
         .await;
-        let _ = svc.schedule_recovery_on_startup(&test_id, &None).await;
+        let _ = svc
+            .schedule_recovery_on_startup(&test_id, &RetryConfig::default(), &None)
+            .await;
         let (id, elapsed) = receiver.recv().await.unwrap();
         assert_eq!(id, test_id);
         assert!(elapsed.as_millis() < 100, "elapsed time was {:?}", elapsed);
@@ -931,6 +960,7 @@ mod tests {
         let _ = svc
             .schedule_recovery_on_startup(
                 &test_id,
+                &RetryConfig::default(),
                 &Some(LastError {
                     error: WorkerError::Unknown("x".to_string()),
                     retry_count: 100,
