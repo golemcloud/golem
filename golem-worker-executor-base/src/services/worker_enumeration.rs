@@ -56,28 +56,26 @@ impl<Ctx: WorkerCtx>
 }
 
 #[cfg(any(feature = "mocks", test))]
-pub struct RunningWorkerEnumerationServiceMock<Ctx: WorkerCtx> {}
+pub struct RunningWorkerEnumerationServiceMock {}
 
 #[cfg(any(feature = "mocks", test))]
-impl<Ctx: WorkerCtx> Default
-    for crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock<Ctx>
-{
+impl Default for crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[cfg(any(feature = "mocks", test))]
-impl<Ctx: WorkerCtx> crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock<Ctx> {
-    pub fn new<Ctx>() -> Self {
+impl crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock {
+    pub fn new() -> Self {
         Self {}
     }
 }
 
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
-impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
-    for crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock<Ctx>
+impl RunningWorkerEnumerationService
+    for crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock
 {
     async fn get(
         &self,
@@ -132,7 +130,7 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
         let mut new_cursor: Option<usize> = None;
         let mut template_workers: Vec<WorkerMetadata> = vec![];
 
-        let template_worker_redis_key = get_template_worker_redis_key(&template_id);
+        let template_worker_redis_key = get_template_worker_redis_key(template_id);
 
         let (new_redis_cursor, worker_redis_keys) = self
             .redis
@@ -142,7 +140,7 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
             .map_err(|e| GolemError::unknown(e.details()))?;
 
         for worker_redis_key in worker_redis_keys {
-            let worker_id = get_worker_id_from_redis_key(&worker_redis_key, &template_id)?;
+            let worker_id = get_worker_id_from_redis_key(&worker_redis_key, template_id)?;
 
             let worker_metadata = self.worker_service.get(&worker_id).await;
 
@@ -181,8 +179,8 @@ impl WorkerEnumerationService
 
             let (next_cursor, workers) = self
                 .get_internal(
-                    &template_id,
-                    &filter,
+                    template_id,
+                    filter,
                     new_cursor.unwrap_or(0),
                     new_count,
                     precise,
@@ -242,16 +240,14 @@ impl WorkerEnumerationService
         filter: &WorkerFilter,
         cursor: usize,
         count: usize,
-        precise: bool,
+        _precise: bool,
     ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
-        // TODO implement precise
         let workers = self.worker_service.enumerate().await;
 
         let all_workers_count = workers.len();
 
-        let mut template_workers: Vec<WorkerMetadata> = vec![];
-
-        let new_cursor = if all_workers_count > cursor {
+        if all_workers_count > cursor {
+            let mut template_workers: Vec<WorkerMetadata> = vec![];
             let mut index = 0;
             for worker in workers {
                 if index >= cursor
@@ -261,21 +257,20 @@ impl WorkerEnumerationService
                     template_workers.push(worker);
                 }
 
-                index = index + 1;
+                index += 1;
 
                 if template_workers.len() == count {
                     break;
                 }
             }
             if index >= all_workers_count {
-                None
+                Ok((None, template_workers))
             } else {
-                Some(index)
+                Ok((Some(index), template_workers))
             }
         } else {
-            None
-        };
-        Ok((new_cursor, template_workers))
+            Ok((None, vec![]))
+        }
     }
 }
 

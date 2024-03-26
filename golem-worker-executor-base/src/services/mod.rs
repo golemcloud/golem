@@ -16,7 +16,6 @@ use std::sync::Arc;
 #[cfg(any(feature = "mocks", test))]
 use std::time::Duration;
 
-use crate::services::worker_enumeration::RunningWorkerEnumerationServiceDefault;
 use tokio::runtime::Handle;
 
 use crate::workerctx::WorkerCtx;
