@@ -266,6 +266,7 @@ impl TestWorkerExecutor {
                 last_known_status: WorkerStatusRecord {
                     oplog_idx: 0,
                     status: metadata.status.try_into().expect("invalid status"),
+                    overridden_retry_config: None, // not passed through gRPC
                     deleted_regions: DeletedRegions::new(),
                 },
             }),

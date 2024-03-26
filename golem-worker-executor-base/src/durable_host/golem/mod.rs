@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::config::RetryConfig;
+use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
@@ -144,7 +144,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn oplog_commit(&mut self, replicas: u8) -> anyhow::Result<()> {
+    async fn oplog_commit(&mut self, _replicas: u8) -> anyhow::Result<()> {
         unimplemented!()
     }
 
@@ -174,7 +174,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
     async fn set_oplog_persistence_level(
         &mut self,
-        new_persistence_level: PersistenceLevel,
+        _new_persistence_level: PersistenceLevel,
     ) -> anyhow::Result<()> {
         unimplemented!()
     }
@@ -183,7 +183,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         unimplemented!()
     }
 
-    async fn set_idempotence_mode(&mut self, idempotent: bool) -> anyhow::Result<()> {
+    async fn set_idempotence_mode(&mut self, _idempotent: bool) -> anyhow::Result<()> {
         unimplemented!()
     }
 }
@@ -194,11 +194,11 @@ impl<Ctx: WorkerCtx> HostAtomicOperation for DurableWorkerCtx<Ctx> {
         unimplemented!()
     }
 
-    async fn commit(&mut self, self_: Resource<AtomicOperation>) -> anyhow::Result<()> {
+    async fn commit(&mut self, _self_: Resource<AtomicOperation>) -> anyhow::Result<()> {
         unimplemented!()
     }
 
-    fn drop(&mut self, rep: Resource<AtomicOperation>) -> anyhow::Result<()> {
+    fn drop(&mut self, _rep: Resource<AtomicOperation>) -> anyhow::Result<()> {
         unimplemented!()
     }
 }

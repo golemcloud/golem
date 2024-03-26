@@ -18,12 +18,12 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
 use fred::prelude::*;
+use golem_common::config::RetryConfig;
 use golem_common::metrics::redis::record_redis_serialized_size;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord};
 use golem_common::redis::RedisPool;
 use tracing::debug;
-use golem_common::config::RetryConfig;
 
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;

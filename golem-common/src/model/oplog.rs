@@ -1,3 +1,4 @@
+use crate::config::RetryConfig;
 use crate::model::regions::OplogRegion;
 use crate::model::{CallingConvention, InvocationKey, PromiseId, Timestamp};
 use crate::serialization::{
@@ -7,7 +8,6 @@ use bincode::{Decode, Encode};
 use bytes::Bytes;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use crate::config::RetryConfig;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub enum OplogEntry {
@@ -62,7 +62,10 @@ pub enum OplogEntry {
     /// Only used to recompute the worker's (cached) status, has no effect on execution.
     Interrupted { timestamp: Timestamp },
     /// Overrides the worker's retry policy
-    ChangeRetryPolicy { timestamp: Timestamp, new_policy: RetryConfig }
+    ChangeRetryPolicy {
+        timestamp: Timestamp,
+        new_policy: RetryConfig,
+    },
 }
 
 impl OplogEntry {

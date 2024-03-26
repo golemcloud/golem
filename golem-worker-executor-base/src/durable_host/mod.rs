@@ -1017,8 +1017,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         for worker in workers {
             let worker_id = worker.worker_id.clone();
             let actualized_metadata =
-                calculate_last_known_status(this, &worker_id.worker_id, &Some(worker))
-                    .await?;
+                calculate_last_known_status(this, &worker_id.worker_id, &Some(worker)).await?;
             let previous_tries = Self::get_worker_retry_count(this, &worker_id.worker_id).await;
             let decision = this
                 .recovery_management()
@@ -1027,7 +1026,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     actualized_metadata
                         .overridden_retry_config
                         .as_ref()
-                        .unwrap_or(&default_retry_config),
+                        .unwrap_or(default_retry_config),
                     previous_tries,
                 )
                 .await;

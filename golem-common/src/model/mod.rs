@@ -19,6 +19,7 @@ use std::ops::Add;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::config::RetryConfig;
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -32,7 +33,6 @@ use poem_openapi::{Enum, Object};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
-use crate::config::RetryConfig;
 
 use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;

@@ -29,13 +29,13 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_mutex::Mutex;
 use async_trait::async_trait;
+use golem_common::config::RetryConfig;
 use golem_common::model::{VersionedWorkerId, WorkerId, WorkerStatus};
 use golem_common::retries::get_delay;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use wasmtime::Trap;
-use golem_common::config::RetryConfig;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum RecoveryDecision {
@@ -300,18 +300,20 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                     {
                         RecoveryDecision::None
                     }
-                    _ => {
-                        match get_delay(retry_config, previous_tries) {
-                            Some(delay) => RecoveryDecision::Delayed(delay),
-                            None => RecoveryDecision::None,
-                        }
-                    }
+                    _ => match get_delay(retry_config, previous_tries) {
+                        Some(delay) => RecoveryDecision::Delayed(delay),
+                        None => RecoveryDecision::None,
+                    },
                 },
             },
         }
     }
 
-    fn get_recovery_decision_on_startup(&self, retry_config: &RetryConfig, previous_tries: u64) -> RecoveryDecision {
+    fn get_recovery_decision_on_startup(
+        &self,
+        retry_config: &RetryConfig,
+        previous_tries: u64,
+    ) -> RecoveryDecision {
         if previous_tries < (retry_config.max_attempts as u64) {
             RecoveryDecision::Immediate
         } else {
@@ -529,6 +531,7 @@ mod tests {
     use anyhow::Error;
     use async_trait::async_trait;
     use bytes::Bytes;
+    use golem_common::config::RetryConfig;
     use golem_common::model::{
         AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerId,
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
@@ -539,7 +542,6 @@ mod tests {
     use tokio::time::{timeout, Instant};
     use wasmtime::component::{Instance, ResourceAny};
     use wasmtime::{AsContextMut, ResourceLimiterAsync};
-    use golem_common::config::RetryConfig;
 
     use crate::services::oplog::{OplogService, OplogServiceMock};
     use crate::services::recovery::{RecoveryManagement, RecoveryManagementDefault};
@@ -889,7 +891,9 @@ mod tests {
             sender.send((id, elapsed)).unwrap();
         })
         .await;
-        let _ = svc.schedule_recovery_on_startup(&test_id, &RetryConfig::default(), 0).await;
+        let _ = svc
+            .schedule_recovery_on_startup(&test_id, &RetryConfig::default(), 0)
+            .await;
         let (id, elapsed) = receiver.recv().await.unwrap();
         assert_eq!(id, test_id);
         assert!(elapsed.as_millis() < 100, "elapsed time was {:?}", elapsed);
@@ -907,7 +911,9 @@ mod tests {
             sender.send((id, elapsed)).unwrap();
         })
         .await;
-        let _ = svc.schedule_recovery_on_startup(&test_id, &RetryConfig::default(), 100).await;
+        let _ = svc
+            .schedule_recovery_on_startup(&test_id, &RetryConfig::default(), 100)
+            .await;
         let res = timeout(Duration::from_secs(1), receiver.recv()).await;
         assert!(res.is_err());
     }
