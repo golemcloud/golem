@@ -18,7 +18,7 @@ use serde_json::{Number, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::{EnumValue, ListValue, OptionValue, RecordValue, text, TupleValue, TypeAnnotatedValue, Uri, Value, VariantValue};
+use crate::{EnumValue, FlagValue, ListValue, OptionValue, RecordValue, text, TupleValue, TypeAnnotatedValue, Uri, Value, VariantValue};
 
 pub fn function_parameters(
     value: &JsonValue,
@@ -775,11 +775,14 @@ fn validate_function_result(
                 } else {
                     for (enabled, name) in values.iter().zip(names) {
                         if *enabled {
-                            result.push(JsonValue::String(name.clone()));
+                            result.push(name.clone());
                         }
                     }
 
-                    Ok(JsonValue::Array(result))
+                    Ok(TypeAnnotatedValue::Flags(FlagValue{
+                        typ: names.clone(),
+                        value: result,
+                    }))
                 }
             }
             _ => Err(vec!["Unexpected type; expected a flags type.".to_string()]),
