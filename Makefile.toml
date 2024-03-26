@@ -184,7 +184,7 @@ script = '''
       echo "Latest Golem OpenAPI spec version detected."
     else
       echo "openapi/golem-service.yaml is not the same as produced by golem-service-yaml." 1>&2
-      echo "Run ./scripts/generate-openapi-yaml.sh to generate new spec." 1>&2
+      echo "Run cargo make generate-openapi to generate new spec." 1>&2
       exit 1
   fi
 '''
@@ -202,12 +202,12 @@ dependencies = [
 [tasks.generate-worker-service-openapi]
 description = "Generates openapi spec for worker service"
 dependencies = ["build"]
-script = "./target/debug/golem-worker-service-yaml > ./target/golem-worker-service.yaml"
+script = "./target/debug/golem-worker-service --dump-openapi-yaml > ./target/golem-worker-service.yaml"
 
 [tasks.generate-template-service-openapi]
 description = "Generates openapi spec for template service"
 dependencies = ["build"]
-script = "./target/debug/golem-template-service-yaml > ./target/golem-template-service.yaml"
+script = "./target/debug/golem-template-service --dump-openapi-yaml > ./target/golem-template-service.yaml"
 
 [tasks.merge-openapi]
 install_crate = { crate_name = "golem-openapi-client-generator", version = "0.0.4" }
@@ -236,7 +236,6 @@ command = "sed"
 args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
 
 [tasks.set-golem-client-version.mac]
-description = "Sets the version in golem-client/Cargo.toml to the value of the VERSION environment variable"
 condition = { env_set = ["VERSION"] }
 command = "sed"
 args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-client/Cargo.toml"]
@@ -254,7 +253,6 @@ command = "sed"
 args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]
 
 [tasks.set-golem-cli-version.mac]
-description = "Sets the version in golem-cli/Cargo.toml to the value of the VERSION environment variable"
 condition = { env_set = ["VERSION"] }
 command = "sed"
 args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-cli/Cargo.toml"]

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -22,6 +23,7 @@ use golem_common::metrics::redis::record_redis_serialized_size;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::WorkerId;
 use golem_common::redis::RedisPool;
+use tracing::error;
 
 use crate::metrics::oplog::record_oplog_call;
 
@@ -34,16 +36,28 @@ pub trait OplogService {
     async fn delete(&self, worker_id: &WorkerId);
 
     async fn read(&self, worker_id: &WorkerId, idx: u64, n: u64) -> Vec<OplogEntry>;
+
+    /// Waits until Redis writes all changes into at least `replicas` replicas (or the maximum
+    /// available).
+    /// Returns true if the maximum possible number of replicas is reached within the timeout,
+    /// otherwise false.
+    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool;
 }
 
 #[derive(Clone, Debug)]
 pub struct OplogServiceDefault {
     redis: RedisPool,
+    replicas: u8,
 }
 
 impl OplogServiceDefault {
-    pub fn new(redis: RedisPool) -> Self {
-        Self { redis }
+    pub async fn new(redis: RedisPool) -> Self {
+        let replicas = redis
+            .with("oplog", "new")
+            .info_connected_slaves()
+            .await
+            .unwrap_or_else(|err| panic!("failed to get the number of replicas from Redis: {err}"));
+        Self { redis, replicas }
     }
 }
 
@@ -170,6 +184,22 @@ impl OplogService for OplogServiceDefault {
 
         entries
     }
+
+    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
+        let replicas = replicas.min(self.replicas);
+        match self
+            .redis
+            .with("oplog", "wait_for_replicas")
+            .wait(replicas as i64, timeout.as_millis() as i64)
+            .await
+        {
+            Ok(n) => n as u8 == replicas,
+            Err(err) => {
+                error!("Failed to execute WAIT command: {:?}", err);
+                false
+            }
+        }
+    }
 }
 
 fn get_oplog_redis_key(worker_id: &WorkerId) -> String {
@@ -209,6 +239,10 @@ impl OplogService for OplogServiceMock {
     }
 
     async fn read(&self, _worker_id: &WorkerId, _idx: u64, _n: u64) -> Vec<OplogEntry> {
+        unimplemented!()
+    }
+
+    async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
         unimplemented!()
     }
 }

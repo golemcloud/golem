@@ -177,16 +177,31 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .status;
 
         match worker_status {
-            WorkerStatus::Failed => Err(GolemError::PreviousInvocationFailed),
+            WorkerStatus::Failed => {
+                let error_and_retry_count =
+                    Ctx::get_last_error_and_retry_count(self, worker_id).await;
+                if let Some(last_error) = error_and_retry_count {
+                    Err(GolemError::PreviousInvocationFailed {
+                        details: format!("{}", last_error.error),
+                    })
+                } else {
+                    Err(GolemError::PreviousInvocationFailed {
+                        details: "".to_string(),
+                    })
+                }
+            }
             WorkerStatus::Exited => Err(GolemError::PreviousInvocationExited),
             _ => {
-                let error_count = Ctx::get_worker_retry_count(self, worker_id).await;
+                let error_and_retry_count =
+                    Ctx::get_last_error_and_retry_count(self, worker_id).await;
                 debug!(
-                    "Trailing error count for worker {}: {}",
-                    worker_id, error_count
+                    "Last error and retry count for worker {}: {:?}",
+                    worker_id, error_and_retry_count
                 );
-                if error_count > 0 {
-                    Err(GolemError::PreviousInvocationFailed)
+                if let Some(last_error) = error_and_retry_count {
+                    Err(GolemError::PreviousInvocationFailed {
+                        details: format!("{}", last_error.error),
+                    })
                 } else {
                     Ok(worker_status)
                 }
@@ -637,7 +652,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ctx::compute_latest_worker_status(self, &worker_id, &Some(metadata.clone()))
                 .await?
                 .status;
-        let retry_count = Ctx::get_worker_retry_count(self, &worker_id).await as i32;
+        let last_error_and_retry_count =
+            Ctx::get_last_error_and_retry_count(self, &worker_id).await;
 
         Ok(golem::worker::WorkerMetadata {
             worker_id: Some(worker_id.into_proto()),
@@ -646,7 +662,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             account_id: Some(metadata.account_id.into()),
             template_version: metadata.worker_id.template_version,
             status: Into::<golem::worker::WorkerStatus>::into(latest_status).into(),
-            retry_count,
+            retry_count: last_error_and_retry_count
+                .map(|last_error| last_error.retry_count as i32)
+                .unwrap_or_default(),
+            // TODO: add error details
         })
     }
 }

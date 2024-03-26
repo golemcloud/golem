@@ -9,6 +9,7 @@ use tonic::transport::Body;
 use warp::Filter;
 
 #[tokio::test]
+#[tracing::instrument]
 async fn jump() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -92,4 +93,30 @@ async fn jump() {
                 Some(common::stdout_event("fifth: 5\n")),
             ]
     );
+}
+
+#[tokio::test]
+async fn explicit_oplog_commit() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+
+    let worker_id = executor
+        .start_worker(&template_id, "runtime-service-explicit-oplog-commit")
+        .await;
+
+    executor.log_output(&worker_id).await;
+
+    // Note: we can only test with replicas=0 because we don't have redis slaves in the test environment currently
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/explicit-commit",
+            vec![common::val_u8(0)],
+        )
+        .await;
+
+    drop(executor);
+    check!(result.is_ok());
 }

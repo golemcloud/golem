@@ -26,6 +26,7 @@ use warp::Filter;
 use wasmtime_wasi::preview2::spawn;
 
 #[tokio::test]
+#[tracing::instrument]
 async fn interruption() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -61,6 +62,7 @@ async fn interruption() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn simulated_crash() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -103,6 +105,7 @@ async fn simulated_crash() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn shopping_cart_example() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -201,6 +204,7 @@ async fn shopping_cart_example() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn stdio_cc() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -218,6 +222,7 @@ async fn stdio_cc() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn dynamic_instance_creation() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -260,6 +265,7 @@ async fn dynamic_instance_creation() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn promise() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -301,6 +307,7 @@ async fn promise() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn get_self_uri() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -330,6 +337,7 @@ async fn get_self_uri() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn invoking_with_same_invocation_key_is_idempotent() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -387,6 +395,7 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn invoking_with_invalid_invocation_key_is_failure() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -417,6 +426,7 @@ async fn invoking_with_invalid_invocation_key_is_failure() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -477,6 +487,7 @@ async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn optional_parameters() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -537,6 +548,7 @@ async fn optional_parameters() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn flags_parameters() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -583,6 +595,7 @@ async fn flags_parameters() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn variants_with_no_payloads() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -602,6 +615,7 @@ async fn variants_with_no_payloads() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn delete_instance() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -629,6 +643,7 @@ async fn delete_instance() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_parameters() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -646,6 +661,7 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameters() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -671,6 +687,7 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn get_instance_metadata() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -719,6 +736,7 @@ async fn get_instance_metadata() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn create_invoke_delete_create_invoke() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -767,6 +785,7 @@ async fn create_invoke_delete_create_invoke() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn recovering_an_old_instance_after_updating_a_template() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -842,6 +861,7 @@ async fn recovering_an_old_instance_after_updating_a_template() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -902,6 +922,7 @@ async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() 
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn trying_to_use_an_old_wasm_provides_good_error_message() {
     let context = common::TestContext::new();
     // case: WASM is an old version, rejected by protector
@@ -926,6 +947,7 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message() {
     let context = common::TestContext::new();
     // case: WASM can be parsed but wasmtime does not support it
@@ -962,6 +984,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message_after_recovery()
 {
     let context = common::TestContext::new();
@@ -1014,6 +1037,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn long_running_poll_loop_works_as_expected() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1080,6 +1104,7 @@ async fn long_running_poll_loop_works_as_expected() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1184,6 +1209,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn long_running_poll_loop_connection_breaks_on_interrupt() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1243,6 +1269,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_worker() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1308,6 +1335,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1394,6 +1422,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1456,6 +1485,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn shopping_cart_resource_example() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1580,6 +1610,7 @@ async fn shopping_cart_resource_example() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn counter_resource_test_1() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -1637,6 +1668,7 @@ async fn counter_resource_test_1() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn reconstruct_interrupted_state() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();

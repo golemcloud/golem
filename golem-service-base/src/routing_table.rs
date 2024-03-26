@@ -38,6 +38,15 @@ impl RoutingTableConfig {
     }
 }
 
+impl Default for RoutingTableConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 9001,
+        }
+    }
+}
+
 impl RoutingTableError {
     pub fn unexpected(details: impl Into<String>) -> Self {
         RoutingTableError::Unexpected(details.into())

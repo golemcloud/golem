@@ -14,6 +14,7 @@
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -22,7 +23,7 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
-use crate::preview2::golem::api::host::OplogIndex;
+use crate::preview2::golem::api::host::{OplogIndex, PersistenceLevel, RetryPolicy};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::OplogRegion;
@@ -137,6 +138,72 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             debug!("Ignoring replayed set_oplog_index for {}", self.worker_id);
             Ok(())
         }
+    }
+
+    async fn oplog_commit(&mut self, replicas: u8) -> anyhow::Result<()> {
+        if self.is_live() {
+            let timeout = Duration::from_secs(1);
+            debug!(
+                "Worker {} committing oplog to {} replicas",
+                self.worker_id, replicas
+            );
+            loop {
+                // Applying a timeout to make sure the worker remains interruptible
+                if self.commit_oplog_to_replicas(replicas, timeout).await {
+                    debug!(
+                        "Worker {} committed oplog to {} replicas",
+                        self.worker_id, replicas
+                    );
+                    return Ok(());
+                } else {
+                    debug!(
+                        "Worker {} failed to commit oplog to {} replicas, retrying",
+                        self.worker_id, replicas
+                    );
+                }
+
+                if let Some(kind) = self.check_interrupt() {
+                    return Err(kind.into());
+                }
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn get_retry_policy(&mut self) -> anyhow::Result<RetryPolicy> {
+        unimplemented!()
+    }
+
+    async fn set_retry_policy(&mut self, _new_retry_policy: RetryPolicy) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    async fn mark_begin_operation(&mut self) -> anyhow::Result<OplogIndex> {
+        unimplemented!()
+    }
+
+    async fn mark_end_operation(&mut self, _begin: OplogIndex) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    async fn get_oplog_persistence_level(&mut self) -> anyhow::Result<PersistenceLevel> {
+        unimplemented!()
+    }
+
+    async fn set_oplog_persistence_level(
+        &mut self,
+        _new_persistence_level: PersistenceLevel,
+    ) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    async fn get_idempotence_mode(&mut self) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
+
+    async fn set_idempotence_mode(&mut self, _idempotent: bool) -> anyhow::Result<()> {
+        unimplemented!()
     }
 }
 
