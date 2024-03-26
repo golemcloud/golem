@@ -793,11 +793,36 @@ pub fn parse_function_name(name: &str) -> ParsedFunctionName {
     }
 }
 
+// #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+// pub struct WorkerNameFilter {
+//     pub comparator: StringFilterComparator,
+//     pub value: String,
+// }
+//
+// #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+// pub struct WorkerStatusFilter {
+//     pub value: WorkerStatus
+// }
+//
+//
+// #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+// pub struct WorkerVersionFilter {
+//     pub comparator: FilterComparator,
+//     pub value: i32,
+// }
+//
+// #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+// pub struct WorkerVersionEnvFilter {
+//     pub name: String,
+//     pub comparator: StringFilterComparator,
+//     pub value: String
+// }
+
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
 pub enum WorkerFilter {
     Empty,
     Name {
-        comparator: FilterStringComparator,
+        comparator: StringFilterComparator,
         value: String,
     },
     Status {
@@ -813,7 +838,7 @@ pub enum WorkerFilter {
     // },
     Env {
         name: String,
-        comparator: FilterStringComparator,
+        comparator: StringFilterComparator,
         value: String,
     },
     And(Vec<WorkerFilter>),
@@ -913,11 +938,11 @@ impl WorkerFilter {
         WorkerFilter::Not(Box::new(filter))
     }
 
-    pub fn new_name(comparator: FilterStringComparator, value: String) -> Self {
+    pub fn new_name(comparator: StringFilterComparator, value: String) -> Self {
         WorkerFilter::Name { comparator, value }
     }
 
-    pub fn new_env(name: String, comparator: FilterStringComparator, value: String) -> Self {
+    pub fn new_env(name: String, comparator: StringFilterComparator, value: String) -> Self {
         WorkerFilter::Env {
             name,
             comparator,
@@ -935,16 +960,16 @@ impl WorkerFilter {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
-pub enum FilterStringComparator {
+pub enum StringFilterComparator {
     Equal,
     Like,
 }
 
-impl FilterStringComparator {
+impl StringFilterComparator {
     pub fn matches<T: Display>(&self, value1: &T, value2: &T) -> bool {
         match self {
-            FilterStringComparator::Equal => value1.to_string() == value2.to_string(),
-            FilterStringComparator::Like => {
+            StringFilterComparator::Equal => value1.to_string() == value2.to_string(),
+            StringFilterComparator::Like => {
                 value1.to_string().contains(value2.to_string().as_str())
             } // FIXME
         }
@@ -980,7 +1005,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use crate::model::{
-        parse_function_name, AccountId, FilterComparator, FilterStringComparator, TemplateId,
+        parse_function_name, AccountId, FilterComparator, StringFilterComparator, TemplateId,
         VersionedWorkerId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
         WorkerStatusRecord,
     };
@@ -1132,14 +1157,14 @@ mod tests {
         assert!(WorkerFilter::Empty.matches(&worker_metadata));
 
         assert!(
-            WorkerFilter::new_name(FilterStringComparator::Equal, "worker-1".to_string())
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
                 .and(WorkerFilter::new_status(WorkerStatus::Idle))
                 .matches(&worker_metadata)
         );
 
         assert!(WorkerFilter::new_env(
             "env1".to_string(),
-            FilterStringComparator::Equal,
+            StringFilterComparator::Equal,
             "value1".to_string(),
         )
         .and(WorkerFilter::new_status(WorkerStatus::Idle))
@@ -1147,7 +1172,7 @@ mod tests {
 
         assert!(WorkerFilter::new_env(
             "env1".to_string(),
-            FilterStringComparator::Equal,
+            StringFilterComparator::Equal,
             "value2".to_string(),
         )
         .not()
@@ -1158,13 +1183,13 @@ mod tests {
         .matches(&worker_metadata));
 
         assert!(
-            WorkerFilter::new_name(FilterStringComparator::Equal, "worker-1".to_string())
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
                 .and(WorkerFilter::new_version(FilterComparator::Equal, 1))
                 .matches(&worker_metadata)
         );
 
         assert!(
-            WorkerFilter::new_name(FilterStringComparator::Equal, "worker-2".to_string())
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-2".to_string())
                 .or(WorkerFilter::new_version(FilterComparator::Equal, 1))
                 .matches(&worker_metadata)
         );
@@ -1172,7 +1197,7 @@ mod tests {
         assert!(WorkerFilter::new_version(FilterComparator::GreaterEqual, 1)
             .and(WorkerFilter::new_version(FilterComparator::Less, 2))
             .or(WorkerFilter::new_name(
-                FilterStringComparator::Equal,
+                StringFilterComparator::Equal,
                 "worker-2".to_string(),
             ))
             .matches(&worker_metadata));
