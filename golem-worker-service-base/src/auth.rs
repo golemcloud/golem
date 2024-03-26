@@ -43,7 +43,6 @@ impl<AuthCtx, Namespace: Default> AuthService<AuthCtx, Namespace> for AuthServic
 }
 
 // TODO: Replace with metadata map
-// Should this be async trait? or too complicated?
 pub trait Metadata {
     fn get_metadata(&self) -> NamespaceMetadata;
 }
