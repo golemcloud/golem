@@ -431,6 +431,73 @@ pub enum TypeAnnotatedValue {
     Handle(ResourceValue),
 }
 
+#[derive(Clone, Debug)]
+pub struct EnumValue {
+    typ: Vec<String>,
+    value: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct OptionValue {
+    typ: AnalysedType,
+    value: Option<Box<TypeAnnotatedValue>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FlagValue {
+    typ: Vec<String>,
+    value: Vec<String>, // value should be a subset of typ field here.
+}
+
+#[derive(Clone, Debug)]
+pub struct VariantValue {
+    typ: Vec<(String, Option<AnalysedType>)>,
+    case_name: String,
+    case_value: Option<Box<TypeAnnotatedValue>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TupleValue {
+    typ: AnalysedType,
+    value: Vec<TypeAnnotatedValue>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RecordValue {
+    typ: AnalysedType,
+    value: Vec<(String, TypeAnnotatedValue)>,
+}
+
+//
+// The law here is:
+//     let mut types = Vec::new();
+//       for value in values {
+//          types.push(value.analysed_typ());
+//       }
+//       let head = types.map(|value| value.into())).head
+//       types.forall(types == head)
+//
+#[derive(Clone, Debug)]
+pub struct ListValue {
+    typ: AnalysedType,
+    values: Vec<TypeAnnotatedValue>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResultValue {
+    ok: Option<Box<AnalysedType>>,
+    error: Option<Box<AnalysedType>>,
+    value: Result<Option<Box<TypeAnnotatedValue>>, Option<Box<TypeAnnotatedValue>>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResourceValue {
+    id: AnalysedResourceId,
+    resource_mode: AnalysedResourceMode,
+    uri: Uri,
+    resource_id: u64,
+}
+
 impl TypeAnnotatedValue {
     pub fn analysed_typ(&self) -> AnalysedType {
         match self {
@@ -862,73 +929,6 @@ impl WasmValue for TypeAnnotatedValue {
             _ => panic!("Expected flags, found {:?}", self),
         }
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct EnumValue {
-    typ: Vec<String>,
-    value: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct OptionValue {
-    typ: AnalysedType,
-    value: Option<Box<TypeAnnotatedValue>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct FlagValue {
-    typ: Vec<String>,
-    value: Vec<String>, // value should be a subset of typ field here.
-}
-
-#[derive(Clone, Debug)]
-pub struct VariantValue {
-    typ: Vec<(String, Option<AnalysedType>)>,
-    case_name: String,
-    case_value: Option<Box<TypeAnnotatedValue>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct TupleValue {
-    typ: AnalysedType,
-    value: Vec<TypeAnnotatedValue>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RecordValue {
-    typ: AnalysedType,
-    value: Vec<(String, TypeAnnotatedValue)>,
-}
-
-//
-// The law here is:
-//     let mut types = Vec::new();
-//       for value in values {
-//          types.push(value.analysed_typ());
-//       }
-//       let head = types.map(|value| value.into())).head
-//       types.forall(types == head)
-//
-#[derive(Clone, Debug)]
-pub struct ListValue {
-    typ: AnalysedType,
-    values: Vec<TypeAnnotatedValue>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ResultValue {
-    ok: Option<Box<AnalysedType>>,
-    error: Option<Box<AnalysedType>>,
-    value: Result<Option<Box<TypeAnnotatedValue>>, Option<Box<TypeAnnotatedValue>>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ResourceValue {
-    id: AnalysedResourceId,
-    resource_mode: AnalysedResourceMode,
-    uri: Uri,
-    resource_id: u64,
 }
 
 #[cfg(feature = "arbitrary")]
