@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use golem_common::model::CallingConvention;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::api_definition::ResponseMapping;
-use golem_worker_service_base::auth::EmptyAuthCtx;
+use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::resolved_variables::ResolvedVariables;
 use golem_worker_service_base::service::worker::WorkerService;
 use golem_worker_service_base::worker_request::WorkerRequest;
@@ -15,15 +15,13 @@ use http::StatusCode;
 use poem::Body;
 use tracing::info;
 
-use crate::service::worker::WorkerNamespace;
-
 pub struct WorkerRequestToHttpResponse {
-    pub worker_service: Arc<dyn WorkerService<WorkerNamespace, EmptyAuthCtx> + Sync + Send>,
+    pub worker_service: Arc<dyn WorkerService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
 }
 
 impl WorkerRequestToHttpResponse {
     pub fn new(
-        worker_service: Arc<dyn WorkerService<WorkerNamespace, EmptyAuthCtx> + Sync + Send>,
+        worker_service: Arc<dyn WorkerService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
     ) -> Self {
         Self { worker_service }
     }
