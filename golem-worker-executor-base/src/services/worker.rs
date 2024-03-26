@@ -27,7 +27,6 @@ use tracing::debug;
 
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
-use crate::services::golem_config::WorkersServiceConfig;
 use crate::services::shard::ShardService;
 
 /// Service for persisting the current set of Golem workers represented by their metadata
