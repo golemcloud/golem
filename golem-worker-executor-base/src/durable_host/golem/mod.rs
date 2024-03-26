@@ -14,6 +14,7 @@
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use golem_common::config::RetryConfig;
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
@@ -171,20 +172,38 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn get_retry_policy(&mut self) -> anyhow::Result<RetryPolicy> {
-        unimplemented!()
-    }
-
-    async fn set_retry_policy(&mut self, _new_retry_policy: RetryPolicy) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-
     async fn mark_begin_operation(&mut self) -> anyhow::Result<OplogIndex> {
         unimplemented!()
     }
 
     async fn mark_end_operation(&mut self, _begin: OplogIndex) -> anyhow::Result<()> {
         unimplemented!()
+    }
+
+    async fn get_retry_policy(&mut self) -> anyhow::Result<RetryPolicy> {
+        record_host_function_call("golem::api", "get_retry_policy");
+        match &self.private_state.overridden_retry_policy {
+            Some(policy) => Ok(policy.into()),
+            None => Ok((&self.private_state.config.retry).into()),
+        }
+    }
+
+    async fn set_retry_policy(&mut self, new_retry_policy: RetryPolicy) -> anyhow::Result<()> {
+        record_host_function_call("golem::api", "set_retry_policy");
+        let new_retry_policy: RetryConfig = new_retry_policy.into();
+        self.private_state.overridden_retry_policy = Some(new_retry_policy.clone());
+
+        self.consume_hint_entries().await;
+        if self.is_live() {
+            self.set_oplog_entry(OplogEntry::ChangeRetryPolicy {
+                timestamp: Timestamp::now_utc(),
+                new_policy: new_retry_policy,
+            })
+            .await;
+        } else {
+            self.get_oplog_entry_change_retry_policy().await?;
+        }
+        Ok(())
     }
 
     async fn get_oplog_persistence_level(&mut self) -> anyhow::Result<PersistenceLevel> {
@@ -261,6 +280,28 @@ impl From<golem::api::host::PromiseId> for PromiseId {
         Self {
             worker_id: host.worker_id.into(),
             oplog_idx: host.oplog_idx,
+        }
+    }
+}
+
+impl From<&RetryConfig> for RetryPolicy {
+    fn from(value: &RetryConfig) -> Self {
+        Self {
+            max_attempts: value.max_attempts,
+            min_delay: value.min_delay.as_nanos() as u64,
+            max_delay: value.max_delay.as_nanos() as u64,
+            multiplier: value.multiplier,
+        }
+    }
+}
+
+impl From<RetryPolicy> for RetryConfig {
+    fn from(value: RetryPolicy) -> Self {
+        Self {
+            max_attempts: value.max_attempts,
+            min_delay: Duration::from_nanos(value.min_delay),
+            max_delay: Duration::from_nanos(value.max_delay),
+            multiplier: value.multiplier,
         }
     }
 }

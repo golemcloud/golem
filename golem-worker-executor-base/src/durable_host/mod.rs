@@ -48,6 +48,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use cap_std::ambient_authority;
+use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -131,6 +132,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {
         self.private_state.get_oplog_entry_marker().await
+    }
+
+    async fn get_oplog_entry_change_retry_policy(&mut self) -> Result<(), GolemError> {
+        self.private_state
+            .get_oplog_entry_change_retry_policy()
+            .await
     }
 
     async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
@@ -285,6 +292,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         next_deleted_region: worker_config
                             .deleted_regions
                             .find_next_deleted_region(0),
+                        overridden_retry_policy: None,
                     },
                     temp_dir,
                     execution_status,
@@ -399,6 +407,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &self.worker_id.worker_id,
                 status,
                 self.private_state.deleted_regions.clone(),
+                self.private_state.overridden_retry_policy.clone(),
                 oplog_idx,
             )
             .await
@@ -782,10 +791,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         error: &TrapType,
     ) -> Result<WorkerStatus, anyhow::Error> {
         let previous_tries = self.private_state.trailing_error_count().await;
+        let default_retry_config = &self.private_state.config.retry;
+        let retry_config = self
+            .private_state
+            .overridden_retry_policy
+            .as_ref()
+            .unwrap_or(default_retry_config)
+            .clone();
         let decision = self
             .private_state
             .recovery_management
-            .schedule_recovery_on_trap(&self.worker_id, previous_tries, error)
+            .schedule_recovery_on_trap(&self.worker_id, &retry_config, previous_tries, error)
             .await;
 
         let oplog_idx = self.private_state.get_oplog_size().await;
@@ -796,6 +812,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         Ok(calculate_worker_status(
             self.private_state.recovery_management.clone(),
+            &retry_config,
             error,
             previous_tries,
         ))
@@ -886,6 +903,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 worker_id,
                 status,
                 latest_status.deleted_regions,
+                latest_status.overridden_retry_config,
                 latest_status.oplog_idx,
             )
             .await;
@@ -1001,12 +1019,22 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         debug!("Recovering running workers: {:?}", workers);
 
+        let default_retry_config = &this.config().retry;
         for worker in workers {
-            let worker_id = worker.worker_id;
+            let worker_id = worker.worker_id.clone();
+            let actualized_metadata =
+                calculate_last_known_status(this, &worker_id.worker_id, &Some(worker)).await?;
             let last_error = Self::get_last_error_and_retry_count(this, &worker_id.worker_id).await;
             let decision = this
                 .recovery_management()
-                .schedule_recovery_on_startup(&worker_id, &last_error)
+                .schedule_recovery_on_startup(
+                    &worker_id,
+                    actualized_metadata
+                        .overridden_retry_config
+                        .as_ref()
+                        .unwrap_or(default_retry_config),
+                    &last_error,
+                )
                 .await;
             if let Some(last_error) = last_error {
                 debug!("Recovery decision for {worker_id} after {last_error}: {decision:?}");
@@ -1082,6 +1110,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     last_resource_id: u64,
     deleted_regions: DeletedRegions,
     next_deleted_region: Option<OplogRegion>,
+    overridden_retry_policy: Option<RetryConfig>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -1172,6 +1201,24 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 _ => {
                     break Err(GolemError::unexpected_oplog_entry(
                         "NoOp",
+                        format!("{:?}", oplog_entry),
+                    ));
+                }
+            }
+        }
+    }
+
+    async fn get_oplog_entry_change_retry_policy(&mut self) -> Result<(), GolemError> {
+        loop {
+            let oplog_entry = self.get_oplog_entry().await;
+            match oplog_entry {
+                OplogEntry::ChangeRetryPolicy { .. } => {
+                    break Ok(());
+                }
+                entry if entry.is_hint() => {}
+                _ => {
+                    break Err(GolemError::unexpected_oplog_entry(
+                        "ChangeRetryPolicy",
                         format!("{:?}", oplog_entry),
                     ));
                 }

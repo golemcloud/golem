@@ -1,3 +1,4 @@
+use crate::config::RetryConfig;
 use crate::model::regions::OplogRegion;
 use crate::model::{CallingConvention, InvocationKey, PromiseId, Timestamp};
 use crate::serialization::{
@@ -66,6 +67,11 @@ pub enum OplogEntry {
     Interrupted { timestamp: Timestamp },
     /// Indicates that the worker has been exited using WASI's exit function.
     Exited { timestamp: Timestamp },
+    /// Overrides the worker's retry policy
+    ChangeRetryPolicy {
+        timestamp: Timestamp,
+        new_policy: RetryConfig,
+    },
 }
 
 impl OplogEntry {
