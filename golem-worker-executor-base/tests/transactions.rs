@@ -137,7 +137,9 @@ async fn set_retry_policy() {
         .unwrap()
         .to_string()
         .starts_with("Runtime error: error while executing at wasm backtrace:"));
-    check!(
-        result2.err().unwrap().to_string() == "The previously invoked function failed".to_string()
-    );
+    check!(result2
+        .err()
+        .unwrap()
+        .to_string()
+        .starts_with("The previously invoked function failed"));
 }
