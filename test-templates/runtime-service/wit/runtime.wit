@@ -4,6 +4,7 @@ interface api {
   get-self-uri: func(function-name: string) -> string;
   jump: func() -> u64;
   fail-with-custom-max-retries: func(max-retries: u64) -> ();
+  explicit-commit: func(replicas: u8) -> ();
 }
 
 world runtime-service {

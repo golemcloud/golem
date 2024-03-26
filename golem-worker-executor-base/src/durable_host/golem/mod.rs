@@ -141,8 +141,35 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn oplog_commit(&mut self, _replicas: u8) -> anyhow::Result<()> {
-        unimplemented!()
+    async fn oplog_commit(&mut self, replicas: u8) -> anyhow::Result<()> {
+        if self.is_live() {
+            let timeout = Duration::from_secs(1);
+            debug!(
+                "Worker {} committing oplog to {} replicas",
+                self.worker_id, replicas
+            );
+            loop {
+                // Applying a timeout to make sure the worker remains interruptible
+                if self.commit_oplog_to_replicas(replicas, timeout).await {
+                    debug!(
+                        "Worker {} committed oplog to {} replicas",
+                        self.worker_id, replicas
+                    );
+                    return Ok(());
+                } else {
+                    debug!(
+                        "Worker {} failed to commit oplog to {} replicas, retrying",
+                        self.worker_id, replicas
+                    );
+                }
+
+                if let Some(kind) = self.check_interrupt() {
+                    return Err(kind.into());
+                }
+            }
+        } else {
+            Ok(())
+        }
     }
 
     async fn mark_begin_operation(&mut self) -> anyhow::Result<OplogIndex> {

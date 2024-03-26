@@ -67,6 +67,13 @@ impl Guest for Component {
 
         panic!("Fail now");
     }
+
+    fn explicit_commit(replicas: u8) {
+        let now = std::time::SystemTime::now();
+        println!("Starting commit with {replicas} replicas at {now:?}");
+        oplog_commit(replicas);
+        println!("Finished commit");
+    }
 }
 
 fn remote_call(param: u64) -> bool {
