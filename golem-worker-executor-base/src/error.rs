@@ -86,7 +86,9 @@ pub enum GolemError {
         shard_ids: Vec<ShardId>,
     },
     InvalidAccount,
-    PreviousInvocationFailed,
+    PreviousInvocationFailed {
+        details: String,
+    },
     PreviousInvocationExited,
     Unknown {
         details: String,
@@ -176,7 +178,7 @@ impl GolemError {
             GolemError::InvalidShardId { .. } => "InvalidShardId",
             GolemError::InvalidAccount => "InvalidAccount",
             GolemError::Runtime { .. } => "Runtime",
-            GolemError::PreviousInvocationFailed => "PreviousInvocationFailed",
+            GolemError::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
             GolemError::PreviousInvocationExited => "PreviousInvocationExited",
             GolemError::Unknown { .. } => "Unknown",
         }
@@ -266,8 +268,8 @@ impl Display for GolemError {
             GolemError::InvalidAccount => {
                 write!(f, "Invalid account")
             }
-            GolemError::PreviousInvocationFailed => {
-                write!(f, "The previously invoked function failed")
+            GolemError::PreviousInvocationFailed { details } => {
+                write!(f, "The previously invoked function failed: {details}")
             }
             GolemError::PreviousInvocationExited => {
                 write!(f, "The previously invoked function exited")
@@ -303,7 +305,7 @@ impl Error for GolemError {
             GolemError::InvalidShardId { .. } => "Invalid shard",
             GolemError::InvalidAccount => "Invalid account",
             GolemError::Runtime { .. } => "Runtime error",
-            GolemError::PreviousInvocationFailed => "The previously invoked function failed",
+            GolemError::PreviousInvocationFailed { .. } => "The previously invoked function failed",
             GolemError::PreviousInvocationExited => "The previously invoked function exited",
             GolemError::Unknown { .. } => "Unknown error",
         }
@@ -536,13 +538,15 @@ impl From<GolemError> for golem::worker::WorkerExecutionError {
                     ),
                 ),
             },
-            GolemError::PreviousInvocationFailed => golem::worker::WorkerExecutionError {
-                error: Some(
-                    golem::worker::worker_execution_error::Error::PreviousInvocationFailed(
-                        golem::worker::PreviousInvocationFailed {},
+            GolemError::PreviousInvocationFailed { details } => {
+                golem::worker::WorkerExecutionError {
+                    error: Some(
+                        golem::worker::worker_execution_error::Error::PreviousInvocationFailed(
+                            golem::worker::PreviousInvocationFailed { details },
+                        ),
                     ),
-                ),
-            },
+                }
+            }
             GolemError::PreviousInvocationExited => golem::worker::WorkerExecutionError {
                 error: Some(
                     golem::worker::worker_execution_error::Error::PreviousInvocationExited(
@@ -702,9 +706,11 @@ impl TryFrom<golem::worker::WorkerExecutionError> for GolemError {
                     details: runtime_error.details,
                 })
             }
-            Some(golem::worker::worker_execution_error::Error::PreviousInvocationFailed(_)) => {
-                Ok(GolemError::PreviousInvocationFailed)
-            }
+            Some(golem::worker::worker_execution_error::Error::PreviousInvocationFailed(
+                previous_invocation_failed,
+            )) => Ok(GolemError::PreviousInvocationFailed {
+                details: previous_invocation_failed.details,
+            }),
             Some(golem::worker::worker_execution_error::Error::PreviousInvocationExited(_)) => {
                 Ok(GolemError::PreviousInvocationExited)
             }
@@ -725,25 +731,4 @@ impl From<EncodingError> for GolemError {
             EncodingError::Unknown { details } => GolemError::Unknown { details },
         }
     }
-}
-
-pub fn is_interrupt(error: &anyhow::Error) -> bool {
-    error
-        .root_cause()
-        .downcast_ref::<InterruptKind>()
-        .map_or(false, |kind| *kind == InterruptKind::Interrupt)
-}
-
-pub fn is_suspend(error: &anyhow::Error) -> bool {
-    error
-        .root_cause()
-        .downcast_ref::<InterruptKind>()
-        .map_or(false, |kind| *kind == InterruptKind::Suspend)
-}
-
-pub fn is_jump(error: &anyhow::Error) -> bool {
-    error
-        .root_cause()
-        .downcast_ref::<InterruptKind>()
-        .map_or(false, |kind| *kind == InterruptKind::Jump)
 }

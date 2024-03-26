@@ -34,11 +34,14 @@ use wasmtime::{Store, UpdateDeadline};
 use crate::error::GolemError;
 use crate::invocation::invoke_worker;
 use crate::metrics::wasm::{record_create_worker, record_create_worker_failure};
-use crate::model::{ExecutionStatus, InterruptKind, WorkerConfig};
+use crate::model::{ExecutionStatus, InterruptKind, TrapType, WorkerConfig};
 use crate::services::golem_config::GolemConfig;
 use crate::services::invocation_key::LookupResult;
+use crate::services::recovery::RecoveryManagement;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
-use crate::services::{HasAll, HasInvocationKeyService, HasOplogService, HasWorkerService};
+use crate::services::{
+    HasAll, HasInvocationKeyService, HasOplogService, HasRecoveryManagement, HasWorkerService,
+};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
 /// Worker is one active wasmtime instance representing a Golem worker with its corresponding
@@ -661,7 +664,7 @@ pub async fn calculate_last_known_status<T>(
     metadata: &Option<WorkerMetadata>,
 ) -> Result<WorkerStatusRecord, GolemError>
 where
-    T: HasOplogService + HasWorkerService,
+    T: HasOplogService + HasWorkerService + HasRecoveryManagement,
 {
     let last_known = metadata
         .as_ref()
@@ -681,7 +684,11 @@ where
             )
             .await;
 
-        let status = calculate_latest_worker_status(&last_known.status, &new_entries);
+        let status = calculate_latest_worker_status(
+            this.recovery_management().clone(),
+            &last_known.status,
+            &new_entries,
+        );
         let deleted_regions = calculate_deleted_regions(last_known.deleted_regions, &new_entries);
 
         Ok(WorkerStatusRecord {
@@ -692,9 +699,18 @@ where
     }
 }
 
-fn calculate_latest_worker_status(initial: &WorkerStatus, entries: &[OplogEntry]) -> WorkerStatus {
+fn calculate_latest_worker_status(
+    recovery_manager: Arc<dyn RecoveryManagement + Send + Sync>,
+    initial: &WorkerStatus,
+    entries: &[OplogEntry],
+) -> WorkerStatus {
     let mut result = initial.clone();
+    let mut last_error_count = 0;
     for entry in entries {
+        if !matches!(entry, OplogEntry::Error { .. }) {
+            last_error_count = 0;
+        }
+
         match entry {
             OplogEntry::ImportedFunctionInvoked { .. } => {
                 result = WorkerStatus::Running;
@@ -714,9 +730,14 @@ fn calculate_latest_worker_status(initial: &WorkerStatus, entries: &[OplogEntry]
             OplogEntry::Suspend { .. } => {
                 result = WorkerStatus::Suspended;
             }
-            OplogEntry::Error { .. } => {
-                // TODO: currently we cannot compute Failed and Exit statuses
-                result = WorkerStatus::Retrying;
+            OplogEntry::Error { error, .. } => {
+                last_error_count += 1;
+
+                if recovery_manager.is_retriable(error, last_error_count) {
+                    result = WorkerStatus::Retrying;
+                } else {
+                    result = WorkerStatus::Failed;
+                }
             }
             OplogEntry::NoOp { .. } => {
                 result = WorkerStatus::Running;
@@ -726,6 +747,9 @@ fn calculate_latest_worker_status(initial: &WorkerStatus, entries: &[OplogEntry]
             }
             OplogEntry::Interrupted { .. } => {
                 result = WorkerStatus::Interrupted;
+            }
+            OplogEntry::Exited { .. } => {
+                result = WorkerStatus::Exited;
             }
         }
     }
@@ -740,4 +764,25 @@ fn calculate_deleted_regions(initial: DeletedRegions, entries: &[OplogEntry]) ->
         }
     }
     builder.build()
+}
+
+pub fn calculate_worker_status(
+    recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+    trap_type: &TrapType,
+    previous_tries: u64,
+) -> WorkerStatus {
+    match trap_type {
+        TrapType::Interrupt(InterruptKind::Interrupt) => WorkerStatus::Interrupted,
+        TrapType::Interrupt(InterruptKind::Suspend) => WorkerStatus::Suspended,
+        TrapType::Interrupt(InterruptKind::Jump) => WorkerStatus::Running,
+        TrapType::Interrupt(InterruptKind::Restart) => WorkerStatus::Running,
+        TrapType::Exit => WorkerStatus::Exited,
+        TrapType::Error(error) => {
+            if recovery_management.is_retriable(error, previous_tries) {
+                WorkerStatus::Retrying
+            } else {
+                WorkerStatus::Failed
+            }
+        }
+    }
 }

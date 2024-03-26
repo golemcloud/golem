@@ -3,6 +3,7 @@ use assert2::check;
 use std::path::Path;
 
 #[tokio::test]
+#[tracing::instrument]
 async fn blobstore_exists_return_true_if_the_container_was_created() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -40,6 +41,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn blobstore_exists_return_false_if_the_container_was_not_created() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
