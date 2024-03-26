@@ -23,9 +23,7 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
-use crate::preview2::golem::api::host::{
-    OplogIndex, PersistenceLevel, RetryPolicy,
-};
+use crate::preview2::golem::api::host::{OplogIndex, PersistenceLevel, RetryPolicy};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::OplogRegion;
