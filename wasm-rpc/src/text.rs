@@ -121,9 +121,9 @@ impl WasmType for AnalysedType {
 }
 
 impl WasmValue for TypeAnnotatedValue {
-    type Type = golem_wasm_ast::analysis::AnalysedType;
+    type Type = AnalysedType;
     fn ty(&self) -> Self::Type {
-        self.analysed_typ().clone()
+       AnalysedType(golem_wasm_ast::analysis::AnalysedType::from(self.clone()))
     }
 
     fn make_bool(val: bool) -> Self {
@@ -182,7 +182,7 @@ impl WasmValue for TypeAnnotatedValue {
         ty: &Self::Type,
         vals: impl IntoIterator<Item = Self>,
     ) -> Result<Self, WasmValueError> {
-        if let golem_wasm_ast::analysis::AnalysedType::List(typ) = &ty {
+        if let golem_wasm_ast::analysis::AnalysedType::List(typ) = &ty.0 {
             Ok(TypeAnnotatedValue::List(ListValue {
                 values: vals.into_iter().collect(),
                 typ: *typ.clone(),
@@ -199,7 +199,7 @@ impl WasmValue for TypeAnnotatedValue {
         ty: &Self::Type,
         fields: impl IntoIterator<Item = (&'a str, Self)>,
     ) -> Result<Self, WasmValueError> {
-        if let golem_wasm_ast::analysis::AnalysedType::Record(types) = &ty {
+        if let golem_wasm_ast::analysis::AnalysedType::Record(types) = &ty.0 {
             Ok(TypeAnnotatedValue::Record(RecordValue {
                 value: fields
                     .into_iter()
@@ -219,7 +219,7 @@ impl WasmValue for TypeAnnotatedValue {
         ty: &Self::Type,
         vals: impl IntoIterator<Item = Self>,
     ) -> Result<Self, WasmValueError> {
-        if let golem_wasm_ast::analysis::AnalysedType::Tuple(types) = &ty {
+        if let golem_wasm_ast::analysis::AnalysedType::Tuple(types) = &ty.0 {
             Ok(TypeAnnotatedValue::Tuple(TupleValue {
                 value: vals.into_iter().collect(),
                 typ: types.clone(),
@@ -237,7 +237,7 @@ impl WasmValue for TypeAnnotatedValue {
         case: &str,
         val: Option<Self>,
     ) -> Result<Self, WasmValueError> {
-        if let golem_wasm_ast::analysis::AnalysedType::Variant(cases) = &ty {
+        if let golem_wasm_ast::analysis::AnalysedType::Variant(cases) = &ty.0 {
             let case_type = cases.iter().enumerate().find_map(|(_, (name, case_type))| {
                 if name == case {
                     Some(case_type)
@@ -263,7 +263,7 @@ impl WasmValue for TypeAnnotatedValue {
     }
 
     fn make_enum(ty: &Self::Type, case: &str) -> Result<Self, WasmValueError> {
-        if let golem_wasm_ast::analysis::AnalysedType::Enum(cases) = &ty {
+        if let golem_wasm_ast::analysis::AnalysedType::Enum(cases) = &ty.0 {
             if cases.contains(&case.to_string()) {
                 Ok(TypeAnnotatedValue::Enum(EnumValue {
                     typ: cases.clone(),
@@ -282,7 +282,7 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn make_option(ty: &Self::Type, val: Option<Self>) -> Result<Self, WasmValueError> {
         Ok(TypeAnnotatedValue::Option(OptionValue {
-            typ: ty.clone(),
+            typ: ty.clone().0,
             value: val.map(|v| Box::new(v)),
         }))
     }
@@ -291,7 +291,7 @@ impl WasmValue for TypeAnnotatedValue {
         ty: &Self::Type,
         val: Result<Option<Self>, Option<Self>>,
     ) -> Result<Self, WasmValueError> {
-        if let golem_wasm_ast::analysis::AnalysedType::Result { ok, error } = &ty {
+        if let golem_wasm_ast::analysis::AnalysedType::Result { ok, error } = &ty.0 {
             Ok(TypeAnnotatedValue::Result(ResultValue {
                 value: match val {
                     Ok(Some(v)) => Ok(Some(Box::new(v))),
@@ -314,7 +314,7 @@ impl WasmValue for TypeAnnotatedValue {
         ty: &Self::Type,
         names: impl IntoIterator<Item = &'a str>,
     ) -> Result<Self, WasmValueError> {
-        if let golem_wasm_ast::analysis::AnalysedType::Flags(all_names) = &ty {
+        if let golem_wasm_ast::analysis::AnalysedType::Flags(all_names) = &ty.0 {
             let names: Vec<String> = names.into_iter().map(|name| name.to_string()).collect();
 
             let invalid_names: Vec<String> = names
