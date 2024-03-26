@@ -61,11 +61,11 @@ impl<T, Namespace> WithNamespace<T, Namespace> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WithAuth<T, AuthCtx> {
     pub value: T,
-    pub context: AuthCtx,
+    pub auth: AuthCtx,
 }
 
 impl<T, AuthCtx> WithAuth<T, AuthCtx> {
-    pub fn new(value: T, context: AuthCtx) -> Self {
-        Self { value, context }
+    pub fn new(value: T, auth: AuthCtx) -> Self {
+        Self { value, auth }
     }
 }
