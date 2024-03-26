@@ -57,18 +57,16 @@ pub fn function_result(
     values: Vec<Value>,
     expected_types: &[AnalysedFunctionResult],
 ) -> Result<JsonValue, Vec<String>> {
-    TypeAnnotatedValueResult::from_values(values, expected_types). map(|result| {
-        match result {
-            TypeAnnotatedValueResult::WithoutNames(values) => {
-                JsonValue::Array(values.into_iter().map(|v| v.into()).collect())
+    TypeAnnotatedValueResult::from_values(values, expected_types).map(|result| match result {
+        TypeAnnotatedValueResult::WithoutNames(values) => {
+            JsonValue::Array(values.into_iter().map(|v| v.into()).collect())
+        }
+        TypeAnnotatedValueResult::WithNames(values) => {
+            let mut map = serde_json::Map::new();
+            for (name, value) in values {
+                map.insert(name, value.into());
             }
-            TypeAnnotatedValueResult::WithNames(values) => {
-                let mut map = serde_json::Map::new();
-                for (name, value) in values {
-                    map.insert(name, value.into());
-                }
-                JsonValue::Object(map)
-            }
+            JsonValue::Object(map)
         }
     })
 }

@@ -1,7 +1,10 @@
+use crate::{
+    EnumValue, FlagValue, ListValue, OptionValue, RecordValue, ResultValue, TupleValue,
+    TypeAnnotatedValue, VariantValue,
+};
 use std::borrow::Cow;
 use std::fmt::{Debug, Formatter};
 use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
-use crate::{EnumValue, FlagValue, ListValue, OptionValue, RecordValue, ResultValue, TupleValue, TypeAnnotatedValue, VariantValue};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct AnalysedType(pub golem_wasm_ast::analysis::AnalysedType);
@@ -202,7 +205,7 @@ impl WasmValue for TypeAnnotatedValue {
                     .into_iter()
                     .map(|(name, value)| (name.to_string(), value))
                     .collect(),
-                typ: types.clone()
+                typ: types.clone(),
             }))
         } else {
             Err(WasmValueError::WrongTypeKind {
@@ -219,7 +222,7 @@ impl WasmValue for TypeAnnotatedValue {
         if let golem_wasm_ast::analysis::AnalysedType::Tuple(types) = &ty {
             Ok(TypeAnnotatedValue::Tuple(TupleValue {
                 value: vals.into_iter().collect(),
-                typ: types.clone()
+                typ: types.clone(),
             }))
         } else {
             Err(WasmValueError::WrongTypeKind {
@@ -297,7 +300,7 @@ impl WasmValue for TypeAnnotatedValue {
                     Err(None) => Err(None),
                 },
                 ok: ok.clone(),
-                error: error.clone()
+                error: error.clone(),
             }))
         } else {
             Err(WasmValueError::WrongTypeKind {
@@ -513,7 +516,8 @@ mod tests {
     fn round_trip(value: Value, typ: AnalysedType) {
         let typed_value = TypeAnnotatedValue::from_value(value.clone(), &typ).unwrap();
         let s = to_string(&typed_value).unwrap();
-        let round_trip_value: TypeAnnotatedValue = from_str(&super::AnalysedType(AnalysedType::from(typed_value)), &s).unwrap();
+        let round_trip_value: TypeAnnotatedValue =
+            from_str(&super::AnalysedType(AnalysedType::from(typed_value)), &s).unwrap();
         assert_eq!(value, round_trip_value.into());
     }
 

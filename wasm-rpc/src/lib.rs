@@ -59,7 +59,9 @@ pub use bindings::golem::rpc::types::{NodeIndex, RpcError, Uri, WasmRpc, WitNode
 use ::wasmtime::component::bindgen;
 
 #[cfg(feature = "typeinfo")]
-use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedFunctionResult, AnalysedType};
+use golem_wasm_ast::analysis::{
+    AnalysedFunctionResult, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
+};
 
 #[cfg(feature = "text")]
 use wasm_wave::wasm::{WasmType, WasmValue, WasmValueError};
@@ -638,7 +640,9 @@ impl TypeAnnotatedValue {
                     if (case_idx as usize) < cases.len() {
                         let (case_name, case_type) = match cases.get(case_idx as usize) {
                             Some(tpe) => Ok(tpe),
-                            None => Err(vec!["Variant not found in the expected types.".to_string()]),
+                            None => {
+                                Err(vec!["Variant not found in the expected types.".to_string()])
+                            }
                         }?;
 
                         match case_type {
@@ -695,50 +699,57 @@ impl TypeAnnotatedValue {
             },
 
             Value::Result(value) => match analysed_type {
-                golem_wasm_ast::analysis::AnalysedType::Result { ok, error } => match (value, ok, error) {
-                    (Ok(Some(value)), Some(ok_type), _) => {
-                        let result = Self::from_value(*value, ok_type)?;
+                golem_wasm_ast::analysis::AnalysedType::Result { ok, error } => {
+                    match (value, ok, error) {
+                        (Ok(Some(value)), Some(ok_type), _) => {
+                            let result = Self::from_value(*value, ok_type)?;
 
-                        Ok(TypeAnnotatedValue::Result(ResultValue {
-                            value: Ok(Some(Box::new(result))),
+                            Ok(TypeAnnotatedValue::Result(ResultValue {
+                                value: Ok(Some(Box::new(result))),
+                                ok: ok.clone(),
+                                error: error.clone(),
+                            }))
+                        }
+
+                        (Ok(None), Some(_), _) => {
+                            Err(vec!["Non-unit ok result has no value".to_string()])
+                        }
+
+                        (Ok(None), None, _) => Ok(TypeAnnotatedValue::Result(ResultValue {
+                            value: Ok(None),
                             ok: ok.clone(),
-                            error: error.clone()
+                            error: error.clone(),
+                        })),
 
-                        }))
-                    }
+                        (Ok(Some(_)), None, _) => {
+                            Err(vec!["Unit ok result has a value".to_string()])
+                        }
 
-                    (Ok(None), Some(_), _) => Err(vec!["Non-unit ok result has no value".to_string()]),
+                        (Err(Some(value)), _, Some(err_type)) => {
+                            let result = Self::from_value(*value, err_type)?;
 
-                    (Ok(None), None, _) => Ok(TypeAnnotatedValue::Result(ResultValue {
-                        value: Ok(None),
-                        ok: ok.clone(),
-                        error: error.clone()
-                    })),
+                            Ok(TypeAnnotatedValue::Result(ResultValue {
+                                value: Err(Some(Box::new(result))),
+                                ok: ok.clone(),
+                                error: error.clone(),
+                            }))
+                        }
 
-                    (Ok(Some(_)), None, _) => Err(vec!["Unit ok result has a value".to_string()]),
+                        (Err(None), _, Some(_)) => {
+                            Err(vec!["Non-unit error result has no value".to_string()])
+                        }
 
-                    (Err(Some(value)), _, Some(err_type)) => {
-                        let result = Self::from_value(*value, err_type)?;
-
-                        Ok(TypeAnnotatedValue::Result(ResultValue {
-                            value: Err(Some(Box::new(result))),
+                        (Err(None), _, None) => Ok(TypeAnnotatedValue::Result(ResultValue {
+                            value: Err(None),
                             ok: ok.clone(),
-                            error: error.clone()
-                        }))
+                            error: error.clone(),
+                        })),
+
+                        (Err(Some(_)), _, None) => {
+                            Err(vec!["Unit error result has a value".to_string()])
+                        }
                     }
-
-                    (Err(None), _, Some(_)) => {
-                        Err(vec!["Non-unit error result has no value".to_string()])
-                    }
-
-                    (Err(None), _, None) => Ok(TypeAnnotatedValue::Result(ResultValue {
-                        value: Err(None),
-                        ok: ok.clone(),
-                        error: error.clone()
-                    })),
-
-                    (Err(Some(_)), _, None) => Err(vec!["Unit error result has a value".to_string()]),
-                },
+                }
 
                 _ => Err(vec!["Unexpected type; expected a Result type.".to_string()]),
             },
@@ -779,19 +790,15 @@ impl From<TypeAnnotatedValue> for AnalysedType {
             TypeAnnotatedValue::Flags(value) => AnalysedType::Flags(value.clone().typ),
             TypeAnnotatedValue::Enum(value) => AnalysedType::Enum(value.clone().typ),
             TypeAnnotatedValue::Option(value) => value.clone().typ,
-            TypeAnnotatedValue::Result(value) => {
-                AnalysedType::Result {
-                    ok: value.clone().ok,
-                    error: value.clone().error
-                }
-            }
-            TypeAnnotatedValue::Handle(value) => {
-                AnalysedType::Resource {
-                    id: value.clone().id,
-                    resource_mode: value.clone().resource_mode,
-                }
-            }
-            TypeAnnotatedValue::Variant(value) => { AnalysedType::Variant(value.clone().typ) }
+            TypeAnnotatedValue::Result(value) => AnalysedType::Result {
+                ok: value.clone().ok,
+                error: value.clone().error,
+            },
+            TypeAnnotatedValue::Handle(value) => AnalysedType::Resource {
+                id: value.clone().id,
+                resource_mode: value.clone().resource_mode,
+            },
+            TypeAnnotatedValue::Variant(value) => AnalysedType::Variant(value.clone().typ),
         }
     }
 }
@@ -804,7 +811,7 @@ impl From<TypeAnnotatedValue> for WitValue {
 }
 pub enum TypeAnnotatedValueResult {
     WithoutNames(Vec<TypeAnnotatedValue>),
-    WithNames(Vec<(String, TypeAnnotatedValue)>)
+    WithNames(Vec<(String, TypeAnnotatedValue)>),
 }
 
 impl TypeAnnotatedValueResult {
@@ -849,7 +856,8 @@ impl TypeAnnotatedValueResult {
                             },
                             type_annotated_value.clone(),
                         )
-                    }).collect::<Vec<(String, TypeAnnotatedValue)>>();
+                    })
+                    .collect::<Vec<(String, TypeAnnotatedValue)>>();
 
                 Ok(TypeAnnotatedValueResult::WithNames(mapped_values))
             }
