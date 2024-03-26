@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::model::InterruptKind;
+use crate::model::{InterruptKind, LastError, TrapType};
 use crate::services::rpc::Rpc;
 use crate::services::{
     active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, scheduler,
@@ -29,12 +29,12 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_mutex::Mutex;
 use async_trait::async_trait;
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::{VersionedWorkerId, WorkerId, WorkerStatus};
 use golem_common::retries::get_delay;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
-use wasmtime::Trap;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum RecoveryDecision {
@@ -45,17 +45,26 @@ pub enum RecoveryDecision {
 
 #[async_trait]
 pub trait RecoveryManagement {
-    async fn schedule_recovery_for_error(
+    /// Makes a recovery decision in case the worker reached a trap. `previous_tries` is the number of retries already
+    /// performed, and `trap_type` distinguishes errors, interrupts and exit signals.
+    async fn schedule_recovery_on_trap(
         &self,
         worker_id: &VersionedWorkerId,
         previous_tries: u64,
-        current_error: &anyhow::Error,
+        trap_type: &TrapType,
     ) -> RecoveryDecision;
+
+    /// Makes a recovery decision when a worker gets started. `previous_tries` is the number of retries already
+    /// performed and `WorkerError` is the error that caused the worker to fail in the last attempt.
+    /// The other trap types are not relevant here, because interrupted workers can always be recovered,
+    /// and exited workers can never.
     async fn schedule_recovery_on_startup(
         &self,
         worker_id: &VersionedWorkerId,
-        previous_tries: u64,
+        last_error: &Option<LastError>,
     ) -> RecoveryDecision;
+
+    fn is_retriable(&self, error: &WorkerError, retry_count: u64) -> bool;
 }
 
 pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
@@ -278,41 +287,41 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         }
     }
 
-    fn get_recovery_decision_for_error(
+    fn get_recovery_decision_on_trap(
         &self,
         previous_tries: u64,
-        current_error: &anyhow::Error,
+        trap_type: &TrapType,
     ) -> RecoveryDecision {
-        match current_error.root_cause().downcast_ref::<InterruptKind>() {
-            Some(InterruptKind::Interrupt) => RecoveryDecision::None,
-            Some(InterruptKind::Suspend) => RecoveryDecision::None,
-            Some(InterruptKind::Restart) => RecoveryDecision::Immediate,
-            Some(InterruptKind::Jump) => RecoveryDecision::Immediate,
-            None => match Ctx::is_exit(current_error) {
-                Some(_) => RecoveryDecision::None,
-                None => match current_error.root_cause().downcast_ref::<Trap>() {
-                    Some(&Trap::StackOverflow) =>
-                    // Never retrying a stack overflow
-                    {
-                        RecoveryDecision::None
+        match trap_type {
+            TrapType::Interrupt(InterruptKind::Interrupt) => RecoveryDecision::None,
+            TrapType::Interrupt(InterruptKind::Suspend) => RecoveryDecision::None,
+            TrapType::Interrupt(InterruptKind::Restart) => RecoveryDecision::Immediate,
+            TrapType::Interrupt(InterruptKind::Jump) => RecoveryDecision::Immediate,
+            TrapType::Exit => RecoveryDecision::None,
+            TrapType::Error(error) => {
+                if self.is_retriable(error, previous_tries) {
+                    let retry_config = &self.golem_config.retry;
+                    match get_delay(retry_config, previous_tries) {
+                        Some(delay) => RecoveryDecision::Delayed(delay),
+                        None => RecoveryDecision::None,
                     }
-                    _ => {
-                        let retry_config = &self.golem_config.retry;
-                        match get_delay(retry_config, previous_tries) {
-                            Some(delay) => RecoveryDecision::Delayed(delay),
-                            None => RecoveryDecision::None,
-                        }
-                    }
-                },
-            },
+                } else {
+                    RecoveryDecision::None
+                }
+            }
         }
     }
 
-    fn get_recovery_decision_on_startup(&self, previous_tries: u64) -> RecoveryDecision {
-        if previous_tries < (self.golem_config.retry.max_attempts as u64) {
-            RecoveryDecision::Immediate
-        } else {
-            RecoveryDecision::None
+    fn get_recovery_decision_on_startup(&self, last_error: &Option<LastError>) -> RecoveryDecision {
+        match last_error {
+            Some(last_error) => {
+                if self.is_retriable(&last_error.error, last_error.retry_count) {
+                    RecoveryDecision::Immediate
+                } else {
+                    RecoveryDecision::None
+                }
+            }
+            None => RecoveryDecision::Immediate,
         }
     }
 
@@ -339,6 +348,9 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                                 .is_marked_as_interrupted(&worker_id_clone.worker_id)
                                 .await;
                             if !interrupted {
+                                info!(
+                                    "Initiating immediate recovery for worker: {worker_id_clone}"
+                                );
                                 recover_worker(&clone, &worker_id_clone).await;
                             }
                         }
@@ -367,6 +379,9 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                                 .is_marked_as_interrupted(&worker_id_clone.worker_id)
                                 .await;
                             if !interrupted {
+                                info!(
+                                    "Initiating scheduled recovery for worker: {worker_id_clone}"
+                                );
                                 recover_worker(&clone, &worker_id_clone).await;
                             }
                         }
@@ -401,15 +416,15 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
-    async fn schedule_recovery_for_error(
+    async fn schedule_recovery_on_trap(
         &self,
         worker_id: &VersionedWorkerId,
         previous_tries: u64,
-        current_error: &anyhow::Error,
+        trap_type: &TrapType,
     ) -> RecoveryDecision {
         self.schedule_recovery(
             worker_id,
-            self.get_recovery_decision_for_error(previous_tries, current_error),
+            self.get_recovery_decision_on_trap(previous_tries, trap_type),
         )
         .await
     }
@@ -417,13 +432,20 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     async fn schedule_recovery_on_startup(
         &self,
         worker_id: &VersionedWorkerId,
-        previous_tries: u64,
+        previous_error: &Option<LastError>,
     ) -> RecoveryDecision {
         self.schedule_recovery(
             worker_id,
-            self.get_recovery_decision_on_startup(previous_tries),
+            self.get_recovery_decision_on_startup(previous_error),
         )
         .await
+    }
+
+    fn is_retriable(&self, error: &WorkerError, retry_count: u64) -> bool {
+        match error {
+            WorkerError::Unknown(_) => retry_count < (self.golem_config.retry.max_attempts as u64),
+            WorkerError::StackOverflow => false,
+        }
     }
 }
 
@@ -431,7 +453,7 @@ async fn recover_worker<Ctx: WorkerCtx, T>(this: &T, worker_id: &VersionedWorker
 where
     T: HasAll<Ctx> + Clone + Send + Sync + 'static,
 {
-    info!("Recovering instance: {worker_id}");
+    info!("Recovering worker: {worker_id}");
 
     match this.worker_service().get(&worker_id.worker_id).await {
         Some(worker) => {
@@ -476,21 +498,25 @@ impl RecoveryManagementMock {
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl RecoveryManagement for RecoveryManagementMock {
-    async fn schedule_recovery_for_error(
+    async fn schedule_recovery_on_trap(
         &self,
         _worker_id: &VersionedWorkerId,
         _previous_tries: u64,
-        _current_error: &anyhow::Error,
+        _trap_type: &TrapType,
     ) -> RecoveryDecision {
-        unimplemented!()
+        todo!()
     }
 
     async fn schedule_recovery_on_startup(
         &self,
         _worker_id: &VersionedWorkerId,
-        _previous_tries: u64,
+        _previous_error: &Option<LastError>,
     ) -> RecoveryDecision {
-        unimplemented!()
+        todo!()
+    }
+
+    fn is_retriable(&self, _error: &WorkerError, _previous_tries: u64) -> bool {
+        todo!()
     }
 }
 
@@ -501,7 +527,9 @@ mod tests {
     use std::time::Duration;
 
     use crate::error::GolemError;
-    use crate::model::{CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig};
+    use crate::model::{
+        CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, WorkerConfig,
+    };
     use crate::services::active_workers::ActiveWorkers;
     use crate::services::blob_store::BlobStoreService;
     use crate::services::golem_config::GolemConfig;
@@ -522,6 +550,7 @@ mod tests {
     use anyhow::Error;
     use async_trait::async_trait;
     use bytes::Bytes;
+    use golem_common::model::oplog::WorkerError;
     use golem_common::model::{
         AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerId,
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
@@ -534,7 +563,7 @@ mod tests {
     use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
     use crate::services::oplog::{OplogService, OplogServiceMock};
-    use crate::services::recovery::{RecoveryManagement, RecoveryManagementDefault};
+    use crate::services::recovery::{RecoveryManagement, RecoveryManagementDefault, TrapType};
     use crate::services::rpc::Rpc;
     use crate::services::scheduler;
     use crate::services::scheduler::SchedulerService;
@@ -654,13 +683,13 @@ mod tests {
             unimplemented!()
         }
 
-        async fn on_invocation_failure(&mut self, _error: &Error) -> Result<(), Error> {
+        async fn on_invocation_failure(&mut self, _trap_type: &TrapType) -> Result<(), Error> {
             unimplemented!()
         }
 
         async fn on_invocation_failure_deactivated(
             &mut self,
-            _error: &Error,
+            _trap_type: &TrapType,
         ) -> Result<WorkerStatus, Error> {
             unimplemented!()
         }
@@ -688,10 +717,10 @@ mod tests {
             unimplemented!()
         }
 
-        async fn get_worker_retry_count<T: HasAll<Self> + Send + Sync>(
+        async fn get_last_error_and_retry_count<T: HasAll<Self> + Send + Sync>(
             _this: &T,
             _worker_id: &WorkerId,
-        ) -> u64 {
+        ) -> Option<LastError> {
             unimplemented!()
         }
 
@@ -881,7 +910,7 @@ mod tests {
             sender.send((id, elapsed)).unwrap();
         })
         .await;
-        let _ = svc.schedule_recovery_on_startup(&test_id, 0).await;
+        let _ = svc.schedule_recovery_on_startup(&test_id, &None).await;
         let (id, elapsed) = receiver.recv().await.unwrap();
         assert_eq!(id, test_id);
         assert!(elapsed.as_millis() < 100, "elapsed time was {:?}", elapsed);
@@ -899,7 +928,15 @@ mod tests {
             sender.send((id, elapsed)).unwrap();
         })
         .await;
-        let _ = svc.schedule_recovery_on_startup(&test_id, 100).await;
+        let _ = svc
+            .schedule_recovery_on_startup(
+                &test_id,
+                &Some(LastError {
+                    error: WorkerError::Unknown("x".to_string()),
+                    retry_count: 100,
+                }),
+            )
+            .await;
         let res = timeout(Duration::from_secs(1), receiver.recv()).await;
         assert!(res.is_err());
     }

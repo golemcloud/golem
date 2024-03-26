@@ -7,6 +7,7 @@ use bincode::{Decode, Encode};
 use bytes::Bytes;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub enum OplogEntry {
@@ -45,7 +46,10 @@ pub enum OplogEntry {
     /// Worker suspended
     Suspend { timestamp: Timestamp },
     /// Worker failed
-    Error { timestamp: Timestamp },
+    Error {
+        timestamp: Timestamp,
+        error: WorkerError,
+    },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
     /// more predictable.
     NoOp { timestamp: Timestamp },
@@ -60,6 +64,8 @@ pub enum OplogEntry {
     /// Indicates that the worker has been interrupted at this point.
     /// Only used to recompute the worker's (cached) status, has no effect on execution.
     Interrupted { timestamp: Timestamp },
+    /// Indicates that the worker has been exited using WASI's exit function.
+    Exited { timestamp: Timestamp },
 }
 
 impl OplogEntry {
@@ -205,7 +211,10 @@ impl OplogEntry {
     pub fn is_hint(&self) -> bool {
         matches!(
             self,
-            OplogEntry::Suspend { .. } | OplogEntry::Error { .. } | OplogEntry::Interrupted { .. }
+            OplogEntry::Suspend { .. }
+                | OplogEntry::Error { .. }
+                | OplogEntry::Interrupted { .. }
+                | OplogEntry::Exited { .. }
         )
     }
 }
@@ -216,6 +225,22 @@ pub enum WrappedFunctionType {
     WriteLocal,
     ReadRemote,
     WriteRemote,
+}
+
+/// Describes the error that occurred in the worker
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+pub enum WorkerError {
+    Unknown(String),
+    StackOverflow,
+}
+
+impl Display for WorkerError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerError::Unknown(message) => write!(f, "{}", message),
+            WorkerError::StackOverflow => write!(f, "Stack overflow"),
+        }
+    }
 }
 
 #[cfg(test)]

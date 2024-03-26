@@ -3,6 +3,7 @@ use assert2::check;
 use std::path::Path;
 
 #[tokio::test]
+#[tracing::instrument]
 async fn readwrite_get_returns_the_value_that_was_set() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -54,6 +55,7 @@ async fn readwrite_get_returns_the_value_that_was_set() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn readwrite_get_fails_if_the_value_was_not_set() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -81,6 +83,7 @@ async fn readwrite_get_fails_if_the_value_was_not_set() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn readwrite_set_replaces_the_value_if_it_was_already_set() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -149,6 +152,7 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn readwrite_delete_removes_the_value_if_it_was_already_set() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -205,6 +209,7 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn readwrite_exists_returns_true_if_the_value_was_set() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -249,6 +254,7 @@ async fn readwrite_exists_returns_true_if_the_value_was_set() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn readwrite_exists_returns_false_if_the_value_was_not_set() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -276,6 +282,7 @@ async fn readwrite_exists_returns_false_if_the_value_was_not_set() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn readwrite_buckets_can_be_shared_between_workers() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -331,6 +338,7 @@ async fn readwrite_buckets_can_be_shared_between_workers() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn batch_get_many_gets_multiple_values() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -432,6 +440,7 @@ async fn batch_get_many_gets_multiple_values() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn batch_get_many_fails_if_any_value_was_not_set() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -497,6 +506,7 @@ async fn batch_get_many_fails_if_any_value_was_not_set() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn batch_set_many_sets_multiple_values() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -608,6 +618,7 @@ async fn batch_set_many_sets_multiple_values() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn batch_delete_many_deletes_multiple_values() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -728,6 +739,7 @@ async fn batch_delete_many_deletes_multiple_values() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn batch_get_keys_returns_multiple_keys() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();

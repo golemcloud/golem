@@ -12,6 +12,7 @@ use tokio::spawn;
 use tracing::info;
 
 #[tokio::test(flavor = "multi_thread")]
+#[tracing::instrument]
 async fn spawning_many_instances_that_sleep() {
     let context = common::TestContext::new();
     fn worker_name(n: i32) -> String {
@@ -97,6 +98,7 @@ async fn spawning_many_instances_that_sleep() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[tracing::instrument]
 async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
     let context = common::TestContext::new();
     fn worker_name(n: i32) -> String {

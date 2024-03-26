@@ -9,6 +9,7 @@ use tonic::transport::Body;
 use warp::Filter;
 
 #[tokio::test]
+#[tracing::instrument]
 async fn jump() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();

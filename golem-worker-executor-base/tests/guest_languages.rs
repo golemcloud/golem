@@ -15,6 +15,7 @@ use warp::Filter;
 use crate::common;
 
 #[tokio::test]
+#[tracing::instrument]
 async fn zig_example_1() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -36,6 +37,7 @@ async fn zig_example_1() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn zig_example_2() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -84,6 +86,7 @@ async fn zig_example_2() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn tinygo_example() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -121,6 +124,7 @@ async fn tinygo_example() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn tinygo_http_client() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -195,6 +199,7 @@ async fn tinygo_http_client() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn grain_example_1() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -230,6 +235,7 @@ async fn grain_example_1() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn java_example_1() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -261,6 +267,7 @@ async fn java_example_1() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn java_shopping_cart() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -359,6 +366,7 @@ async fn java_shopping_cart() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn javascript_example_1() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -398,6 +406,7 @@ async fn javascript_example_1() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn javascript_example_2() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -426,6 +435,7 @@ async fn javascript_example_2() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn csharp_example_1() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -471,6 +481,7 @@ async fn csharp_example_1() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn c_example_1() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -498,6 +509,7 @@ async fn c_example_1() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn c_example_2() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -526,6 +538,7 @@ async fn c_example_2() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn swift_example_1() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -553,6 +566,7 @@ async fn swift_example_1() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn python_example_1() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
