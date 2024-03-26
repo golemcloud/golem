@@ -41,7 +41,7 @@ pub struct TemplateServiceDefault<AuthCtx, Namespace> {
 }
 
 type InnerAuthService<AuthCtx, Namespace> =
-    Arc<dyn AuthService<WithAuth<AuthCtx, TemplateId>, Namespace> + Send + Sync>;
+    Arc<dyn AuthService<WithAuth<TemplateId, AuthCtx>, Namespace> + Send + Sync>;
 
 impl<AuthCtx, Namespace> TemplateServiceDefault<AuthCtx, Namespace> {
     pub fn new(
@@ -71,7 +71,7 @@ where
     ) -> TemplateResult<Template, Namespace> {
         let desc = format!("Getting latest version of template: {}", template_id);
         info!("{}", &desc);
-        let auth_ctx = WithAuth::new(auth_ctx.clone(), template_id.clone());
+        let auth_ctx = WithAuth::new(template_id.clone(), auth_ctx.clone());
 
         let namespace = self
             .auth_service
@@ -140,7 +140,7 @@ where
         let desc = format!("Getting template: {}", template_id);
         info!("{}", &desc);
 
-        let auth_ctx = WithAuth::new(auth_ctx.clone(), template_id.clone());
+        let auth_ctx = WithAuth::new(template_id.clone(), auth_ctx.clone());
 
         let namespace = self
             .auth_service

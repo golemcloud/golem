@@ -130,29 +130,26 @@ pub trait WorkerService<AuthCtx, Namespace> {
 }
 
 #[derive(Clone)]
-pub struct WorkerServiceDefault<AuthCtx, Namespace>
-where
-    Namespace: Metadata + Send + Sync,
-    AuthCtx: Send + Sync,
-{
-    auth_service: InnerAuthService<AuthCtx, Namespace>,
+pub struct WorkerServiceDefault<AuthCtx, WorkerNamespace, TemplateNamespace> {
+    auth_service: InnerAuthService<AuthCtx, WorkerNamespace>,
     worker_executor_clients: Arc<dyn WorkerExecutorClients + Send + Sync>,
-    template_service: Arc<dyn TemplateService<AuthCtx, Namespace> + Send + Sync>,
+    template_service: Arc<dyn TemplateService<AuthCtx, TemplateNamespace> + Send + Sync>,
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
 }
 
 type InnerAuthService<AuthCtx, Namespace> =
-    Arc<dyn AuthService<WithAuth<AuthCtx, TemplateId>, Namespace> + Send + Sync>;
+    Arc<dyn AuthService<WithAuth<TemplateId, AuthCtx>, Namespace> + Send + Sync>;
 
-impl<AuthCtx, Namespace> WorkerServiceDefault<AuthCtx, Namespace>
+impl<AuthCtx, WorkerNamespace, TemplateNamespace>
+    WorkerServiceDefault<AuthCtx, WorkerNamespace, TemplateNamespace>
 where
-    Namespace: Metadata + Send + Sync,
     AuthCtx: Send + Sync,
+    WorkerNamespace: Metadata + Send + Sync,
 {
     pub fn new(
-        auth_service: InnerAuthService<AuthCtx, Namespace>,
+        auth_service: InnerAuthService<AuthCtx, WorkerNamespace>,
         worker_executor_clients: Arc<dyn WorkerExecutorClients + Send + Sync>,
-        template_service: Arc<dyn TemplateService<AuthCtx, Namespace> + Send + Sync>,
+        template_service: Arc<dyn TemplateService<AuthCtx, TemplateNamespace> + Send + Sync>,
         routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
     ) -> Self {
         Self {
@@ -165,18 +162,18 @@ where
 }
 
 #[async_trait]
-impl<AuthCtx, Namespace> WorkerService<AuthCtx, Namespace>
-    for WorkerServiceDefault<AuthCtx, Namespace>
+impl<AuthCtx, WorkerNamespace, TemplateNamespace> WorkerService<AuthCtx, WorkerNamespace>
+    for WorkerServiceDefault<AuthCtx, WorkerNamespace, TemplateNamespace>
 where
     AuthCtx: Clone + Send + Sync,
-    Namespace: Metadata + Send + Sync,
+    WorkerNamespace: Metadata + Send + Sync,
 {
     async fn get_by_id(
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<VersionedWorkerId, Namespace> {
-        let auth_ctx = WithAuth::new(auth_ctx.clone(), worker_id.template_id.clone());
+    ) -> WorkerResult<VersionedWorkerId, WorkerNamespace> {
+        let auth_ctx = WithAuth::new(worker_id.template_id.clone(), auth_ctx.clone());
 
         let namespace = self
             .auth_service
@@ -199,8 +196,8 @@ where
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<VersionedWorkerId, Namespace> {
-        let auth_ctx = WithAuth::new(auth_ctx.clone(), worker_id.template_id.clone());
+    ) -> WorkerResult<VersionedWorkerId, WorkerNamespace> {
+        let auth_ctx = WithAuth::new(worker_id.template_id.clone(), auth_ctx.clone());
         let namespace = self
             .auth_service
             .is_authorized(Permission::Create, &auth_ctx)
@@ -259,8 +256,8 @@ where
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<ConnectWorkerStream, Namespace> {
-        let auth_ctx = WithAuth::new(auth_ctx.clone(), worker_id.template_id.clone());
+    ) -> WorkerResult<ConnectWorkerStream, WorkerNamespace> {
+        let auth_ctx = WithAuth::new(worker_id.template_id.clone(), auth_ctx.clone());
         let namespace = self
             .auth_service
             .is_authorized(Permission::View, &auth_ctx)
@@ -310,8 +307,8 @@ where
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<(), Namespace> {
-        let auth_ctx = WithAuth::new(auth_ctx.clone(), worker_id.template_id.clone());
+    ) -> WorkerResult<(), WorkerNamespace> {
+        let auth_ctx = WithAuth::new(worker_id.template_id.clone(), auth_ctx.clone());
         let namespace = self
             .auth_service
             .is_authorized(Permission::Delete, &auth_ctx)
@@ -357,8 +354,8 @@ where
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<InvocationKey, Namespace> {
-        let auth_ctx = WithAuth::new(auth_ctx.clone(), worker_id.template_id.clone());
+    ) -> WorkerResult<InvocationKey, WorkerNamespace> {
+        let auth_ctx = WithAuth::new(worker_id.template_id.clone(), auth_ctx.clone());
         let namespace = self
             .auth_service
             .is_authorized(Permission::Create, &auth_ctx)
@@ -410,7 +407,7 @@ where
         params: Value,
         calling_convention: &CallingConvention,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<Value, Namespace> {
+    ) -> WorkerResult<Value, WorkerNamespace> {
         let template_details = self
             .try_get_template_for_worker(worker_id, auth_ctx)
             .await?;
@@ -467,12 +464,12 @@ where
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<ProtoInvokeResult, Namespace> {
+    ) -> WorkerResult<ProtoInvokeResult, WorkerNamespace> {
         let namespace = self
             .auth_service
             .is_authorized(
                 Permission::Create,
-                &WithAuth::new(auth_ctx.clone(), worker_id.template_id.clone()),
+                &WithAuth::new(worker_id.template_id.clone(), auth_ctx.clone()),
             )
             .await?;
 
@@ -548,12 +545,12 @@ where
         function_name: String,
         params: Value,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<(), Namespace> {
+    ) -> WorkerResult<(), WorkerNamespace> {
         let namespace = self
             .auth_service
             .is_authorized(
                 Permission::Create,
-                &WithAuth::new(auth_ctx.clone(), worker_id.template_id.clone()),
+                &WithAuth::new(worker_id.template_id.clone(), auth_ctx.clone()),
             )
             .await?;
         let _ = namespace.get_metadata();
@@ -589,12 +586,12 @@ where
         function_name: String,
         params: Vec<ProtoVal>,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<(), Namespace> {
+    ) -> WorkerResult<(), WorkerNamespace> {
         let namespace = self
             .auth_service
             .is_authorized(
                 Permission::Create,
-                &WithAuth::new(auth_ctx.clone(), worker_id.template_id.clone()),
+                &WithAuth::new(worker_id.template_id.clone(), auth_ctx.clone()),
             )
             .await?;
         let _ = namespace.get_metadata();
@@ -672,12 +669,12 @@ where
         oplog_id: u64,
         data: Vec<u8>,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<bool, Namespace> {
+    ) -> WorkerResult<bool, WorkerNamespace> {
         let namespace = self
             .auth_service
             .is_authorized(
                 Permission::Create,
-                &WithAuth::new(auth_ctx.clone(), worker_id.template_id.clone()),
+                &WithAuth::new(worker_id.template_id.clone(), auth_ctx.clone()),
             )
             .await?;
         let _ = namespace.get_metadata();
@@ -735,12 +732,12 @@ where
         worker_id: &WorkerId,
         recover_immediately: bool,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<(), Namespace> {
+    ) -> WorkerResult<(), WorkerNamespace> {
         let namespace = self
             .auth_service
             .is_authorized(
                 Permission::Update,
-                &WithAuth::new(auth_ctx.clone(), worker_id.template_id.clone()),
+                &WithAuth::new(worker_id.template_id.clone(), auth_ctx.clone()),
             )
             .await?;
 
@@ -784,12 +781,12 @@ where
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<WorkerMetadata, Namespace> {
+    ) -> WorkerResult<WorkerMetadata, WorkerNamespace> {
         let namespace = self
             .auth_service
             .is_authorized(
                 Permission::View,
-                &WithAuth::new(auth_ctx.clone(), worker_id.template_id.clone()),
+                &WithAuth::new(worker_id.template_id.clone(), auth_ctx.clone()),
             )
             .await?;
 
@@ -831,12 +828,12 @@ where
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<(), Namespace> {
+    ) -> WorkerResult<(), WorkerNamespace> {
         let namespace = self
             .auth_service
             .is_authorized(
                 Permission::Update,
-                &WithAuth::new(auth_ctx.clone(), worker_id.template_id.clone()),
+                &WithAuth::new(worker_id.template_id.clone(), auth_ctx.clone()),
             )
             .await?;
 
@@ -876,10 +873,11 @@ where
     }
 }
 
-impl<AuthCtx, Namespace> WorkerServiceDefault<AuthCtx, Namespace>
+impl<AuthCtx, WorkerNamespace, TemplateNamespace>
+    WorkerServiceDefault<AuthCtx, WorkerNamespace, TemplateNamespace>
 where
-    Namespace: Metadata + Send + Sync,
     AuthCtx: Clone + Send + Sync,
+    WorkerNamespace: Metadata + Send + Sync,
 {
     async fn try_get_template_for_worker(
         &self,
