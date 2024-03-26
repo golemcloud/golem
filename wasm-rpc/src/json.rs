@@ -18,10 +18,7 @@ use serde_json::{Number, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::{
-    text, EnumValue, FlagValue, ListValue, OptionValue, RecordValue, TupleValue,
-    TypeAnnotatedValue, Uri, Value, VariantValue,
-};
+use crate::{text, EnumValue, FlagValue, ListValue, OptionValue, RecordValue, TupleValue, TypeAnnotatedValue, Uri, Value, VariantValue, ResultValue};
 
 pub fn function_parameters(
     value: &JsonValue,
@@ -798,35 +795,35 @@ fn validate_function_result(
         Value::Result(value) => match expected_type {
             AnalysedType::Result { ok, error } => match (value, ok, error) {
                 (Ok(Some(value)), Some(ok_type), _) => {
-                    let mut map: serde_json::Map<String, serde_json::Value> =
-                        serde_json::Map::new();
-
                     let result = validate_function_result(*value, ok_type)?;
-                    map.insert("ok".to_string(), result);
-                    Ok(serde_json::Value::Object(map))
+
+                    Ok(TypeAnnotatedValue::Result(ResultValue{
+                        value: Ok(Some(Box::new(result))),
+                        ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                        error: error.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                    }))
                 }
 
                 (Ok(None), Some(_), _) => Err(vec!["Non-unit ok result has no value".to_string()]),
 
                 (Ok(None), None, _) => {
-                    let mut map: serde_json::Map<String, serde_json::Value> =
-                        serde_json::Map::new();
-
-                    map.insert("ok".to_string(), serde_json::Value::Null);
-
-                    Ok(serde_json::Value::Object(map))
+                    Ok(TypeAnnotatedValue::Result(ResultValue{
+                        value: Ok(None),
+                        ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                        error: error.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                    }))
                 }
 
                 (Ok(Some(_)), None, _) => Err(vec!["Unit ok result has a value".to_string()]),
 
                 (Err(Some(value)), _, Some(err_type)) => {
-                    let mut map: serde_json::Map<String, serde_json::Value> =
-                        serde_json::Map::new();
-
                     let result = validate_function_result(*value, err_type)?;
-                    map.insert("err".to_string(), result);
 
-                    Ok(serde_json::Value::Object(map))
+                    Ok(TypeAnnotatedValue::Result(ResultValue{
+                        value: Err(Some(Box::new(result))),
+                        ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                        error: error.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                    }))
                 }
 
                 (Err(None), _, Some(_)) => {
@@ -834,12 +831,11 @@ fn validate_function_result(
                 }
 
                 (Err(None), _, None) => {
-                    let mut map: serde_json::Map<String, serde_json::Value> =
-                        serde_json::Map::new();
-
-                    map.insert("err".to_string(), serde_json::Value::Null);
-
-                    Ok(serde_json::Value::Object(map))
+                    Ok(TypeAnnotatedValue::Result(ResultValue{
+                        value: Err(None),
+                        ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                        error: error.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                    }))
                 }
 
                 (Err(Some(_)), _, None) => Err(vec!["Unit error result has a value".to_string()]),
