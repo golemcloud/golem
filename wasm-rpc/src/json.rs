@@ -18,7 +18,7 @@ use serde_json::{Number, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::{text, EnumValue, FlagValue, ListValue, OptionValue, RecordValue, TupleValue, TypeAnnotatedValue, Uri, Value, VariantValue, ResultValue};
+use crate::{text, EnumValue, FlagValue, ListValue, OptionValue, RecordValue, TupleValue, TypeAnnotatedValue, Uri, Value, VariantValue, ResultValue, ResourceValue};
 
 pub fn function_parameters(
     value: &JsonValue,
@@ -844,11 +844,10 @@ fn validate_function_result(
             _ => Err(vec!["Unexpected type; expected a Result type.".to_string()]),
         },
         Value::Handle { uri, resource_id } => match expected_type {
-            AnalysedType::Resource { .. } => Ok(serde_json::Value::String(format!(
-                "{}/{}",
-                uri.value, resource_id
-            ))),
-            _ => Err(vec!["Unexpected type; expected a Handle type.".to_string()]),
+            AnalysedType::Resource { id, resource_mode } =>
+                Ok(TypeAnnotatedValue::Handle(ResourceValue { id, resource_mode, uri, resource_id })),
+            _ =>
+                Err(vec!["Unexpected type; expected a Handle type.".to_string()]),
         },
     }
 }
