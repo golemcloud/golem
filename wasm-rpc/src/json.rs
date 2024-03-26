@@ -18,7 +18,10 @@ use serde_json::{Number, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::{EnumValue, FlagValue, ListValue, OptionValue, RecordValue, text, TupleValue, TypeAnnotatedValue, Uri, Value, VariantValue};
+use crate::{
+    text, EnumValue, FlagValue, ListValue, OptionValue, RecordValue, TupleValue,
+    TypeAnnotatedValue, Uri, Value, VariantValue,
+};
 
 pub fn function_parameters(
     value: &JsonValue,
@@ -608,7 +611,7 @@ fn validate_function_result(
 
         Value::Enum(value) => match expected_type {
             AnalysedType::Enum(names) => match names.get(value as usize) {
-                Some(str) => Ok(TypeAnnotatedValue::Enum(EnumValue{
+                Some(str) => Ok(TypeAnnotatedValue::Enum(EnumValue {
                     typ: names.clone(),
                     value: str.to_string(),
                 })),
@@ -618,14 +621,13 @@ fn validate_function_result(
         },
 
         Value::Option(value) => match expected_type {
-            AnalysedType::Option(elem) =>
-                Ok(TypeAnnotatedValue::Option(OptionValue{
-                    typ: text::AnalysedType(*elem.clone()),
-                    value: match value {
-                        Some(value) => Some(Box::new(validate_function_result(*value, elem)?)),
-                        None => None,
-                    },
-                })),
+            AnalysedType::Option(elem) => Ok(TypeAnnotatedValue::Option(OptionValue {
+                typ: text::AnalysedType(*elem.clone()),
+                value: match value {
+                    Some(value) => Some(Box::new(validate_function_result(*value, elem)?)),
+                    None => None,
+                },
+            })),
 
             _ => Err(vec!["Unexpected type; expected an Option type.".to_string()]),
         },
@@ -651,7 +653,7 @@ fn validate_function_result(
                 }
 
                 if errors.is_empty() {
-                    Ok(TypeAnnotatedValue::Tuple(TupleValue{
+                    Ok(TypeAnnotatedValue::Tuple(TupleValue {
                         typ: types.clone().into_iter().map(text::AnalysedType).collect(),
                         value: results,
                     }))
@@ -676,7 +678,7 @@ fn validate_function_result(
                 }
 
                 if errors.is_empty() {
-                    Ok(TypeAnnotatedValue::List(ListValue{
+                    Ok(TypeAnnotatedValue::List(ListValue {
                         typ: text::AnalysedType(*elem.clone()),
                         values: results,
                     }))
@@ -707,8 +709,12 @@ fn validate_function_result(
                 }
 
                 if errors.is_empty() {
-                    Ok(TypeAnnotatedValue::Record(RecordValue{
-                        typ: fields.clone().into_iter().map(|(name, tpe)| (name, text::AnalysedType(tpe))).collect(),
+                    Ok(TypeAnnotatedValue::Record(RecordValue {
+                        typ: fields
+                            .clone()
+                            .into_iter()
+                            .map(|(name, tpe)| (name, text::AnalysedType(tpe)))
+                            .collect(),
                         value: results,
                     }))
                 } else {
@@ -730,14 +736,17 @@ fn validate_function_result(
                         None => Err(vec!["Variant not found in the expected types.".to_string()]),
                     }?;
 
-                    let typ =
-                        cases.clone().into_iter().map(|(name, tpe)| (name, tpe.map(text::AnalysedType))).collect();
+                    let typ = cases
+                        .clone()
+                        .into_iter()
+                        .map(|(name, tpe)| (name, tpe.map(text::AnalysedType)))
+                        .collect();
 
                     match case_type {
                         Some(tpe) => match case_value {
                             Some(case_value) => {
                                 let result = validate_function_result(*case_value, tpe)?;
-                                Ok(TypeAnnotatedValue::Variant(VariantValue{
+                                Ok(TypeAnnotatedValue::Variant(VariantValue {
                                     typ,
                                     case_name: case_name.clone(),
                                     case_value: Some(Box::new(result)),
@@ -745,13 +754,11 @@ fn validate_function_result(
                             }
                             None => Err(vec![format!("Missing value for case {case_name}")]),
                         },
-                        None => Ok(
-                            TypeAnnotatedValue::Variant(VariantValue{
-                                typ,
-                                case_name: case_name.clone(),
-                                case_value: None,
-                            })
-                        ),
+                        None => Ok(TypeAnnotatedValue::Variant(VariantValue {
+                            typ,
+                            case_name: case_name.clone(),
+                            case_value: None,
+                        })),
                     }
                 } else {
                     Err(vec![
@@ -779,7 +786,7 @@ fn validate_function_result(
                         }
                     }
 
-                    Ok(TypeAnnotatedValue::Flags(FlagValue{
+                    Ok(TypeAnnotatedValue::Flags(FlagValue {
                         typ: names.clone(),
                         value: result,
                     }))
