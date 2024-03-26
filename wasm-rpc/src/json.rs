@@ -18,7 +18,7 @@ use serde_json::{Number, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::{EnumValue, OptionValue, text, TypeAnnotatedValue, Uri, Value};
+use crate::{EnumValue, ListValue, OptionValue, RecordValue, text, TupleValue, TypeAnnotatedValue, Uri, Value};
 
 pub fn function_parameters(
     value: &JsonValue,
@@ -651,7 +651,10 @@ fn validate_function_result(
                 }
 
                 if errors.is_empty() {
-                    Ok(serde_json::Value::Array(results))
+                    Ok(TypeAnnotatedValue::Tuple(TupleValue{
+                        typ: types.clone().into_iter().map(text::AnalysedType).collect(),
+                        value: results,
+                    }))
                 } else {
                     Err(errors)
                 }
@@ -673,7 +676,10 @@ fn validate_function_result(
                 }
 
                 if errors.is_empty() {
-                    Ok(serde_json::Value::Array(results))
+                    Ok(TypeAnnotatedValue::List(ListValue{
+                        typ: text::AnalysedType(*elem.clone()),
+                        values: results,
+                    }))
                 } else {
                     Err(errors)
                 }
@@ -701,7 +707,10 @@ fn validate_function_result(
                 }
 
                 if errors.is_empty() {
-                    Ok(serde_json::Value::Object(results))
+                    Ok(TypeAnnotatedValue::Record(RecordValue{
+                        typ: fields.clone().into_iter().map(|(name, tpe)| (name, text::AnalysedType(tpe))).collect(),
+                        values: results,
+                    }))
                 } else {
                     Err(errors)
                 }

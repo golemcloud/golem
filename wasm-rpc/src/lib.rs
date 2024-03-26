@@ -404,7 +404,7 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
 
 // An efficient read representation of a value with type information at every node
 // Note that we do an extra annotation of AnalysedType at complex structures to fetch their type information with 0(1)
-// However the typical use of TypeAnnotatedValue is similar to using a complete json structure
+// However the typical use of TypeAnnotatedValue is similar to using a Json/Yaml etc
 #[derive(Clone, Debug)]
 pub enum TypeAnnotatedValue {
     Bool(bool),
@@ -458,13 +458,13 @@ pub struct VariantValue {
 
 #[derive(Clone, Debug)]
 pub struct TupleValue {
-    typ: AnalysedType,
+    typ: Vec<AnalysedType>,
     value: Vec<TypeAnnotatedValue>,
 }
 
 #[derive(Clone, Debug)]
 pub struct RecordValue {
-    typ: AnalysedType,
+    typ: Vec<(String, AnalysedType)>,
     value: Vec<(String, TypeAnnotatedValue)>,
 }
 
@@ -517,8 +517,21 @@ impl TypeAnnotatedValue {
             TypeAnnotatedValue::Chr(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::Chr),
             TypeAnnotatedValue::Str(_) => AnalysedType(golem_wasm_ast::analysis::AnalysedType::Str),
             TypeAnnotatedValue::List(value) => value.clone().typ,
-            TypeAnnotatedValue::Tuple(value) => value.clone().typ,
-            TypeAnnotatedValue::Record(value) => value.clone().typ,
+            TypeAnnotatedValue::Tuple(value) => {
+                AnalysedType(golem_wasm_ast::analysis::AnalysedType::Tuple(
+                    value.clone().typ.into_iter().map(|t| t.0).collect(),
+                ))
+            }
+            TypeAnnotatedValue::Record(value) => {
+                AnalysedType(golem_wasm_ast::analysis::AnalysedType::Record(
+                    value
+                        .clone()
+                        .typ
+                        .into_iter()
+                        .map(|(name, ty)| (name, ty.0))
+                        .collect(),
+                ))
+            }
             TypeAnnotatedValue::Flags(value) => AnalysedType(
                 golem_wasm_ast::analysis::AnalysedType::Flags(value.clone().typ),
             ),
@@ -621,33 +634,61 @@ impl WasmValue for TypeAnnotatedValue {
         ty: &Self::Type,
         vals: impl IntoIterator<Item = Self>,
     ) -> Result<Self, WasmValueError> {
-        Ok(TypeAnnotatedValue::List(ListValue {
-            values: vals.into_iter().collect(),
-            typ: ty.clone(),
-        }))
+        if let golem_wasm_ast::analysis::AnalysedType::List(typ) = &ty.0 {
+            Ok(TypeAnnotatedValue::List(ListValue {
+                values: vals.into_iter().collect(),
+                typ: AnalysedType(*typ.clone()),
+            }))
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
     }
 
     fn make_record<'a>(
         ty: &Self::Type,
         fields: impl IntoIterator<Item = (&'a str, Self)>,
     ) -> Result<Self, WasmValueError> {
-        Ok(TypeAnnotatedValue::Record(RecordValue {
-            value: fields
-                .into_iter()
-                .map(|(name, value)| (name.to_string(), value))
-                .collect(),
-            typ: ty.clone(),
-        }))
+        if let golem_wasm_ast::analysis::AnalysedType::Record(types) = &ty.0 {
+            Ok(TypeAnnotatedValue::Record(RecordValue {
+                value: fields
+                    .into_iter()
+                    .map(|(name, value)| (name.to_string(), value))
+                    .collect(),
+                typ: types
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), AnalysedType(ty.clone())))
+                    .collect(),
+            }))
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
     }
 
     fn make_tuple(
         ty: &Self::Type,
         vals: impl IntoIterator<Item = Self>,
     ) -> Result<Self, WasmValueError> {
-        Ok(TypeAnnotatedValue::Tuple(TupleValue {
-            value: vals.into_iter().collect(),
-            typ: ty.clone(),
-        }))
+        if let golem_wasm_ast::analysis::AnalysedType::Tuple(types) = &ty.0 {
+            Ok(TypeAnnotatedValue::Tuple(TupleValue {
+                value: vals.into_iter().collect(),
+                typ: types
+                    .clone()
+                    .into_iter()
+                    .map(|ty| AnalysedType(ty))
+                    .collect(),
+            }))
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
     }
 
     fn make_variant(
