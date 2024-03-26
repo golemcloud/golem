@@ -18,7 +18,10 @@ use serde_json::{Number, Value as JsonValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::{text, EnumValue, FlagValue, ListValue, OptionValue, RecordValue, TupleValue, TypeAnnotatedValue, Uri, Value, VariantValue, ResultValue, ResourceValue};
+use crate::{
+    text, EnumValue, FlagValue, ListValue, OptionValue, RecordValue, ResourceValue, ResultValue,
+    TupleValue, TypeAnnotatedValue, Uri, Value, VariantValue,
+};
 
 pub fn function_parameters(
     value: &JsonValue,
@@ -797,32 +800,36 @@ fn validate_function_result(
                 (Ok(Some(value)), Some(ok_type), _) => {
                     let result = validate_function_result(*value, ok_type)?;
 
-                    Ok(TypeAnnotatedValue::Result(ResultValue{
+                    Ok(TypeAnnotatedValue::Result(ResultValue {
                         value: Ok(Some(Box::new(result))),
                         ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                        error: error.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                        error: error
+                            .clone()
+                            .map(|x| Box::new(text::AnalysedType(*x.clone()))),
                     }))
                 }
 
                 (Ok(None), Some(_), _) => Err(vec!["Non-unit ok result has no value".to_string()]),
 
-                (Ok(None), None, _) => {
-                    Ok(TypeAnnotatedValue::Result(ResultValue{
-                        value: Ok(None),
-                        ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                        error: error.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                    }))
-                }
+                (Ok(None), None, _) => Ok(TypeAnnotatedValue::Result(ResultValue {
+                    value: Ok(None),
+                    ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                    error: error
+                        .clone()
+                        .map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                })),
 
                 (Ok(Some(_)), None, _) => Err(vec!["Unit ok result has a value".to_string()]),
 
                 (Err(Some(value)), _, Some(err_type)) => {
                     let result = validate_function_result(*value, err_type)?;
 
-                    Ok(TypeAnnotatedValue::Result(ResultValue{
+                    Ok(TypeAnnotatedValue::Result(ResultValue {
                         value: Err(Some(Box::new(result))),
                         ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                        error: error.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                        error: error
+                            .clone()
+                            .map(|x| Box::new(text::AnalysedType(*x.clone()))),
                     }))
                 }
 
@@ -830,13 +837,13 @@ fn validate_function_result(
                     Err(vec!["Non-unit error result has no value".to_string()])
                 }
 
-                (Err(None), _, None) => {
-                    Ok(TypeAnnotatedValue::Result(ResultValue{
-                        value: Err(None),
-                        ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                        error: error.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
-                    }))
-                }
+                (Err(None), _, None) => Ok(TypeAnnotatedValue::Result(ResultValue {
+                    value: Err(None),
+                    ok: ok.clone().map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                    error: error
+                        .clone()
+                        .map(|x| Box::new(text::AnalysedType(*x.clone()))),
+                })),
 
                 (Err(Some(_)), _, None) => Err(vec!["Unit error result has a value".to_string()]),
             },
@@ -844,10 +851,15 @@ fn validate_function_result(
             _ => Err(vec!["Unexpected type; expected a Result type.".to_string()]),
         },
         Value::Handle { uri, resource_id } => match expected_type {
-            AnalysedType::Resource { id, resource_mode } =>
-                Ok(TypeAnnotatedValue::Handle(ResourceValue { id, resource_mode, uri, resource_id })),
-            _ =>
-                Err(vec!["Unexpected type; expected a Handle type.".to_string()]),
+            AnalysedType::Resource { id, resource_mode } => {
+                Ok(TypeAnnotatedValue::Handle(ResourceValue {
+                    id: id.clone(),
+                    resource_mode: resource_mode.clone(),
+                    uri,
+                    resource_id,
+                }))
+            }
+            _ => Err(vec!["Unexpected type; expected a Handle type.".to_string()]),
         },
     }
 }
