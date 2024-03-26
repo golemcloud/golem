@@ -58,9 +58,12 @@ pub fn function_result(
     expected_types: &[AnalysedFunctionResult],
 ) -> Result<JsonValue, Vec<String>> {
     TypeAnnotatedValueResult::from_values(values, expected_types).map(|result| match result {
-        TypeAnnotatedValueResult::WithoutNames(values) => {
-            JsonValue::Array(values.into_iter().map(|v| JsonFunctionResult::from(v).0).collect())
-        }
+        TypeAnnotatedValueResult::WithoutNames(values) => JsonValue::Array(
+            values
+                .into_iter()
+                .map(|v| JsonFunctionResult::from(v).0)
+                .collect(),
+        ),
         TypeAnnotatedValueResult::WithNames(values) => {
             let mut map = serde_json::Map::new();
             for (name, value) in values {
@@ -549,14 +552,6 @@ fn get_handle(value: &JsonValue) -> Result<Value, Vec<String>> {
     }
 }
 
-fn validate_function_result(
-    val: Value,
-    expected_type: &AnalysedType,
-) -> Result<JsonValue, Vec<String>> {
-    TypeAnnotatedValue::from_value(val, expected_type)
-        .map(|result| JsonFunctionResult::from(result).0)
-}
-
 pub struct JsonFunctionResult(pub serde_json::Value);
 
 impl From<TypeAnnotatedValue> for JsonFunctionResult {
@@ -684,12 +679,20 @@ impl From<TypeAnnotatedValue> for JsonFunctionResult {
 
 #[cfg(test)]
 mod tests {
-    use crate::json::{get_record, validate_function_parameter, validate_function_result};
-    use crate::Value;
+    use crate::json::{get_record, validate_function_parameter, JsonFunctionResult};
+    use crate::{TypeAnnotatedValue, Value};
     use golem_wasm_ast::analysis::AnalysedType;
     use proptest::prelude::*;
     use serde_json::{json, Number, Value as JsonValue};
     use std::collections::HashSet;
+
+    fn validate_function_result(
+        val: Value,
+        expected_type: &AnalysedType,
+    ) -> Result<JsonValue, Vec<String>> {
+        TypeAnnotatedValue::from_value(val, expected_type)
+            .map(|result| JsonFunctionResult::from(result).0)
+    }
 
     proptest! {
         #[test]

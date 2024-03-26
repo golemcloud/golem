@@ -123,7 +123,7 @@ impl WasmType for AnalysedType {
 impl WasmValue for TypeAnnotatedValue {
     type Type = AnalysedType;
     fn ty(&self) -> Self::Type {
-       AnalysedType(golem_wasm_ast::analysis::AnalysedType::from(self.clone()))
+        AnalysedType(golem_wasm_ast::analysis::AnalysedType::from(self.clone()))
     }
 
     fn make_bool(val: bool) -> Self {
@@ -480,7 +480,10 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn unwrap_option(&self) -> Option<Cow<Self>> {
         match self {
-            TypeAnnotatedValue::Option(value) => value.clone().value.map(|v| Cow::Owned(*v)),
+            TypeAnnotatedValue::Option(value) => match value.clone().value {
+                Some(v) => Some(Cow::Owned(*v)),
+                None => None,
+            },
             _ => panic!("Expected option, found {:?}", self),
         }
     }
@@ -515,6 +518,8 @@ mod tests {
 
     fn round_trip(value: Value, typ: AnalysedType) {
         let typed_value = TypeAnnotatedValue::from_value(value.clone(), &typ).unwrap();
+        println!("{:?}", typed_value.clone());
+
         let s = to_string(&typed_value).unwrap();
         let round_trip_value: TypeAnnotatedValue =
             from_str(&super::AnalysedType(AnalysedType::from(typed_value)), &s).unwrap();

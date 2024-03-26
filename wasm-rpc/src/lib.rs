@@ -48,23 +48,13 @@ pub mod wasmtime;
 use crate::builder::WitValueBuilder;
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 pub use extractor::{WitNodePointer, WitValueExtractor};
-use std::borrow::Cow;
 use std::ops::Deref;
-
-#[cfg(not(feature = "host"))]
-#[cfg(feature = "stub")]
-pub use bindings::golem::rpc::types::{NodeIndex, RpcError, Uri, WasmRpc, WitNode, WitValue};
 
 #[cfg(feature = "host")]
 use ::wasmtime::component::bindgen;
 
 #[cfg(feature = "typeinfo")]
-use golem_wasm_ast::analysis::{
-    AnalysedFunctionResult, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
-};
-
-#[cfg(feature = "text")]
-use wasm_wave::wasm::{WasmType, WasmValue, WasmValueError};
+use golem_wasm_ast::analysis::{AnalysedFunctionResult, AnalysedResourceId, AnalysedResourceMode, AnalysedType};
 
 #[cfg(feature = "host")]
 bindgen!({
@@ -295,6 +285,7 @@ impl From<TypeAnnotatedValue> for Value {
                 panic!("Enum value not found in the list of expected enums")
             }
             TypeAnnotatedValue::Option(optional_value) => {
+                dbg!("HerE?");
                 Value::Option(match optional_value.value {
                     Some(value) => Some(Box::new(value.deref().clone().into())),
                     None => None,
@@ -784,12 +775,12 @@ impl From<TypeAnnotatedValue> for AnalysedType {
             TypeAnnotatedValue::F64(_) => AnalysedType::F64,
             TypeAnnotatedValue::Chr(_) => AnalysedType::Chr,
             TypeAnnotatedValue::Str(_) => AnalysedType::Str,
-            TypeAnnotatedValue::List(value) => value.clone().typ,
+            TypeAnnotatedValue::List(value) => AnalysedType::List(Box::new(value.typ)),
             TypeAnnotatedValue::Tuple(value) => AnalysedType::Tuple(value.clone().typ),
             TypeAnnotatedValue::Record(value) => AnalysedType::Record(value.clone().typ),
             TypeAnnotatedValue::Flags(value) => AnalysedType::Flags(value.clone().typ),
             TypeAnnotatedValue::Enum(value) => AnalysedType::Enum(value.clone().typ),
-            TypeAnnotatedValue::Option(value) => value.clone().typ,
+            TypeAnnotatedValue::Option(value) => AnalysedType::Option(Box::new(value.clone().typ)),
             TypeAnnotatedValue::Result(value) => AnalysedType::Result {
                 ok: value.clone().ok,
                 error: value.clone().error,
