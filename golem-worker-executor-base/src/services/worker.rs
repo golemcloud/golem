@@ -53,19 +53,6 @@ pub trait WorkerService {
     );
 }
 
-pub fn configured(
-    config: &WorkersServiceConfig,
-    redis_pool: RedisPool,
-    shard_service: Arc<dyn ShardService + Send + Sync>,
-) -> Arc<dyn WorkerService + Send + Sync> {
-    match config {
-        WorkersServiceConfig::InMemory => Arc::new(WorkerServiceInMemory::new()),
-        WorkersServiceConfig::Redis => {
-            Arc::new(WorkerServiceRedis::new(redis_pool.clone(), shard_service))
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct WorkerServiceRedis {
     redis: RedisPool,

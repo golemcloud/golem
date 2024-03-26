@@ -837,27 +837,10 @@ impl WorkerFilter {
         match self.clone() {
             WorkerFilter::Empty => true,
             WorkerFilter::Name { comparator, value } => {
-                match comparator {
-                    FilterStringComparator::Equal => {
-                        metadata.worker_id.worker_id.worker_name == value
-                    }
-                    FilterStringComparator::Like => metadata
-                        .worker_id
-                        .worker_id
-                        .worker_name
-                        .contains(value.as_str()), // FIXME
-                }
+                comparator.matches(&metadata.worker_id.worker_id.worker_name, &value)
             }
             WorkerFilter::Version { comparator, value } => {
-                let version = metadata.worker_id.template_version;
-                match comparator {
-                    FilterComparator::Equal => version == value,
-                    FilterComparator::NotEqual => version != value,
-                    FilterComparator::Less => version < value,
-                    FilterComparator::LessEqual => version <= value,
-                    FilterComparator::Greater => version > value,
-                    FilterComparator::GreaterEqual => version >= value,
-                }
+                comparator.matches(&metadata.worker_id.template_version, &value)
             }
             WorkerFilter::Env {
                 name,
@@ -867,10 +850,7 @@ impl WorkerFilter {
                 let mut result = false;
                 for env_value in metadata.env.clone() {
                     if env_value.0 == name {
-                        result = match comparator {
-                            FilterStringComparator::Equal => env_value.1 == value,
-                            FilterStringComparator::Like => env_value.1.contains(value.as_str()), // FIXME
-                        };
+                        result = comparator.matches(&env_value.1, &value);
 
                         break;
                     }
@@ -883,7 +863,7 @@ impl WorkerFilter {
                 let mut result = true;
                 for filter in filters {
                     result = filter.matches(metadata);
-                    if result == false {
+                    if !result {
                         break;
                     }
                 }
@@ -895,7 +875,7 @@ impl WorkerFilter {
                     result = false;
                     for filter in filters {
                         result = filter.matches(metadata);
-                        if result == true {
+                        if result {
                             break;
                         }
                     }
@@ -944,6 +924,17 @@ pub enum FilterStringComparator {
     Like,
 }
 
+impl FilterStringComparator {
+    pub fn matches<T: Display>(&self, value1: &T, value2: &T) -> bool {
+        match self {
+            FilterStringComparator::Equal => value1.to_string() == value2.to_string(),
+            FilterStringComparator::Like => {
+                value1.to_string().contains(value2.to_string().as_str())
+            } // FIXME
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
 pub enum FilterComparator {
     Equal,
@@ -952,6 +943,25 @@ pub enum FilterComparator {
     Greater,
     LessEqual,
     Less,
+}
+
+impl FilterComparator {
+    pub fn matches<T: Ord>(&self, value1: &T, value2: &T) -> bool {
+        match self {
+            FilterComparator::Equal => value1.cmp(value2) == std::cmp::Ordering::Equal,
+            FilterComparator::NotEqual => value1.cmp(value2) != std::cmp::Ordering::Equal,
+            FilterComparator::Less => value1.cmp(value2) == std::cmp::Ordering::Less,
+            FilterComparator::LessEqual => {
+                let r = value1.cmp(value2);
+                r == std::cmp::Ordering::Equal || r == std::cmp::Ordering::Less
+            }
+            FilterComparator::Greater => value1.cmp(value2) == std::cmp::Ordering::Greater,
+            FilterComparator::GreaterEqual => {
+                let r = value1.cmp(value2);
+                r == std::cmp::Ordering::Equal || r == std::cmp::Ordering::Greater
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -603,8 +603,8 @@ mod tests {
     use crate::services::worker_event::WorkerEventService;
     use crate::services::{
         All, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps, HasInvocationKeyService,
-        HasKeyValueService, HasPromiseService, HasRpc, HasTemplateService, HasWasmtimeEngine,
-        HasWorkerService,
+        HasKeyValueService, HasPromiseService, HasRpc, HasRunningWorkerEnumerationService,
+        HasTemplateService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
     };
     use crate::workerctx::{
         ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
@@ -937,6 +937,8 @@ mod tests {
             runtime,
             deps.template_service(),
             deps.worker_service(),
+            deps.worker_enumeration_service(),
+            deps.running_worker_enumeration_service(),
             oplog,
             deps.promise_service(),
             scheduler,
