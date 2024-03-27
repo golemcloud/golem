@@ -173,11 +173,47 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn mark_begin_operation(&mut self) -> anyhow::Result<OplogIndex> {
-        unimplemented!()
+        record_host_function_call("golem::api", "mark_begin_operation");
+        let begin_index = self.private_state.oplog_idx;
+        if self.is_live() {
+            self.set_oplog_entry(OplogEntry::BeginAtomicRegion {
+                timestamp: Timestamp::now_utc(),
+            })
+            .await;
+        } else {
+            self.consume_hint_entries().await;
+            self.get_oplog_entry_begin_operation().await?;
+
+            match self.lookup_oplog_entry_end_operation(begin_index).await {
+                Some(end_index) => {
+                    debug!(
+                        "Worker {}'s atomic operation starting at {} is already committed at {}",
+                        self.worker_id, begin_index, end_index
+                    );
+                }
+                None => {
+                    debug!("Worker {}'s atomic operation starting at {} is not committed, ignoring persisted entries", self.worker_id, begin_index);
+                    self.private_state.oplog_idx = self.private_state.oplog_size;
+                }
+            }
+        }
+        Ok(begin_index)
     }
 
-    async fn mark_end_operation(&mut self, _begin: OplogIndex) -> anyhow::Result<()> {
-        unimplemented!()
+    async fn mark_end_operation(&mut self, begin: OplogIndex) -> anyhow::Result<()> {
+        record_host_function_call("golem::api", "mark_end_operation");
+        if self.is_live() {
+            self.set_oplog_entry(OplogEntry::EndAtomicRegion {
+                timestamp: Timestamp::now_utc(),
+                begin_index: begin,
+            })
+            .await;
+        } else {
+            self.consume_hint_entries().await;
+            self.get_oplog_entry_end_operation().await?;
+        }
+
+        Ok(())
     }
 
     async fn get_retry_policy(&mut self) -> anyhow::Result<RetryPolicy> {
@@ -193,7 +229,6 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         let new_retry_policy: RetryConfig = new_retry_policy.into();
         self.private_state.overridden_retry_policy = Some(new_retry_policy.clone());
 
-        self.consume_hint_entries().await;
         if self.is_live() {
             self.set_oplog_entry(OplogEntry::ChangeRetryPolicy {
                 timestamp: Timestamp::now_utc(),
@@ -201,6 +236,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             })
             .await;
         } else {
+            self.consume_hint_entries().await;
             self.get_oplog_entry_change_retry_policy().await?;
         }
         Ok(())

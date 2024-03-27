@@ -140,6 +140,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await
     }
 
+    async fn get_oplog_entry_begin_operation(&mut self) -> Result<(), GolemError> {
+        self.private_state.get_oplog_entry_begin_operation().await
+    }
+
+    async fn get_oplog_entry_end_operation(&mut self) -> Result<(), GolemError> {
+        self.private_state.get_oplog_entry_end_operation().await
+    }
+
+    async fn lookup_oplog_entry_end_operation(&mut self, begin_idx: u64) -> Option<u64> {
+        self.private_state
+            .lookup_oplog_entry_end_operation(begin_idx)
+            .await
+    }
+
     async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
     where
         R: Decode + DeserializeOwned,
@@ -1190,6 +1204,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         oplog_entry
     }
 
+    // TODO: get rid of these redundant helpers
+
     async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {
         loop {
             let oplog_entry = self.get_oplog_entry().await;
@@ -1224,6 +1240,66 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 }
             }
         }
+    }
+
+    async fn get_oplog_entry_begin_operation(&mut self) -> Result<(), GolemError> {
+        loop {
+            let oplog_entry = self.get_oplog_entry().await;
+            match oplog_entry {
+                OplogEntry::BeginAtomicRegion { .. } => {
+                    break Ok(());
+                }
+                entry if entry.is_hint() => {}
+                _ => {
+                    break Err(GolemError::unexpected_oplog_entry(
+                        "BeginAtomicRegion",
+                        format!("{:?}", oplog_entry),
+                    ));
+                }
+            }
+        }
+    }
+
+    async fn get_oplog_entry_end_operation(&mut self) -> Result<(), GolemError> {
+        loop {
+            let oplog_entry = self.get_oplog_entry().await;
+            match oplog_entry {
+                OplogEntry::EndAtomicRegion { .. } => {
+                    break Ok(());
+                }
+                entry if entry.is_hint() => {}
+                _ => {
+                    break Err(GolemError::unexpected_oplog_entry(
+                        "EndAtomicRegion",
+                        format!("{:?}", oplog_entry),
+                    ));
+                }
+            }
+        }
+    }
+
+    async fn lookup_oplog_entry_end_operation(&mut self, begin_idx: u64) -> Option<u64> {
+        let mut start = self.oplog_idx;
+        const CHUNK_SIZE: u64 = 1024;
+        while start < self.oplog_size {
+            let entries = self
+                .oplog_service
+                .read(&self.worker_id, start, CHUNK_SIZE)
+                .await;
+            for (n, entry) in entries.iter().enumerate() {
+                match entry {
+                    OplogEntry::EndAtomicRegion { begin_index, .. }
+                        if begin_idx == *begin_index =>
+                    {
+                        return Some(start + n as u64);
+                    }
+                    _ => {}
+                }
+            }
+            start += entries.len() as u64;
+        }
+
+        None
     }
 
     async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
