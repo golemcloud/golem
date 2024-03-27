@@ -42,6 +42,9 @@ pub mod serde;
 #[cfg(feature = "text")]
 mod text;
 
+#[cfg(feature = "typeinfo")]
+mod type_annotated_value;
+
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
 
@@ -76,6 +79,9 @@ pub use golem::rpc::types::{Host, HostWasmRpc, NodeIndex, RpcError, Uri, WitNode
 pub struct WasmRpcEntry {
     pub payload: Box<dyn std::any::Any + Send + Sync>,
 }
+
+#[cfg(feature = "typeinfo")]
+pub use type_annotated_value::*;
 
 #[cfg(feature = "arbitrary")]
 impl<'a> arbitrary::Arbitrary<'a> for Uri {

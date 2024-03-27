@@ -1,6 +1,5 @@
-use crate::Value;
+use crate::TypeAnnotatedValue;
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
 
@@ -10,511 +9,6 @@ pub struct AnalysedType(golem_wasm_ast::analysis::AnalysedType);
 impl Debug for AnalysedType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
-    }
-}
-
-/// A value with known type
-#[derive(Debug, Clone, PartialEq)]
-pub struct TypedValue {
-    value: Value,
-    typ: AnalysedType,
-}
-
-impl TypedValue {
-    #[allow(dead_code)]
-    pub fn new(value: Value, typ: AnalysedType) -> Self {
-        Self { value, typ }
-    }
-
-    pub fn get_type(&self) -> &golem_wasm_ast::analysis::AnalysedType {
-        &self.typ.0
-    }
-}
-
-impl WasmValue for TypedValue {
-    type Type = AnalysedType;
-
-    fn ty(&self) -> Self::Type {
-        self.typ.clone()
-    }
-
-    fn make_bool(val: bool) -> Self {
-        TypedValue {
-            value: Value::Bool(val),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::Bool),
-        }
-    }
-
-    fn make_s8(val: i8) -> Self {
-        TypedValue {
-            value: Value::S8(val),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::S8),
-        }
-    }
-
-    fn make_s16(val: i16) -> Self {
-        TypedValue {
-            value: Value::S16(val),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::S16),
-        }
-    }
-
-    fn make_s32(val: i32) -> Self {
-        TypedValue {
-            value: Value::S32(val),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::S32),
-        }
-    }
-
-    fn make_s64(val: i64) -> Self {
-        TypedValue {
-            value: Value::S64(val),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::S64),
-        }
-    }
-
-    fn make_u8(val: u8) -> Self {
-        TypedValue {
-            value: Value::U8(val),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::U8),
-        }
-    }
-
-    fn make_u16(val: u16) -> Self {
-        TypedValue {
-            value: Value::U16(val),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::U16),
-        }
-    }
-
-    fn make_u32(val: u32) -> Self {
-        TypedValue {
-            value: Value::U32(val),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::U32),
-        }
-    }
-
-    fn make_u64(val: u64) -> Self {
-        TypedValue {
-            value: Value::U64(val),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::U64),
-        }
-    }
-
-    fn make_float32(val: f32) -> Self {
-        TypedValue {
-            value: Value::F32(val),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::F32),
-        }
-    }
-
-    fn make_float64(val: f64) -> Self {
-        TypedValue {
-            value: Value::F64(val),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::F64),
-        }
-    }
-
-    fn make_char(val: char) -> Self {
-        TypedValue {
-            value: Value::Char(val),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::Chr),
-        }
-    }
-
-    fn make_string(val: Cow<str>) -> Self {
-        TypedValue {
-            value: Value::String(val.to_string()),
-            typ: AnalysedType(golem_wasm_ast::analysis::AnalysedType::Str),
-        }
-    }
-
-    fn make_list(
-        ty: &Self::Type,
-        vals: impl IntoIterator<Item = Self>,
-    ) -> Result<Self, WasmValueError> {
-        Ok(TypedValue {
-            value: Value::List(vals.into_iter().map(|v| v.value).collect()),
-            typ: ty.clone(),
-        })
-    }
-
-    fn make_record<'a>(
-        ty: &Self::Type,
-        fields: impl IntoIterator<Item = (&'a str, Self)>,
-    ) -> Result<Self, WasmValueError> {
-        Ok(TypedValue {
-            value: Value::Record(fields.into_iter().map(|(_, v)| v.value).collect()),
-            typ: ty.clone(),
-        })
-    }
-
-    fn make_tuple(
-        ty: &Self::Type,
-        vals: impl IntoIterator<Item = Self>,
-    ) -> Result<Self, WasmValueError> {
-        Ok(TypedValue {
-            value: Value::Tuple(vals.into_iter().map(|v| v.value).collect()),
-            typ: ty.clone(),
-        })
-    }
-
-    fn make_variant(
-        ty: &Self::Type,
-        case: &str,
-        val: Option<Self>,
-    ) -> Result<Self, WasmValueError> {
-        if let golem_wasm_ast::analysis::AnalysedType::Variant(cases) = &ty.0 {
-            let case_idx =
-                cases
-                    .iter()
-                    .enumerate()
-                    .find_map(|(idx, (name, _))| if name == case { Some(idx) } else { None });
-            if let Some(case_idx) = case_idx {
-                Ok(TypedValue {
-                    value: Value::Variant {
-                        case_idx: case_idx as u32,
-                        case_value: val.map(|v| Box::new(v.value)),
-                    },
-                    typ: ty.clone(),
-                })
-            } else {
-                Err(WasmValueError::UnknownCase(case.to_string()))
-            }
-        } else {
-            Err(WasmValueError::WrongTypeKind {
-                kind: ty.kind(),
-                ty: format!("{ty:?}"),
-            })
-        }
-    }
-
-    fn make_enum(ty: &Self::Type, case: &str) -> Result<Self, WasmValueError> {
-        if let golem_wasm_ast::analysis::AnalysedType::Enum(cases) = &ty.0 {
-            let case_idx =
-                cases
-                    .iter()
-                    .enumerate()
-                    .find_map(|(idx, name)| if name == case { Some(idx) } else { None });
-            if let Some(case_idx) = case_idx {
-                Ok(TypedValue {
-                    value: Value::Enum(case_idx as u32),
-                    typ: ty.clone(),
-                })
-            } else {
-                Err(WasmValueError::UnknownCase(case.to_string()))
-            }
-        } else {
-            Err(WasmValueError::WrongTypeKind {
-                kind: ty.kind(),
-                ty: format!("{ty:?}"),
-            })
-        }
-    }
-
-    fn make_option(ty: &Self::Type, val: Option<Self>) -> Result<Self, WasmValueError> {
-        Ok(TypedValue {
-            value: Value::Option(val.map(|v| Box::new(v.value))),
-            typ: ty.clone(),
-        })
-    }
-
-    fn make_result(
-        ty: &Self::Type,
-        val: Result<Option<Self>, Option<Self>>,
-    ) -> Result<Self, WasmValueError> {
-        Ok(TypedValue {
-            value: Value::Result(match val {
-                Ok(Some(v)) => Ok(Some(Box::new(v.value))),
-                Ok(None) => Ok(None),
-                Err(Some(v)) => Err(Some(Box::new(v.value))),
-                Err(None) => Err(None),
-            }),
-            typ: ty.clone(),
-        })
-    }
-
-    fn make_flags<'a>(
-        ty: &Self::Type,
-        names: impl IntoIterator<Item = &'a str>,
-    ) -> Result<Self, WasmValueError> {
-        if let golem_wasm_ast::analysis::AnalysedType::Flags(all_names) = &ty.0 {
-            let mut flags = vec![false; all_names.len()];
-            let names: HashSet<String> =
-                HashSet::from_iter(names.into_iter().map(|s| s.to_string()));
-
-            for (idx, name) in all_names.iter().enumerate() {
-                if names.contains(name) {
-                    flags[idx] = true;
-                }
-            }
-
-            Ok(TypedValue {
-                value: Value::Flags(flags),
-                typ: ty.clone(),
-            })
-        } else {
-            Err(WasmValueError::WrongTypeKind {
-                kind: ty.kind(),
-                ty: format!("{ty:?}"),
-            })
-        }
-    }
-
-    fn unwrap_bool(&self) -> bool {
-        if let Value::Bool(val) = &self.value {
-            *val
-        } else {
-            panic!("expected bool, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_s8(&self) -> i8 {
-        if let Value::S8(val) = &self.value {
-            *val
-        } else {
-            panic!("expected s8, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_s16(&self) -> i16 {
-        if let Value::S16(val) = &self.value {
-            *val
-        } else {
-            panic!("expected s16, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_s32(&self) -> i32 {
-        if let Value::S32(val) = &self.value {
-            *val
-        } else {
-            panic!("expected s32, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_s64(&self) -> i64 {
-        if let Value::S64(val) = &self.value {
-            *val
-        } else {
-            panic!("expected s64, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_u8(&self) -> u8 {
-        if let Value::U8(val) = &self.value {
-            *val
-        } else {
-            panic!("expected u8, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_u16(&self) -> u16 {
-        if let Value::U16(val) = &self.value {
-            *val
-        } else {
-            panic!("expected u16, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_u32(&self) -> u32 {
-        if let Value::U32(val) = &self.value {
-            *val
-        } else {
-            panic!("expected u32, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_u64(&self) -> u64 {
-        if let Value::U64(val) = &self.value {
-            *val
-        } else {
-            panic!("expected u64, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_float32(&self) -> f32 {
-        if let Value::F32(val) = &self.value {
-            *val
-        } else {
-            panic!("expected f32, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_float64(&self) -> f64 {
-        if let Value::F64(val) = &self.value {
-            *val
-        } else {
-            panic!("expected f64, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_char(&self) -> char {
-        if let Value::Char(val) = &self.value {
-            *val
-        } else {
-            panic!("expected char, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_string(&self) -> Cow<str> {
-        if let Value::String(val) = &self.value {
-            Cow::Borrowed(val)
-        } else {
-            panic!("expected string, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_list(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
-        if let golem_wasm_ast::analysis::AnalysedType::List(inner_type) = self.get_type() {
-            if let Value::List(vals) = &self.value {
-                Box::new(vals.iter().map(|v| {
-                    Cow::Owned(TypedValue {
-                        value: v.clone(),
-                        typ: AnalysedType(*inner_type.clone()),
-                    })
-                }))
-            } else {
-                panic!("expected list, got {:?}", self.value);
-            }
-        } else {
-            panic!("expected list, got {:?}", self.typ);
-        }
-    }
-
-    fn unwrap_record(&self) -> Box<dyn Iterator<Item = (Cow<str>, Cow<Self>)> + '_> {
-        if let golem_wasm_ast::analysis::AnalysedType::Record(field_types) = self.get_type() {
-            if let Value::Record(fields) = &self.value {
-                Box::new(fields.iter().zip(field_types).map(|(v, (n, t))| {
-                    (
-                        Cow::Borrowed(n.as_str()),
-                        Cow::Owned(TypedValue {
-                            value: v.clone(),
-                            typ: AnalysedType(t.clone()),
-                        }),
-                    )
-                }))
-            } else {
-                panic!("expected record, got {:?}", self.typ);
-            }
-        } else {
-            panic!("expected record, got {:?}", self.value);
-        }
-    }
-
-    fn unwrap_tuple(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
-        if let golem_wasm_ast::analysis::AnalysedType::Tuple(val_types) = self.get_type() {
-            if let Value::Tuple(vals) = &self.value {
-                Box::new(vals.iter().zip(val_types).map(|(v, t)| {
-                    Cow::Owned(TypedValue {
-                        value: v.clone(),
-                        typ: AnalysedType(t.clone()),
-                    })
-                }))
-            } else {
-                panic!("expected tuple, got {:?}", self.value);
-            }
-        } else {
-            panic!("expected tuple, got {:?}", self.typ);
-        }
-    }
-
-    fn unwrap_variant(&self) -> (Cow<str>, Option<Cow<Self>>) {
-        if let golem_wasm_ast::analysis::AnalysedType::Variant(cases) = self.get_type() {
-            if let Value::Variant {
-                case_idx,
-                case_value,
-            } = &self.value
-            {
-                let (name, typ) = &cases[*case_idx as usize];
-                match typ {
-                    None => return (Cow::Borrowed(name), None),
-                    Some(typ) => (
-                        Cow::Borrowed(name),
-                        case_value.as_ref().map(|v| {
-                            Cow::Owned(TypedValue {
-                                value: *v.clone(),
-                                typ: AnalysedType(typ.clone()),
-                            })
-                        }),
-                    ),
-                }
-            } else {
-                panic!("expected variant, got {:?}", self.value);
-            }
-        } else {
-            panic!("expected variant, got {:?}", self.typ);
-        }
-    }
-
-    fn unwrap_enum(&self) -> Cow<str> {
-        if let golem_wasm_ast::analysis::AnalysedType::Enum(cases) = self.get_type() {
-            if let Value::Enum(case_idx) = &self.value {
-                Cow::Borrowed(&cases[*case_idx as usize])
-            } else {
-                panic!("expected enum, got {:?}", self.value);
-            }
-        } else {
-            panic!("expected enum, got {:?}", self.typ);
-        }
-    }
-
-    fn unwrap_option(&self) -> Option<Cow<Self>> {
-        if let golem_wasm_ast::analysis::AnalysedType::Option(inner_type) = self.get_type() {
-            if let Value::Option(val) = &self.value {
-                val.as_ref().map(|v| {
-                    Cow::Owned(TypedValue {
-                        value: *v.clone(),
-                        typ: AnalysedType(*inner_type.clone()),
-                    })
-                })
-            } else {
-                panic!("expected option, got {:?}", self.value);
-            }
-        } else {
-            panic!("expected option, got {:?}", self.typ);
-        }
-    }
-
-    fn unwrap_result(&self) -> Result<Option<Cow<Self>>, Option<Cow<Self>>> {
-        if let golem_wasm_ast::analysis::AnalysedType::Result { ok, error } = self.get_type() {
-            if let Value::Result(val) = &self.value {
-                match val {
-                    Ok(Some(v)) => Ok(Some(Cow::Owned(TypedValue {
-                        value: *v.clone(),
-                        typ: AnalysedType(*(ok.as_ref().unwrap()).clone()),
-                    }))),
-                    Ok(None) => Ok(None),
-                    Err(Some(v)) => Err(Some(Cow::Owned(TypedValue {
-                        value: *v.clone(),
-                        typ: AnalysedType(*(error.as_ref().unwrap()).clone()),
-                    }))),
-                    Err(None) => Err(None),
-                }
-            } else {
-                panic!("expected result, got {:?}", self.value);
-            }
-        } else {
-            panic!("expected result, got {:?}", self.typ);
-        }
-    }
-
-    fn unwrap_flags(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
-        if let golem_wasm_ast::analysis::AnalysedType::Flags(names) = self.get_type() {
-            if let Value::Flags(flags) = &self.value {
-                Box::new(flags.iter().zip(names).filter_map(|(flag, name)| {
-                    if *flag {
-                        Some(Cow::Borrowed(name.as_str()))
-                    } else {
-                        None
-                    }
-                }))
-            } else {
-                panic!("expected flags, got {:?}", self.value);
-            }
-        } else {
-            panic!("expected flags, got {:?}", self.typ);
-        }
     }
 }
 
@@ -623,18 +117,420 @@ impl WasmType for AnalysedType {
     }
 }
 
+impl WasmValue for TypeAnnotatedValue {
+    type Type = AnalysedType;
+    fn ty(&self) -> Self::Type {
+        AnalysedType(golem_wasm_ast::analysis::AnalysedType::from(self.clone()))
+    }
+
+    fn make_bool(val: bool) -> Self {
+        TypeAnnotatedValue::Bool(val)
+    }
+
+    fn make_s8(val: i8) -> Self {
+        TypeAnnotatedValue::S8(val)
+    }
+
+    fn make_s16(val: i16) -> Self {
+        TypeAnnotatedValue::S16(val)
+    }
+
+    fn make_s32(val: i32) -> Self {
+        TypeAnnotatedValue::S32(val)
+    }
+
+    fn make_s64(val: i64) -> Self {
+        TypeAnnotatedValue::S64(val)
+    }
+
+    fn make_u8(val: u8) -> Self {
+        TypeAnnotatedValue::U8(val)
+    }
+
+    fn make_u16(val: u16) -> Self {
+        TypeAnnotatedValue::U16(val)
+    }
+
+    fn make_u32(val: u32) -> Self {
+        TypeAnnotatedValue::U32(val)
+    }
+
+    fn make_u64(val: u64) -> Self {
+        TypeAnnotatedValue::U64(val)
+    }
+
+    fn make_float32(val: f32) -> Self {
+        TypeAnnotatedValue::F32(val)
+    }
+
+    fn make_float64(val: f64) -> Self {
+        TypeAnnotatedValue::F64(val)
+    }
+
+    fn make_char(val: char) -> Self {
+        TypeAnnotatedValue::Chr(val)
+    }
+
+    fn make_string(val: Cow<str>) -> Self {
+        TypeAnnotatedValue::Str(val.to_string())
+    }
+
+    fn make_list(
+        ty: &Self::Type,
+        vals: impl IntoIterator<Item = Self>,
+    ) -> Result<Self, WasmValueError> {
+        if let golem_wasm_ast::analysis::AnalysedType::List(typ) = &ty.0 {
+            Ok(TypeAnnotatedValue::List {
+                values: vals.into_iter().collect(),
+                typ: *typ.clone(),
+            })
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
+    }
+
+    fn make_record<'a>(
+        ty: &Self::Type,
+        fields: impl IntoIterator<Item = (&'a str, Self)>,
+    ) -> Result<Self, WasmValueError> {
+        if let golem_wasm_ast::analysis::AnalysedType::Record(types) = &ty.0 {
+            Ok(TypeAnnotatedValue::Record {
+                value: fields
+                    .into_iter()
+                    .map(|(name, value)| (name.to_string(), value))
+                    .collect(),
+                typ: types.clone(),
+            })
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
+    }
+
+    fn make_tuple(
+        ty: &Self::Type,
+        vals: impl IntoIterator<Item = Self>,
+    ) -> Result<Self, WasmValueError> {
+        if let golem_wasm_ast::analysis::AnalysedType::Tuple(types) = &ty.0 {
+            Ok(TypeAnnotatedValue::Tuple {
+                value: vals.into_iter().collect(),
+                typ: types.clone(),
+            })
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
+    }
+
+    fn make_variant(
+        ty: &Self::Type,
+        case: &str,
+        val: Option<Self>,
+    ) -> Result<Self, WasmValueError> {
+        if let golem_wasm_ast::analysis::AnalysedType::Variant(cases) = &ty.0 {
+            let case_type =
+                cases.iter().find_map(
+                    |(name, case_type)| {
+                        if name == case {
+                            Some(case_type)
+                        } else {
+                            None
+                        }
+                    },
+                );
+            if case_type.is_some() {
+                Ok(TypeAnnotatedValue::Variant {
+                    typ: cases.clone(),
+                    case_name: case.to_string(),
+                    case_value: val.map(Box::new),
+                })
+            } else {
+                Err(WasmValueError::UnknownCase(case.to_string()))
+            }
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
+    }
+
+    fn make_enum(ty: &Self::Type, case: &str) -> Result<Self, WasmValueError> {
+        if let golem_wasm_ast::analysis::AnalysedType::Enum(cases) = &ty.0 {
+            if cases.contains(&case.to_string()) {
+                Ok(TypeAnnotatedValue::Enum {
+                    typ: cases.clone(),
+                    value: case.to_string(),
+                })
+            } else {
+                Err(WasmValueError::UnknownCase(case.to_string()))
+            }
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
+    }
+
+    fn make_option(ty: &Self::Type, val: Option<Self>) -> Result<Self, WasmValueError> {
+        Ok(TypeAnnotatedValue::Option {
+            typ: ty.clone().0,
+            value: val.map(Box::new),
+        })
+    }
+
+    fn make_result(
+        ty: &Self::Type,
+        val: Result<Option<Self>, Option<Self>>,
+    ) -> Result<Self, WasmValueError> {
+        if let golem_wasm_ast::analysis::AnalysedType::Result { ok, error } = &ty.0 {
+            Ok(TypeAnnotatedValue::Result {
+                value: match val {
+                    Ok(Some(v)) => Ok(Some(Box::new(v))),
+                    Ok(None) => Ok(None),
+                    Err(Some(v)) => Err(Some(Box::new(v))),
+                    Err(None) => Err(None),
+                },
+                ok: ok.clone(),
+                error: error.clone(),
+            })
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
+    }
+
+    fn make_flags<'a>(
+        ty: &Self::Type,
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Self, WasmValueError> {
+        if let golem_wasm_ast::analysis::AnalysedType::Flags(all_names) = &ty.0 {
+            let names: Vec<String> = names.into_iter().map(|name| name.to_string()).collect();
+
+            let invalid_names: Vec<String> = names
+                .iter()
+                .filter(|&name| !all_names.contains(&name.to_string()))
+                .cloned()
+                .collect();
+
+            if invalid_names.is_empty() {
+                Ok(TypeAnnotatedValue::Flags {
+                    typ: all_names.clone(),
+                    values: names,
+                })
+            } else {
+                Err(WasmValueError::UnknownCase(invalid_names.join(", ")))
+            }
+        } else {
+            Err(WasmValueError::WrongTypeKind {
+                kind: ty.kind(),
+                ty: format!("{ty:?}"),
+            })
+        }
+    }
+
+    fn unwrap_bool(&self) -> bool {
+        match self {
+            TypeAnnotatedValue::Bool(value) => *value,
+            _ => panic!("Expected bool, found {:?}", self),
+        }
+    }
+
+    fn unwrap_s8(&self) -> i8 {
+        match self {
+            TypeAnnotatedValue::S8(value) => *value,
+            _ => panic!("Expected s8, found {:?}", self),
+        }
+    }
+
+    fn unwrap_s16(&self) -> i16 {
+        match self {
+            TypeAnnotatedValue::S16(value) => *value,
+            _ => panic!("Expected s16, found {:?}", self),
+        }
+    }
+
+    fn unwrap_s32(&self) -> i32 {
+        match self {
+            TypeAnnotatedValue::S32(value) => *value,
+            _ => panic!("Expected s32, found {:?}", self),
+        }
+    }
+
+    fn unwrap_s64(&self) -> i64 {
+        match self {
+            TypeAnnotatedValue::S64(value) => *value,
+            _ => panic!("Expected s64, found {:?}", self),
+        }
+    }
+
+    fn unwrap_u8(&self) -> u8 {
+        match self {
+            TypeAnnotatedValue::U8(value) => *value,
+            _ => panic!("Expected u8, found {:?}", self),
+        }
+    }
+
+    fn unwrap_u16(&self) -> u16 {
+        match self {
+            TypeAnnotatedValue::U16(value) => *value,
+            _ => panic!("Expected u16, found {:?}", self),
+        }
+    }
+
+    fn unwrap_u32(&self) -> u32 {
+        match self {
+            TypeAnnotatedValue::U32(value) => *value,
+            _ => panic!("Expected u32, found {:?}", self),
+        }
+    }
+
+    fn unwrap_u64(&self) -> u64 {
+        match self {
+            TypeAnnotatedValue::U64(value) => *value,
+            _ => panic!("Expected u64, found {:?}", self),
+        }
+    }
+
+    fn unwrap_float32(&self) -> f32 {
+        match self {
+            TypeAnnotatedValue::F32(value) => *value,
+            _ => panic!("Expected f32, found {:?}", self),
+        }
+    }
+
+    fn unwrap_float64(&self) -> f64 {
+        match self {
+            TypeAnnotatedValue::F64(value) => *value,
+            _ => panic!("Expected f64, found {:?}", self),
+        }
+    }
+
+    fn unwrap_char(&self) -> char {
+        match self {
+            TypeAnnotatedValue::Chr(value) => *value,
+            _ => panic!("Expected chr, found {:?}", self),
+        }
+    }
+
+    fn unwrap_string(&self) -> Cow<str> {
+        match self {
+            TypeAnnotatedValue::Str(value) => Cow::Borrowed(value),
+            _ => panic!("Expected string, found {:?}", self),
+        }
+    }
+
+    fn unwrap_list(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
+        match self {
+            TypeAnnotatedValue::List { typ: _, values } => {
+                Box::new(values.iter().map(Cow::Borrowed))
+            }
+            _ => panic!("Expected list, found {:?}", self),
+        }
+    }
+
+    fn unwrap_record(&self) -> Box<dyn Iterator<Item = (Cow<str>, Cow<Self>)> + '_> {
+        match self {
+            TypeAnnotatedValue::Record { typ: _, value } => Box::new(
+                value
+                    .iter()
+                    .map(|(name, value)| (Cow::Borrowed(name.as_str()), Cow::Borrowed(value))),
+            ),
+            _ => panic!("Expected record, found {:?}", self),
+        }
+    }
+
+    fn unwrap_tuple(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
+        match self {
+            TypeAnnotatedValue::Tuple { typ: _, value } => {
+                Box::new(value.iter().map(Cow::Borrowed))
+            }
+            _ => panic!("Expected tuple, found {:?}", self),
+        }
+    }
+
+    fn unwrap_variant(&self) -> (Cow<str>, Option<Cow<Self>>) {
+        match self {
+            TypeAnnotatedValue::Variant {
+                typ: _,
+                case_name,
+                case_value,
+            } => {
+                let case_name = Cow::Borrowed(case_name.as_str());
+                let case_value = case_value.clone().map(|v| Cow::Owned(*v));
+                (case_name, case_value)
+            }
+            _ => panic!("Expected variant, found {:?}", self),
+        }
+    }
+
+    fn unwrap_enum(&self) -> Cow<str> {
+        match self {
+            TypeAnnotatedValue::Enum { typ: _, value } => Cow::Borrowed(value.as_str()),
+            _ => panic!("Expected enum, found {:?}", self),
+        }
+    }
+
+    fn unwrap_option(&self) -> Option<Cow<Self>> {
+        match self {
+            TypeAnnotatedValue::Option { typ: _, value } => {
+                value.as_ref().map(|v| Cow::Owned(*v.clone()))
+            }
+            _ => panic!("Expected option, found {:?}", self),
+        }
+    }
+
+    fn unwrap_result(&self) -> Result<Option<Cow<Self>>, Option<Cow<Self>>> {
+        match self {
+            TypeAnnotatedValue::Result {
+                ok: _,
+                error: _,
+                value,
+            } => match value {
+                Ok(Some(v)) => Ok(Some(Cow::Borrowed(v))),
+                Ok(None) => Ok(None),
+                Err(Some(v)) => Err(Some(Cow::Borrowed(v))),
+                Err(None) => Err(None),
+            },
+            _ => panic!("Expected result, found {:?}", self),
+        }
+    }
+
+    fn unwrap_flags(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
+        match self {
+            TypeAnnotatedValue::Flags { typ: _, values } => {
+                Box::new(values.iter().map(|v| Cow::Borrowed(v.as_str())))
+            }
+            _ => panic!("Expected flags, found {:?}", self),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::text::TypedValue;
-    use crate::Value;
+    use crate::{TypeAnnotatedValue, Value};
     use golem_wasm_ast::analysis::AnalysedType;
     use wasm_wave::{from_str, to_string};
 
     fn round_trip(value: Value, typ: AnalysedType) {
-        let typed_value = TypedValue::new(value.clone(), super::AnalysedType(typ));
+        let typed_value = TypeAnnotatedValue::from_value(&value, &typ).unwrap();
+        println!("{:?}", typed_value.clone());
+
         let s = to_string(&typed_value).unwrap();
-        let round_trip_value: TypedValue = from_str(&typed_value.typ, &s).unwrap();
-        assert_eq!(value, round_trip_value.value);
+        let round_trip_value: TypeAnnotatedValue =
+            from_str(&super::AnalysedType(AnalysedType::from(typed_value)), &s).unwrap();
+        let result: Value = round_trip_value.try_into().unwrap();
+        assert_eq!(value, result);
     }
 
     #[test]
