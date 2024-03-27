@@ -235,13 +235,16 @@ impl WasmValue for TypeAnnotatedValue {
         val: Option<Self>,
     ) -> Result<Self, WasmValueError> {
         if let golem_wasm_ast::analysis::AnalysedType::Variant(cases) = &ty.0 {
-            let case_type = cases.iter().enumerate().find_map(|(_, (name, case_type))| {
-                if name == case {
-                    Some(case_type)
-                } else {
-                    None
-                }
-            });
+            let case_type =
+                cases.iter().find_map(
+                    |(name, case_type)| {
+                        if name == case {
+                            Some(case_type)
+                        } else {
+                            None
+                        }
+                    },
+                );
             if case_type.is_some() {
                 Ok(TypeAnnotatedValue::Variant {
                     typ: cases.clone(),
