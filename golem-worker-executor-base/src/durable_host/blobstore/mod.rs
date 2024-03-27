@@ -36,13 +36,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         record_host_function_call("blobstore::blobstore", "create_container");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let result = Durability::<Ctx, u64, SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem blobstore::blobstore::create_container",
             |ctx| {
-                ctx.private_state
+                ctx.state
                     .blob_store_service
                     .create_container(account_id.clone(), name.clone())
             },
@@ -65,13 +65,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         record_host_function_call("blobstore::blobstore", "get_container");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let result = Durability::<Ctx, Option<u64>, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
             "golem blobstore::blobstore::get_container",
             |ctx| {
-                ctx.private_state
+                ctx.state
                     .blob_store_service
                     .get_container(account_id.clone(), name.clone())
             },
@@ -92,13 +92,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::blobstore", "delete_container");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem blobstore::blobstore::delete_container",
             |ctx| {
-                ctx.private_state
+                ctx.state
                     .blob_store_service
                     .delete_container(account_id.clone(), name.clone())
             },
@@ -115,13 +115,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<bool, Error>> {
         record_host_function_call("blobstore::blobstore", "container_exists");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let result = Durability::<Ctx, bool, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
             "golem blobstore::blobstore::container_exists",
             |ctx| {
-                ctx.private_state
+                ctx.state
                     .blob_store_service
                     .container_exists(account_id.clone(), name.clone())
             },
@@ -139,13 +139,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::blobstore", "copy_object");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem blobstore::blobstore::copy_object",
             |ctx| {
-                ctx.private_state.blob_store_service.copy_object(
+                ctx.state.blob_store_service.copy_object(
                     account_id.clone(),
                     src.container.clone(),
                     src.object.clone(),
@@ -167,13 +167,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::blobstore", "move_object");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem blobstore::blobstore::move_object",
             |ctx| {
-                ctx.private_state.blob_store_service.move_object(
+                ctx.state.blob_store_service.move_object(
                     account_id.clone(),
                     src.container.clone(),
                     src.object.clone(),
