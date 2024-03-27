@@ -13,7 +13,7 @@ pub trait RunningWorkerEnumerationService {
     async fn get(
         &self,
         template_id: &TemplateId,
-        filter: &WorkerFilter,
+        filter: Option<WorkerFilter>,
     ) -> Result<Vec<WorkerMetadata>, GolemError>;
 }
 
@@ -29,7 +29,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
     async fn get(
         &self,
         template_id: &TemplateId,
-        filter: &WorkerFilter,
+        filter: Option<WorkerFilter>,
     ) -> Result<Vec<WorkerMetadata>, GolemError> {
         let active_workers = self.active_workers.enum_workers();
 
@@ -37,7 +37,9 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
         for worker in active_workers {
             if worker.0.template_id == *template_id
                 && worker.1.metadata.last_known_status.status == WorkerStatus::Running
-                && filter.matches(&worker.1.metadata)
+                && filter
+                    .clone()
+                    .map_or(true, |f| f.matches(&worker.1.metadata))
             {
                 template_workers.push(worker.1.metadata.clone());
             }
@@ -80,7 +82,7 @@ impl RunningWorkerEnumerationService
     async fn get(
         &self,
         _template_id: &TemplateId,
-        _filter: &WorkerFilter,
+        _filter: Option<WorkerFilter>,
     ) -> Result<Vec<WorkerMetadata>, GolemError> {
         unimplemented!()
     }
@@ -91,7 +93,7 @@ pub trait WorkerEnumerationService {
     async fn get(
         &self,
         template_id: &TemplateId,
-        filter: &WorkerFilter,
+        filter: Option<WorkerFilter>,
         cursor: usize,
         count: usize,
         precise: bool,
@@ -121,7 +123,7 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
     async fn get_internal(
         &self,
         template_id: &TemplateId,
-        filter: &WorkerFilter,
+        filter: Option<WorkerFilter>,
         cursor: usize,
         count: usize,
         precise: bool,
@@ -145,7 +147,7 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
             let worker_metadata = self.worker_service.get(&worker_id).await;
 
             if let Some(worker_metadata) = worker_metadata {
-                if filter.matches(&worker_metadata) {
+                if filter.clone().map_or(true, |f| f.matches(&worker_metadata)) {
                     template_workers.push(worker_metadata);
                 }
             }
@@ -166,7 +168,7 @@ impl WorkerEnumerationService
     async fn get(
         &self,
         template_id: &TemplateId,
-        filter: &WorkerFilter,
+        filter: Option<WorkerFilter>,
         cursor: usize,
         count: usize,
         precise: bool,
@@ -180,7 +182,7 @@ impl WorkerEnumerationService
             let (next_cursor, workers) = self
                 .get_internal(
                     template_id,
-                    filter,
+                    filter.clone(),
                     new_cursor.unwrap_or(0),
                     new_count,
                     precise,
@@ -237,7 +239,7 @@ impl WorkerEnumerationService
     async fn get(
         &self,
         template_id: &TemplateId,
-        filter: &WorkerFilter,
+        filter: Option<WorkerFilter>,
         cursor: usize,
         count: usize,
         _precise: bool,
@@ -252,7 +254,7 @@ impl WorkerEnumerationService
             for worker in workers {
                 if index >= cursor
                     && worker.worker_id.worker_id.template_id == *template_id
-                    && filter.matches(&worker)
+                    && filter.clone().map_or(true, |f| f.matches(&worker))
                 {
                     template_workers.push(worker);
                 }
@@ -299,7 +301,7 @@ impl WorkerEnumerationService
     async fn get(
         &self,
         _template_id: &TemplateId,
-        _filter: &WorkerFilter,
+        _filter: Option<WorkerFilter>,
         _cursor: usize,
         _count: usize,
         _precise: bool,

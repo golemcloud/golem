@@ -636,7 +636,6 @@ impl<'a> RedisLabelledApi<'a> {
         Ok(connected_slaves)
     }
 
-
     pub async fn scan<K>(
         &self,
         pattern: K,
