@@ -11,7 +11,6 @@ use tap::TapFallible;
 use golem_service_base::model::*;
 use golem_worker_service_base::api::error::WorkerApiBaseError;
 
-use crate::empty_worker_metadata;
 use crate::service::{template::TemplateService, worker::WorkerService};
 
 pub struct WorkerApi {
@@ -33,7 +32,8 @@ impl WorkerApi {
         let worker = self
             .worker_service
             .get_by_id(&worker_id, &EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         Ok(Json(worker))
     }
@@ -61,7 +61,8 @@ impl WorkerApi {
                         &template_id, error
                     ),
                 }))
-            })?;
+            })?
+            .value;
 
         let WorkerCreationRequest { name, args, env } = request.0;
 
@@ -73,10 +74,10 @@ impl WorkerApi {
                 latest_template.versioned_template_id.version,
                 args,
                 env,
-                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
-            .await?;
+            .await?
+            .value;
 
         Ok(Json(worker))
     }
@@ -115,7 +116,8 @@ impl WorkerApi {
         let invocation_key = self
             .worker_service
             .get_invocation_key(&worker_id, &EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         Ok(Json(invocation_key))
     }
@@ -148,10 +150,10 @@ impl WorkerApi {
                 },
                 params.0.params,
                 &calling_convention,
-                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
-            .await?;
+            .await?
+            .value;
 
         Ok(Json(InvokeResult { result }))
     }
@@ -171,13 +173,7 @@ impl WorkerApi {
         let worker_id = make_worker_id(template_id.0, worker_name.0)?;
 
         self.worker_service
-            .invoke_function(
-                &worker_id,
-                function.0,
-                params.0.params,
-                empty_worker_metadata(),
-                &EmptyAuthCtx {},
-            )
+            .invoke_function(&worker_id, function.0, params.0.params, &EmptyAuthCtx {})
             .await?;
 
         Ok(Json(InvokeResponse {}))
@@ -200,7 +196,8 @@ impl WorkerApi {
         let result = self
             .worker_service
             .complete_promise(&worker_id, oplog_idx, data, &EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         Ok(Json(result))
     }
@@ -243,7 +240,8 @@ impl WorkerApi {
         let result = self
             .worker_service
             .get_metadata(&worker_id, &EmptyAuthCtx {})
-            .await?;
+            .await?
+            .value;
 
         Ok(Json(result))
     }

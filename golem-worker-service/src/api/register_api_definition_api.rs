@@ -1,6 +1,7 @@
 use std::result::Result;
 use std::sync::Arc;
 
+use golem_service_base::service::auth::AuthService;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -16,15 +17,23 @@ use golem_worker_service_base::oas_worker_bridge::*;
 use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 
 pub struct RegisterApiDefinitionApi {
-    pub definition_service: DefinitionService,
+    pub definition_service:
+        Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
 }
-
-type DefinitionService = Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send>;
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
-    pub fn new(definition_service: DefinitionService) -> Self {
-        Self { definition_service }
+    pub fn new(
+        definition_service: Arc<
+            dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send,
+        >,
+        auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
+    ) -> Self {
+        Self {
+            definition_service,
+            auth_service,
+        }
     }
 
     #[oai(path = "/oas", method = "put")]
@@ -82,13 +91,9 @@ impl RegisterApiDefinitionApi {
 
         let data = self
             .definition_service
-            .get(
-                &api_definition_id,
-                &api_version,
-                CommonNamespace::default(),
-                &EmptyAuthCtx {},
-            )
-            .await?;
+            .get(&api_definition_id, &api_version, EmptyAuthCtx {})
+            .await?
+            .value;
 
         let values: Vec<ApiDefinition> = match data {
             Some(d) => {
@@ -114,13 +119,9 @@ impl RegisterApiDefinitionApi {
 
         let deleted = self
             .definition_service
-            .delete(
-                &api_definition_id,
-                &api_definition_version,
-                CommonNamespace::default(),
-                &EmptyAuthCtx {},
-            )
-            .await?;
+            .delete(&api_definition_id, &api_definition_version, EmptyAuthCtx {})
+            .await?
+            .value;
 
         if deleted.is_some() {
             Ok(Json("API definition deleted".to_string()))
@@ -133,8 +134,9 @@ impl RegisterApiDefinitionApi {
     async fn get_all(&self) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
         let data = self
             .definition_service
-            .get_all(CommonNamespace::default(), &EmptyAuthCtx {})
-            .await?;
+            .get_all(EmptyAuthCtx {})
+            .await?
+            .value;
 
         let values = data
             .into_iter()
@@ -152,7 +154,7 @@ impl RegisterApiDefinitionApi {
         definition: &api_definition::ApiDefinition,
     ) -> Result<(), ApiEndpointError> {
         self.definition_service
-            .register(definition, CommonNamespace::default(), &EmptyAuthCtx {})
+            .register(definition, EmptyAuthCtx {})
             .await
             .map_err(|e| {
                 error!("API definition id: {} - register error: {e}", definition.id,);
@@ -165,26 +167,32 @@ impl RegisterApiDefinitionApi {
 
 #[cfg(test)]
 mod test {
+    use golem_worker_service_base::auth::AuthServiceNoop;
     use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
-    use golem_worker_service_base::service::template::TemplateServiceNoop;
+    use golem_worker_service_base::service::template::TemplateService;
     use poem::test::TestClient;
 
     use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
     use golem_worker_service_base::service::api_definition::RegisterApiDefinitionDefault;
 
-    use crate::service::template::TemplateService;
+    use crate::service::template::TemplateServiceNoop;
 
     use super::*;
 
     fn make_route() -> poem::Route {
-        let template_service: TemplateService = Arc::new(TemplateServiceNoop {});
+        let template_service: Arc<dyn TemplateService<EmptyAuthCtx, ()> + Send + Sync> =
+            Arc::new(TemplateServiceNoop {});
         let definition_service = RegisterApiDefinitionDefault::new(
             template_service,
+            Arc::new(AuthServiceNoop {}),
             Arc::new(InMemoryRegistry::default()),
             Arc::new(ApiDefinitionValidatorNoop {}),
         );
 
-        let endpoint = RegisterApiDefinitionApi::new(Arc::new(definition_service));
+        let endpoint = RegisterApiDefinitionApi::new(
+            Arc::new(definition_service),
+            Arc::new(AuthServiceNoop {}),
+        );
 
         poem::Route::new().nest("", OpenApiService::new(endpoint, "test", "1.0"))
     }

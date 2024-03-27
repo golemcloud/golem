@@ -3116,31 +3116,3 @@ impl From<GrpcRoutingTableEntry> for RoutingTableEntry {
         }
     }
 }
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct ResourceLimits {
-    pub available_fuel: i64,
-    pub max_memory_per_worker: i64,
-}
-
-impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
-    fn from(value: ResourceLimits) -> Self {
-        Self {
-            available_fuel: value.available_fuel,
-            max_memory_per_worker: value.max_memory_per_worker,
-        }
-    }
-}
-
-impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimits {
-    fn from(value: golem_api_grpc::proto::golem::common::ResourceLimits) -> Self {
-        Self {
-            available_fuel: value.available_fuel,
-            max_memory_per_worker: value.max_memory_per_worker,
-        }
-    }
-}

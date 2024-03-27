@@ -3,6 +3,7 @@ pub mod worker;
 
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
 use async_trait::async_trait;
+use golem_service_base::service::auth::AuthService;
 use golem_worker_service_base::api_definition::{
     ApiDefinition, ApiDefinitionId, ResponseMapping, Version,
 };
@@ -10,7 +11,7 @@ use golem_worker_service_base::api_definition_repo::{
     ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry,
 };
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
+use golem_worker_service_base::auth::{AuthServiceNoop, CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::http_request::InputHttpRequest;
 use golem_worker_service_base::oas_worker_bridge::{
     GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION,
@@ -24,15 +25,15 @@ use golem_worker_service_base::service::api_definition_validator::{
 use golem_worker_service_base::service::http_request_definition_lookup::{
     ApiDefinitionLookupError, HttpRequestDefinitionLookup,
 };
-use golem_worker_service_base::service::template::{RemoteTemplateService, TemplateServiceNoop};
-use golem_worker_service_base::service::worker::{
-    WorkerRequestMetadata, WorkerServiceDefault, WorkerServiceNoOp,
-};
+use golem_worker_service_base::service::template::TemplateServiceDefault;
+use golem_worker_service_base::service::worker::{WorkerServiceDefault, WorkerServiceNoOp};
 use golem_worker_service_base::worker_request_to_response::WorkerRequestToResponse;
 use http::HeaderMap;
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
+
+use self::template::TemplateServiceNoop;
 
 #[derive(Clone)]
 pub struct Services {
@@ -43,11 +44,15 @@ pub struct Services {
     pub definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
     pub api_definition_validator_service: Arc<dyn ApiDefinitionValidatorService + Sync + Send>,
 }
 
 impl Services {
     pub async fn new(config: &WorkerServiceBaseConfig) -> Result<Services, String> {
+        let auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send> =
+            Arc::new(AuthServiceNoop {});
+
         let routing_table_service: Arc<
             dyn golem_service_base::routing_table::RoutingTableService + Send + Sync,
         > = Arc::new(
@@ -70,10 +75,15 @@ impl Services {
             let uri = config.uri();
             let retry_config = config.retries.clone();
 
-            Arc::new(RemoteTemplateService::new(uri, retry_config))
+            Arc::new(TemplateServiceDefault::new(
+                uri,
+                retry_config,
+                Arc::new(AuthServiceNoop {}),
+            ))
         };
 
         let worker_service: worker::WorkerService = Arc::new(WorkerServiceDefault::new(
+            Arc::new(AuthServiceNoop {}),
             worker_executor_grpc_clients.clone(),
             template_service.clone(),
             routing_table_service.clone(),
@@ -100,6 +110,7 @@ impl Services {
             dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send,
         > = Arc::new(RegisterApiDefinitionDefault::new(
             template_service.clone(),
+            auth_service.clone(),
             definition_repo.clone(),
             api_definition_validator_service.clone(),
         ));
@@ -110,6 +121,7 @@ impl Services {
             definition_lookup_service,
             worker_to_http_service,
             template_service,
+            auth_service,
             api_definition_validator_service,
         })
     }
@@ -118,11 +130,11 @@ impl Services {
         let template_service: template::TemplateService = Arc::new(TemplateServiceNoop {});
 
         let worker_service: worker::WorkerService = Arc::new(WorkerServiceNoOp {
-            metadata: WorkerRequestMetadata {
-                account_id: None,
-                limits: None,
-            },
+            namespace: CommonNamespace::default(),
         });
+
+        let auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send> =
+            Arc::new(AuthServiceNoop {});
 
         let definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace> + Sync + Send> =
             Arc::new(InMemoryRegistry::default());
@@ -137,6 +149,7 @@ impl Services {
 
         let definition_service = Arc::new(RegisterApiDefinitionDefault::new(
             template_service.clone(),
+            auth_service.clone(),
             Arc::new(InMemoryRegistry::default()),
             api_definition_validator_service.clone(),
         ));
@@ -151,6 +164,7 @@ impl Services {
             definition_lookup_service,
             worker_to_http_service,
             template_service,
+            auth_service,
             api_definition_validator_service,
         }
     }
