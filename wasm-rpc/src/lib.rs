@@ -233,34 +233,54 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
     }
 }
 
-impl From<TypeAnnotatedValue> for Value {
-    fn from(value: TypeAnnotatedValue) -> Self {
+impl TryFrom<TypeAnnotatedValue> for Value {
+    type Error = String;
+
+    fn try_from(value: TypeAnnotatedValue) -> Result<Self, Self::Error> {
         match value {
-            TypeAnnotatedValue::Bool(value) => Value::Bool(value),
-            TypeAnnotatedValue::S8(value) => Value::S8(value),
-            TypeAnnotatedValue::U8(value) => Value::U8(value),
-            TypeAnnotatedValue::S16(value) => Value::S16(value),
-            TypeAnnotatedValue::U16(value) => Value::U16(value),
-            TypeAnnotatedValue::S32(value) => Value::S32(value),
-            TypeAnnotatedValue::U32(value) => Value::U32(value),
-            TypeAnnotatedValue::S64(value) => Value::S64(value),
-            TypeAnnotatedValue::U64(value) => Value::U64(value),
-            TypeAnnotatedValue::F32(value) => Value::F32(value),
-            TypeAnnotatedValue::F64(value) => Value::F64(value),
-            TypeAnnotatedValue::Chr(value) => Value::Char(value),
-            TypeAnnotatedValue::Str(value) => Value::String(value),
+            TypeAnnotatedValue::Bool(value) => Ok(Value::Bool(value)),
+            TypeAnnotatedValue::S8(value) => Ok(Value::S8(value)),
+            TypeAnnotatedValue::U8(value) => Ok(Value::U8(value)),
+            TypeAnnotatedValue::S16(value) => Ok(Value::S16(value)),
+            TypeAnnotatedValue::U16(value) => Ok(Value::U16(value)),
+            TypeAnnotatedValue::S32(value) => Ok(Value::S32(value)),
+            TypeAnnotatedValue::U32(value) => Ok(Value::U32(value)),
+            TypeAnnotatedValue::S64(value) => Ok(Value::S64(value)),
+            TypeAnnotatedValue::U64(value) => Ok(Value::U64(value)),
+            TypeAnnotatedValue::F32(value) => Ok(Value::F32(value)),
+            TypeAnnotatedValue::F64(value) => Ok(Value::F64(value)),
+            TypeAnnotatedValue::Chr(value) => Ok(Value::Char(value)),
+            TypeAnnotatedValue::Str(value) => Ok(Value::String(value)),
             TypeAnnotatedValue::List { typ: _, values } => {
-                Value::List(values.into_iter().map(|value| value.into()).collect())
+                let mut list_values = Vec::new();
+                for value in values {
+                    match value.try_into() {
+                        Ok(v) => list_values.push(v),
+                        Err(err) => return Err(err),
+                    }
+                }
+                Ok(Value::List(list_values))
             }
             TypeAnnotatedValue::Tuple { typ: _, value } => {
-                Value::Tuple(value.into_iter().map(|value| value.into()).collect())
+                let mut tuple_values = Vec::new();
+                for value in value {
+                    match value.try_into() {
+                        Ok(v) => tuple_values.push(v),
+                        Err(err) => return Err(err),
+                    }
+                }
+                Ok(Value::Tuple(tuple_values))
             }
-            TypeAnnotatedValue::Record { typ: _, value } => Value::Record(
-                value
-                    .into_iter()
-                    .map(|(_, value)| value.into())
-                    .collect::<Vec<Value>>(),
-            ),
+            TypeAnnotatedValue::Record { typ: _, value } => {
+                let mut record_values = Vec::new();
+                for (_, value) in value {
+                    match value.try_into() {
+                        Ok(v) => record_values.push(v),
+                        Err(err) => return Err(err),
+                    }
+                }
+                Ok(Value::Record(record_values))
+            }
             TypeAnnotatedValue::Flags { typ, values } => {
                 let mut bools = Vec::new();
 
@@ -271,45 +291,67 @@ impl From<TypeAnnotatedValue> for Value {
                         bools.push(false);
                     }
                 }
-                Value::Flags(bools)
+                Ok(Value::Flags(bools))
             }
-            TypeAnnotatedValue::Enum { typ, value } => {
-                for (index, expected_enum) in typ.iter().enumerate() {
-                    if expected_enum.clone() == value {
-                        return Value::Enum(index as u32);
-                    }
-                }
+            TypeAnnotatedValue::Enum { typ, value } => typ
+                .iter()
+                .position(|expected_enum| expected_enum == &value)
+                .map(|index| Value::Enum(index as u32))
+                .ok_or_else(|| "Enum value not found in the list of expected enums".to_string()),
 
-                panic!("Enum value not found in the list of expected enums")
-            }
-            TypeAnnotatedValue::Option { typ: _, value } => {
-                Value::Option(value.map(|value| Box::new(value.deref().clone().into())))
-            }
+            TypeAnnotatedValue::Option { typ: _, value } => match value {
+                Some(value) => {
+                    let value: Value = value.deref().clone().try_into()?;
+                    Ok(Value::Option(Some(Box::new(value))))
+                }
+                None => Ok(Value::Option(None)),
+            },
             TypeAnnotatedValue::Result {
                 ok: _,
                 error: _,
                 value,
-            } => Value::Result(match value {
-                Ok(value) => Ok(value.map(|value| Box::new(value.deref().clone().into()))),
-                Err(value) => Err(value.map(|value| Box::new(value.deref().clone().into()))),
-            }),
+            } => Ok(Value::Result(match value {
+                Ok(value) => match value {
+                    Some(v) => {
+                        let value: Value = v.deref().clone().try_into()?;
+                        Ok(Some(Box::new(value)))
+                    }
+
+                    None => Ok(None),
+                },
+                Err(value) => match value {
+                    Some(v) => {
+                        let value: Value = v.deref().clone().try_into()?;
+                        Err(Some(Box::new(value)))
+                    }
+
+                    None => Err(None),
+                },
+            })),
             TypeAnnotatedValue::Handle {
                 id: _,
                 resource_mode: _,
                 uri,
                 resource_id,
-            } => Value::Handle { uri, resource_id },
+            } => Ok(Value::Handle { uri, resource_id }),
             TypeAnnotatedValue::Variant {
                 typ,
                 case_name,
                 case_value,
-            } => {
-                let case_value = case_value.map(|value| Box::new(value.deref().clone().into()));
-                Value::Variant {
-                    case_idx: typ.iter().position(|(name, _)| name == &case_name).unwrap() as u32,
-                    case_value,
+            } => match case_value {
+                Some(value) => {
+                    let result: Value = value.deref().clone().try_into()?;
+                    Ok(Value::Variant {
+                        case_idx: typ.iter().position(|(name, _)| name == &case_name).unwrap()
+                            as u32,
+                        case_value: Some(Box::new(result)),
+                    })
                 }
-            }
+                None => Ok(Value::Variant {
+                    case_idx: typ.iter().position(|(name, _)| name == &case_name).unwrap() as u32,
+                    case_value: None,
+                }),
+            },
         }
     }
 }
@@ -1323,10 +1365,11 @@ impl From<TypeAnnotatedValue> for AnalysedType {
     }
 }
 
-impl From<TypeAnnotatedValue> for WitValue {
-    fn from(value: TypeAnnotatedValue) -> Self {
-        let value: Value = value.into();
-        value.into()
+impl TryFrom<TypeAnnotatedValue> for WitValue {
+    type Error = String;
+    fn try_from(value: TypeAnnotatedValue) -> Result<Self, Self::Error> {
+        let value: Result<Value, String> = value.try_into();
+        value.map(|v| v.into())
     }
 }
 pub enum TypeAnnotatedValueResult {

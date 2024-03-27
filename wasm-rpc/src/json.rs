@@ -31,7 +31,10 @@ pub fn function_parameters(
     if parameters.len() == expected_parameters.len() {
         for (json, fp) in parameters.iter().zip(expected_parameters.iter()) {
             match TypeAnnotatedValue::from_json_value(json, &fp.typ) {
-                Ok(result) => results.push(Value::from(result)),
+                Ok(result) => match Value::try_from(result) {
+                    Ok(value) => results.push(value),
+                    Err(err) => errors.push(err),
+                },
                 Err(err) => errors.extend(err),
             }
         }
@@ -222,7 +225,13 @@ mod tests {
         json: &JsonValue,
         expected_type: &AnalysedType,
     ) -> Result<Value, Vec<String>> {
-        TypeAnnotatedValue::from_json_value(json, expected_type).map(Value::from)
+        match TypeAnnotatedValue::from_json_value(json, expected_type) {
+            Ok(result) => match Value::try_from(result) {
+                Ok(value) => Ok(value),
+                Err(err) => Err(vec![err]),
+            },
+            Err(err) => Err(err),
+        }
     }
 
     proptest! {
@@ -679,8 +688,11 @@ mod tests {
             (key2.clone(), AnalysedType::Str),
         ];
 
-        let result =
-            TypeAnnotatedValue::get_record(&input_json, &name_type_pairs).map(|v| Value::from(v));
+        let result = match TypeAnnotatedValue::get_record(&input_json, &name_type_pairs) {
+            Ok(v) => Value::try_from(v).map_err(|err| vec![err]),
+            Err(e) => Err(e),
+        };
+
         let expected_result = Ok(Value::Record(vec![
             Value::String("value1".to_string()),
             Value::String("value2".to_string()),
@@ -693,8 +705,11 @@ mod tests {
             "key1": "value1",
         });
 
-        let result =
-            TypeAnnotatedValue::get_record(&input_json, &name_type_pairs).map(|v| Value::from(v));
+        let result = match TypeAnnotatedValue::get_record(&input_json, &name_type_pairs) {
+            Ok(v) => Value::try_from(v).map_err(|err| vec![err]),
+            Err(e) => Err(e),
+        };
+
         assert!(result.is_err());
     }
 }
