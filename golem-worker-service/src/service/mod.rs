@@ -40,7 +40,7 @@ pub struct Services {
     pub worker_service: worker::WorkerService,
     pub template_service: template::TemplateService,
     pub definition_service:
-        Arc<dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
+        Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
     pub definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
@@ -107,7 +107,7 @@ impl Services {
             Arc::new(ApiDefinitionValidatorDefault {});
 
         let definition_service: Arc<
-            dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send,
+            dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send,
         > = Arc::new(RegisterApiDefinitionDefault::new(
             template_service.clone(),
             auth_service.clone(),
