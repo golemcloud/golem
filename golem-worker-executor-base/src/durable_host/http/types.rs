@@ -31,6 +31,7 @@ use crate::durable_host::http::serialized::{
     SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
 };
 use crate::durable_host::serialized::SerializableError;
+use crate::get_oplog_entry;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use wasmtime_wasi_http::bindings::wasi::http::types::{
@@ -580,7 +581,16 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
 
             response
         } else {
-            let serialized_response = self.get_oplog_entry_imported_function_invoked::<SerializableResponse>().await.map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
+            let oplog_entry = get_oplog_entry!(self.private_state, OplogEntry::ImportedFunctionInvoked).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
+            let serialized_response = oplog_entry
+                .response::<SerializableResponse>()
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to deserialize function response: {:?}: {err}",
+                        oplog_entry
+                    )
+                })
+                .unwrap();
 
             match serialized_response {
                 SerializableResponse::Pending => Ok(None),

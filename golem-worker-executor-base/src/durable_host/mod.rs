@@ -130,36 +130,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await
     }
 
-    async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {
-        self.private_state.get_oplog_entry_marker().await
-    }
-
-    async fn get_oplog_entry_change_retry_policy(&mut self) -> Result<(), GolemError> {
-        self.private_state
-            .get_oplog_entry_change_retry_policy()
-            .await
-    }
-
-    async fn get_oplog_entry_begin_operation(&mut self) -> Result<(), GolemError> {
-        self.private_state.get_oplog_entry_begin_operation().await
-    }
-
-    async fn get_oplog_entry_end_operation(&mut self) -> Result<(), GolemError> {
-        self.private_state.get_oplog_entry_end_operation().await
-    }
-
     async fn lookup_oplog_entry_end_operation(&mut self, begin_idx: u64) -> Option<u64> {
         self.private_state
             .lookup_oplog_entry_end_operation(begin_idx)
-            .await
-    }
-
-    async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
-    where
-        R: Decode + DeserializeOwned,
-    {
-        self.private_state
-            .get_oplog_entry_imported_function_invoked()
             .await
     }
 
@@ -579,9 +552,19 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
             }
             result
         } else {
-            let response = self
-                .get_oplog_entry_imported_function_invoked::<Result<SerializedSuccess, SerializedErr>>()
-                .await.map_err(|err| Into::<SerializedErr>::into(err).into())?;
+            let oplog_entry =
+                crate::get_oplog_entry!(self.private_state, OplogEntry::ImportedFunctionInvoked)
+                    .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+            let response = oplog_entry
+                .response::<Result<SerializedSuccess, SerializedErr>>()
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to deserialize function response: {:?}: {err}",
+                        oplog_entry
+                    )
+                })
+                .unwrap();
+
             response
                 .map(|serialized_success| serialized_success.into())
                 .map_err(|serialized_err| serialized_err.into())
@@ -642,9 +625,19 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
             }
             result
         } else {
-            let response = self
-                .get_oplog_entry_imported_function_invoked::<Result<SerializedSuccess, SerializedErr>>()
-                .await.map_err(|err| Into::<SerializedErr>::into(err).into())?;
+            let oplog_entry =
+                crate::get_oplog_entry!(self.private_state, OplogEntry::ImportedFunctionInvoked)
+                    .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+            let response = oplog_entry
+                .response::<Result<SerializedSuccess, SerializedErr>>()
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to deserialize function response: {:?}: {err}",
+                        oplog_entry
+                    )
+                })
+                .unwrap();
+
             match response {
                 Ok(serialized_success) => {
                     let success = put_serializable(self, serialized_success).await?;
@@ -1204,80 +1197,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         oplog_entry
     }
 
-    // TODO: get rid of these redundant helpers
-
-    async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {
-        loop {
-            let oplog_entry = self.get_oplog_entry().await;
-            match oplog_entry {
-                OplogEntry::NoOp { .. } => {
-                    break Ok(());
-                }
-                entry if entry.is_hint() => {}
-                _ => {
-                    break Err(GolemError::unexpected_oplog_entry(
-                        "NoOp",
-                        format!("{:?}", oplog_entry),
-                    ));
-                }
-            }
-        }
-    }
-
-    async fn get_oplog_entry_change_retry_policy(&mut self) -> Result<(), GolemError> {
-        loop {
-            let oplog_entry = self.get_oplog_entry().await;
-            match oplog_entry {
-                OplogEntry::ChangeRetryPolicy { .. } => {
-                    break Ok(());
-                }
-                entry if entry.is_hint() => {}
-                _ => {
-                    break Err(GolemError::unexpected_oplog_entry(
-                        "ChangeRetryPolicy",
-                        format!("{:?}", oplog_entry),
-                    ));
-                }
-            }
-        }
-    }
-
-    async fn get_oplog_entry_begin_operation(&mut self) -> Result<(), GolemError> {
-        loop {
-            let oplog_entry = self.get_oplog_entry().await;
-            match oplog_entry {
-                OplogEntry::BeginAtomicRegion { .. } => {
-                    break Ok(());
-                }
-                entry if entry.is_hint() => {}
-                _ => {
-                    break Err(GolemError::unexpected_oplog_entry(
-                        "BeginAtomicRegion",
-                        format!("{:?}", oplog_entry),
-                    ));
-                }
-            }
-        }
-    }
-
-    async fn get_oplog_entry_end_operation(&mut self) -> Result<(), GolemError> {
-        loop {
-            let oplog_entry = self.get_oplog_entry().await;
-            match oplog_entry {
-                OplogEntry::EndAtomicRegion { .. } => {
-                    break Ok(());
-                }
-                entry if entry.is_hint() => {}
-                _ => {
-                    break Err(GolemError::unexpected_oplog_entry(
-                        "EndAtomicRegion",
-                        format!("{:?}", oplog_entry),
-                    ));
-                }
-            }
-        }
-    }
-
     async fn lookup_oplog_entry_end_operation(&mut self, begin_idx: u64) -> Option<u64> {
         let mut start = self.oplog_idx;
         const CHUNK_SIZE: u64 = 1024;
@@ -1300,35 +1219,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
 
         None
-    }
-
-    async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
-    where
-        R: Decode + DeserializeOwned,
-    {
-        loop {
-            let oplog_entry = self.get_oplog_entry().await;
-            match oplog_entry {
-                OplogEntry::ImportedFunctionInvoked { .. } => {
-                    break Ok(oplog_entry
-                        .response()
-                        .unwrap_or_else(|err| {
-                            panic!(
-                                "failed to deserialize function response: {:?}: {err}",
-                                oplog_entry
-                            )
-                        })
-                        .unwrap());
-                }
-                entry if entry.is_hint() => {}
-                _ => {
-                    break Err(GolemError::unexpected_oplog_entry(
-                        "ImportedFunctionInvoked",
-                        format!("{:?}", oplog_entry),
-                    ));
-                }
-            }
-        }
     }
 
     async fn get_oplog_entry_exported_function_invoked(
@@ -1607,4 +1497,29 @@ struct Ready {}
 #[async_trait]
 impl Subscribe for Ready {
     async fn ready(&mut self) {}
+}
+
+/// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
+/// replay, while skipping hint entries.
+/// The macro expression's type is `Result<OplogEntry, GolemError>` and it fails if the next non-hint
+/// entry was not the expected one.
+#[macro_export]
+macro_rules! get_oplog_entry {
+    ($private_state:expr, $case:path) => {
+        loop {
+            let oplog_entry = $private_state.get_oplog_entry().await;
+            match oplog_entry {
+                $case { .. } => {
+                    break Ok(oplog_entry);
+                }
+                entry if entry.is_hint() => {}
+                _ => {
+                    break Err(crate::error::GolemError::unexpected_oplog_entry(
+                        stringify!($case),
+                        format!("{:?}", oplog_entry),
+                    ));
+                }
+            }
+        }
+    };
 }

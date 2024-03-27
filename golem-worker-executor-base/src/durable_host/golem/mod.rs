@@ -29,6 +29,7 @@ use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{PromiseId, TemplateId, Timestamp, WorkerId};
+use crate::get_oplog_entry;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
@@ -96,7 +97,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             self.set_oplog_entry(OplogEntry::nop(Timestamp::now_utc()))
                 .await;
         } else {
-            let _ = self.get_oplog_entry_marker().await?;
+            let _ = get_oplog_entry!(self.private_state, OplogEntry::NoOp);
         }
         Ok(result)
     }
@@ -182,7 +183,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             .await;
         } else {
             self.consume_hint_entries().await;
-            self.get_oplog_entry_begin_operation().await?;
+            let _ = get_oplog_entry!(self.private_state, OplogEntry::BeginAtomicRegion)?;
 
             match self.lookup_oplog_entry_end_operation(begin_index).await {
                 Some(end_index) => {
@@ -226,7 +227,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             .await;
         } else {
             self.consume_hint_entries().await;
-            self.get_oplog_entry_end_operation().await?;
+            let _ = get_oplog_entry!(self.private_state, OplogEntry::EndAtomicRegion)?;
         }
 
         Ok(())
@@ -253,7 +254,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             .await;
         } else {
             self.consume_hint_entries().await;
-            self.get_oplog_entry_change_retry_policy().await?;
+            let _ = get_oplog_entry!(self.private_state, OplogEntry::ChangeRetryPolicy)?;
         }
         Ok(())
     }
