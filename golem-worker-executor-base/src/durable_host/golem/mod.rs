@@ -201,7 +201,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                     // and later we replay it, we need to skip the first attempt and only replay the second.
                     // Se we add a Jump entry to the oplog that registers a deleted region.
                     let deleted_region = OplogRegion {
-                        start: begin_index,
+                        start: begin_index + 1, // need to keep the BeginAtomicRegion entry
                         end: self.private_state.oplog_size + 1, // skipping the Jump entry too
                     };
                     self.private_state
