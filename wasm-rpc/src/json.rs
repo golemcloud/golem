@@ -681,10 +681,10 @@ mod tests {
 
         let result =
             TypeAnnotatedValue::get_record(&input_json, &name_type_pairs).map(|v| Value::from(v));
-        let expected_result = Ok(vec![
+        let expected_result = Ok(Value::Record(vec![
             Value::String("value1".to_string()),
             Value::String("value2".to_string()),
-        ]);
+        ]));
 
         assert_eq!(result, expected_result);
 
