@@ -679,14 +679,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::GetRunningWorkerMetadatasRequest,
     ) -> Result<Vec<golem::worker::WorkerMetadata>, GolemError> {
-        let template_id: common_model::TemplateId =
-            request.template_id.unwrap().try_into().unwrap();
+        let template_id: common_model::TemplateId = request
+            .template_id
+            .and_then(|t| t.try_into().ok())
+            .ok_or(GolemError::invalid_request("Invalid template id"))?;
+
+        let filter: Option<WorkerFilter> = match request.filter {
+            Some(f) => {
+                let f = f.try_into().map_err(|e| GolemError::invalid_request(e))?;
+                Some(f)
+            }
+            None => None,
+        };
+
         let workers = self
             .running_worker_enumeration_service()
-            .get(&template_id, &WorkerFilter::Empty) // FIXME filter
+            .get(&template_id, filter)
             .await?;
+
         let result: Vec<golem::worker::WorkerMetadata> =
             workers.iter().map(|worker| worker.clone().into()).collect();
+
         Ok(result)
     }
 
@@ -694,13 +707,24 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::GetWorkerMetadatasRequest,
     ) -> Result<(Option<usize>, Vec<golem::worker::WorkerMetadata>), GolemError> {
-        let template_id: common_model::TemplateId =
-            request.template_id.unwrap().try_into().unwrap();
+        let template_id: common_model::TemplateId = request
+            .template_id
+            .and_then(|t| t.try_into().ok())
+            .ok_or(GolemError::invalid_request("Invalid template id"))?;
+
+        let filter: Option<WorkerFilter> = match request.filter {
+            Some(f) => {
+                let f = f.try_into().map_err(|e| GolemError::invalid_request(e))?;
+                Some(f)
+            }
+            None => None,
+        };
+
         let (new_cursor, workers) = self
             .worker_enumeration_service()
             .get(
                 &template_id,
-                &WorkerFilter::Empty, // FIXME filter
+                filter,
                 request.cursor as usize,
                 request.count as usize,
                 request.precise,
@@ -709,6 +733,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let result: Vec<golem::worker::WorkerMetadata> =
             workers.iter().map(|worker| worker.clone().into()).collect();
+
         Ok((new_cursor, result))
     }
 }
