@@ -682,11 +682,18 @@ impl<'a> RedisLabelledApi<'a> {
                 if let Some(Resp3Frame::Array { data, .. }) = data.pop() {
                     let mut keys = Vec::with_capacity(data.len());
 
+                    let key_prefix_len = self.key_prefix.len();
+
                     for frame in data.into_iter() {
                         let key: String = frame
                             .try_into()
                             .and_then(|value: RedisValue| value.convert())?;
-                        keys.push(key);
+
+                        if key_prefix_len > 0 {
+                            keys.push(key[key_prefix_len..].to_string());
+                        } else {
+                            keys.push(key);
+                        }
                     }
 
                     Ok((cursor, keys))

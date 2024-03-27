@@ -999,6 +999,73 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilte
     }
 }
 
+impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
+    fn from(value: WorkerFilter) -> Self {
+        let filter = match value {
+            WorkerFilter::Name { comparator, value } => {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Name(
+                    golem_api_grpc::proto::golem::worker::WorkerNameFilter {
+                        comparator: comparator.into(),
+                        value,
+                    },
+                )
+            }
+            WorkerFilter::Version { comparator, value } => {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(
+                    golem_api_grpc::proto::golem::worker::WorkerVersionFilter {
+                        comparator: comparator.into(),
+                        value,
+                    },
+                )
+            }
+            WorkerFilter::Env {
+                name,
+                comparator,
+                value,
+            } => golem_api_grpc::proto::golem::worker::worker_filter::Filter::Env(
+                golem_api_grpc::proto::golem::worker::WorkerEnvFilter {
+                    name,
+                    comparator: comparator.into(),
+                    value,
+                },
+            ),
+            WorkerFilter::Status { value } => {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Status(
+                    golem_api_grpc::proto::golem::worker::WorkerStatusFilter {
+                        value: value.into(),
+                    },
+                )
+            }
+            WorkerFilter::Not(filter) => {
+                let f: golem_api_grpc::proto::golem::worker::WorkerFilter = (*filter).into();
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Not(Box::new(
+                    golem_api_grpc::proto::golem::worker::WorkerNotFilter {
+                        filter: Some(Box::new(f)),
+                    },
+                ))
+            }
+            WorkerFilter::And(filters) => {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::And(
+                    golem_api_grpc::proto::golem::worker::WorkerAndFilter {
+                        filters: filters.into_iter().map(|f| f.into()).collect(),
+                    },
+                )
+            }
+            WorkerFilter::Or(filters) => {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Or(
+                    golem_api_grpc::proto::golem::worker::WorkerOrFilter {
+                        filters: filters.into_iter().map(|f| f.into()).collect(),
+                    },
+                )
+            }
+        };
+
+        golem_api_grpc::proto::golem::worker::WorkerFilter {
+            filter: Some(filter),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Enum)]
 pub enum StringFilterComparator {
     Equal,

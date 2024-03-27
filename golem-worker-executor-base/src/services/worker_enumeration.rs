@@ -208,10 +208,8 @@ fn get_worker_id_from_redis_key(
     template_id: &TemplateId,
 ) -> Result<WorkerId, GolemError> {
     let template_prefix = format!("instance:instance:{}:", template_id.0);
-
-    // find because of redis key_prefix - figure out better solution
-    if let Some(i) = worker_redis_key.find(&template_prefix) {
-        let worker_name = &worker_redis_key[(i + template_prefix.len())..];
+    if worker_redis_key.starts_with(&template_prefix) {
+        let worker_name = &worker_redis_key[template_prefix.len()..];
         Ok(WorkerId {
             worker_name: worker_name.to_string(),
             template_id: template_id.clone(),

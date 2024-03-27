@@ -33,8 +33,8 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     InterruptWorkerResponse, InvokeAndAwaitWorkerRequest, InvokeWorkerRequest, ResumeWorkerRequest,
 };
 use golem_common::model::{
-    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
@@ -266,6 +266,7 @@ impl TestWorkerExecutor {
     pub async fn get_running_worker_metadatas(
         &mut self,
         template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
     ) -> Vec<WorkerMetadata> {
         let template_id: golem_api_grpc::proto::golem::template::TemplateId =
             template_id.clone().into();
@@ -273,7 +274,7 @@ impl TestWorkerExecutor {
             .client
             .get_running_worker_metadatas(GetRunningWorkerMetadatasRequest {
                 template_id: Some(template_id),
-                filter: None,
+                filter: filter.map(|f| f.into()),
             })
             .await
             .expect("Failed to get running worker metadatas")
@@ -294,6 +295,10 @@ impl TestWorkerExecutor {
     pub async fn get_worker_metadatas(
         &mut self,
         template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: usize,
+        count: usize,
+        precise: bool,
     ) -> (Option<usize>, Vec<WorkerMetadata>) {
         let template_id: golem_api_grpc::proto::golem::template::TemplateId =
             template_id.clone().into();
@@ -301,10 +306,10 @@ impl TestWorkerExecutor {
             .client
             .get_worker_metadatas(GetWorkerMetadatasRequest {
                 template_id: Some(template_id),
-                filter: None,
-                cursor: 0,
-                count: 10,
-                precise: true,
+                filter: filter.map(|f| f.into()),
+                cursor: cursor as u64,
+                count: count as u64,
+                precise,
             })
             .await
             .expect("Failed to get worker metadatas")
