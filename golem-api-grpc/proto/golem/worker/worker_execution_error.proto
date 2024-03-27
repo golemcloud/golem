@@ -107,7 +107,9 @@ message InvalidShardId {
   repeated golem.shardmanager.ShardId shard_ids = 2;
 }
 
-message PreviousInvocationFailed {}
+message PreviousInvocationFailed {
+  string details = 1;
+}
 
 message PreviousInvocationExited {}
 

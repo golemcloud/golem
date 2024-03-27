@@ -2542,21 +2542,27 @@ impl From<GolemErrorInvalidShardId> for golem_api_grpc::proto::golem::worker::In
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
-pub struct GolemErrorPreviousInvocationFailed {}
+pub struct GolemErrorPreviousInvocationFailed {
+    pub details: String,
+}
 
 impl From<golem_api_grpc::proto::golem::worker::PreviousInvocationFailed>
     for GolemErrorPreviousInvocationFailed
 {
-    fn from(_value: golem_api_grpc::proto::golem::worker::PreviousInvocationFailed) -> Self {
-        Self {}
+    fn from(value: golem_api_grpc::proto::golem::worker::PreviousInvocationFailed) -> Self {
+        Self {
+            details: value.details,
+        }
     }
 }
 
 impl From<GolemErrorPreviousInvocationFailed>
     for golem_api_grpc::proto::golem::worker::PreviousInvocationFailed
 {
-    fn from(_value: GolemErrorPreviousInvocationFailed) -> Self {
-        Self {}
+    fn from(value: GolemErrorPreviousInvocationFailed) -> Self {
+        Self {
+            details: value.details,
+        }
     }
 }
 

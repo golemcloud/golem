@@ -18,7 +18,7 @@ use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 
 pub struct RegisterApiDefinitionApi {
     pub definition_service:
-        Arc<dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
+        Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
     pub auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
 }
 
@@ -26,7 +26,7 @@ pub struct RegisterApiDefinitionApi {
 impl RegisterApiDefinitionApi {
     pub fn new(
         definition_service: Arc<
-            dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send,
+            dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send,
         >,
         auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
     ) -> Self {
@@ -169,15 +169,21 @@ impl RegisterApiDefinitionApi {
 mod test {
     use golem_worker_service_base::auth::AuthServiceNoop;
     use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
+    use golem_worker_service_base::service::template::TemplateService;
     use poem::test::TestClient;
 
     use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
     use golem_worker_service_base::service::api_definition::RegisterApiDefinitionDefault;
 
+    use crate::service::template::TemplateServiceNoop;
+
     use super::*;
 
     fn make_route() -> poem::Route {
+        let template_service: Arc<dyn TemplateService<EmptyAuthCtx, ()> + Send + Sync> =
+            Arc::new(TemplateServiceNoop {});
         let definition_service = RegisterApiDefinitionDefault::new(
+            template_service,
             Arc::new(AuthServiceNoop {}),
             Arc::new(InMemoryRegistry::default()),
             Arc::new(ApiDefinitionValidatorNoop {}),

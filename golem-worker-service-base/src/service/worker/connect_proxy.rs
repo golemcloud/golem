@@ -119,14 +119,13 @@ where
 }
 
 mod keep_alive {
+    use futures::{Future, Sink, SinkExt, Stream, StreamExt};
+    use poem::web::websocket::Message;
     use std::{
         pin::Pin,
         task::{Context, Poll},
         time::Duration,
     };
-
-    use futures::{Future, Sink, SinkExt, Stream, StreamExt};
-    use poem::web::websocket::Message;
     use tokio::time::Instant;
 
     pub struct WebSocketKeepAlive<A, B> {

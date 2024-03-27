@@ -7,6 +7,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 #[tokio::test]
+#[tracing::instrument]
 async fn auction_example_1() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -81,6 +82,7 @@ async fn auction_example_1() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn auction_example_2() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -155,6 +157,7 @@ async fn auction_example_2() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn counter_resource_test_1() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -191,6 +194,7 @@ async fn counter_resource_test_1() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn counter_resource_test_2() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -224,6 +228,7 @@ async fn counter_resource_test_2() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn counter_resource_test_2_with_restart() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -261,6 +266,7 @@ async fn counter_resource_test_2_with_restart() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn counter_resource_test_3() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
@@ -294,6 +300,7 @@ async fn counter_resource_test_3() {
 }
 
 #[tokio::test]
+#[tracing::instrument]
 async fn counter_resource_test_3_with_restart() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
