@@ -237,6 +237,7 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
     }
 }
 
+#[cfg(feature = "typeinfo")]
 impl TryFrom<TypeAnnotatedValue> for Value {
     type Error = String;
 
@@ -1229,6 +1230,7 @@ impl TypeAnnotatedValue {
     }
 }
 
+#[cfg(feature = "typeinfo")]
 fn type_description(value: &JsonValue) -> &'static str {
     match value {
         JsonValue::Null => "Null",
@@ -1240,6 +1242,7 @@ fn type_description(value: &JsonValue) -> &'static str {
     }
 }
 
+#[cfg(feature = "typeinfo")]
 fn ensure_range(
     value: &JsonValue,
     min: BigDecimal,
@@ -1256,6 +1259,7 @@ fn ensure_range(
     }
 }
 
+#[cfg(feature = "typeinfo")]
 fn bigdecimal(value: &JsonValue) -> Result<BigDecimal, Vec<String>> {
     match value {
         JsonValue::Number(num) => {
@@ -1275,6 +1279,7 @@ fn bigdecimal(value: &JsonValue) -> Result<BigDecimal, Vec<String>> {
     }
 }
 
+#[cfg(feature = "typeinfo")]
 fn get_u64(value: &JsonValue) -> Result<u64, Vec<String>> {
     match value {
         JsonValue::Number(num) => {
@@ -1294,6 +1299,7 @@ fn get_u64(value: &JsonValue) -> Result<u64, Vec<String>> {
     }
 }
 
+#[cfg(feature = "typeinfo")]
 fn get_char(json: &JsonValue) -> Result<char, Vec<String>> {
     if let Some(num_u64) = json.as_u64() {
         if num_u64 > u32::MAX as u64 {
@@ -1317,6 +1323,7 @@ fn get_char(json: &JsonValue) -> Result<char, Vec<String>> {
     }
 }
 
+#[cfg(feature = "typeinfo")]
 fn get_string(input_json: &JsonValue) -> Result<String, Vec<String>> {
     if let Some(str_value) = input_json.as_str() {
         // If the JSON value is a string, return it
