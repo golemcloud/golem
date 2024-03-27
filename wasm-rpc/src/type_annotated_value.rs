@@ -73,26 +73,26 @@ pub enum TypeAnnotatedValue {
 
 impl TypeAnnotatedValue {
     pub fn from_value(
-        val: Value,
+        val: &Value,
         analysed_type: &AnalysedType,
     ) -> Result<TypeAnnotatedValue, Vec<String>> {
         match val {
-            Value::Bool(bool) => Ok(TypeAnnotatedValue::Bool(bool)),
-            Value::S8(value) => Ok(TypeAnnotatedValue::S8(value)),
-            Value::U8(value) => Ok(TypeAnnotatedValue::U8(value)),
-            Value::U32(value) => Ok(TypeAnnotatedValue::U32(value)),
-            Value::S16(value) => Ok(TypeAnnotatedValue::S16(value)),
-            Value::U16(value) => Ok(TypeAnnotatedValue::U16(value)),
-            Value::S32(value) => Ok(TypeAnnotatedValue::S32(value)),
-            Value::S64(value) => Ok(TypeAnnotatedValue::S64(value)),
-            Value::U64(value) => Ok(TypeAnnotatedValue::U64(value)),
-            Value::F32(value) => Ok(TypeAnnotatedValue::F32(value)),
-            Value::F64(value) => Ok(TypeAnnotatedValue::F64(value)),
-            Value::Char(value) => Ok(TypeAnnotatedValue::Chr(value)),
-            Value::String(value) => Ok(TypeAnnotatedValue::Str(value)),
+            Value::Bool(bool) => Ok(TypeAnnotatedValue::Bool(*bool)),
+            Value::S8(value) => Ok(TypeAnnotatedValue::S8(*value)),
+            Value::U8(value) => Ok(TypeAnnotatedValue::U8(*value)),
+            Value::U32(value) => Ok(TypeAnnotatedValue::U32(*value)),
+            Value::S16(value) => Ok(TypeAnnotatedValue::S16(*value)),
+            Value::U16(value) => Ok(TypeAnnotatedValue::U16(*value)),
+            Value::S32(value) => Ok(TypeAnnotatedValue::S32(*value)),
+            Value::S64(value) => Ok(TypeAnnotatedValue::S64(*value)),
+            Value::U64(value) => Ok(TypeAnnotatedValue::U64(*value)),
+            Value::F32(value) => Ok(TypeAnnotatedValue::F32(*value)),
+            Value::F64(value) => Ok(TypeAnnotatedValue::F64(*value)),
+            Value::Char(value) => Ok(TypeAnnotatedValue::Chr(*value)),
+            Value::String(value) => Ok(TypeAnnotatedValue::Str(value.clone())),
 
             Value::Enum(value) => match analysed_type {
-                AnalysedType::Enum(names) => match names.get(value as usize) {
+                AnalysedType::Enum(names) => match names.get(*value as usize) {
                     Some(str) => Ok(TypeAnnotatedValue::Enum {
                         typ: names.clone(),
                         value: str.to_string(),
@@ -106,7 +106,7 @@ impl TypeAnnotatedValue {
                 AnalysedType::Option(elem) => Ok(TypeAnnotatedValue::Option {
                     typ: *elem.clone(),
                     value: match value {
-                        Some(value) => Some(Box::new(Self::from_value(*value, elem)?)),
+                        Some(value) => Some(Box::new(Self::from_value(value, elem)?)),
                         None => None,
                     },
                 }),
@@ -127,7 +127,7 @@ impl TypeAnnotatedValue {
                     let mut errors = vec![];
                     let mut results = vec![];
 
-                    for (value, tpe) in values.into_iter().zip(types.iter()) {
+                    for (value, tpe) in values.iter().zip(types.iter()) {
                         match Self::from_value(value, tpe) {
                             Ok(result) => results.push(result),
                             Err(errs) => errors.extend(errs),
@@ -181,7 +181,7 @@ impl TypeAnnotatedValue {
                     let mut errors = vec![];
                     let mut results: Vec<(String, TypeAnnotatedValue)> = vec![];
 
-                    for (value, (field_name, typ)) in values.into_iter().zip(fields) {
+                    for (value, (field_name, typ)) in values.iter().zip(fields) {
                         match TypeAnnotatedValue::from_value(value, typ) {
                             Ok(res) => {
                                 results.push((field_name.clone(), res));
@@ -208,8 +208,8 @@ impl TypeAnnotatedValue {
                 case_value,
             } => match analysed_type {
                 AnalysedType::Variant(cases) => {
-                    if (case_idx as usize) < cases.len() {
-                        let (case_name, case_type) = match cases.get(case_idx as usize) {
+                    if (*case_idx as usize) < cases.len() {
+                        let (case_name, case_type) = match cases.get(*case_idx as usize) {
                             Some(tpe) => Ok(tpe),
                             None => {
                                 Err(vec!["Variant not found in the expected types.".to_string()])
@@ -219,7 +219,7 @@ impl TypeAnnotatedValue {
                         match case_type {
                             Some(tpe) => match case_value {
                                 Some(case_value) => {
-                                    let result = Self::from_value(*case_value, tpe)?;
+                                    let result = Self::from_value(case_value, tpe)?;
                                     Ok(TypeAnnotatedValue::Variant {
                                         typ: cases.clone(),
                                         case_name: case_name.clone(),
@@ -273,7 +273,7 @@ impl TypeAnnotatedValue {
                 golem_wasm_ast::analysis::AnalysedType::Result { ok, error } => {
                     match (value, ok, error) {
                         (Ok(Some(value)), Some(ok_type), _) => {
-                            let result = Self::from_value(*value, ok_type)?;
+                            let result = Self::from_value(value, ok_type)?;
 
                             Ok(TypeAnnotatedValue::Result {
                                 value: Ok(Some(Box::new(result))),
@@ -297,7 +297,7 @@ impl TypeAnnotatedValue {
                         }
 
                         (Err(Some(value)), _, Some(err_type)) => {
-                            let result = Self::from_value(*value, err_type)?;
+                            let result = Self::from_value(value, err_type)?;
 
                             Ok(TypeAnnotatedValue::Result {
                                 value: Err(Some(Box::new(result))),
@@ -328,8 +328,8 @@ impl TypeAnnotatedValue {
                 AnalysedType::Resource { id, resource_mode } => Ok(TypeAnnotatedValue::Handle {
                     id: id.clone(),
                     resource_mode: resource_mode.clone(),
-                    uri,
-                    resource_id,
+                    uri: uri.clone(),
+                    resource_id: *resource_id,
                 }),
                 _ => Err(vec!["Unexpected type; expected a Handle type.".to_string()]),
             },
@@ -967,7 +967,7 @@ impl TypeAnnotatedValueResult {
             let mut errors = vec![];
 
             for (value, expected) in values.into_iter().zip(expected_types.iter()) {
-                let result = TypeAnnotatedValue::from_value(value, &expected.typ);
+                let result = TypeAnnotatedValue::from_value(&value, &expected.typ);
 
                 match result {
                     Ok(value) => results.push(value),
