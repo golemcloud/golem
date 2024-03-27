@@ -43,7 +43,7 @@ impl<AuthCtx, Namespace: Default> AuthService<AuthCtx, Namespace> for AuthServic
 }
 
 // TODO: Replace with metadata map
-pub trait Metadata {
+pub trait HasMetadata {
     fn get_metadata(&self) -> NamespaceMetadata;
 }
 
@@ -53,7 +53,7 @@ pub struct NamespaceMetadata {
     pub limits: Option<ResourceLimits>,
 }
 
-impl Metadata for CommonNamespace {
+impl HasMetadata for CommonNamespace {
     fn get_metadata(&self) -> NamespaceMetadata {
         NamespaceMetadata {
             account_id: Some(golem_common::model::AccountId {
