@@ -18,7 +18,7 @@ use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 
 pub struct RegisterApiDefinitionApi {
     pub definition_service:
-        Arc<dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send>,
+        Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
     pub auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
 }
 
@@ -26,7 +26,7 @@ pub struct RegisterApiDefinitionApi {
 impl RegisterApiDefinitionApi {
     pub fn new(
         definition_service: Arc<
-            dyn ApiDefinitionService<CommonNamespace, EmptyAuthCtx> + Sync + Send,
+            dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send,
         >,
         auth_service: Arc<dyn AuthService<EmptyAuthCtx, CommonNamespace> + Sync + Send>,
     ) -> Self {

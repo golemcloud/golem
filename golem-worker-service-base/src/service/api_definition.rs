@@ -19,7 +19,7 @@ pub type ApiResult<T, Namespace> = Result<WithNamespace<T, Namespace>, ApiRegist
 // Ideally a repo service and its implementation with a different service impl that takes care of
 // validations, authorisations etc is the right approach. However we are keeping it simple for now.
 #[async_trait]
-pub trait ApiDefinitionService<Namespace, AuthCtx> {
+pub trait ApiDefinitionService<AuthCtx, Namespace> {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -112,18 +112,24 @@ pub enum ApiRegistrationError {
     ValidationError(#[from] ValidationError),
 }
 
-pub struct RegisterApiDefinitionDefault<Namespace, AuthCtx> {
-    pub template_service: Arc<dyn TemplateService<AuthCtx, Namespace> + Send + Sync>,
-    pub auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
-    pub register_repo: Arc<dyn ApiDefinitionRepo<Namespace> + Sync + Send>,
+pub struct RegisterApiDefinitionDefault<AuthCtx, ApiDefNamespace, TemplateNamespace> {
+    pub template_service: Arc<dyn TemplateService<AuthCtx, TemplateNamespace> + Send + Sync>,
+    pub auth_service: Arc<dyn AuthService<AuthCtx, ApiDefNamespace> + Sync + Send>,
+    pub register_repo: Arc<dyn ApiDefinitionRepo<ApiDefNamespace> + Sync + Send>,
     pub api_definition_validator: Arc<dyn ApiDefinitionValidatorService + Sync + Send>,
 }
 
-impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
+impl<AuthCtx, ApiDefNamespace, TemplateNamespace>
+    RegisterApiDefinitionDefault<AuthCtx, ApiDefNamespace, TemplateNamespace>
+where
+    AuthCtx: Send + Sync,
+    ApiDefNamespace: ApiNamespace,
+    TemplateNamespace: std::fmt::Debug + Send + Sync,
+{
     pub fn new(
-        template_service: Arc<dyn TemplateService<AuthCtx, Namespace> + Send + Sync>,
-        auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
-        register_repo: Arc<dyn ApiDefinitionRepo<Namespace> + Sync + Send>,
+        template_service: Arc<dyn TemplateService<AuthCtx, TemplateNamespace> + Send + Sync>,
+        auth_service: Arc<dyn AuthService<AuthCtx, ApiDefNamespace> + Sync + Send>,
+        register_repo: Arc<dyn ApiDefinitionRepo<ApiDefNamespace> + Sync + Send>,
         api_definition_validator: Arc<dyn ApiDefinitionValidatorService + Sync + Send>,
     ) -> Self {
         Self {
@@ -133,14 +139,12 @@ impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
             api_definition_validator,
         }
     }
-}
 
-impl<Namespace: ApiNamespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub async fn is_authorized(
         &self,
         permission: Permission,
         auth_ctx: &AuthCtx,
-    ) -> Result<Namespace, ApiRegistrationError> {
+    ) -> Result<ApiDefNamespace, ApiRegistrationError> {
         Ok(self
             .auth_service
             .is_authorized(permission, auth_ctx)
@@ -199,14 +203,18 @@ impl<Namespace: ApiNamespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, A
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespace, AuthCtx>
-    for RegisterApiDefinitionDefault<Namespace, AuthCtx>
+impl<AuthCtx, ApiDefNamespace, TemplateNamespace> ApiDefinitionService<AuthCtx, ApiDefNamespace>
+    for RegisterApiDefinitionDefault<AuthCtx, ApiDefNamespace, TemplateNamespace>
+where
+    AuthCtx: Send + Sync,
+    ApiDefNamespace: ApiNamespace,
+    TemplateNamespace: std::fmt::Debug + Send + Sync,
 {
     async fn register(
         &self,
         definition: &ApiDefinition,
         auth_ctx: AuthCtx,
-    ) -> ApiResult<ApiDefinitionId, Namespace> {
+    ) -> ApiResult<ApiDefinitionId, ApiDefNamespace> {
         let namespace = self.is_authorized(Permission::Create, &auth_ctx).await?;
 
         let templates = self.get_all_templates(definition, &auth_ctx).await?;
@@ -233,7 +241,7 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
         api_definition_id: &ApiDefinitionId,
         version: &Version,
         auth_ctx: AuthCtx,
-    ) -> ApiResult<Option<ApiDefinition>, Namespace> {
+    ) -> ApiResult<Option<ApiDefinition>, ApiDefNamespace> {
         let namespace = self.is_authorized(Permission::View, &auth_ctx).await?;
 
         let key = ApiDefinitionKey {
@@ -252,7 +260,7 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
         api_definition_id: &ApiDefinitionId,
         version: &Version,
         auth_ctx: AuthCtx,
-    ) -> ApiResult<Option<ApiDefinitionId>, Namespace> {
+    ) -> ApiResult<Option<ApiDefinitionId>, ApiDefNamespace> {
         let namespace = self.is_authorized(Permission::Delete, &auth_ctx).await?;
 
         let key = ApiDefinitionKey {
@@ -268,7 +276,7 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
         Ok(WithNamespace { value, namespace })
     }
 
-    async fn get_all(&self, auth_ctx: AuthCtx) -> ApiResult<Vec<ApiDefinition>, Namespace> {
+    async fn get_all(&self, auth_ctx: AuthCtx) -> ApiResult<Vec<ApiDefinition>, ApiDefNamespace> {
         let namespace = self.is_authorized(Permission::View, &auth_ctx).await?;
         let value = self.register_repo.get_all(&namespace).await?;
         Ok(WithNamespace { value, namespace })
@@ -278,7 +286,7 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
         &self,
         api_id: &ApiDefinitionId,
         auth_ctx: AuthCtx,
-    ) -> ApiResult<Vec<ApiDefinition>, Namespace> {
+    ) -> ApiResult<Vec<ApiDefinition>, ApiDefNamespace> {
         let namespace = self.is_authorized(Permission::View, &auth_ctx).await?;
 
         let value = self
@@ -293,7 +301,7 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
 pub struct RegisterApiDefinitionNoop {}
 
 #[async_trait]
-impl ApiDefinitionService<CommonNamespace, EmptyAuthCtx> for RegisterApiDefinitionNoop {
+impl ApiDefinitionService<EmptyAuthCtx, CommonNamespace> for RegisterApiDefinitionNoop {
     async fn register(
         &self,
         api_definition: &ApiDefinition,
