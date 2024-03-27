@@ -74,6 +74,38 @@ impl Guest for Component {
         oplog_commit(replicas);
         println!("Finished commit");
     }
+
+    fn atomic_region() {
+        let now = std::time::SystemTime::now();
+        println!("Starting atomic region at {now:?}");
+
+        let begin = mark_begin_operation();
+
+        remote_side_effect("1"); // repeated 3x
+        remote_side_effect("2"); // repeated 3x
+
+        let decision = remote_call(1); // will return false on the 3rd call
+        if decision {
+            panic!("crash 1");
+        }
+
+        remote_side_effect("3"); // only performed once
+
+        mark_end_operation(begin);
+        println!("Finished atomic region");
+
+        remote_side_effect("4"); // only performed once
+
+        let begin = mark_begin_operation();
+        remote_side_effect("5"); // repeated 3x
+        let decision = remote_call(2); // will return false on the 3rd call
+        if decision {
+            panic!("crash 2");
+        }
+        mark_end_operation(begin);
+
+        remote_side_effect("6"); // only performed once
+    }
 }
 
 fn remote_call(param: u64) -> bool {
@@ -94,4 +126,23 @@ fn remote_call(param: u64) -> bool {
 
     println!("Received {status} {body}");
     body
+}
+
+fn remote_side_effect(message: &str) {
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let client = Client::builder().build().unwrap();
+
+    let url = format!("http://localhost:{port}/side-effect");
+
+    println!("Sending POST {url}");
+
+    let response: Response = client.post(&url)
+        .body(message.to_string())
+        .send()
+        .expect("Request failed");
+
+    let status = response.status();
+
+    println!("Received {status}");
 }

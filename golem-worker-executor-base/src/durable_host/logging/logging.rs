@@ -24,7 +24,7 @@ use crate::workerctx::WorkerCtx;
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
         record_host_function_call("logging::handler", "log");
-        if self.is_live() {
+        if self.state.is_live() {
             let event_service = &self.public_state.event_service;
             let log_level = match level {
                 Level::Critical => LogLevel::Critical,

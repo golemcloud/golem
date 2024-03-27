@@ -72,6 +72,16 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         new_policy: RetryConfig,
     },
+    /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
+    /// recovery except if there is a corresponding `EndAtomicRegion` entry.
+    BeginAtomicRegion { timestamp: Timestamp },
+    /// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
+    /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
+    /// compaction.
+    EndAtomicRegion {
+        timestamp: Timestamp,
+        begin_index: u64,
+    },
 }
 
 impl OplogEntry {

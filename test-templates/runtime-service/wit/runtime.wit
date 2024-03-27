@@ -5,6 +5,7 @@ interface api {
   jump: func() -> u64;
   fail-with-custom-max-retries: func(max-retries: u64) -> ();
   explicit-commit: func(replicas: u8) -> ();
+  atomic-region: func() -> ();
 }
 
 world runtime-service {

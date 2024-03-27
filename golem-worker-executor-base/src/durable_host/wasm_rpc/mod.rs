@@ -73,7 +73,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             &remote_worker_id,
                             function_name,
                             function_params,
-                            &ctx.private_state.account_id,
+                            &ctx.state.account_id,
                         )
                         .await
                 })

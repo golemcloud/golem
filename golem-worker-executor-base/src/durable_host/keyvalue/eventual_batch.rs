@@ -35,7 +35,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         keys: Vec<Key>,
     ) -> anyhow::Result<Result<Vec<Option<Resource<IncomingValue>>>, Resource<Error>>> {
         record_host_function_call("keyvalue::eventual_batch", "get_many");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -48,7 +48,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 WrappedFunctionType::ReadRemote,
                 "golem keyvalue::eventual_batch::get_many",
                 |ctx| {
-                    ctx.private_state.key_value_service.get_many(
+                    ctx.state.key_value_service.get_many(
                         account_id.clone(),
                         bucket.clone(),
                         keys.clone(),
@@ -90,7 +90,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
     ) -> anyhow::Result<Result<Vec<Key>, Resource<Error>>> {
         record_host_function_call("keyvalue::eventual_batch", "get_keys");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -102,7 +102,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             WrappedFunctionType::ReadRemote,
             "golem keyvalue::eventual_batch::get_keys",
             |ctx| {
-                ctx.private_state
+                ctx.state
                     .key_value_service
                     .get_keys(account_id.clone(), bucket.clone())
             },
@@ -117,7 +117,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         key_values: Vec<(Key, Resource<OutgoingValue>)>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
         record_host_function_call("keyvalue::eventual_batch", "set_many");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -143,7 +143,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             WrappedFunctionType::WriteRemote,
             "golem keyvalue::eventual_batch::set_many",
             |ctx| {
-                ctx.private_state.key_value_service.set_many(
+                ctx.state.key_value_service.set_many(
                     account_id.clone(),
                     bucket.clone(),
                     key_values.clone(),
@@ -169,7 +169,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         keys: Vec<Key>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
         record_host_function_call("keyvalue::eventual_batch", "delete_many");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -181,7 +181,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             WrappedFunctionType::WriteRemote,
             "golem keyvalue::eventual_batch::delete_many",
             |ctx| {
-                ctx.private_state.key_value_service.delete_many(
+                ctx.state.key_value_service.delete_many(
                     account_id.clone(),
                     bucket.clone(),
                     keys.clone(),

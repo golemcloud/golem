@@ -773,6 +773,12 @@ fn calculate_latest_worker_status(
                 current_retry_policy = Some(new_policy.clone());
                 result = WorkerStatus::Running;
             }
+            OplogEntry::BeginAtomicRegion { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::EndAtomicRegion { .. } => {
+                result = WorkerStatus::Running;
+            }
         }
     }
     result
