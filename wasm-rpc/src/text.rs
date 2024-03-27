@@ -1,7 +1,4 @@
-use crate::{
-    EnumValue, FlagValue, ListValue, OptionValue, RecordValue, ResultValue, TupleValue,
-    TypeAnnotatedValue, VariantValue,
-};
+use crate::TypeAnnotatedValue;
 use std::borrow::Cow;
 use std::fmt::{Debug, Formatter};
 use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
@@ -183,10 +180,10 @@ impl WasmValue for TypeAnnotatedValue {
         vals: impl IntoIterator<Item = Self>,
     ) -> Result<Self, WasmValueError> {
         if let golem_wasm_ast::analysis::AnalysedType::List(typ) = &ty.0 {
-            Ok(TypeAnnotatedValue::List(ListValue {
+            Ok(TypeAnnotatedValue::List {
                 values: vals.into_iter().collect(),
                 typ: *typ.clone(),
-            }))
+            })
         } else {
             Err(WasmValueError::WrongTypeKind {
                 kind: ty.kind(),
@@ -200,13 +197,13 @@ impl WasmValue for TypeAnnotatedValue {
         fields: impl IntoIterator<Item = (&'a str, Self)>,
     ) -> Result<Self, WasmValueError> {
         if let golem_wasm_ast::analysis::AnalysedType::Record(types) = &ty.0 {
-            Ok(TypeAnnotatedValue::Record(RecordValue {
+            Ok(TypeAnnotatedValue::Record {
                 value: fields
                     .into_iter()
                     .map(|(name, value)| (name.to_string(), value))
                     .collect(),
                 typ: types.clone(),
-            }))
+            })
         } else {
             Err(WasmValueError::WrongTypeKind {
                 kind: ty.kind(),
@@ -220,10 +217,10 @@ impl WasmValue for TypeAnnotatedValue {
         vals: impl IntoIterator<Item = Self>,
     ) -> Result<Self, WasmValueError> {
         if let golem_wasm_ast::analysis::AnalysedType::Tuple(types) = &ty.0 {
-            Ok(TypeAnnotatedValue::Tuple(TupleValue {
+            Ok(TypeAnnotatedValue::Tuple {
                 value: vals.into_iter().collect(),
                 typ: types.clone(),
-            }))
+            })
         } else {
             Err(WasmValueError::WrongTypeKind {
                 kind: ty.kind(),
@@ -246,11 +243,11 @@ impl WasmValue for TypeAnnotatedValue {
                 }
             });
             if case_type.is_some() {
-                Ok(TypeAnnotatedValue::Variant(VariantValue {
+                Ok(TypeAnnotatedValue::Variant {
                     typ: cases.clone(),
                     case_name: case.to_string(),
-                    case_value: val.map(|v| Box::new(v)),
-                }))
+                    case_value: val.map(Box::new),
+                })
             } else {
                 Err(WasmValueError::UnknownCase(case.to_string()))
             }
@@ -265,10 +262,10 @@ impl WasmValue for TypeAnnotatedValue {
     fn make_enum(ty: &Self::Type, case: &str) -> Result<Self, WasmValueError> {
         if let golem_wasm_ast::analysis::AnalysedType::Enum(cases) = &ty.0 {
             if cases.contains(&case.to_string()) {
-                Ok(TypeAnnotatedValue::Enum(EnumValue {
+                Ok(TypeAnnotatedValue::Enum {
                     typ: cases.clone(),
                     value: case.to_string(),
-                }))
+                })
             } else {
                 Err(WasmValueError::UnknownCase(case.to_string()))
             }
@@ -281,10 +278,10 @@ impl WasmValue for TypeAnnotatedValue {
     }
 
     fn make_option(ty: &Self::Type, val: Option<Self>) -> Result<Self, WasmValueError> {
-        Ok(TypeAnnotatedValue::Option(OptionValue {
+        Ok(TypeAnnotatedValue::Option {
             typ: ty.clone().0,
-            value: val.map(|v| Box::new(v)),
-        }))
+            value: val.map(Box::new),
+        })
     }
 
     fn make_result(
@@ -292,7 +289,7 @@ impl WasmValue for TypeAnnotatedValue {
         val: Result<Option<Self>, Option<Self>>,
     ) -> Result<Self, WasmValueError> {
         if let golem_wasm_ast::analysis::AnalysedType::Result { ok, error } = &ty.0 {
-            Ok(TypeAnnotatedValue::Result(ResultValue {
+            Ok(TypeAnnotatedValue::Result {
                 value: match val {
                     Ok(Some(v)) => Ok(Some(Box::new(v))),
                     Ok(None) => Ok(None),
@@ -301,7 +298,7 @@ impl WasmValue for TypeAnnotatedValue {
                 },
                 ok: ok.clone(),
                 error: error.clone(),
-            }))
+            })
         } else {
             Err(WasmValueError::WrongTypeKind {
                 kind: ty.kind(),
@@ -319,15 +316,13 @@ impl WasmValue for TypeAnnotatedValue {
 
             let invalid_names: Vec<String> = names
                 .iter()
-                .cloned()
-                .filter(|name| !all_names.contains(&name.to_string()))
-                .collect();
+                .filter(|&name| !all_names.contains(&name.to_string())).cloned().collect();
 
             if invalid_names.is_empty() {
-                Ok(TypeAnnotatedValue::Flags(FlagValue {
+                Ok(TypeAnnotatedValue::Flags {
                     typ: all_names.clone(),
-                    value: names,
-                }))
+                    values: names,
+                })
             } else {
                 Err(WasmValueError::UnknownCase(invalid_names.join(", ")))
             }
@@ -432,8 +427,8 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn unwrap_list(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
         match self {
-            TypeAnnotatedValue::List(value) => {
-                Box::new(value.values.iter().map(|v| Cow::Borrowed(v)))
+            TypeAnnotatedValue::List { typ: _, values } => {
+                Box::new(values.iter().map(Cow::Borrowed))
             }
             _ => panic!("Expected list, found {:?}", self),
         }
@@ -441,9 +436,8 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn unwrap_record(&self) -> Box<dyn Iterator<Item = (Cow<str>, Cow<Self>)> + '_> {
         match self {
-            TypeAnnotatedValue::Record(value) => Box::new(
+            TypeAnnotatedValue::Record { typ: _, value } => Box::new(
                 value
-                    .value
                     .iter()
                     .map(|(name, value)| (Cow::Borrowed(name.as_str()), Cow::Borrowed(value))),
             ),
@@ -453,8 +447,8 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn unwrap_tuple(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
         match self {
-            TypeAnnotatedValue::Tuple(value) => {
-                Box::new(value.value.iter().map(|v| Cow::Borrowed(v)))
+            TypeAnnotatedValue::Tuple { typ: _, value } => {
+                Box::new(value.iter().map(Cow::Borrowed))
             }
             _ => panic!("Expected tuple, found {:?}", self),
         }
@@ -462,9 +456,13 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn unwrap_variant(&self) -> (Cow<str>, Option<Cow<Self>>) {
         match self {
-            TypeAnnotatedValue::Variant(value) => {
-                let case_name = Cow::Borrowed(value.case_name.as_str());
-                let case_value = value.clone().case_value.map(|v| Cow::Owned(*v));
+            TypeAnnotatedValue::Variant {
+                typ: _,
+                case_name,
+                case_value,
+            } => {
+                let case_name = Cow::Borrowed(case_name.as_str());
+                let case_value = case_value.clone().map(|v| Cow::Owned(*v));
                 (case_name, case_value)
             }
             _ => panic!("Expected variant, found {:?}", self),
@@ -473,27 +471,29 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn unwrap_enum(&self) -> Cow<str> {
         match self {
-            TypeAnnotatedValue::Enum(value) => Cow::Borrowed(value.value.as_str()),
+            TypeAnnotatedValue::Enum { typ: _, value } => Cow::Borrowed(value.as_str()),
             _ => panic!("Expected enum, found {:?}", self),
         }
     }
 
     fn unwrap_option(&self) -> Option<Cow<Self>> {
         match self {
-            TypeAnnotatedValue::Option(value) => match value.clone().value {
-                Some(v) => Some(Cow::Owned(*v)),
-                None => None,
-            },
+            TypeAnnotatedValue::Option { typ: _, value } =>
+                value.as_ref().map(|v| Cow::Owned(*v.clone())),
             _ => panic!("Expected option, found {:?}", self),
         }
     }
 
     fn unwrap_result(&self) -> Result<Option<Cow<Self>>, Option<Cow<Self>>> {
         match self {
-            TypeAnnotatedValue::Result(value) => match value.clone().value {
-                Ok(Some(v)) => Ok(Some(Cow::Owned(*v))),
+            TypeAnnotatedValue::Result {
+                ok: _,
+                error: _,
+                value,
+            } => match value {
+                Ok(Some(v)) => Ok(Some(Cow::Borrowed(v))),
                 Ok(None) => Ok(None),
-                Err(Some(v)) => Err(Some(Cow::Owned(*v))),
+                Err(Some(v)) => Err(Some(Cow::Borrowed(v))),
                 Err(None) => Err(None),
             },
             _ => panic!("Expected result, found {:?}", self),
@@ -502,8 +502,8 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn unwrap_flags(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
         match self {
-            TypeAnnotatedValue::Flags(value) => {
-                Box::new(value.value.iter().map(|v| Cow::Borrowed(v.as_str())))
+            TypeAnnotatedValue::Flags { typ: _, values } => {
+                Box::new(values.iter().map(|v| Cow::Borrowed(v.as_str())))
             }
             _ => panic!("Expected flags, found {:?}", self),
         }

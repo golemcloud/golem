@@ -558,12 +558,8 @@ impl From<TypeAnnotatedValue> for JsonFunctionResult {
     fn from(value: TypeAnnotatedValue) -> Self {
         match value {
             TypeAnnotatedValue::Bool(bool) => JsonFunctionResult(serde_json::Value::Bool(bool)),
-            TypeAnnotatedValue::Flags(flag_value) => JsonFunctionResult(JsonValue::Array(
-                flag_value
-                    .value
-                    .into_iter()
-                    .map(JsonValue::String)
-                    .collect(),
+            TypeAnnotatedValue::Flags { typ: _, values } => JsonFunctionResult(JsonValue::Array(
+                values.into_iter().map(JsonValue::String).collect(),
             )),
             TypeAnnotatedValue::S8(value) => {
                 JsonFunctionResult(JsonValue::Number(Number::from(value)))
@@ -599,23 +595,23 @@ impl From<TypeAnnotatedValue> for JsonFunctionResult {
                 JsonFunctionResult(JsonValue::Number(Number::from(value as u32)))
             }
             TypeAnnotatedValue::Str(value) => JsonFunctionResult(JsonValue::String(value)),
-            TypeAnnotatedValue::Enum(value) => JsonFunctionResult(JsonValue::String(value.value)),
-            TypeAnnotatedValue::Option(value) => match value.value {
+            TypeAnnotatedValue::Enum { typ: _, value } => {
+                JsonFunctionResult(JsonValue::String(value))
+            }
+            TypeAnnotatedValue::Option { typ: _, value } => match value {
                 Some(value) => JsonFunctionResult::from(*value),
                 None => JsonFunctionResult(JsonValue::Null),
             },
-            TypeAnnotatedValue::Tuple(values) => {
-                let values: Vec<serde_json::Value> = values
-                    .value
+            TypeAnnotatedValue::Tuple { typ: _, value } => {
+                let values: Vec<serde_json::Value> = value
                     .into_iter()
                     .map(JsonFunctionResult::from)
                     .map(|v| v.0)
                     .collect();
                 JsonFunctionResult(JsonValue::Array(values))
             }
-            TypeAnnotatedValue::List(value) => {
-                let values: Vec<serde_json::Value> = value
-                    .values
+            TypeAnnotatedValue::List { typ: _, values } => {
+                let values: Vec<serde_json::Value> = values
                     .into_iter()
                     .map(JsonFunctionResult::from)
                     .map(|v| v.0)
@@ -623,20 +619,23 @@ impl From<TypeAnnotatedValue> for JsonFunctionResult {
                 JsonFunctionResult(JsonValue::Array(values))
             }
 
-            TypeAnnotatedValue::Record(record) => {
+            TypeAnnotatedValue::Record { typ: _, value } => {
                 let mut map = serde_json::Map::new();
-                for (key, value) in record.value {
+                for (key, value) in value {
                     map.insert(key, JsonFunctionResult::from(value).0);
                 }
                 JsonFunctionResult(JsonValue::Object(map))
             }
 
-            TypeAnnotatedValue::Variant(variant) => {
+            TypeAnnotatedValue::Variant {
+                typ: _,
+                case_name,
+                case_value,
+            } => {
                 let mut map = serde_json::Map::new();
                 map.insert(
-                    variant.case_name,
-                    variant
-                        .case_value
+                    case_name,
+                    case_value
                         .map(|x| JsonFunctionResult::from(*x))
                         .map(|v| v.0)
                         .unwrap_or(JsonValue::Null),
@@ -644,22 +643,26 @@ impl From<TypeAnnotatedValue> for JsonFunctionResult {
                 JsonFunctionResult(JsonValue::Object(map))
             }
 
-            TypeAnnotatedValue::Result(result) => {
+            TypeAnnotatedValue::Result {
+                ok: _,
+                error: _,
+                value,
+            } => {
                 let mut map = serde_json::Map::new();
-                match result.value {
-                    Ok(value) => {
+                match value {
+                    Ok(ok_value) => {
                         map.insert(
                             "ok".to_string(),
-                            value
+                            ok_value
                                 .map(|x| JsonFunctionResult::from(*x))
                                 .map(|v| v.0)
                                 .unwrap_or(JsonValue::Null),
                         );
                     }
-                    Err(value) => {
+                    Err(err_value) => {
                         map.insert(
                             "err".to_string(),
-                            value
+                            err_value
                                 .map(|x| JsonFunctionResult::from(*x))
                                 .map(|v| v.0)
                                 .unwrap_or(JsonValue::Null),
@@ -669,10 +672,12 @@ impl From<TypeAnnotatedValue> for JsonFunctionResult {
                 JsonFunctionResult(JsonValue::Object(map))
             }
 
-            TypeAnnotatedValue::Handle(handle) => JsonFunctionResult(JsonValue::String(format!(
-                "{}/{}",
-                handle.uri.value, handle.resource_id
-            ))),
+            TypeAnnotatedValue::Handle {
+                id: _,
+                resource_mode: _,
+                uri,
+                resource_id,
+            } => JsonFunctionResult(JsonValue::String(format!("{}/{}", uri.value, resource_id))),
         }
     }
 }

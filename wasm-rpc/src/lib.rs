@@ -241,7 +241,7 @@ impl From<TypeAnnotatedValue> for Value {
             TypeAnnotatedValue::F64(value) => Value::F64(value),
             TypeAnnotatedValue::Chr(value) => Value::Char(value),
             TypeAnnotatedValue::Str(value) => Value::String(value),
-            TypeAnnotatedValue::List { typ, values } => {
+            TypeAnnotatedValue::List { typ: _, values } => {
                 Value::List(values.into_iter().map(|value| value.into()).collect())
             }
             TypeAnnotatedValue::Tuple { typ: _, value } => {
@@ -274,17 +274,14 @@ impl From<TypeAnnotatedValue> for Value {
 
                 panic!("Enum value not found in the list of expected enums")
             }
-            TypeAnnotatedValue::Option { typ: _, value } => Value::Option(match value {
-                Some(value) => Some(Box::new(value.deref().clone().into())),
-                None => None,
-            }),
-            TypeAnnotatedValue::Result { ok, error, value } => Value::Result(match value {
+            TypeAnnotatedValue::Option { typ: _, value } => Value::Option(value.map(|value| Box::new(value.deref().clone().into()))),
+            TypeAnnotatedValue::Result { ok:_, error:_, value } => Value::Result(match value {
                 Ok(value) => Ok(value.map(|value| Box::new(value.deref().clone().into()))),
                 Err(value) => Err(value.map(|value| Box::new(value.deref().clone().into()))),
             }),
             TypeAnnotatedValue::Handle {
-                id,
-                resource_mode,
+                id: _,
+                resource_mode: _,
                 uri,
                 resource_id,
             } => Value::Handle { uri, resource_id },
