@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -6,9 +7,11 @@ use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
 use crate::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 use crate::auth::{CommonNamespace, EmptyAuthCtx};
 use async_trait::async_trait;
+use golem_service_base::model::Template;
 use golem_service_base::service::auth::{AuthError, AuthService, Permission, WithNamespace};
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationError};
+use super::template::TemplateService;
 
 pub type ApiResult<T, Namespace> = Result<WithNamespace<T, Namespace>, ApiRegistrationError>;
 
@@ -110,6 +113,7 @@ pub enum ApiRegistrationError {
 }
 
 pub struct RegisterApiDefinitionDefault<Namespace, AuthCtx> {
+    pub template_service: Arc<dyn TemplateService<AuthCtx, Namespace> + Send + Sync>,
     pub auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
     pub register_repo: Arc<dyn ApiDefinitionRepo<Namespace> + Sync + Send>,
     pub api_definition_validator: Arc<dyn ApiDefinitionValidatorService + Sync + Send>,
@@ -117,11 +121,13 @@ pub struct RegisterApiDefinitionDefault<Namespace, AuthCtx> {
 
 impl<Namespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, AuthCtx> {
     pub fn new(
+        template_service: Arc<dyn TemplateService<AuthCtx, Namespace> + Send + Sync>,
         auth_service: Arc<dyn AuthService<AuthCtx, Namespace> + Sync + Send>,
         register_repo: Arc<dyn ApiDefinitionRepo<Namespace> + Sync + Send>,
         api_definition_validator: Arc<dyn ApiDefinitionValidatorService + Sync + Send>,
     ) -> Self {
         Self {
+            template_service,
             auth_service,
             register_repo,
             api_definition_validator,
@@ -141,12 +147,54 @@ impl<Namespace: ApiNamespace, AuthCtx> RegisterApiDefinitionDefault<Namespace, A
             .await?)
     }
 
-    pub async fn register_api(
+    async fn get_all_templates(
         &self,
-        api_definition: &ApiDefinition,
-        key: &ApiDefinitionKey<Namespace>,
-    ) -> Result<(), ApiRegistrationError> {
-        Ok(self.register_repo.register(api_definition, key).await?)
+        definition: &ApiDefinition,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Vec<Template>, ApiRegistrationError> {
+        let get_templates = definition
+            .routes
+            .iter()
+            .cloned()
+            .map(|route| (route.binding.template.clone(), route))
+            .collect::<HashMap<_, _>>()
+            .into_values()
+            .map(|route| async move {
+                let id = &route.binding.template;
+                self.template_service
+                    .get_latest(id, auth_ctx)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error getting latest template: {:?}", e);
+                        // TODO: Better error message.
+                        crate::service::api_definition_validator::RouteValidationError::from_route(
+                            route,
+                            "Error getting latest template".into(),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        let templates: Vec<Template> = {
+            let results = futures::future::join_all(get_templates).await;
+            let (successes, errors) = results
+                .into_iter()
+                .partition::<Vec<_>, _>(|result| result.is_ok());
+
+            // Ensure that all templates were retrieved.
+            if !errors.is_empty() {
+                let errors = errors.into_iter().map(|r| r.unwrap_err()).collect();
+                return Err(ValidationError { errors }.into());
+            }
+
+            successes
+                .into_iter()
+                .map(|r| r.unwrap())
+                .map(|t| t.value)
+                .collect()
+        };
+
+        Ok(templates)
     }
 }
 
@@ -161,7 +209,10 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
     ) -> ApiResult<ApiDefinitionId, Namespace> {
         let namespace = self.is_authorized(Permission::Create, &auth_ctx).await?;
 
-        self.api_definition_validator.validate(definition).await?;
+        let templates = self.get_all_templates(definition, &auth_ctx).await?;
+
+        self.api_definition_validator
+            .validate(definition, templates.as_slice())?;
 
         let key = ApiDefinitionKey {
             namespace: namespace.clone(),
@@ -238,6 +289,7 @@ impl<Namespace: ApiNamespace, AuthCtx: Send + Sync> ApiDefinitionService<Namespa
         Ok(WithNamespace { value, namespace })
     }
 }
+
 pub struct RegisterApiDefinitionNoop {}
 
 #[async_trait]

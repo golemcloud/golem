@@ -14,6 +14,8 @@ pub enum WorkerServiceErrorsBody {
     Validation(ValidationErrorsBody),
 }
 
+// TODO: These should probably use golem_common ErrorBody and ErrorsBody instead.
+
 #[derive(Object)]
 pub struct MessagesErrorsBody {
     errors: Vec<String>,
@@ -110,21 +112,18 @@ mod conversion {
     impl From<ApiRegistrationError> for ApiEndpointError {
         fn from(error: ApiRegistrationError) -> Self {
             match error {
-                ApiRegistrationError::AuthenticationError(AuthError::Forbidden { .. }) => {
-                    ApiEndpointError::forbidden(error)
-                }
-                ApiRegistrationError::AuthenticationError(AuthError::Unauthorized { .. }) => {
-                    ApiEndpointError::unauthorized(error)
-                }
-                ApiRegistrationError::AuthenticationError(AuthError::Internal(_)) => {
-                    ApiEndpointError::internal("Internal error")
-                }
-                ApiRegistrationError::RepoError(ApiRegistrationRepoError::AlreadyExists(_)) => {
-                    ApiEndpointError::already_exists(error)
-                }
-                ApiRegistrationError::RepoError(ApiRegistrationRepoError::InternalError(_)) => {
-                    ApiEndpointError::internal(error)
-                }
+                ApiRegistrationError::AuthenticationError(auth) => match auth {
+                    AuthError::Forbidden(_) => ApiEndpointError::forbidden(auth),
+                    AuthError::Unauthorized(_) => ApiEndpointError::unauthorized(auth),
+                    AuthError::Internal(_) => ApiEndpointError::internal(auth),
+                    AuthError::NotFound(_) => ApiEndpointError::not_found(auth),
+                },
+                ApiRegistrationError::RepoError(error) => match error {
+                    ApiRegistrationRepoError::AlreadyExists(_) => {
+                        ApiEndpointError::already_exists(error)
+                    }
+                    ApiRegistrationRepoError::InternalError(_) => ApiEndpointError::internal(error),
+                },
                 ApiRegistrationError::ValidationError(e) => e.into(),
             }
         }

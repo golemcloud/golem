@@ -1,18 +1,15 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-use crate::{
-    api_definition::{ApiDefinition, MethodPattern, PathPattern, Route},
-    service::template::TemplateService,
-};
+use crate::api_definition::{ApiDefinition, MethodPattern, PathPattern, Route};
 use async_trait::async_trait;
-use futures::future::join_all;
 use golem_common::model::TemplateId;
-use golem_service_base::model::{Export, ExportFunction, ExportInstance, Template};
+use golem_service_base::model::{
+    Export, ExportFunction, ExportInstance, Template, TemplateMetadata,
+};
 use serde::{Deserialize, Serialize};
 
-#[async_trait]
 pub trait ApiDefinitionValidatorService {
-    async fn validate(&self, api: &ApiDefinition) -> Result<(), ValidationError>;
+    fn validate(&self, api: &ApiDefinition, templates: &[Template]) -> Result<(), ValidationError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, thiserror::Error)]
@@ -31,7 +28,7 @@ pub struct RouteValidationError {
 }
 
 impl RouteValidationError {
-    fn from_route(route: Route, detail: String) -> Self {
+    pub fn from_route(route: Route, detail: String) -> Self {
         Self {
             method: route.method,
             path: route.path.to_string(),
@@ -42,53 +39,19 @@ impl RouteValidationError {
 }
 
 #[derive(Clone)]
-pub struct ApiDefinitionValidatorDefault {
-    template_service: Arc<dyn TemplateService + Send + Sync>,
-}
+pub struct ApiDefinitionValidatorDefault {}
 
-impl ApiDefinitionValidatorDefault {
-    pub fn new(template_service: Arc<dyn TemplateService + Send + Sync>) -> Self {
-        Self { template_service }
-    }
-}
-
-#[async_trait]
 impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
-    async fn validate(&self, api: &ApiDefinition) -> Result<(), ValidationError> {
-        let get_templates = api
-            .routes
+    fn validate(&self, api: &ApiDefinition, templates: &[Template]) -> Result<(), ValidationError> {
+        let templates: HashMap<&TemplateId, &TemplateMetadata> = templates
             .iter()
-            .cloned()
-            .map(|route| (route.binding.template.clone(), route))
-            .collect::<HashMap<_, _>>()
-            .into_values()
-            .map(|route| async move {
-                let id = &route.binding.template;
-                self.template_service.get_latest(id).await.map_err(|e| {
-                    tracing::error!("Error getting latest template: {:?}", e);
-                    // TODO: Better error message.
-                    RouteValidationError::from_route(route, "Error getting latest template".into())
-                })
+            .map(|template| {
+                (
+                    &template.versioned_template_id.template_id,
+                    &template.metadata,
+                )
             })
-            .collect::<Vec<_>>();
-
-        let templates: HashMap<TemplateId, Template> = {
-            let results = join_all(get_templates).await;
-            let (successes, errors) = results
-                .into_iter()
-                .partition::<Vec<_>, _>(|result| result.is_ok());
-            // Ensure that all templates were retrieved.
-            if !errors.is_empty() {
-                let errors = errors.into_iter().map(|r| r.unwrap_err()).collect();
-                return Err(ValidationError { errors });
-            }
-
-            successes
-                .into_iter()
-                .map(|r| r.unwrap())
-                .map(|template| (template.versioned_template_id.template_id.clone(), template))
-                .collect()
-        };
+            .collect();
 
         let errors = {
             let route_validation = api
@@ -147,7 +110,7 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
 
 fn validate_route(
     route: Route,
-    templates: &HashMap<TemplateId, Template>,
+    templates: &HashMap<&TemplateId, &TemplateMetadata>,
 ) -> Result<(), RouteValidationError> {
     let template_id = route.binding.template.clone();
     // We can unwrap here because we've already validated that all templates are present.
@@ -163,8 +126,8 @@ fn validate_route(
     Ok(())
 }
 
-fn find_function(name: &str, template: &Template) -> Option<ExportFunction> {
-    template.metadata.exports.iter().find_map(|exp| match exp {
+fn find_function(name: &str, template: &TemplateMetadata) -> Option<ExportFunction> {
+    template.exports.iter().find_map(|exp| match exp {
         Export::Instance(ExportInstance {
             name: instance_name,
             functions,
@@ -191,7 +154,11 @@ pub struct ApiDefinitionValidatorNoop {}
 
 #[async_trait]
 impl ApiDefinitionValidatorService for ApiDefinitionValidatorNoop {
-    async fn validate(&self, _api: &ApiDefinition) -> Result<(), ValidationError> {
+    fn validate(
+        &self,
+        _api: &ApiDefinition,
+        _templates: &[Template],
+    ) -> Result<(), ValidationError> {
         Ok(())
     }
 }

@@ -1,4 +1,4 @@
-use crate::service::error::TemplateServiceError;
+use crate::service::template::TemplateServiceError;
 use crate::UriBackConversion;
 
 use async_trait::async_trait;
@@ -10,38 +10,75 @@ use golem_common::config::RetryConfig;
 use golem_common::model::TemplateId;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Template;
+use golem_service_base::service::auth::{AuthService, Permission, WithAuth, WithNamespace};
 use http::Uri;
+use std::sync::Arc;
 use tracing::info;
 
+pub type TemplateResult<T, Namespace> = Result<WithNamespace<T, Namespace>, TemplateServiceError>;
+
 #[async_trait]
-pub trait TemplateService {
+pub trait TemplateService<AuthCtx, Namespace> {
     async fn get_by_version(
         &self,
         template_id: &TemplateId,
         version: i32,
-    ) -> Result<Option<Template>, TemplateServiceError>;
+        auth_ctx: &AuthCtx,
+    ) -> TemplateResult<Template, Namespace>;
 
-    async fn get_latest(&self, template_id: &TemplateId) -> Result<Template, TemplateServiceError>;
+    async fn get_latest(
+        &self,
+        template_id: &TemplateId,
+        auth_ctx: &AuthCtx,
+    ) -> TemplateResult<Template, Namespace>;
 }
 
 #[derive(Clone)]
-pub struct TemplateServiceDefault {
+pub struct TemplateServiceDefault<AuthCtx, Namespace> {
     uri: Uri,
     retry_config: RetryConfig,
+    auth_service: InnerAuthService<AuthCtx, Namespace>,
 }
 
-impl TemplateServiceDefault {
-    pub fn new(uri: Uri, retry_config: RetryConfig) -> Self {
-        Self { uri, retry_config }
+type InnerAuthService<AuthCtx, Namespace> =
+    Arc<dyn AuthService<WithAuth<TemplateId, AuthCtx>, Namespace> + Send + Sync>;
+
+impl<AuthCtx, Namespace> TemplateServiceDefault<AuthCtx, Namespace> {
+    pub fn new(
+        uri: Uri,
+        retry_config: RetryConfig,
+        auth_service: InnerAuthService<AuthCtx, Namespace>,
+    ) -> Self {
+        Self {
+            uri,
+            retry_config,
+            auth_service,
+        }
     }
 }
 
 #[async_trait]
-impl TemplateService for TemplateServiceDefault {
-    async fn get_latest(&self, template_id: &TemplateId) -> Result<Template, TemplateServiceError> {
+impl<AuthCtx, Namespace> TemplateService<AuthCtx, Namespace>
+    for TemplateServiceDefault<AuthCtx, Namespace>
+where
+    Namespace: Send + Sync,
+    AuthCtx: Clone + Send + Sync,
+{
+    async fn get_latest(
+        &self,
+        template_id: &TemplateId,
+        auth_ctx: &AuthCtx,
+    ) -> TemplateResult<Template, Namespace> {
         let desc = format!("Getting latest version of template: {}", template_id);
         info!("{}", &desc);
-        with_retries(
+        let auth_ctx = WithAuth::new(template_id.clone(), auth_ctx.clone());
+
+        let namespace = self
+            .auth_service
+            .is_authorized(Permission::View, &auth_ctx)
+            .await?;
+
+        let value = with_retries(
             &desc,
             "template",
             "get_latest",
@@ -60,7 +97,7 @@ impl TemplateService for TemplateServiceDefault {
                         .into_inner();
 
                     match response.result {
-                        None => Err(TemplateServiceError::Internal("Empty response".to_string())),
+                        None => Err(TemplateServiceError::internal("Empty response")),
                         Some(get_template_metadata_response::Result::Success(response)) => {
                             let template_view: Result<
                                 golem_service_base::model::Template,
@@ -69,15 +106,15 @@ impl TemplateService for TemplateServiceDefault {
                                 Some(template) => {
                                     let template: golem_service_base::model::Template =
                                         template.clone().try_into().map_err(|_| {
-                                            TemplateServiceError::Internal(
-                                                "Response conversion error".to_string(),
+                                            TemplateServiceError::internal(
+                                                "Response conversion error",
                                             )
                                         })?;
                                     Ok(template)
                                 }
-                                None => Err(TemplateServiceError::Internal(
-                                    "Empty template response".to_string(),
-                                )),
+                                None => {
+                                    Err(TemplateServiceError::internal("Empty template response"))
+                                }
                             };
                             Ok(template_view?)
                         }
@@ -87,18 +124,30 @@ impl TemplateService for TemplateServiceDefault {
                     }
                 })
             },
-            TemplateServiceError::is_retriable,
+            is_retriable,
         )
-        .await
+        .await?;
+
+        Ok(WithNamespace { namespace, value })
     }
+
     async fn get_by_version(
         &self,
         template_id: &TemplateId,
         version: i32,
-    ) -> Result<Option<Template>, TemplateServiceError> {
+        auth_ctx: &AuthCtx,
+    ) -> TemplateResult<Template, Namespace> {
         let desc = format!("Getting template: {}", template_id);
         info!("{}", &desc);
-        with_retries(
+
+        let auth_ctx = WithAuth::new(template_id.clone(), auth_ctx.clone());
+
+        let namespace = self
+            .auth_service
+            .is_authorized(Permission::View, &auth_ctx)
+            .await?;
+
+        let value = with_retries(
             &desc,
             "template",
             "get_template",
@@ -115,25 +164,25 @@ impl TemplateService for TemplateServiceDefault {
                     let response = client.get_template_metadata(request).await?.into_inner();
 
                     match response.result {
-                        None => Err(TemplateServiceError::Internal("Empty response".to_string())),
+                        None => Err(TemplateServiceError::internal("Empty response")),
 
                         Some(get_template_metadata_response::Result::Success(response)) => {
                             let template_view: Result<
-                                Option<golem_service_base::model::Template>,
+                                golem_service_base::model::Template,
                                 TemplateServiceError,
                             > = match response.template {
                                 Some(template) => {
                                     let template: golem_service_base::model::Template =
                                         template.clone().try_into().map_err(|_| {
-                                            TemplateServiceError::Internal(
-                                                "Response conversion error".to_string(),
+                                            TemplateServiceError::internal(
+                                                "Response conversion error",
                                             )
                                         })?;
-                                    Ok(Some(template))
+                                    Ok(template)
                                 }
-                                None => Err(TemplateServiceError::Internal(
-                                    "Empty template response".to_string(),
-                                )),
+                                None => {
+                                    Err(TemplateServiceError::internal("Empty template response"))
+                                }
                             };
                             Ok(template_view?)
                         }
@@ -143,30 +192,17 @@ impl TemplateService for TemplateServiceDefault {
                     }
                 })
             },
-            TemplateServiceError::is_retriable,
+            is_retriable,
         )
-        .await
+        .await?;
+
+        Ok(WithNamespace { value, namespace })
     }
 }
 
-pub struct TemplateServiceNoop {}
-
-#[async_trait]
-impl TemplateService for TemplateServiceNoop {
-    async fn get_by_version(
-        &self,
-        _template_id: &TemplateId,
-        _version: i32,
-    ) -> Result<Option<Template>, TemplateServiceError> {
-        Ok(None)
-    }
-
-    async fn get_latest(
-        &self,
-        _template_id: &TemplateId,
-    ) -> Result<Template, TemplateServiceError> {
-        Err(TemplateServiceError::Internal(
-            "Not implemented".to_string(),
-        ))
+fn is_retriable(error: &TemplateServiceError) -> bool {
+    match error {
+        TemplateServiceError::Internal(error) => error.is::<tonic::Status>(),
+        _ => false,
     }
 }

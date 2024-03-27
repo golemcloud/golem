@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::{
@@ -33,11 +31,11 @@ use golem_api_grpc::proto::golem::worker::{
     VersionedWorkerId, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
 };
 use golem_worker_service_base::auth::EmptyAuthCtx;
-use golem_worker_service_base::service::template::TemplateService;
 use golem_worker_service_base::service::worker::ConnectWorkerStream;
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
 
+use crate::service::template::TemplateService;
 use crate::service::worker::WorkerService;
 
 fn server_error<T>(error: T) -> GrpcWorkerError
@@ -53,7 +51,7 @@ where
     }
 }
 pub struct WorkerGrpcApi {
-    pub template_service: Arc<dyn TemplateService + Sync + Send>,
+    pub template_service: TemplateService,
     pub worker_service: WorkerService,
 }
 
@@ -259,14 +257,15 @@ impl WorkerGrpcApi {
 
         let latest_template_version = self
             .template_service
-            .get_latest(&template_id)
+            .get_latest(&template_id, &EmptyAuthCtx {})
             .await
             .tap_err(|error| tracing::error!("Error getting latest template version: {:?}", error))
             .map_err(|_| GrpcWorkerError {
                 error: Some(worker_error::Error::NotFound(ErrorBody {
                     error: format!("Template not found: {}", &template_id),
                 })),
-            })?;
+            })?
+            .value;
 
         let worker_id = make_worker_id(template_id, request.name)?;
 
