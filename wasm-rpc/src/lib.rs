@@ -52,8 +52,13 @@ pub use extractor::{WitNodePointer, WitValueExtractor};
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 pub use bindings::golem::rpc::types::{NodeIndex, RpcError, Uri, WasmRpc, WitNode, WitValue};
+
+#[cfg(not(feature = "stub"))]
 use std::collections::HashMap;
+#[cfg(not(feature = "stub"))]
 use std::ops::Deref;
+
+#[cfg(not(feature = "stub"))]
 use std::str::FromStr;
 
 #[cfg(feature = "host")]
