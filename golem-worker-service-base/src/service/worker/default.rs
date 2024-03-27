@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use crate::auth::{EmptyAuthCtx, Metadata};
+use crate::auth::{EmptyAuthCtx, HasMetadata};
 use crate::service::template::TemplateService;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
@@ -144,7 +144,7 @@ impl<AuthCtx, WorkerNamespace, TemplateNamespace>
     WorkerServiceDefault<AuthCtx, WorkerNamespace, TemplateNamespace>
 where
     AuthCtx: Send + Sync,
-    WorkerNamespace: Metadata + Send + Sync,
+    WorkerNamespace: HasMetadata + Send + Sync,
 {
     pub fn new(
         auth_service: InnerAuthService<AuthCtx, WorkerNamespace>,
@@ -166,7 +166,7 @@ impl<AuthCtx, WorkerNamespace, TemplateNamespace> WorkerService<AuthCtx, WorkerN
     for WorkerServiceDefault<AuthCtx, WorkerNamespace, TemplateNamespace>
 where
     AuthCtx: Clone + Send + Sync,
-    WorkerNamespace: Metadata + Send + Sync,
+    WorkerNamespace: HasMetadata + Send + Sync,
 {
     async fn get_by_id(
         &self,
@@ -877,7 +877,7 @@ impl<AuthCtx, WorkerNamespace, TemplateNamespace>
     WorkerServiceDefault<AuthCtx, WorkerNamespace, TemplateNamespace>
 where
     AuthCtx: Clone + Send + Sync,
-    WorkerNamespace: Metadata + Send + Sync,
+    WorkerNamespace: HasMetadata + Send + Sync,
 {
     async fn try_get_template_for_worker(
         &self,
