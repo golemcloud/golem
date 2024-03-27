@@ -437,6 +437,7 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
     }
 }
 
+#[cfg(feature = "typeinfo")]
 #[derive(Clone, Debug)]
 pub enum TypeAnnotatedValue {
     Bool(bool),
@@ -494,6 +495,7 @@ pub enum TypeAnnotatedValue {
     },
 }
 
+#[cfg(feature = "typeinfo")]
 impl TypeAnnotatedValue {
     pub fn from_value(
         val: Value,
