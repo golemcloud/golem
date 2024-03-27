@@ -193,7 +193,23 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                 }
                 None => {
                     debug!("Worker {}'s atomic operation starting at {} is not committed, ignoring persisted entries", self.worker_id, begin_index);
+
+                    // We need to jump to the end of the oplog
                     self.private_state.oplog_idx = self.private_state.oplog_size;
+
+                    // But this is not enough, because if the retried transactional block succeeds,
+                    // and later we replay it, we need to skip the first attempt and only replay the second.
+                    // Se we add a Jump entry to the oplog that registers a deleted region.
+                    let deleted_region = OplogRegion {
+                        start: begin_index,
+                        end: self.private_state.oplog_size + 1, // skipping the Jump entry too
+                    };
+                    self.private_state
+                        .deleted_regions
+                        .add(deleted_region.clone());
+                    self.set_oplog_entry(OplogEntry::jump(Timestamp::now_utc(), deleted_region))
+                        .await;
+                    self.commit_oplog().await;
                 }
             }
         }
