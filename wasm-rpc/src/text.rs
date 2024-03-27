@@ -520,7 +520,7 @@ mod tests {
     use wasm_wave::{from_str, to_string};
 
     fn round_trip(value: Value, typ: AnalysedType) {
-        let typed_value = TypeAnnotatedValue::from_value(value.clone(), &typ).unwrap();
+        let typed_value = TypeAnnotatedValue::from_value(&value, &typ).unwrap();
         println!("{:?}", typed_value.clone());
 
         let s = to_string(&typed_value).unwrap();

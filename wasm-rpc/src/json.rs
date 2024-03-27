@@ -210,14 +210,14 @@ mod tests {
     use crate::{TypeAnnotatedValue, Value};
     use golem_wasm_ast::analysis::AnalysedType;
     use proptest::prelude::*;
-    use serde_json::{json, Number, Value as JsonValue};
+    use serde_json::{Number, Value as JsonValue};
     use std::collections::HashSet;
 
     fn validate_function_result(
         val: Value,
         expected_type: &AnalysedType,
     ) -> Result<JsonValue, Vec<String>> {
-        TypeAnnotatedValue::from_value(val, expected_type)
+        TypeAnnotatedValue::from_value(&val, expected_type)
             .map(|result| JsonFunctionResult::from(result).0)
     }
 
