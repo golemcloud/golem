@@ -48,6 +48,10 @@ pub mod wasmtime;
 use crate::builder::WitValueBuilder;
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 pub use extractor::{WitNodePointer, WitValueExtractor};
+
+#[cfg(not(feature = "host"))]
+#[cfg(feature = "stub")]
+pub use bindings::golem::rpc::types::{NodeIndex, RpcError, Uri, WasmRpc, WitNode, WitValue};
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::str::FromStr;
@@ -438,6 +442,7 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
 }
 
 #[cfg(feature = "typeinfo")]
+#[cfg(not(feature = "stub"))]
 #[derive(Clone, Debug)]
 pub enum TypeAnnotatedValue {
     Bool(bool),
@@ -496,6 +501,7 @@ pub enum TypeAnnotatedValue {
 }
 
 #[cfg(feature = "typeinfo")]
+#[cfg(not(feature = "stub"))]
 impl TypeAnnotatedValue {
     pub fn from_value(
         val: Value,
@@ -1325,6 +1331,7 @@ fn get_string(input_json: &JsonValue) -> Result<String, Vec<String>> {
     }
 }
 
+#[cfg(feature = "typeinfo")]
 impl From<TypeAnnotatedValue> for AnalysedType {
     fn from(value: TypeAnnotatedValue) -> Self {
         match value {
@@ -1367,6 +1374,7 @@ impl From<TypeAnnotatedValue> for AnalysedType {
     }
 }
 
+#[cfg(feature = "typeinfo")]
 impl TryFrom<TypeAnnotatedValue> for WitValue {
     type Error = String;
     fn try_from(value: TypeAnnotatedValue) -> Result<Self, Self::Error> {
@@ -1374,11 +1382,14 @@ impl TryFrom<TypeAnnotatedValue> for WitValue {
         value.map(|v| v.into())
     }
 }
+
+#[cfg(feature = "typeinfo")]
 pub enum TypeAnnotatedValueResult {
     WithoutNames(Vec<TypeAnnotatedValue>),
     WithNames(Vec<(String, TypeAnnotatedValue)>),
 }
 
+#[cfg(feature = "typeinfo")]
 impl TypeAnnotatedValueResult {
     pub fn from_values(
         values: Vec<Value>,
