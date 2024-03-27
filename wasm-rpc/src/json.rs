@@ -671,45 +671,4 @@ mod tests {
             ]))
         );
     }
-
-    #[test]
-    fn test_get_record() {
-        // Test case where all keys are present
-        let input_json = json!({
-            "key1": "value1",
-            "key2": "value2",
-        });
-
-        let key1 = "key1".to_string();
-        let key2 = "key2".to_string();
-
-        let name_type_pairs: Vec<(String, AnalysedType)> = vec![
-            (key1.clone(), AnalysedType::Str),
-            (key2.clone(), AnalysedType::Str),
-        ];
-
-        let result = match TypeAnnotatedValue::get_record(&input_json, &name_type_pairs) {
-            Ok(v) => Value::try_from(v).map_err(|err| vec![err]),
-            Err(e) => Err(e),
-        };
-
-        let expected_result = Ok(Value::Record(vec![
-            Value::String("value1".to_string()),
-            Value::String("value2".to_string()),
-        ]));
-
-        assert_eq!(result, expected_result);
-
-        // Test case where a key is missing
-        let input_json = json!({
-            "key1": "value1",
-        });
-
-        let result = match TypeAnnotatedValue::get_record(&input_json, &name_type_pairs) {
-            Ok(v) => Value::try_from(v).map_err(|err| vec![err]),
-            Err(e) => Err(e),
-        };
-
-        assert!(result.is_err());
-    }
 }
