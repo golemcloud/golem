@@ -44,18 +44,18 @@ impl<AuthCtx, Namespace: Default> AuthService<AuthCtx, Namespace> for AuthServic
 
 // TODO: Replace with metadata map
 pub trait HasMetadata {
-    fn get_metadata(&self) -> NamespaceMetadata;
+    fn get_metadata(&self) -> WorkerMetadata;
 }
 
 #[derive(Clone, Debug)]
-pub struct NamespaceMetadata {
+pub struct WorkerMetadata {
     pub account_id: Option<AccountId>,
     pub limits: Option<ResourceLimits>,
 }
 
 impl HasMetadata for CommonNamespace {
-    fn get_metadata(&self) -> NamespaceMetadata {
-        NamespaceMetadata {
+    fn get_metadata(&self) -> WorkerMetadata {
+        WorkerMetadata {
             account_id: Some(golem_common::model::AccountId {
                 value: "-1".to_string(),
             }),
