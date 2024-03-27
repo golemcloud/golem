@@ -169,6 +169,7 @@ impl RegisterApiDefinitionApi {
 mod test {
     use golem_worker_service_base::auth::AuthServiceNoop;
     use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
+    use golem_worker_service_base::service::template::TemplateService;
     use poem::test::TestClient;
 
     use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
@@ -179,8 +180,10 @@ mod test {
     use super::*;
 
     fn make_route() -> poem::Route {
+        let template_service: Arc<dyn TemplateService<EmptyAuthCtx, ()> + Send + Sync> =
+            Arc::new(TemplateServiceNoop {});
         let definition_service = RegisterApiDefinitionDefault::new(
-            Arc::new(TemplateServiceNoop {}),
+            template_service,
             Arc::new(AuthServiceNoop {}),
             Arc::new(InMemoryRegistry::default()),
             Arc::new(ApiDefinitionValidatorNoop {}),
