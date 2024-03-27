@@ -635,9 +635,18 @@ async fn delete_instance() {
         .unwrap();
 
     let metadata1 = executor.get_worker_metadata(&worker_id).await;
+    let metadatas1r = executor
+        .get_running_worker_metadatas(&worker_id.template_id)
+        .await;
+    let (cursor1, metadatas1) = executor.get_worker_metadatas(&worker_id.template_id).await;
+
     executor.delete_worker(&worker_id).await;
+
     let metadata2 = executor.get_worker_metadata(&worker_id).await;
 
+    check!(metadatas1r.len() == 1);
+    check!(metadatas1.len() == 1);
+    check!(cursor1.is_none());
     check!(metadata1.is_some());
     check!(metadata2.is_none());
 }

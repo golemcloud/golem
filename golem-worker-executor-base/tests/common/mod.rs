@@ -24,11 +24,13 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
-    create_worker_response, get_invocation_key_response, get_worker_metadata_response,
-    interrupt_worker_response, invoke_and_await_worker_response, invoke_worker_response,
-    resume_worker_response, ConnectWorkerRequest, CreateWorkerRequest, GetInvocationKeyRequest,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitWorkerRequest,
-    InvokeWorkerRequest, ResumeWorkerRequest,
+    create_worker_response, get_invocation_key_response, get_running_worker_metadatas_response,
+    get_worker_metadata_response, get_worker_metadatas_response, interrupt_worker_response,
+    invoke_and_await_worker_response, invoke_worker_response, resume_worker_response,
+    ConnectWorkerRequest, CreateWorkerRequest, GetInvocationKeyRequest,
+    GetRunningWorkerMetadatasRequest, GetRunningWorkerMetadatasSuccessResponse,
+    GetWorkerMetadatasRequest, GetWorkerMetadatasSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitWorkerRequest, InvokeWorkerRequest, ResumeWorkerRequest,
 };
 use golem_common::model::{
     AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata,
@@ -249,35 +251,80 @@ impl TestWorkerExecutor {
 
         match response.result {
             None => panic!("No response from connect_worker"),
-            Some(get_worker_metadata_response::Result::Success(metadata)) => Some(WorkerMetadata {
-                worker_id: VersionedWorkerId {
-                    worker_id: metadata
-                        .worker_id
-                        .expect("no worker_id")
-                        .clone()
-                        .try_into()
-                        .expect("invalid worker_id"),
-                    template_version: metadata.template_version,
-                },
-                args: metadata.args.clone(),
-                env: metadata
-                    .env
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<Vec<_>>(),
-                account_id: metadata.account_id.expect("no account_id").clone().into(),
-                last_known_status: WorkerStatusRecord {
-                    oplog_idx: 0,
-                    status: metadata.status.try_into().expect("invalid status"),
-                    overridden_retry_config: None, // not passed through gRPC
-                    deleted_regions: DeletedRegions::new(),
-                },
-            }),
+            Some(get_worker_metadata_response::Result::Success(metadata)) => {
+                Some(to_worker_metadata(&metadata))
+            }
             Some(get_worker_metadata_response::Result::Failure(WorkerExecutionError {
                 error: Some(worker_execution_error::Error::WorkerNotFound(_)),
             })) => None,
             Some(get_worker_metadata_response::Result::Failure(error)) => {
                 panic!("Failed to get worker metadata: {error:?}")
+            }
+        }
+    }
+
+    pub async fn get_running_worker_metadatas(
+        &mut self,
+        template_id: &TemplateId,
+    ) -> Vec<WorkerMetadata> {
+        let template_id: golem_api_grpc::proto::golem::template::TemplateId =
+            template_id.clone().into();
+        let response = self
+            .client
+            .get_running_worker_metadatas(GetRunningWorkerMetadatasRequest {
+                template_id: Some(template_id),
+                filter: None,
+            })
+            .await
+            .expect("Failed to get running worker metadatas")
+            .into_inner();
+
+        match response.result {
+            None => panic!("No response from get_running_worker_metadatas"),
+            Some(get_running_worker_metadatas_response::Result::Success(
+                GetRunningWorkerMetadatasSuccessResponse { workers },
+            )) => workers.iter().map(to_worker_metadata).collect(),
+
+            Some(get_running_worker_metadatas_response::Result::Failure(error)) => {
+                panic!("Failed to get worker metadata: {error:?}")
+            }
+        }
+    }
+
+    pub async fn get_worker_metadatas(
+        &mut self,
+        template_id: &TemplateId,
+    ) -> (Option<usize>, Vec<WorkerMetadata>) {
+        let template_id: golem_api_grpc::proto::golem::template::TemplateId =
+            template_id.clone().into();
+        let response = self
+            .client
+            .get_worker_metadatas(GetWorkerMetadatasRequest {
+                template_id: Some(template_id),
+                filter: None,
+                cursor: 0,
+                count: 10,
+                precise: true,
+            })
+            .await
+            .expect("Failed to get worker metadatas")
+            .into_inner();
+
+        match response.result {
+            None => panic!("No response from get_worker_metadatas"),
+            Some(get_worker_metadatas_response::Result::Success(
+                GetWorkerMetadatasSuccessResponse { workers, cursor },
+            )) => {
+                let cursor: Option<usize> = if cursor == 0 {
+                    None
+                } else {
+                    Some(cursor as usize)
+                };
+
+                (cursor, workers.iter().map(to_worker_metadata).collect())
+            }
+            Some(get_worker_metadatas_response::Result::Failure(error)) => {
+                panic!("Failed to get worker metadatas: {error:?}")
             }
         }
     }
@@ -730,6 +777,41 @@ impl TestWorkerExecutor {
             handle: None,
             grpc_port: clone_info.grpc_port,
         }
+    }
+}
+
+fn to_worker_metadata(
+    metadata: &golem_api_grpc::proto::golem::worker::WorkerMetadata,
+) -> WorkerMetadata {
+    WorkerMetadata {
+        worker_id: VersionedWorkerId {
+            worker_id: metadata
+                .worker_id
+                .clone()
+                .expect("no worker_id")
+                .clone()
+                .try_into()
+                .expect("invalid worker_id"),
+            template_version: metadata.template_version,
+        },
+        args: metadata.args.clone(),
+        env: metadata
+            .env
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<Vec<_>>(),
+        account_id: metadata
+            .account_id
+            .clone()
+            .expect("no account_id")
+            .clone()
+            .into(),
+        last_known_status: WorkerStatusRecord {
+            oplog_idx: 0,
+            status: metadata.status.try_into().expect("invalid status"),
+            overridden_retry_config: None, // not passed through gRPC
+            deleted_regions: DeletedRegions::new(),
+        },
     }
 }
 

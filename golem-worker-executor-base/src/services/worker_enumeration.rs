@@ -36,7 +36,8 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
         let mut template_workers: Vec<WorkerMetadata> = vec![];
         for worker in active_workers {
             if worker.0.template_id == *template_id
-                && worker.1.metadata.last_known_status.status == WorkerStatus::Running
+                && (worker.1.metadata.last_known_status.status == WorkerStatus::Running
+                    || worker.1.metadata.last_known_status.status == WorkerStatus::Idle)
                 && filter
                     .clone()
                     .map_or(true, |f| f.matches(&worker.1.metadata))
@@ -177,7 +178,7 @@ impl WorkerEnumerationService
         let mut template_workers: Vec<WorkerMetadata> = vec![];
 
         while new_cursor.is_some() && template_workers.len() < count {
-            let new_count = template_workers.len() - count;
+            let new_count = count - template_workers.len();
 
             let (next_cursor, workers) = self
                 .get_internal(
@@ -208,8 +209,9 @@ fn get_worker_id_from_redis_key(
 ) -> Result<WorkerId, GolemError> {
     let template_prefix = format!("instance:instance:{}:", template_id.0);
 
-    if worker_redis_key.starts_with(&template_prefix) {
-        let worker_name = &worker_redis_key[template_prefix.len()..];
+    // find because of redis key_prefix - figure out better solution
+    if let Some(i) = worker_redis_key.find(&template_prefix) {
+        let worker_name = &worker_redis_key[(i + template_prefix.len())..];
         Ok(WorkerId {
             worker_name: worker_name.to_string(),
             template_id: template_id.clone(),
