@@ -274,8 +274,14 @@ impl From<TypeAnnotatedValue> for Value {
 
                 panic!("Enum value not found in the list of expected enums")
             }
-            TypeAnnotatedValue::Option { typ: _, value } => Value::Option(value.map(|value| Box::new(value.deref().clone().into()))),
-            TypeAnnotatedValue::Result { ok:_, error:_, value } => Value::Result(match value {
+            TypeAnnotatedValue::Option { typ: _, value } => {
+                Value::Option(value.map(|value| Box::new(value.deref().clone().into())))
+            }
+            TypeAnnotatedValue::Result {
+                ok: _,
+                error: _,
+                value,
+            } => Value::Result(match value {
                 Ok(value) => Ok(value.map(|value| Box::new(value.deref().clone().into()))),
                 Err(value) => Err(value.map(|value| Box::new(value.deref().clone().into()))),
             }),

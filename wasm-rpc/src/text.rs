@@ -316,7 +316,9 @@ impl WasmValue for TypeAnnotatedValue {
 
             let invalid_names: Vec<String> = names
                 .iter()
-                .filter(|&name| !all_names.contains(&name.to_string())).cloned().collect();
+                .filter(|&name| !all_names.contains(&name.to_string()))
+                .cloned()
+                .collect();
 
             if invalid_names.is_empty() {
                 Ok(TypeAnnotatedValue::Flags {
@@ -478,8 +480,9 @@ impl WasmValue for TypeAnnotatedValue {
 
     fn unwrap_option(&self) -> Option<Cow<Self>> {
         match self {
-            TypeAnnotatedValue::Option { typ: _, value } =>
-                value.as_ref().map(|v| Cow::Owned(*v.clone())),
+            TypeAnnotatedValue::Option { typ: _, value } => {
+                value.as_ref().map(|v| Cow::Owned(*v.clone()))
+            }
             _ => panic!("Expected option, found {:?}", self),
         }
     }
