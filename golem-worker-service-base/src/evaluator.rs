@@ -2,12 +2,9 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::JsonFunctionResult;
-
-use serde_json::Value;
-
 use super::tokeniser::tokenizer::{Token, Tokenizer};
 use crate::expr::{ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber};
-use crate::path::{Path, PathComponent, ResolvedVariables};
+use crate::path::{Path};
 use crate::getter::Getter;
 use crate::primitive::GetPrimitive;
 use crate::merge::Merge;
