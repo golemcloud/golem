@@ -6,11 +6,11 @@ The page is divided into two major sections by tiers, as the ability to define y
 
 This page will use [Golem CLI](/docs/golem-cli) parameter names when talking about how to invoke functions, but the same rules apply when using the [REST API](/docs/rest-api) too.
 
-## Tier 2 languages
+## Tier 1 languages
 
-**Tier 2 languages** use the **WASM component model**'s tooling to define their interface using WIT files. Please read the [official design document of the WIT format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md) to learn what it is capable of.
+**Tier 1 languages** use the **WASM component model**'s tooling to define their interface using WIT files. Please read the [official design document of the WIT format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md) to learn what it is capable of.
 
-For each tier 2 language there is a **binding generator** tool that takes the WIT definition and generates the appropriate binding code in the given guest language. Read [Building Templates](/docs/building-templates) for more information about how these tools work.
+For each tier 1 language there is a **binding generator** tool that takes the WIT definition and generates the appropriate binding code in the given guest language. Read [Building Templates](/docs/building-templates) for more information about how these tools work.
 
 The WIT definition is also embedded in the compiled WASM that you upload to **Golem**. This is how Golem knows what the exported functions are, and it can validate the provided parameters to make sure they have the correct type.
 
@@ -141,19 +141,19 @@ The following table maps types you can use in WIT to their JSON encoding:
 | flags           | A JSON array of strings                                                                                                                                          | Set of possible name values, where you can select more than one of them.      |
 | handle          | a JSON string that starts with the resource owner's worker uri, followed by a slash and a numeric resource id: `"worker://template-id/worker-name/resource-id"`  | Points to a resource created on a given worker                                |
 
-## Tier 3 languages
+## Tier 2 languages
 
-For **Tier 3 languages** you cannot define more than one function to be exported. The function that Golem will run is your program's main function, without passing any arguments or getting any result values.
+For **Tier 2 languages** you cannot define more than one function to be exported. The function that Golem will run is your program's main function, without passing any arguments or getting any result values.
 
 ## Function names
 
-The function name for **tier 3** languages that you need to pass to the `--function` parameter of [Golem CLI](/docs/golem-cli) is always:
+The function name for **tier 2** languages that you need to pass to the `--function` parameter of [Golem CLI](/docs/golem-cli) is always:
 
 - `wasi:cli/run@0.2.0/run`
 
 ### Parameters and results
 
-As you cannot define any parameter or result types in **tier 3** the only option is to use **the stdio mode or the stdio event loop mode**.
+As you cannot define any parameter or result types in **tier 2** the only option is to use **the stdio mode or the stdio event loop mode**.
 
 This is enabled in the [Golem CLI](/docs/golem-cli) using the `--use-stdio` or `--use-stdio-eventloop` commands when invoking an instance.
 

@@ -30,10 +30,9 @@ As explained on the [building templates](/docs/building-templates.md) page, Gole
 
 The tiers are:
 
-- **Tier 1** would be a platform that built-in support for the component model
-- **Tier 2** languages are having a WIT binding generator and thus can be used to implement "reactor" (or "library") components, with multiple exported functions, and they can import and use any of the supported host interfaces.
-- **Tier 3** languages have no binding generators, but they can be used with the preview1 adapter to implement "command" components, exposing a single parameterless `run` function. There are Golem features allowing some level of interactivity with these components via standard input and output.
-- **Tier 4** languages are everything else
+- **Tier 1** languages are having a WIT binding generator or directly support the component model and thus can be used to implement "reactor" (or "library") components, with multiple exported functions, and they can import and use any of the supported host interfaces.
+- **Tier 2** languages have no binding generators, but they can be used with the preview1 adapter to implement "command" components, exposing a single parameterless `run` function. There are Golem features allowing some level of interactivity with these components via standard input and output.
+- **Tier 3** languages are everything else
 
 ## Repositories
 

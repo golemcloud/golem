@@ -102,13 +102,13 @@ The final step is converting the module in a WASM component, including mapping i
 This is done with `wasm-tools` too:
 
 ```bash
-wasm-tools component new main.embed.wasm -o template.wasm --adapt adapters/tier2/wasi_snapshot_preview1.wasm
+wasm-tools component new main.embed.wasm -o template.wasm --adapt adapters/tier1/wasi_snapshot_preview1.wasm
 ```
 
 The `wasi_snapshot_preview1.wasm` describes the mapping from WASI Preview1 to Preview2. You **must** use the version of this file packaged together with `golem-cli.`
 
 <Callout>
-Make sure you use the **tier2 adapter** from the golem package!
+Make sure you use the **tier1 adapter** from the golem package!
 
 </Callout>
 

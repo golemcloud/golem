@@ -1,28 +1,13 @@
-import { Callout } from "nextra/components"
 import { Card, Cards } from "nextra/components"
 
 # Tier 3 languages
 
-Tier 3 languages can be compiled to WASM **modules** and they support **WASI Preview 1** but there is no way to generate bindings for WIT interfaces.
-
-This restricts them to only expose a single, parameterless `run` function and they can only access the host functionalities part of **WASI Preview 1**. (standard IO, files and filesystems, clock, random, cmd args / environment variables).
-
-It is possible to pass input to these functions using the **standard input** and to get back their **standard output** as the call's results, but this function can only be called once for each worker.
-
-Golem provides two special **calling conventions** for workers implemented with a **tier 3** language:
-
-- The `stdio` calling convention passes the invocation's parameters through the worker's standard input, and parses it's standard output as JSON, returning as the invocation's result. A worker after an `stdio` invocation is no longer usable.
-- The `stdio-eventloop` calling convention makes it possible to implement stateful workers with a **tier 3** language but it requires the worker to be implemented as a **loop** that in each iteration reads a single line containing the invocation parameters as JSON, and before reading the next line is responsible to write the response to the standard output as a single-line JSON.
+Tier 3 languages can be compiled to WASM modules but they don't (or don't fully) support even **WASI Preview 1**. In case they partially support WASI, they may still be used to implement stateless single-invocation workers which could be useful as parts of a bigger Golem application to expose some platform-specific functionality or third party libraries, for example.
 
 The currently supported Tier 3 languages are:
 
+- [C#](/docs/building-templates/tier-3/c-sharp) - does not support **reading** from the standard input, so the `stdio` and `stdio-eventloop` calling conventions cannot be used. Parameters can be passed via environment variables and output can be written to the standard output.
+
 <Cards>
-  <Card title="Swift" href="/docs/building-templates/tier-3/swift" />
-  <Card title="Zig" href="/docs/building-templates/tier-3/zig" />
-  <Card title="Grain" href="/docs/building-templates/tier-3/grain" />
+  <Card title="C#" href="/docs/building-templates/tier-3/c-sharp" />
 </Cards>
-
-<Callout>
- Possible other supported Tier 3 languages added in the near future are **Ruby,** **PHP and Haskell**.
-
-</Callout>

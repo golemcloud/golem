@@ -33,12 +33,12 @@ First we have to compile the `grain` program to WASM:
 grain compile --release main.gr
 ```
 
-This results in a `main.gr.wasm` file which is a WASM **module**. We cannot write any WIT documents because there is no Grain binding generator available currently. This makes Grain a Tier 3 language, so we can convert the compiled module into a WASM **component** using the adapter from the `tier3` directory of the golem package:
+This results in a `main.gr.wasm` file which is a WASM **module**. We cannot write any WIT documents because there is no Grain binding generator available currently. This makes Grain a Tier 2 language, so we can convert the compiled module into a WASM **component** using the adapter from the `tier2` directory of the golem package:
 
 ```bash
-wasm-tools component new main.gr.wasm -o template.wasm --adapt tier3/wasi_snapshot_preview1.wasm
+wasm-tools component new main.gr.wasm -o template.wasm --adapt tier2/wasi_snapshot_preview1.wasm
 ```
 
-<Callout>Make sure you use the **tier3 adapter** from the golem package!</Callout>
+<Callout>Make sure you use the **tier2 adapter** from the golem package!</Callout>
 
 The resulting `template.wasm` is ready to be used with Golem!

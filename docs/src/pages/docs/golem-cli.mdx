@@ -203,7 +203,7 @@ See the [Template Interface](/docs/template-interface) page for more information
 There are two more optional parameters to this command:
 
 - `--invocation-key KEY` associates an invocation key, previously created with the `worker invocation-key` CLI command. This is an advanced features you can use to avoid accidentally invoking the same thing twice. Creating an invocation key always succeeds. Once you have an invocation key, if you accidentally invoke the same function twice with the same ID, Golem guarantees that it won't be executed twice.
-- `--use-stdio` switches the call into **stdio mode**. This is useful for **tier 3 languages** (see [Building Templates](/docs/building-templates) to learn more about tiers) where you cannot define your program's interface with a WIT file. In stdio mode the JSON you provide in `--parameters` is passed directly to the component's `run` (or `main`) function through the standard input, and the result of the call is the program's standard output.
+- `--use-stdio` switches the call into **stdio mode**. This is useful for **tier 2 languages** (see [Building Templates](/docs/building-templates) to learn more about tiers) where you cannot define your program's interface with a WIT file. In stdio mode the JSON you provide in `--parameters` is passed directly to the component's `run` (or `main`) function through the standard input, and the result of the call is the program's standard output.
 
 ## Observing workers
 
