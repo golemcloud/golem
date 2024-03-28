@@ -15,7 +15,6 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 
-use golem_common::model::Timestamp;
 use http::{HeaderName, HeaderValue};
 
 use std::collections::HashMap;
@@ -570,7 +569,6 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             };
 
             let oplog_entry = OplogEntry::imported_function_invoked(
-                Timestamp::now_utc(),
                 "http::types::future_incoming_response::get".to_string(),
                 &serializable_response,
                 WrappedFunctionType::WriteRemote,

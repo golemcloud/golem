@@ -86,7 +86,6 @@ pub enum OplogEntry {
 
 impl OplogEntry {
     pub fn imported_function_invoked<R: Encode>(
-        timestamp: Timestamp,
         function_name: String,
         response: &R,
         wrapped_function_type: WrappedFunctionType,
@@ -94,7 +93,7 @@ impl OplogEntry {
         let serialized_response = serialize(response)?.to_vec();
 
         Ok(OplogEntry::ImportedFunctionInvoked {
-            timestamp,
+            timestamp: Timestamp::now_utc(),
             function_name,
             response: serialized_response,
             wrapped_function_type,
@@ -102,7 +101,6 @@ impl OplogEntry {
     }
 
     pub fn exported_function_invoked<R: Encode>(
-        timestamp: Timestamp,
         function_name: String,
         request: &R,
         invocation_key: Option<InvocationKey>,
@@ -110,7 +108,7 @@ impl OplogEntry {
     ) -> Result<OplogEntry, String> {
         let serialized_request = serialize(request)?.to_vec();
         Ok(OplogEntry::ExportedFunctionInvoked {
-            timestamp,
+            timestamp: Timestamp::now_utc(),
             function_name,
             request: serialized_request,
             invocation_key,
@@ -119,16 +117,99 @@ impl OplogEntry {
     }
 
     pub fn exported_function_completed<R: Encode>(
-        timestamp: Timestamp,
         response: &R,
         consumed_fuel: i64,
     ) -> Result<OplogEntry, String> {
         let serialized_response = serialize(response)?.to_vec();
         Ok(OplogEntry::ExportedFunctionCompleted {
-            timestamp,
+            timestamp: Timestamp::now_utc(),
             response: serialized_response,
             consumed_fuel,
         })
+    }
+
+    pub fn jump(jump: OplogRegion) -> OplogEntry {
+        OplogEntry::Jump {
+            timestamp: Timestamp::now_utc(),
+            jump,
+        }
+    }
+
+    pub fn nop() -> OplogEntry {
+        OplogEntry::NoOp {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn suspend() -> OplogEntry {
+        OplogEntry::Suspend {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn error(error: WorkerError) -> OplogEntry {
+        OplogEntry::Error {
+            timestamp: Timestamp::now_utc(),
+            error,
+        }
+    }
+
+    pub fn interrupted() -> OplogEntry {
+        OplogEntry::Interrupted {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn exited() -> OplogEntry {
+        OplogEntry::Exited {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn create_promise(promise_id: PromiseId) -> OplogEntry {
+        OplogEntry::CreatePromise {
+            timestamp: Timestamp::now_utc(),
+            promise_id,
+        }
+    }
+
+    pub fn complete_promise(promise_id: PromiseId, data: Vec<u8>) -> OplogEntry {
+        OplogEntry::CompletePromise {
+            timestamp: Timestamp::now_utc(),
+            promise_id,
+            data,
+        }
+    }
+
+    pub fn change_retry_policy(new_policy: RetryConfig) -> OplogEntry {
+        OplogEntry::ChangeRetryPolicy {
+            timestamp: Timestamp::now_utc(),
+            new_policy,
+        }
+    }
+
+    pub fn begin_atomic_region() -> OplogEntry {
+        OplogEntry::BeginAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn end_atomic_region(begin_index: u64) -> OplogEntry {
+        OplogEntry::EndAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    /// True if the oplog entry is a "hint" that should be skipped during replay
+    pub fn is_hint(&self) -> bool {
+        matches!(
+            self,
+            OplogEntry::Suspend { .. }
+                | OplogEntry::Error { .. }
+                | OplogEntry::Interrupted { .. }
+                | OplogEntry::Exited { .. }
+        )
     }
 
     pub fn response<T: DeserializeOwned + Decode>(&self) -> Result<Option<T>, String> {
@@ -213,25 +294,6 @@ impl OplogEntry {
                 Ok(Some(function_input))
             }
         }
-    }
-
-    pub fn jump(timestamp: Timestamp, jump: OplogRegion) -> OplogEntry {
-        OplogEntry::Jump { timestamp, jump }
-    }
-
-    pub fn nop(timestamp: Timestamp) -> OplogEntry {
-        OplogEntry::NoOp { timestamp }
-    }
-
-    /// True if the oplog entry is a "hint" that should be skipped during replay
-    pub fn is_hint(&self) -> bool {
-        matches!(
-            self,
-            OplogEntry::Suspend { .. }
-                | OplogEntry::Error { .. }
-                | OplogEntry::Interrupted { .. }
-                | OplogEntry::Exited { .. }
-        )
     }
 }
 
