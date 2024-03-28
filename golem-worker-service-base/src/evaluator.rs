@@ -2,7 +2,6 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::JsonFunctionResult;
-use hyper::ext::HashMap;
 
 use serde_json::Value;
 
@@ -11,6 +10,8 @@ use crate::expr::{ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstruc
 use crate::resolved_variables::{Path, PathComponent, ResolvedVariables};
 use crate::getter::Getter;
 use crate::primitive::GetPrimitive;
+use crate::merge::Merge;
+
 
 pub trait Evaluator {
     fn evaluate(
@@ -322,21 +323,21 @@ impl Evaluator for Expr {
                         path_var
                     ))),
 
-                Expr::Variable(variable) => resolved_variables
-                    .get_key(variable.as_str())
-                    .map(ValueTyped::from_json)
+                Expr::Variable(variable) => input
+                    .get(Path::from_raw_string(variable.as_str())
                     .ok_or(EvaluationError::Message(format!(
                         "The result doesn't contain the field {}",
                         variable
-                    ))),
-                Expr::Boolean(bool) => Ok(ValueTyped::Boolean(bool)),
+                    )))),
+
+                Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(bool)),
                 Expr::PatternMatch(input_expr, constructors) => {
                     // if `match worker.response`, then match_evaluated is the value of worker.response
-                    let match_evaluated = go(&input_expr, resolved_variables)?.to_json();
-                    let mut resolved_result: Option<Value> = None;
+                    let match_evaluated = go(&input_expr, input)?;
+                    let mut resolved_result: Option<TypeAnnotatedValue> = None;
 
                     for constructor in constructors {
-                        // if `match worker.response { some(value) =>...}`, then condition pattern is some(value)
+                        // if constructor is `match worker.response { some(value) =>...}`, then `condition pattern` is `some(value)`
                         let (condition_pattern, possible_resolution) = constructor.0;
 
                         match condition_pattern {
@@ -353,25 +354,42 @@ impl Evaluator for Expr {
                                             constructor_type,
                                         ) => match constructor_type {
                                             InBuiltConstructorInner::Some => {
-                                                if match_evaluated != Value::Null {
-                                                    let result = go(
-                                                        &possible_resolution,
-                                                        resolved_variables,
-                                                    )?
-                                                    .to_json();
-                                                    resolved_result = Some(result);
-                                                    break;
+                                                match &match_evaluated {
+                                                    TypeAnnotatedValue::Option {value, ..} => {
+                                                        match value {
+                                                            Some(v) => {
+                                                                let result = go(
+                                                                    &possible_resolution,
+                                                                    input,
+                                                                )?;
+
+                                                                resolved_result = Some(result);
+                                                            }
+
+                                                            None => {}
+
+                                                        }
+                                                    }
+                                                    _ => {}
                                                 }
                                             }
                                             InBuiltConstructorInner::None => {
-                                                if match_evaluated == Value::Null {
-                                                    let result = go(
-                                                        &possible_resolution,
-                                                        resolved_variables,
-                                                    )?
-                                                    .to_json();
-                                                    resolved_result = Some(result);
-                                                    break;
+                                                match &match_evaluated {
+                                                    TypeAnnotatedValue::Option {value, ..} => {
+                                                        match value {
+                                                            Some(_) => {}
+                                                            None => {
+                                                                let result = go(
+                                                                    &possible_resolution,
+                                                                    input,
+                                                                )?;
+
+                                                                resolved_result = Some(result);
+                                                            }
+
+                                                        }
+                                                    }
+                                                    _ => {}
                                                 }
                                             }
                                             any_other => {
@@ -445,7 +463,7 @@ impl Evaluator for Expr {
             }
         }
 
-        go(expr, resolved_variables).map(|v| v.to_json())
+        go(expr, input).map(|v| v.to_json())
     }
 }
 

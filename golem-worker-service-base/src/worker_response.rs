@@ -18,6 +18,7 @@ use tracing::info;
 use crate::primitive::GetPrimitive;
 use crate::service::worker::ConnectProxyError::Json;
 use crate::tokeniser::tokenizer::Token;
+use crate::merge::Merge;
 
 pub struct WorkerResponse {
     pub result: TypeAnnotatedValue,
@@ -51,28 +52,9 @@ impl WorkerResponse {
         response_mapping: &ResponseMapping,
         request_value: &TypeAnnotatedValue,
     ) -> Result<IntermediateHttpResponse, EvaluationError> {
-        let worker_response_type = AnalysedType::from(&self.result);
+        let worker_response_value = &self.result;
 
-        let worker_response_result = &self.result;
-
-        // Merging request related type annotated value with worker-response type annotated value
-        let type_annotated_value = match request_value {
-            TypeAnnotatedValue::Record { value, typ } => {
-                let mut new_value = value.clone();
-                let mut types = typ.clone();
-                types.push((Token::WorkerResponse.to_string(), worker_response_type));
-                new_value.push((Token::WorkerResponse.to_string(), worker_response_result.clone()));
-                TypeAnnotatedValue::Record {
-                    typ: types,
-                    value: new_value
-                }
-            }
-            _ =>
-                TypeAnnotatedValue::Record {
-                    typ: vec![(Token::WorkerResponse.to_string(), worker_response_type)],
-                    value: vec![(Token::WorkerResponse.to_string(), worker_response_result.clone())]
-                }
-        };
+        let type_annotated_value = request_value.merge(worker_response_value);
 
         let status_code = get_status_code(&response_mapping.status, &type_annotated_value)?;
 

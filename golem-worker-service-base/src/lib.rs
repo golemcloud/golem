@@ -14,11 +14,11 @@ pub mod resolved_variables;
 pub mod service;
 pub mod tokeniser;
 pub mod type_inference;
-pub mod value_typed;
 pub mod worker_request;
 pub mod worker_request_to_response;
 pub mod worker_response;
 
+pub mod merge;
 pub mod getter;
 pub mod primitive;
 
