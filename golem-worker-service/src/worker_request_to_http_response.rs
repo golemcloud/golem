@@ -2,6 +2,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use golem_wasm_rpc::TypeAnnotatedValue;
 use golem_common::model::CallingConvention;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::api_definition::ResponseMapping;
@@ -32,7 +33,7 @@ impl WorkerRequestToResponse<ResponseMapping, poem::Response> for WorkerRequestT
         &self,
         worker_request_params: WorkerRequest,
         response_mapping: &Option<ResponseMapping>,
-        resolved_variables: &ResolvedVariables,
+        resolved_variables: &TypeAnnotatedValue,
     ) -> poem::Response {
         match execute(self, worker_request_params.clone()).await {
             Ok(worker_response) => {

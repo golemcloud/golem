@@ -40,9 +40,17 @@ impl RouteValidationError {
 
 #[derive(Clone)]
 pub struct ApiDefinitionValidatorDefault {}
+pub struct ValidationResult {
+    pub result: HashMap<(TemplateId, String)>
+}
+
+struct FunctionDetails {
+    template_id: TemplateId,
+    function: ExportFunction,
+}
 
 impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
-    fn validate(&self, api: &ApiDefinition, templates: &[Template]) -> Result<(), ValidationError> {
+    fn validate(&self, api: &ApiDefinition, templates: &[Template]) -> Result<Vec<FunctionDetails>, ValidationError> {
         let templates: HashMap<&TemplateId, &TemplateMetadata> = templates
             .iter()
             .map(|template| {
@@ -53,24 +61,24 @@ impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
             })
             .collect();
 
-        let errors = {
-            let route_validation = api
-                .routes
-                .iter()
-                .cloned()
-                .flat_map(|route| validate_route(route, &templates).err())
-                .collect::<Vec<_>>();
+
+            let mut success_results = Vec::new();
+            let mut route_errors = Vec::new();
+
+            for route in &api.routes {
+                match validate_route(route.clone(), &templates) {
+                    Ok(result) => success_results.push(result),
+                    Err(err) => route_errors.push(err),
+                }
+            }
 
             let unique_route_errors = unique_routes(api.routes.as_slice());
 
-            let mut errors = route_validation;
+            let mut errors = route_errors;
             errors.extend(unique_route_errors);
 
-            errors
-        };
-
         if errors.is_empty() {
-            Ok(())
+            Ok(success_results)
         } else {
             Err(ValidationError { errors })
         }
@@ -111,19 +119,23 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
 fn validate_route(
     route: Route,
     templates: &HashMap<&TemplateId, &TemplateMetadata>,
-) -> Result<(), RouteValidationError> {
+) -> Result<FunctionDetails, RouteValidationError> {
     let template_id = route.binding.template.clone();
     // We can unwrap here because we've already validated that all templates are present.
     let template = templates.get(&template_id).unwrap();
 
     let function_name = route.binding.function_name.clone();
 
-    // TODO: Validate function params.
-    let _function = find_function(function_name.as_str(), template).ok_or_else(|| {
+    let function = find_function(function_name.as_str(), template).ok_or_else(|| {
         RouteValidationError::from_route(route, format!("Invalid function name: {function_name}"))
     })?;
 
-    Ok(())
+    let function_details = FunctionDetails {
+        template_id: template_id.clone(),
+        function: function.clone(),
+    };
+
+    Ok(function_details)
 }
 
 fn find_function(name: &str, template: &TemplateMetadata) -> Option<ExportFunction> {

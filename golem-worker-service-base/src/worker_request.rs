@@ -2,6 +2,7 @@ use golem_wasm_rpc::json::JsonFunctionResult;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use golem_common::model::TemplateId;
 use serde_json::Value;
+use golem_service_base::model::{ExportFunction, TemplateMetadata};
 
 use crate::api_request_route_resolver::ResolvedWorkerBinding;
 use crate::evaluator::{Evaluator, RawString};
@@ -14,6 +15,7 @@ pub struct WorkerRequest {
     pub worker_id: String,
     pub function: String,
     pub function_params: Value,
+    pub template_metadata: ExportFunction
 }
 
 impl WorkerRequest {

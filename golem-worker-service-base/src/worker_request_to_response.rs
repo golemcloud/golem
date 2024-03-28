@@ -13,6 +13,6 @@ pub trait WorkerRequestToResponse<Mapper, Response> {
         &self,
         resolved_worker_request: WorkerRequest,
         response_mapping: &Option<Mapper>,
-        input_request_variables: &TypeAnnotatedValue,
+        input_request: &TypeAnnotatedValue,
     ) -> Response;
 }
