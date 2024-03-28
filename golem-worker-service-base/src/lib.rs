@@ -10,7 +10,7 @@ pub mod http_request;
 pub mod metrics;
 pub mod oas_worker_bridge;
 pub mod parser;
-pub mod resolved_variables;
+pub mod path;
 pub mod service;
 pub mod tokeniser;
 pub mod type_inference;

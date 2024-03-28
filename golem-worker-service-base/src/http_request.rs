@@ -4,7 +4,7 @@ use derive_more::{Display, FromStr, Into};
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
-use crate::resolved_variables::{Path, ResolvedVariables};
+use crate::path::{Path, ResolvedVariables};
 use crate::tokeniser::tokenizer::Token;
 
 // An input request from external API gateways, that is then resolved to a worker request, using API definitions
@@ -16,7 +16,7 @@ pub struct InputHttpRequest<'a> {
 }
 
 impl InputHttpRequest {
-    pub fn from_http_request(
+    pub fn get_type_annotated_value(
         &self,
         request_query_variables: HashMap<String, String>,
         spec_query_variables: Vec<String>,

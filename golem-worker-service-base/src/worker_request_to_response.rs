@@ -1,4 +1,3 @@
-use crate::resolved_variables::ResolvedVariables;
 use crate::worker_request::WorkerRequest;
 use async_trait::async_trait;
 use golem_wasm_rpc::TypeAnnotatedValue;
@@ -6,14 +5,14 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 // A generic interface that can convert a worker request to any type of response
 // given some variable values and a mapping spec mainly consisting of expressions. Example: If the response is Http, we can have a mapping
 // that sets the status code as  ${match worker.response { some(value) => 200 else 401 }} expression.
-// all variables used in the mapping can look up from this dictionary resolved_variables. `Resolved Variables` are
-// formed usually from input http request
+// All variables used in the mapping can look up from this dictionary of input request variables which is also represented using TypeAnnotatedValue.
+// This will ensure that any reference to input request variables is also typed, than just a text/Json or HashMap
 #[async_trait]
 pub trait WorkerRequestToResponse<Mapper, Response> {
     async fn execute(
         &self,
         resolved_worker_request: WorkerRequest,
         response_mapping: &Option<Mapper>,
-        type_annotated_value_request: &TypeAnnotatedValue,
+        input_request_variables: &TypeAnnotatedValue,
     ) -> Response;
 }

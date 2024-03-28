@@ -4,7 +4,7 @@ use hyper::http::Method;
 
 use crate::api_definition::{ApiDefinition, GolemWorkerBinding, MethodPattern};
 use crate::http_request::InputHttpRequest;
-use crate::resolved_variables::ResolvedVariables;
+use crate::path::ResolvedVariables;
 
 // For any input request type, there should be a way to resolve the
 // worker binding template, which is then used to form the worker request

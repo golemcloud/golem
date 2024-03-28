@@ -6,7 +6,7 @@ use golem_common::model::CallingConvention;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::api_definition::ResponseMapping;
 use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
-use golem_worker_service_base::resolved_variables::ResolvedVariables;
+use golem_worker_service_base::path::ResolvedVariables;
 use golem_worker_service_base::service::worker::WorkerService;
 use golem_worker_service_base::worker_request::WorkerRequest;
 use golem_worker_service_base::worker_request_to_response::WorkerRequestToResponse;

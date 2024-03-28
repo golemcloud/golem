@@ -1,4 +1,4 @@
-use crate::resolved_variables::{KeyName, Path, PathComponent};
+use crate::path::{KeyName, Path, PathComponent};
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::collections::HashMap;
 

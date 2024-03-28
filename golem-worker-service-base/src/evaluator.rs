@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::tokeniser::tokenizer::{Token, Tokenizer};
 use crate::expr::{ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber};
-use crate::resolved_variables::{Path, PathComponent, ResolvedVariables};
+use crate::path::{Path, PathComponent, ResolvedVariables};
 use crate::getter::Getter;
 use crate::primitive::GetPrimitive;
 use crate::merge::Merge;
@@ -106,7 +106,7 @@ impl Evaluator for Expr {
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
             match expr.clone() {
                 Expr::Request() => {
-                    match input.get(&Path::from_string_unsafe(
+                    match input.get(&Path::from_raw_string(
                         Token::Request.to_string().as_str(),
                     )) {
                         Some(v) => Ok(v),
@@ -116,7 +116,7 @@ impl Evaluator for Expr {
                     }
                 }
                 Expr::WorkerResponse() => {
-                    match input.get(&Path::from_string_unsafe(
+                    match input.get(&Path::from_raw_string(
                         Token::WorkerResponse.to_string().as_str(),
                     )) {
                         Some(v) => Ok(v),
@@ -488,7 +488,7 @@ fn handle_pattern_match(
 mod tests {
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expr::Expr;
-    use crate::resolved_variables::ResolvedVariables;
+    use crate::path::ResolvedVariables;
     use http::HeaderMap;
     use serde_json::Value;
     use std::collections::HashMap;

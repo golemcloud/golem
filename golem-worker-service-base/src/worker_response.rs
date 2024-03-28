@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::api_definition::ResponseMapping;
 use crate::evaluator::{EvaluationError, Evaluator};
 use crate::expr::Expr;
-use crate::resolved_variables::ResolvedVariables;
+use crate::path::ResolvedVariables;
 use crate::type_inference::*;
 use crate::worker_request::WorkerRequest;
 use crate::worker_request_to_response::WorkerRequestToResponse;
