@@ -173,7 +173,7 @@ impl WorkerRequestToResponse<ResponseMapping, poem::Response> for NoOpWorkerRequ
         &self,
         worker_request_params: WorkerRequest,
         response_mapping: &Option<ResponseMapping>,
-        resolved_variables: &ResolvedVariables, // resolved variables from the input request can also be useful to form the response
+        type_annotaterd_value_of_request: &TypeAnnotatedValue, // type annotated value from the request variables
     ) -> poem::Response {
         let worker_name = worker_request_params.worker_id;
         let template_id = worker_request_params.template;
@@ -212,7 +212,7 @@ impl WorkerRequestToResponse<ResponseMapping, poem::Response> for NoOpWorkerRequ
             result: type_anntoated_value,
         };
 
-        worker_response.to_http_response(response_mapping, resolved_variables)
+        worker_response.to_http_response(response_mapping, type_annotaterd_value_of_request)
     }
 }
 

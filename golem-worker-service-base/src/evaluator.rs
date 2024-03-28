@@ -7,9 +7,8 @@ use hyper::ext::HashMap;
 use serde_json::Value;
 
 use super::tokeniser::tokenizer::{Token, Tokenizer};
-use crate::expr::{ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner};
+use crate::expr::{ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber};
 use crate::resolved_variables::{Path, PathComponent, ResolvedVariables};
-use crate::value_typed::ValueTyped;
 use crate::getter::Getter;
 use crate::primitive::GetPrimitive;
 
@@ -151,21 +150,29 @@ impl Evaluator for Expr {
                     let left = go(&left, input)?;
                     let right = go(&right, input)?;
 
-                    let result = left
-                        .equal_to(right)
-                        .map_err(|err| EvaluationError::Message(err.to_string()))?;
-
-                    Ok(ValueTyped::Boolean(result))
+                    match (left.get_primitive(), right.get_primitive()) {
+                        (Some(left), Some(right)) => {
+                            let result = left == right;
+                            Ok(TypeAnnotatedValue::Bool(result))
+                        }
+                        _ => Err(EvaluationError::Message(
+                            "Unsupported json type to compare".to_string(),
+                        )),
+                    }
                 }
                 Expr::GreaterThan(left, right) => {
                     let left = go(&left, input)?;
                     let right = go(&right, input)?;
 
-                    let result = left
-                        .greater_than(right)
-                        .map_err(|err| EvaluationError::Message(err.to_string()))?;
-
-                    Ok(ValueTyped::Boolean(result))
+                    match (left.get_primitive(), right.get_primitive()) {
+                        (Some(left), Some(right)) => {
+                            let result = left > right;
+                            Ok(TypeAnnotatedValue::Bool(result))
+                        }
+                        _ => Err(EvaluationError::Message(
+                            "Unsupported json type to compare".to_string(),
+                        )),
+                    }
                 }
                 Expr::GreaterThanOrEqualTo(left, right) => {
                     let left = go(&left, input)?;
@@ -300,17 +307,21 @@ impl Evaluator for Expr {
                     Ok(TypeAnnotatedValue::Str(result))
                 }
 
-                Expr::Literal(literal) => Ok(ValueTyped::from_string(literal.as_str())),
+                Expr::Literal(literal) => Ok(TypeAnnotatedValue::Str(literal)),
 
-                Expr::Number(number) => Ok(ValueTyped::from_number_expr(number)),
+                Expr::Number(number) => match number {
+                    InnerNumber::UnsignedInteger(u64) => Ok(TypeAnnotatedValue::U64(u64)),
+                    InnerNumber::Integer(i64) => Ok(TypeAnnotatedValue::S64(i64)),
+                    InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(f64)),
+                }
 
-                Expr::PathVar(path_var) => resolved_variables
-                    .get_key(path_var.as_str())
-                    .map(ValueTyped::from_json)
+                Expr::PathVar(path_var) => input
+                    .get(&Path::from_key(path_var.as_str()))
                     .ok_or(EvaluationError::Message(format!(
                         "The result doesn't contain the field {}",
                         path_var
                     ))),
+
                 Expr::Variable(variable) => resolved_variables
                     .get_key(variable.as_str())
                     .map(ValueTyped::from_json)
