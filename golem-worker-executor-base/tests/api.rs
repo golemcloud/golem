@@ -786,8 +786,14 @@ async fn get_workers() {
         )
         .await;
 
-    check!(cursor2.is_none());
     check!(metadatas2.len() == workers_count - metadatas1.len());
+
+    if let Some(cursor2) = cursor2 {
+        let (_, metadatas3) = executor
+            .get_worker_metadatas(&template_id, None, cursor2, workers_count, true)
+            .await;
+        check!(metadatas3.len() == 0);
+    }
 
     for worker_id in worker_ids {
         executor.delete_worker(&worker_id).await;
