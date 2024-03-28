@@ -19,13 +19,11 @@ pub enum WorkerServiceError {
     TemplateNotFound(TemplateId),
     #[error("Account not found: {0}")]
     AccountIdNotFound(AccountId),
-    // TODO: Once worker is independent of account
     #[error("Worker not found: {0}")]
     WorkerNotFound(WorkerId),
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
-    // TODO: Fix display impl.
-    #[error("Golem error")]
+    #[error(transparent)]
     Golem(GolemError),
 }
 
