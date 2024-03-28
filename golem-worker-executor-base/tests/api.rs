@@ -681,11 +681,11 @@ async fn get_workers() {
         executor: &mut TestWorkerExecutor,
     ) {
         let metadatas1r = executor
-            .get_running_worker_metadatas(&template_id, filter.clone())
+            .get_running_worker_metadatas(template_id, filter.clone())
             .await;
 
         let (cursor1, metadatas1) = executor
-            .get_worker_metadatas(&template_id, filter, 0, 20, true)
+            .get_worker_metadatas(template_id, filter, 0, 20, true)
             .await;
 
         let expected_count = expected_worker_ids.len();
