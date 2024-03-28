@@ -297,7 +297,7 @@ impl Evaluator for Expr {
                                 if let Some(primitive) = value.get_primitive() {
                                     result.push_str(primitive.to_string().as_str())
                                 } else {
-                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} to form strings. Please check the expression", value)));
+                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} to form strings. Please check the expression", JsonFunctionResult::from(value).0)));
                                 }
                             }
 
@@ -332,131 +332,13 @@ impl Evaluator for Expr {
 
                 Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(bool)),
                 Expr::PatternMatch(input_expr, constructors) => {
-                    // if `match worker.response`, then match_evaluated is the value of worker.response
-                    let match_evaluated = go(&input_expr, input)?;
-                    let mut resolved_result: Option<TypeAnnotatedValue> = None;
 
-                    for constructor in constructors {
-                        // if constructor is `match worker.response { some(value) =>...}`, then `condition pattern` is `some(value)`
-                        let (condition_pattern, possible_resolution) = constructor.0;
+                    let constructors: Vec<(ConstructorPattern, Expr)> =
+                        &constructors.iter().map(|(constructor)| (constructor.0.0.clone(), constructor.0.1.clone())).collect();
 
-                        match condition_pattern {
-                            //  if `match worker.response { some(value) => value}`, then condition key is some
-                            // and patterns is vec![ConstructorPattern::Literal(Expr::Variable(value))] (as an example)
-                            ConstructorPattern::Constructor(condition_key, patterns) => {
-                                if patterns.len() > 1 {
-                                    return Err(EvaluationError::Message(
-                                        "Pattern matching is currently supported only for single pattern in constructor. i.e, {}(person), {}, {}(person_info) etc and not {}(age, birth_date)".to_string(),
-                                    ));
-                                } else {
-                                    match condition_key {
-                                        ConstructorTypeName::InBuiltConstructor(
-                                            constructor_type,
-                                        ) => match constructor_type {
-                                            InBuiltConstructorInner::Some => {
-                                                match &match_evaluated {
-                                                    TypeAnnotatedValue::Option {value, ..} => {
-                                                        match value {
-                                                            Some(v) => {
-                                                                let result = go(
-                                                                    &possible_resolution,
-                                                                    input,
-                                                                )?;
-
-                                                                resolved_result = Some(result);
-                                                            }
-
-                                                            None => {}
-
-                                                        }
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
-                                            InBuiltConstructorInner::None => {
-                                                match &match_evaluated {
-                                                    TypeAnnotatedValue::Option {value, ..} => {
-                                                        match value {
-                                                            Some(_) => {}
-                                                            None => {
-                                                                let result = go(
-                                                                    &possible_resolution,
-                                                                    input,
-                                                                )?;
-
-                                                                resolved_result = Some(result);
-                                                            }
-
-                                                        }
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
-                                            any_other => {
-                                                let result =
-                                                    match_evaluated.get(any_other.to_string());
-
-                                                if let Some(value) = result {
-                                                    let first_pattern = &patterns[0];
-
-                                                    match first_pattern {
-                                                        ConstructorPattern::Literal(expr) => {
-                                                            match *expr.clone() {
-                                                                Expr::Variable(variable) => {
-                                                                    let mut resolved_variables =
-                                                                        resolved_variables.clone();
-                                                                    resolved_variables.insert(
-                                                                        Path::from_raw_string(
-                                                                            variable.as_str(),
-                                                                        ),
-                                                                        value.clone(),
-                                                                    );
-                                                                    let value = go(
-                                                                        &possible_resolution,
-                                                                        &resolved_variables,
-                                                                    )?
-                                                                    .to_json();
-                                                                    resolved_result = Some(value);
-                                                                    break;
-                                                                }
-                                                                _ => {
-                                                                    return Err(EvaluationError::Message(
-                                                                                "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
-                                                                            ));
-                                                                }
-                                                            }
-                                                        }
-                                                        _ => {
-                                                            return Err(EvaluationError::Message(
-                                                                        "Currently only variable pattern is supported. i.e, some(value), err(message) etc".to_string(),
-                                                                    ));
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        ConstructorTypeName::CustomConstructor(_) => {
-                                            return Err(EvaluationError::Message(
-                                                "Pattern matching is currently supported only for inbuilt constructors. ok, err, some, none".to_string(),
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {
-                                return Err(EvaluationError::Message(
-                                    "Currently only constructor pattern is supported".to_string(),
-                                ));
-                            }
-                        }
-                    }
-
-                    resolved_result
-                        .map(|value| ValueTyped::from_json(&value))
-                        .ok_or(EvaluationError::Message(
-                            "Pattern matching failed".to_string(),
-                        ))
+                    handle_pattern_match(&input_expr, &constructors, input)
                 }
+                // TODO; Constructing Expr is not done yet
                 Expr::Constructor0(_) => Err(EvaluationError::Message(
                     "Constructor0 is not supported yet".to_string(),
                 )),
@@ -465,6 +347,141 @@ impl Evaluator for Expr {
 
         go(expr, input).map(|v| v.to_json())
     }
+}
+
+fn handle_pattern_match(
+    input_expr: &Expr,
+    constructors: &Vec<(ConstructorPattern, Expr)>,
+    input: &TypeAnnotatedValue,
+) -> Result<TypeAnnotatedValue, EvaluationError> {
+    let match_evaluated = input_expr.evaluate(input)?;
+
+    let mut resolved_result: Option<TypeAnnotatedValue> = None;
+
+    for constructor in constructors {
+        let (condition_pattern, possible_resolution) = constructor;
+
+        match condition_pattern {
+            ConstructorPattern::Constructor(condition_key, patterns) => {
+                if patterns.clone().len() > 1 {
+                    return Err(EvaluationError::Message(
+                        "Pattern matching is currently supported only for single pattern in constructor. i.e, {}(person), {}, {}(person_info) etc and not {}(age, birth_date)".to_string(),
+                    ));
+                } else {
+                    let pattern_expr_variable = match &patterns[0] {
+                        ConstructorPattern::Literal(Expr::Variable(v)) => v,
+                        _ => {
+                            return Err(EvaluationError::Message(
+                                "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
+                            ));
+                        }
+                    };
+                    match condition_key {
+                        ConstructorTypeName::InBuiltConstructor(constructor_type) => match constructor_type {
+                            InBuiltConstructorInner::Some => {
+                                match &match_evaluated {
+                                    TypeAnnotatedValue::Option { value, .. } => {
+                                        match value {
+                                            Some(v) => {
+                                                let result = v.evaluate(input.merge(
+                                                    &TypeAnnotatedValue::Record {
+                                                        value: vec![(pattern_expr_variable.to_string(), *v.clone())],
+                                                        typ: vec![(pattern_expr_variable.to_string(), AnalysedType::from(*v.clone()))]
+                                                    }
+                                                ))?;
+
+                                                resolved_result = Some(result);
+                                            }
+
+                                            None => {}
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            InBuiltConstructorInner::None => {
+                                match &match_evaluated {
+                                    TypeAnnotatedValue::Option { value, .. } => {
+                                        match value {
+                                            Some(_) => {}
+                                            None => {
+                                                let result = possible_resolution.evaluate(input)?;
+
+                                                resolved_result = Some(result);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            InBuiltConstructorInner::Ok => {
+                                match &match_evaluated {
+                                    TypeAnnotatedValue::Result { value, .. } => {
+                                        match value {
+                                            Ok(v) => {
+                                                let result = possible_resolution.evaluate(input.merge(
+                                                    &TypeAnnotatedValue::Record {
+                                                        value: vec![(pattern_expr_variable.to_string(), v.clone().unwrap())],
+                                                        typ: vec![(pattern_expr_variable.to_string(), AnalysedType::from(*v.clone().unwrap()))]
+                                                    }
+                                                ))?;
+
+                                                resolved_result = Some(result);
+                                                break;
+                                            }
+
+                                            None => {}
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            },
+                            InBuiltConstructorInner::Err => {
+                                match &match_evaluated {
+                                    TypeAnnotatedValue::Result {value, ..} => {
+                                        match value {
+                                            Ok(_) => {}
+                                            Err(v) => {
+                                                let result =
+                                                    &possible_resolution.evaluate(
+                                                        input.merge( &TypeAnnotatedValue::Record {
+                                                            value: vec![(pattern_expr_variable.to_string(), v.clone().unwrap())],
+                                                            typ: vec![(pattern_expr_variable.to_string(), AnalysedType::from(*v.clone().unwrap()))]
+                                                        })
+                                                    )?;
+
+                                                resolved_result = Some(result);
+                                                break;
+                                            }
+
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        ConstructorTypeName::CustomConstructor(_) => {
+                            return Err(EvaluationError::Message(
+                                "Pattern matching is currently supported only for inbuilt constructors. ok, err, some, none".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+            _ => {
+                return Err(EvaluationError::Message(
+                    "Currently only constructor pattern is supported".to_string(),
+                ));
+            }
+        }
+    }
+
+    resolved_result
+        .ok_or(EvaluationError::Message(
+            "Pattern matching failed".to_string(),
+        ))
 }
 
 #[cfg(test)]

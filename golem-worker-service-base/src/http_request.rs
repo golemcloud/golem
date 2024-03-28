@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 
 use derive_more::{Display, FromStr, Into};
+use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
+use serde_json::Value;
+use crate::resolved_variables::{Path, ResolvedVariables};
+use crate::tokeniser::tokenizer::Token;
 
 // An input request from external API gateways, that is then resolved to a worker request, using API definitions
 pub struct InputHttpRequest<'a> {
@@ -9,6 +13,102 @@ pub struct InputHttpRequest<'a> {
     pub headers: &'a HeaderMap,
     pub req_method: &'a Method,
     pub req_body: serde_json::Value,
+}
+
+impl InputHttpRequest {
+    pub fn from_http_request(
+        &self,
+        request_query_variables: HashMap<String, String>,
+        spec_query_variables: Vec<String>,
+        request_path_values: &HashMap<usize, String>,
+        spec_path_variables: &HashMap<usize, String>,
+    ) -> Result<TypeAnnotatedValue, Vec<String>> {
+
+        let mut headers: serde_json::Map<String, Value> = serde_json::Map::new();
+
+        for (header_name, header_value) in request_header {
+            let header_value_str = header_value.to_str().map_err(|err| vec![err.to_string()])?;
+
+            headers.insert(
+                header_name.to_string(),
+                Value::String(header_value_str.to_string()),
+            );
+        }
+
+        let request_headers = Value::Object(headers.clone());
+        let mut request_query_values = ResolvedVariables::get_request_query_values(
+            request_query_variables,
+            spec_query_variables,
+        )?;
+
+        let request_path_values =
+            ResolvedVariables::get_request_path_values(request_path_values, spec_path_variables)?;
+
+        request_query_values.extend(request_path_values);
+
+        let mut request_details = serde_json::Map::new();
+        request_details.insert("body".to_string(), request_body.clone());
+        request_details.insert("header".to_string(), request_headers);
+        request_details.insert("path".to_string(), Value::Object(request_query_values));
+
+        gateway_variables.insert(
+            Path::from_string_unsafe(Token::Request.to_string().as_str()),
+            Value::Object(request_details),
+        );
+
+        Ok(gateway_variables)
+    }
+
+    fn get_request_path_values(
+        request_path_values: &HashMap<usize, String>,
+        spec_path_variables: &HashMap<usize, String>,
+    ) -> Result<serde_json::Map<String, Value>, Vec<String>> {
+        let mut unavailable_path_variables: Vec<String> = vec![];
+        let mut path_variables_map = serde_json::Map::new();
+
+        for (index, spec_path_variable) in spec_path_variables.iter() {
+            if let Some(path_value) = request_path_values.get(index) {
+                path_variables_map.insert(
+                    spec_path_variable.clone(),
+                    serde_json::Value::String(path_value.trim().to_string()),
+                );
+            } else {
+                unavailable_path_variables.push(spec_path_variable.to_string());
+            }
+        }
+
+        if unavailable_path_variables.is_empty() {
+            Ok(path_variables_map)
+        } else {
+            Err(unavailable_path_variables)
+        }
+    }
+
+    fn get_request_query_values(
+        request_query_variables: HashMap<String, String>,
+        spec_query_variables: Vec<String>,
+    ) -> Result<serde_json::Map<String, Value>, Vec<String>> {
+        let mut unavailable_query_variables: Vec<String> = vec![];
+        let mut query_variable_map = serde_json::Map::new();
+
+        for spec_query_variable in spec_query_variables.iter() {
+            if let Some(query_value) = request_query_variables.get(spec_query_variable) {
+                query_variable_map.insert(
+                    spec_query_variable.clone(),
+                    serde_json::Value::String(query_value.trim().to_string()),
+                );
+            } else {
+                unavailable_query_variables.push(spec_query_variable.to_string());
+            }
+        }
+
+        if unavailable_query_variables.is_empty() {
+            Ok(query_variable_map)
+        } else {
+            Err(unavailable_query_variables)
+        }
+    }
+
 }
 
 #[derive(PartialEq, Debug, Display, FromStr, Into)]
