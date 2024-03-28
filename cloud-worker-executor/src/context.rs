@@ -14,7 +14,7 @@ use golem_worker_executor_base::durable_host::{
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::metrics::wasm::record_allocated_memory;
 use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
@@ -209,13 +209,13 @@ impl InvocationHooks for Context {
             .await
     }
 
-    async fn on_invocation_failure(&mut self, error: &Error) -> Result<(), Error> {
+    async fn on_invocation_failure(&mut self, error: &TrapType) -> Result<(), Error> {
         self.durable_ctx.on_invocation_failure(error).await
     }
 
     async fn on_invocation_failure_deactivated(
         &mut self,
-        error: &Error,
+        error: &TrapType,
     ) -> Result<WorkerStatus, Error> {
         self.durable_ctx
             .on_invocation_failure_deactivated(error)
@@ -284,11 +284,11 @@ impl ExternalOperations<Context> for Context {
         DurableWorkerCtx::<Context>::set_worker_status(this, worker_id, status).await
     }
 
-    async fn get_worker_retry_count<T: HasAll<Context> + Send + Sync>(
+    async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
         worker_id: &WorkerId,
-    ) -> u64 {
-        DurableWorkerCtx::<Context>::get_worker_retry_count(this, worker_id).await
+    ) -> Option<LastError> {
+        DurableWorkerCtx::<Context>::get_last_error_and_retry_count(this, worker_id).await
     }
 
     async fn prepare_instance(

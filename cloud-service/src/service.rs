@@ -2,6 +2,7 @@ use golem_service_base::config::TemplateStoreConfig;
 use golem_service_base::service::template_object_store;
 use std::sync::Arc;
 
+use crate::auth::AccountAuthorisation;
 use crate::config::{CloudServiceConfig, DbConfig};
 use crate::db;
 use crate::repo;
@@ -23,9 +24,9 @@ pub mod project_auth;
 pub mod project_grant;
 pub mod project_policy;
 pub mod template;
-
 pub mod token;
 pub mod worker;
+
 #[derive(Clone)]
 pub struct Services {
     pub auth_service: Arc<dyn auth::AuthService + Sync + Send>,
@@ -202,16 +203,30 @@ impl Services {
             ),
         );
 
-        let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
-            Arc::new(worker::WorkerServiceDefault::new(
-                worker_executor_clients.clone(),
+        let worker_service: Arc<dyn worker::WorkerService + Sync + Send> = {
+            use golem_worker_service_base::service::template::TemplateService as BaseTemplateService;
+            use golem_worker_service_base::service::worker::WorkerServiceDefault;
+
+            let wrapped_template_service: Arc<
+                dyn BaseTemplateService<AccountAuthorisation> + Send + Sync,
+            > = Arc::new(worker::TemplateServiceWrapper::new(
                 template_service.clone(),
+            ));
+
+            let base = WorkerServiceDefault::new(
+                worker_executor_clients.clone(),
+                wrapped_template_service,
                 routing_table_service.clone(),
+            );
+
+            Arc::new(worker::WorkerServiceDefault::new(
+                Arc::new(base),
                 project_auth_service.clone(),
+                plan_limit_service.clone(),
                 repositories.account_connections_repo.clone(),
                 repositories.account_workers_repo.clone(),
-                plan_limit_service.clone(),
-            ));
+            ))
+        };
 
         Ok(Services {
             auth_service,

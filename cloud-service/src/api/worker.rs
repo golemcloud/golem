@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use cloud_common::auth::GolemSecurityScheme;
 use golem_common::model::{CallingConvention, InvocationKey, TemplateId};
+use golem_worker_service_base::service::template::TemplateServiceError;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -11,7 +12,7 @@ use tonic::Status;
 use crate::api::ApiTags;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::template::{TemplateError, TemplateService};
-use crate::service::worker::WorkerService;
+use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
 use golem_service_base::model::*;
 
 #[derive(ApiResponse)]
@@ -66,86 +67,69 @@ impl From<Status> for WorkerError {
     }
 }
 
-impl From<crate::service::worker::WorkerError> for WorkerError {
-    fn from(value: crate::service::worker::WorkerError) -> Self {
-        use crate::service::worker::WorkerError as ServiceError;
-
+impl From<TemplateServiceError> for WorkerError {
+    fn from(value: TemplateServiceError) -> Self {
         match value {
-            ServiceError::Internal(error) => WorkerError::InternalError(Json(GolemErrorBody {
-                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
-            })),
-            ServiceError::Unauthorized(error) => {
-                WorkerError::Unauthorized(Json(ErrorBody { error }))
+            TemplateServiceError::BadRequest(errors) => {
+                WorkerError::BadRequest(Json(ErrorsBody { errors }))
             }
-            ServiceError::LimitExceeded(error) => {
-                WorkerError::LimitExceeded(Json(ErrorBody { error }))
+            TemplateServiceError::AlreadyExists(error) => {
+                WorkerError::AlreadyExists(Json(ErrorBody { error }))
             }
-            ServiceError::TypeCheckerError(error) => WorkerError::BadRequest(Json(ErrorsBody {
-                errors: vec![format!("Type checker error: {error}")],
-            })),
-            ServiceError::VersionedTemplateIdNotFound(template_id) => {
-                WorkerError::NotFound(Json(ErrorBody {
-                    error: format!("Template not found: {template_id}"),
+            TemplateServiceError::Internal(error) => {
+                WorkerError::InternalError(Json(GolemErrorBody {
+                    golem_error: GolemError::Unknown(GolemErrorUnknown {
+                        details: error.to_string(),
+                    }),
                 }))
             }
-            ServiceError::TemplateNotFound(template_id) => WorkerError::NotFound(Json(ErrorBody {
-                error: format!("Template not found: {template_id}"),
-            })),
-            ServiceError::ProjectIdNotFound(project_id) => WorkerError::NotFound(Json(ErrorBody {
-                error: format!("Project not found: {project_id}"),
-            })),
-            ServiceError::AccountIdNotFound(account_id) => WorkerError::NotFound(Json(ErrorBody {
-                error: format!("Account not found: {account_id}"),
-            })),
-            ServiceError::WorkerNotFound(worker_id) => WorkerError::NotFound(Json(ErrorBody {
-                error: format!("Worker not found: {worker_id}"),
-            })),
-            ServiceError::Golem(golem_error) => {
-                WorkerError::InternalError(Json(GolemErrorBody { golem_error }))
+            TemplateServiceError::Unauthorized(error) => {
+                WorkerError::Unauthorized(Json(ErrorBody { error }))
             }
-            ServiceError::DelegatedTemplateServiceError(error) => error.into(),
+            TemplateServiceError::Forbidden(error) => {
+                WorkerError::LimitExceeded(Json(ErrorBody { error }))
+            }
+            TemplateServiceError::NotFound(error) => {
+                WorkerError::NotFound(Json(ErrorBody { error }))
+            }
         }
     }
 }
 
-impl From<TemplateError> for WorkerError {
-    fn from(value: TemplateError) -> Self {
+impl From<WorkerServiceError> for WorkerError {
+    fn from(value: WorkerServiceError) -> Self {
+        use golem_worker_service_base::service::worker::WorkerServiceError as BaseServiceError;
+
         match value {
-            TemplateError::Internal(error) => WorkerError::InternalError(Json(GolemErrorBody {
-                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
-            })),
-            TemplateError::Unauthorized(error) => {
-                WorkerError::Unauthorized(Json(ErrorBody { error }))
-            }
-            TemplateError::LimitExceeded(error) => {
+            WorkerServiceError::Forbidden(error) => {
                 WorkerError::LimitExceeded(Json(ErrorBody { error }))
             }
-            TemplateError::AlreadyExists(template_id) => {
-                WorkerError::BadRequest(Json(ErrorsBody {
-                    errors: vec![format!("Template already exists: {template_id}")],
-                }))
+            WorkerServiceError::Unauthorized(error) => {
+                WorkerError::Unauthorized(Json(ErrorBody { error }))
             }
-            TemplateError::UnknownTemplateId(template_id) => {
-                WorkerError::NotFound(Json(ErrorBody {
-                    error: format!("Template not found: {template_id}"),
-                }))
-            }
-            TemplateError::UnknownVersionedTemplateId(template_id) => {
-                WorkerError::NotFound(Json(ErrorBody {
-                    error: format!("Template not found: {template_id}"),
-                }))
-            }
-            TemplateError::UnknownProjectId(project_id) => WorkerError::NotFound(Json(ErrorBody {
-                error: format!("Project not found: {project_id}"),
+            WorkerServiceError::ProjectNotFound(_) => WorkerError::NotFound(Json(ErrorBody {
+                error: value.to_string(),
             })),
-            TemplateError::IOError(error) => WorkerError::InternalError(Json(GolemErrorBody {
-                golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
-            })),
-            TemplateError::TemplateProcessingError(error) => {
-                WorkerError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
-                }))
-            }
+            WorkerServiceError::Base(error) => match error {
+                BaseServiceError::VersionedTemplateIdNotFound(_)
+                | BaseServiceError::TemplateNotFound(_)
+                | BaseServiceError::AccountIdNotFound(_)
+                | BaseServiceError::WorkerNotFound(_) => WorkerError::NotFound(Json(ErrorBody {
+                    error: error.to_string(),
+                })),
+                BaseServiceError::TypeChecker(error) => WorkerError::bad_request(error),
+                BaseServiceError::Template(error) => error.into(),
+                BaseServiceError::Internal(error) => {
+                    WorkerError::InternalError(Json(GolemErrorBody {
+                        golem_error: GolemError::Unknown(GolemErrorUnknown {
+                            details: error.to_string(),
+                        }),
+                    }))
+                }
+                BaseServiceError::Golem(golem_error) => {
+                    WorkerError::InternalError(Json(GolemErrorBody { golem_error }))
+                }
+            },
         }
     }
 }
@@ -161,6 +145,34 @@ impl From<AuthServiceError> for WorkerError {
                     golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
                 }))
             }
+        }
+    }
+}
+
+impl From<TemplateError> for WorkerError {
+    fn from(error: TemplateError) -> Self {
+        match error {
+            TemplateError::AlreadyExists(_) => WorkerError::AlreadyExists(Json(ErrorBody {
+                error: error.to_string(),
+            })),
+            TemplateError::UnknownTemplateId(_)
+            | TemplateError::UnknownVersionedTemplateId(_)
+            | TemplateError::UnknownProjectId(_) => WorkerError::NotFound(Json(ErrorBody {
+                error: error.to_string(),
+            })),
+            TemplateError::Unauthorized(error) => {
+                WorkerError::Unauthorized(Json(ErrorBody { error }))
+            }
+            TemplateError::LimitExceeded(error) => {
+                WorkerError::LimitExceeded(Json(ErrorBody { error }))
+            }
+            TemplateError::TemplateProcessingError(_)
+            | TemplateError::Internal(_)
+            | TemplateError::IOError(_) => WorkerError::InternalError(Json(GolemErrorBody {
+                golem_error: GolemError::Unknown(GolemErrorUnknown {
+                    details: error.to_string(),
+                }),
+            })),
         }
     }
 }

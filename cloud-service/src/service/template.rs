@@ -24,44 +24,27 @@ use crate::service::project_auth::{ProjectAuthorisationError, ProjectAuthorisati
 use golem_service_base::model::*;
 use golem_service_base::service::template_object_store::TemplateObjectStore;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum TemplateError {
+    #[error("Template already exists: {0}")]
     AlreadyExists(TemplateId),
+    #[error("Unknown template id: {0}")]
     UnknownTemplateId(TemplateId),
+    #[error("Unknown versioned template id: {0}")]
     UnknownVersionedTemplateId(VersionedTemplateId),
+    #[error("Unknown project id: {0}")]
     UnknownProjectId(ProjectId),
+    #[error("Internal error: {0}")]
     Internal(String),
+    #[error("IO error: {0}")]
     IOError(String),
+    #[error("Unauthorized: {0}")]
     Unauthorized(String),
+    #[error("Limit exceeded: {0}")]
     LimitExceeded(String),
+    #[error("Template processing error: {0}")]
     // TODO: processing error? more detail?
     TemplateProcessingError(String),
-}
-
-impl std::fmt::Display for TemplateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            TemplateError::AlreadyExists(ref template_id) => {
-                write!(f, "Template already exists: {}", template_id)
-            }
-            TemplateError::UnknownTemplateId(ref template_id) => {
-                write!(f, "Unknown template id: {}", template_id)
-            }
-            TemplateError::UnknownVersionedTemplateId(ref template_id) => {
-                write!(f, "Unknown versioned template id: {}", template_id)
-            }
-            TemplateError::UnknownProjectId(ref project_id) => {
-                write!(f, "Unknown project id: {}", project_id)
-            }
-            TemplateError::Internal(ref error) => write!(f, "Internal error: {}", error),
-            TemplateError::IOError(ref error) => write!(f, "IO error: {}", error),
-            TemplateError::Unauthorized(ref error) => write!(f, "Unauthorized: {}", error),
-            TemplateError::LimitExceeded(ref error) => write!(f, "Limit exceeded: {}", error),
-            TemplateError::TemplateProcessingError(ref error) => {
-                write!(f, "Template processing error: {}", error)
-            }
-        }
-    }
 }
 
 impl TemplateError {

@@ -43,6 +43,7 @@ pub struct LimitResult {
     pub plan: Plan,
 }
 
+#[derive(Clone)]
 pub struct CheckLimitResult {
     pub account_id: AccountId,
     pub count: i64,

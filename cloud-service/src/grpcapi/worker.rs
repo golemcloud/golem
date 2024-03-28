@@ -17,6 +17,7 @@ use golem_api_grpc::proto::golem::worker::{
     ResumeWorkerResponse, UnknownError, VersionedWorkerId, WorkerError as GrpcWorkerError,
     WorkerExecutionError, WorkerMetadata,
 };
+use golem_worker_service_base::service::worker::WorkerServiceError;
 use tap::TapFallible;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
@@ -523,53 +524,41 @@ impl From<crate::service::worker::WorkerError> for GrpcWorkerError {
 impl From<crate::service::worker::WorkerError> for worker_error::Error {
     fn from(value: crate::service::worker::WorkerError) -> Self {
         match value {
-            worker::WorkerError::TemplateNotFound(template_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Template not found: {template_id}"),
-                })
-            }
-            worker::WorkerError::ProjectIdNotFound(project_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Project not found: {project_id}"),
-                })
-            }
-            worker::WorkerError::AccountIdNotFound(account_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Account not found: {account_id}"),
-                })
-            }
-            worker::WorkerError::VersionedTemplateIdNotFound(template_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Versioned template not found: {template_id}"),
-                })
-            }
-            worker::WorkerError::WorkerNotFound(worker_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Worker not found: {worker_id}"),
-                })
-            }
-            worker::WorkerError::Internal(error) => {
-                worker_error::Error::InternalError(WorkerExecutionError {
-                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: error,
-                    })),
-                })
-            }
-            worker::WorkerError::TypeCheckerError(error) => {
-                worker_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![error],
-                })
+            worker::WorkerError::Base(error) => match error {
+                WorkerServiceError::Template(error) => error.into(),
+                WorkerServiceError::TypeChecker(error) => {
+                    worker_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![error],
+                    })
+                }
+                WorkerServiceError::VersionedTemplateIdNotFound(_)
+                | WorkerServiceError::TemplateNotFound(_)
+                | WorkerServiceError::AccountIdNotFound(_)
+                | WorkerServiceError::WorkerNotFound(_) => {
+                    worker_error::Error::NotFound(ErrorBody {
+                        error: error.to_string(),
+                    })
+                }
+                WorkerServiceError::Golem(golem) => {
+                    worker_error::Error::InternalError(golem.into())
+                }
+                WorkerServiceError::Internal(error) => {
+                    worker_error::Error::InternalError(WorkerExecutionError {
+                        error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                            details: error.to_string(),
+                        })),
+                    })
+                }
+            },
+            worker::WorkerError::Forbidden(error) => {
+                worker_error::Error::LimitExceeded(ErrorBody { error })
             }
             worker::WorkerError::Unauthorized(error) => {
                 worker_error::Error::Unauthorized(ErrorBody { error })
             }
-            worker::WorkerError::LimitExceeded(error) => {
-                worker_error::Error::LimitExceeded(ErrorBody { error })
-            }
-            worker::WorkerError::DelegatedTemplateServiceError(_) => todo!(),
-            worker::WorkerError::Golem(golem_error) => {
-                worker_error::Error::InternalError(golem_error.into())
-            }
+            worker::WorkerError::ProjectNotFound(_) => worker_error::Error::NotFound(ErrorBody {
+                error: value.to_string(),
+            }),
         }
     }
 }
