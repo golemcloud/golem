@@ -38,7 +38,7 @@ tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 figment = { workspace = true }
 url = { workspace = true }
-http_02 = { package = "http", version = "0.2.11" }
+http_02 = { workspace = true }
 hyper = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }

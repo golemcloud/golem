@@ -8,6 +8,7 @@ members = [
     "golem-common",
     "golem-service-base",
     "golem-template-compilation-service",
+    "golem-template-service-base",
     "golem-template-service",
     "golem-shard-manager",
     "golem-worker-executor-base",
@@ -67,6 +68,7 @@ futures-util = "0.3.29"
 golem-wasm-ast = "0.2.1"
 golem-wasm-rpc = { version = "0.0.13", default-features = false, features = ["host"] }
 http = "1.0.0" # keep in sync with wasmtime
+http_02 = { package = "http", version = "0.2.11" }
 humantime-serde = "1.1.1"
 hyper = { version = "1.0.1", features = ["full"] } # keep in sync with wasmtime
 iso8601-timestamp = "0.2.16"

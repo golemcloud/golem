@@ -17,7 +17,7 @@ golem-worker-executor-base = { version = "0.0.0", path = "../golem-worker-execut
 async-trait = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-http_02 = { package = "http", version = "0.2.11" }
+http_02 = { workspace = true }
 tokio = { workspace = true }
 
 tracing = { workspace = true }

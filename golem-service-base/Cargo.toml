@@ -16,7 +16,7 @@ aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bigdecimal = "0.4.2"
 http = { workspace = true }
-http_02 = { package = "http", version = "0.2.11" }
+http_02 = { workspace = true }
 hyper = { workspace = true }
 num-traits = "0.2"
 poem-openapi = { workspace = true }
