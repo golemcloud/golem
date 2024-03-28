@@ -1,0 +1,62 @@
+use std::cmp::Ordering;
+use std::fmt::Display;
+use golem_wasm_rpc::TypeAnnotatedValue;
+
+pub trait GetPrimitive {
+    fn get_primitive(&self) -> Option<Primitive>;
+}
+
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum Primitive {
+    Num(Number),
+    String(String),
+    Bool(bool),
+}
+
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum Number {
+    PosInt(u64),
+    NegInt(i64),
+    Float(f64),
+}
+
+impl Display for Primitive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Primitive::Num(number) => write!(f, "{}", number),
+            Primitive::String(value) => write!(f, "{}", value),
+            Primitive::Bool(value) => write!(f, "{}", value),
+        }
+    }
+}
+
+
+impl GetPrimitive for TypeAnnotatedValue {
+    fn get_primitive(&self) -> Option<Primitive> {
+        let optional_number = get_number(self);
+
+
+        match optional_number {
+            Some(number) => Some(Primitive::Num(number)),
+            None => match self {
+                TypeAnnotatedValue::Str(value) => Some(Primitive::String(value.clone())),
+                TypeAnnotatedValue::Bool(value) => Some(Primitive::Bool(*value)),
+                _ => None,
+            }
+        }
+    }
+}
+
+fn get_number(type_annotated_value: &TypeAnnotatedValue) -> Option<Number> {
+    match type_annotated_value {
+        TypeAnnotatedValue::S16(value) => Some(Number::NegInt(*value as i64)),
+        TypeAnnotatedValue::S32(value) => Some(Number::NegInt(*value as i64)),
+        TypeAnnotatedValue::S64(value) => Some(Number::NegInt(*value as i64)),
+        TypeAnnotatedValue::U16(value) => Some(Number::PosInt(*value as u64)),
+        TypeAnnotatedValue::U32(value) => Some(Number::PosInt(*value as u64)),
+        TypeAnnotatedValue::U64(value) => Some(Number::PosInt(*value as u64)),
+        TypeAnnotatedValue::F32(value) => Some(Number::Float(*value as f64)),
+        TypeAnnotatedValue::F64(value) => Some(Number::Float(*value as f64)),
+        _ => None,
+    }
+}

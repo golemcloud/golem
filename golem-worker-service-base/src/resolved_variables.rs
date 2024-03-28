@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fmt::Display;
 
 use bincode::{Decode, Encode};
+use golem_service_base::model::Type;
+use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -13,7 +15,7 @@ use crate::tokeniser::tokenizer::{Token, Tokenizer};
 // Values are often resolved from input request, or output response of a worker, both of which are JSON.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedVariables {
-    pub variables: HashMap<Path, Value>,
+    pub variables: TypeAnnotatedValue,
 }
 
 impl Default for ResolvedVariables {
@@ -27,15 +29,6 @@ impl ResolvedVariables {
         ResolvedVariables {
             variables: HashMap::new(),
         }
-    }
-
-    pub fn from_worker_response(worker_response: &Value) -> ResolvedVariables {
-        let mut vars: ResolvedVariables = ResolvedVariables::new();
-        let path = Path::from_string_unsafe(Token::WorkerResponse.to_string().as_str());
-
-        vars.insert(path, worker_response.clone());
-
-        vars
     }
 
     pub fn from_http_request(
@@ -230,6 +223,20 @@ fn get_from_sequence(sequence: &[Value], path_component: &PathComponent) -> Opti
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct Path(pub Vec<PathComponent>);
 
+impl Path {
+    pub fn from_key(input: &str) -> Path {
+        let mut path = Path::new();
+        path.update_key(input);
+        path
+    }
+
+    pub fn from_index(index: usize) -> Path {
+        let mut path = Path::new();
+        path.update_index(index);
+        path
+    }
+}
+
 pub struct RemainingPath(Path);
 
 impl RemainingPath {
@@ -393,6 +400,15 @@ pub enum PathComponent {
 }
 
 impl PathComponent {
+
+    fn key(input: &str) -> PathComponent {
+        PathComponent::KeyName(KeyName(input.to_string()))
+    }
+
+    fn ind(index: usize) -> PathComponent {
+        PathComponent::Index(Index(index))
+    }
+
     fn get_index(&self) -> Option<&Index> {
         match self {
             PathComponent::KeyName(_) => None,

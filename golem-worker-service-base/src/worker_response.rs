@@ -4,26 +4,33 @@ use crate::api_definition::ResponseMapping;
 use crate::evaluator::{EvaluationError, Evaluator};
 use crate::expr::Expr;
 use crate::resolved_variables::ResolvedVariables;
+use crate::type_inference::*;
 use crate::worker_request::WorkerRequest;
 use crate::worker_request_to_response::WorkerRequestToResponse;
 use async_trait::async_trait;
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::json::JsonFunctionResult;
+use golem_wasm_rpc::TypeAnnotatedValue;
 use http::{HeaderMap, StatusCode};
 use poem::{Body, ResponseParts};
 use serde_json::{json, Value};
 use tracing::info;
+use crate::primitive::GetPrimitive;
+use crate::service::worker::ConnectProxyError::Json;
+use crate::tokeniser::tokenizer::Token;
 
 pub struct WorkerResponse {
-    pub result: Value,
+    pub result: TypeAnnotatedValue,
 }
 
 impl WorkerResponse {
     pub fn to_http_response(
         &self,
         response_mapping: &Option<ResponseMapping>,
-        resolved_variables_from_request: &ResolvedVariables,
+        request_type_annotated_value: &TypeAnnotatedValue,
     ) -> poem::Response {
         if let Some(mapping) = response_mapping {
-            match &self.to_intermediate_http_response(mapping, resolved_variables_from_request) {
+            match &self.to_intermediate_http_response(mapping, request_type_annotated_value) {
                 Ok(intermediate_response) => intermediate_response.to_http_response(),
                 Err(e) => poem::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
@@ -33,7 +40,8 @@ impl WorkerResponse {
                     ))),
             }
         } else {
-            let body: Body = Body::from_json(&self.result).unwrap();
+            let json = JsonFunctionResult::from(self.result.clone());
+            let body: Body = Body::from_json(json.0).unwrap();
             poem::Response::builder().body(body)
         }
     }
@@ -41,19 +49,36 @@ impl WorkerResponse {
     fn to_intermediate_http_response(
         &self,
         response_mapping: &ResponseMapping,
-        resolved_variables_from_request: &ResolvedVariables,
+        request_value: &TypeAnnotatedValue,
     ) -> Result<IntermediateHttpResponse, EvaluationError> {
-        let variables = {
-            let mut response_variables = ResolvedVariables::from_worker_response(&self.result);
-            response_variables.extend(resolved_variables_from_request);
-            response_variables
+        let worker_response_type = AnalysedType::from(&self.result);
+
+        let worker_response_result = &self.result;
+
+        // Merging request related type annotated value with worker-response type annotated value
+        let type_annotated_value = match request_value {
+            TypeAnnotatedValue::Record { value, typ } => {
+                let mut new_value = value.clone();
+                let mut types = typ.clone();
+                types.push((Token::WorkerResponse.to_string(), worker_response_type));
+                new_value.push((Token::WorkerResponse.to_string(), worker_response_result.clone()));
+                TypeAnnotatedValue::Record {
+                    typ: types,
+                    value: new_value
+                }
+            }
+            _ =>
+                TypeAnnotatedValue::Record {
+                    typ: vec![(Token::WorkerResponse.to_string(), worker_response_type)],
+                    value: vec![(Token::WorkerResponse.to_string(), worker_response_result.clone())]
+                }
         };
 
-        let status_code = get_status_code(&response_mapping.status, &variables)?;
+        let status_code = get_status_code(&response_mapping.status, &type_annotated_value)?;
 
-        let headers = ResolvedResponseHeaders::from(&response_mapping.headers, &variables)?;
+        let headers = ResolvedResponseHeaders::from(&response_mapping.headers, &type_annotated_value)?;
 
-        let response_body = response_mapping.body.evaluate(&variables)?;
+        let response_body = response_mapping.body.evaluate(&type_annotated_value)?;
 
         Ok(IntermediateHttpResponse {
             body: response_body,
@@ -64,7 +89,7 @@ impl WorkerResponse {
 }
 
 pub struct IntermediateHttpResponse {
-    pub body: Value,
+    pub body: TypeAnnotatedValue,
     pub status: StatusCode,
     pub headers: ResolvedResponseHeaders,
 }
@@ -86,7 +111,7 @@ impl IntermediateHttpResponse {
                     headers: response_headers,
                     extensions: Default::default(),
                 };
-                let body: Body = Body::from_json(body.clone()).unwrap();
+                let body: Body = Body::from_json(JsonFunctionResult::from(body.clone()).0).unwrap();
                 poem::Response::from_parts(parts, body)
             }
             Err(err) => poem::Response::builder()
@@ -119,16 +144,16 @@ impl ResolvedResponseHeaders {
     // to the http response. Here we resolve the expression based on the resolved variables (that was formed from the response of the worker)
     pub fn from(
         header_mapping: &HashMap<String, Expr>,
-        gateway_variables: &ResolvedVariables,
+        input: &TypeAnnotatedValue, // The input to evaluating header expression is a type annotated value
     ) -> Result<ResolvedResponseHeaders, EvaluationError> {
         let mut resolved_headers: HashMap<String, String> = HashMap::new();
 
-        for (header_name, value_expr) in header_mapping {
-            let value = value_expr.evaluate(gateway_variables)?;
+        for (header_name, header_value_expr) in header_mapping {
+            let value = header_value_expr.evaluate(input)?;
 
-            let value_str = value.as_str().ok_or(EvaluationError::Message(format!(
+            let value_str = value.get_primitive().ok_or(EvaluationError::Message(format!(
                 "Header value is not a string. {}",
-                value
+                JsonFunctionResult::from(value).0
             )))?;
 
             resolved_headers.insert(header_name.clone(), value_str.to_string());
@@ -178,8 +203,13 @@ impl WorkerRequestToResponse<ResponseMapping, poem::Response> for NoOpWorkerRequ
             }]
         );
 
+        // From request body you can infer analysed type
+        let analyzed_type = infer_analysed_type(&sample_json_data).unwrap();
+        let type_anntoated_value =
+            TypeAnnotatedValue::from_json_value(&sample_json_data, &analyzed_type).unwrap();
+
         let worker_response = WorkerResponse {
-            result: sample_json_data,
+            result: type_anntoated_value,
         };
 
         worker_response.to_http_response(response_mapping, resolved_variables)
@@ -188,7 +218,7 @@ impl WorkerRequestToResponse<ResponseMapping, poem::Response> for NoOpWorkerRequ
 
 fn get_status_code(
     status_expr: &Expr,
-    resolved_variables: &ResolvedVariables,
+    resolved_variables: &TypeAnnotatedValue,
 ) -> Result<StatusCode, EvaluationError> {
     let status_value = status_expr.evaluate(resolved_variables)?;
     let status_res: Result<u16, EvaluationError> =

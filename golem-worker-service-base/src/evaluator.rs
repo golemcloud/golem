@@ -1,14 +1,23 @@
+use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::json::JsonFunctionResult;
+use hyper::ext::HashMap;
 
 use serde_json::Value;
 
 use super::tokeniser::tokenizer::{Token, Tokenizer};
 use crate::expr::{ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner};
-use crate::resolved_variables::{Path, ResolvedVariables};
+use crate::resolved_variables::{Path, PathComponent, ResolvedVariables};
 use crate::value_typed::ValueTyped;
+use crate::getter::Getter;
+use crate::primitive::GetPrimitive;
 
-pub trait Evaluator<T> {
-    fn evaluate(&self, resolved_variables: &ResolvedVariables) -> Result<T, EvaluationError>;
+pub trait Evaluator {
+    fn evaluate(
+        &self,
+        input: &TypeAnnotatedValue,
+    ) -> Result<TypeAnnotatedValue, EvaluationError>;
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -24,22 +33,22 @@ impl Display for EvaluationError {
     }
 }
 
-pub struct Primitive<'t> {
+pub struct RawString<'t> {
     pub input: &'t str,
 }
 
 // When we expect only primitives within a string, and uses ${} not as an expr,
 // but as a mere place holder. This type disallows complex structures to end up
 // in values such as function-name.
-impl<'t> Primitive<'t> {
-    pub fn new(str: &'t str) -> Primitive<'t> {
-        Primitive { input: str }
+impl<'t> RawString<'t> {
+    pub fn new(str: &'t str) -> RawString<'t> {
+        RawString { input: str }
     }
 }
 
 // Foo/{user-id}
-impl<'t> Evaluator<String> for Primitive<'t> {
-    fn evaluate(&self, place_holder_values: &ResolvedVariables) -> Result<String, EvaluationError> {
+impl<'t> Evaluator for RawString<'t> {
+    fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError> {
         let mut combined_string = String::new();
         let result: crate::tokeniser::tokenizer::TokeniserResult = Tokenizer::new(self.input).run();
 
@@ -52,23 +61,19 @@ impl<'t> Evaluator<String> for Primitive<'t> {
                         .capture_string_until(vec![&Token::InterpolationStart], &Token::CloseParen);
 
                     if let Some(place_holder_name) = place_holder_name {
-                        match place_holder_values.get_key(place_holder_name.as_str()) {
-                            Some(place_holder_value) => match place_holder_value {
-                                Value::Bool(bool) => {
-                                    combined_string.push_str(bool.to_string().as_str())
-                                }
-                                Value::Number(number) => {
-                                    combined_string.push_str(number.to_string().as_str())
-                                }
-                                Value::String(string) => {
-                                    combined_string.push_str(string.to_string().as_str())
-                                }
+                        match input.get(&Path::from_key(place_holder_name.as_str())) {
+                            Some(type_annotated_value) => {
+                                match type_annotated_value.get_primitive() {
+                                    Some(primitive) => {
+                                        combined_string.push_str(primitive.to_string().as_str())
+                                    }
 
-                                _ => {
-                                    return Result::Err(EvaluationError::Message(format!(
-                                        "Unsupported json type to be replaced in place holder. Make sure the values are primitive {}",
-                                        place_holder_name,
-                                    )));
+                                    None => {
+                                        return Result::Err(EvaluationError::Message(format!(
+                                            "Unsupported json type to be replaced in place holder. Make sure the values are primitive {}",
+                                            place_holder_name,
+                                        )));
+                                    }
                                 }
                             },
 
@@ -85,36 +90,36 @@ impl<'t> Evaluator<String> for Primitive<'t> {
             }
         }
 
-        Ok(combined_string)
+        Ok(TypeAnnotatedValue::Str(combined_string))
     }
 }
 
-impl Evaluator<Value> for Expr {
-    fn evaluate(&self, resolved_variables: &ResolvedVariables) -> Result<Value, EvaluationError> {
+impl Evaluator for Expr {
+    fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError> {
         let expr: &Expr = self;
 
         // An expression evaluation needs to be careful with string values
         // and therefore returns ValueTyped
         fn go(
             expr: &Expr,
-            resolved_variables: &ResolvedVariables,
-        ) -> Result<ValueTyped, EvaluationError> {
+            input: &TypeAnnotatedValue,
+        ) -> Result<TypeAnnotatedValue, EvaluationError> {
             match expr.clone() {
                 Expr::Request() => {
-                    match resolved_variables.get_path(&Path::from_string_unsafe(
+                    match input.get(&Path::from_string_unsafe(
                         Token::Request.to_string().as_str(),
                     )) {
-                        Some(v) => Ok(ValueTyped::from_json(&v)),
+                        Some(v) => Ok(v),
                         None => Err(EvaluationError::Message(
                             "Details of request is missing".to_string(),
                         )),
                     }
                 }
                 Expr::WorkerResponse() => {
-                    match resolved_variables.get_path(&Path::from_string_unsafe(
+                    match input.get(&Path::from_string_unsafe(
                         Token::WorkerResponse.to_string().as_str(),
                     )) {
-                        Some(v) => Ok(ValueTyped::from_json(&v)),
+                        Some(v) => Ok(v),
                         None => Err(EvaluationError::Message(
                             "Details of worker response is missing".to_string(),
                         )),
@@ -122,42 +127,29 @@ impl Evaluator<Value> for Expr {
                 }
 
                 Expr::SelectIndex(expr, index) => {
-                    let evaluation_result = go(&expr, resolved_variables)?;
+                    let evaluation_result = go(&expr, input)?;
 
-                    evaluation_result
-                        .as_array()
+                    evaluation_result.get(&Path::from_index(index))
                         .ok_or(EvaluationError::Message(format!(
-                            "Result is not an array to get the index {}",
-                            index
-                        )))?
-                        .get(index)
-                        .map(ValueTyped::from_json)
-                        .ok_or(EvaluationError::Message(format!(
-                            "The array doesn't contain {} elements",
-                            index
+                            "Unable to fetch the element at index {} in {}",
+                            index, JsonFunctionResult::from(&evaluation_result).0
                         )))
                 }
 
                 Expr::SelectField(expr, field_name) => {
-                    let evaluation_result = go(&expr, resolved_variables)?;
+                    let evaluation_result = go(&expr, input)?;
 
                     evaluation_result
-                        .as_object()
+                        .get(&Path::from_key(field_name.as_str()))
                         .ok_or(EvaluationError::Message(format!(
-                            "Result is not an object to get the field {}",
-                            field_name
-                        )))?
-                        .get(&field_name)
-                        .map(ValueTyped::from_json)
-                        .ok_or(EvaluationError::Message(format!(
-                            "The result doesn't contain the field {}",
-                            field_name
+                            "The result {} doesn't contain the field {}",
+                            JsonFunctionResult::from(&evaluation_result).0, field_name
                         )))
                 }
 
                 Expr::EqualTo(left, right) => {
-                    let left = go(&left, resolved_variables)?;
-                    let right = go(&right, resolved_variables)?;
+                    let left = go(&left, input)?;
+                    let right = go(&right, input)?;
 
                     let result = left
                         .equal_to(right)
@@ -166,8 +158,8 @@ impl Evaluator<Value> for Expr {
                     Ok(ValueTyped::Boolean(result))
                 }
                 Expr::GreaterThan(left, right) => {
-                    let left = go(&left, resolved_variables)?;
-                    let right = go(&right, resolved_variables)?;
+                    let left = go(&left, input)?;
+                    let right = go(&right, input)?;
 
                     let result = left
                         .greater_than(right)
@@ -176,98 +168,126 @@ impl Evaluator<Value> for Expr {
                     Ok(ValueTyped::Boolean(result))
                 }
                 Expr::GreaterThanOrEqualTo(left, right) => {
-                    let left = go(&left, resolved_variables)?;
-                    let right = go(&right, resolved_variables)?;
+                    let left = go(&left, input)?;
+                    let right = go(&right, input)?;
 
-                    let result = left
-                        .greater_than_or_equal_to(right)
-                        .map_err(|err| EvaluationError::Message(err.to_string()))?;
-
-                    Ok(ValueTyped::Boolean(result))
+                    match (left.get_primitive(), right.get_primitive()) {
+                        (Some(left), Some(right)) => {
+                            let result = left >= right;
+                            Ok(TypeAnnotatedValue::Bool(result))
+                        }
+                        _ => Err(EvaluationError::Message(
+                            "Unsupported json type to compare".to_string(),
+                        )),
+                    }
                 }
                 Expr::LessThan(left, right) => {
-                    let left = go(&left, resolved_variables)?;
-                    let right = go(&right, resolved_variables)?;
-                    let result = left
-                        .less_than(right)
-                        .map_err(|err| EvaluationError::Message(err.to_string()))?;
+                    let left = go(&left, input)?;
+                    let right = go(&right, input)?;
 
-                    Ok(ValueTyped::Boolean(result))
+                    match (left.get_primitive(), right.get_primitive()) {
+                        (Some(left), Some(right)) => {
+                            let result = left < right;
+                            Ok(TypeAnnotatedValue::Bool(result))
+                        }
+                        _ => Err(EvaluationError::Message(
+                            "Unsupported json type to compare".to_string(),
+                        )),
+                    }
                 }
                 Expr::LessThanOrEqualTo(left, right) => {
-                    let left = go(&left, resolved_variables)?;
-                    let right = go(&right, resolved_variables)?;
-                    let result = left
-                        .less_than_or_equal_to(right)
-                        .map_err(|err| EvaluationError::Message(err.to_string()))?;
+                    let left = go(&left, input)?;
+                    let right = go(&right, input)?;
 
-                    Ok(ValueTyped::Boolean(result))
+                    match (left.get_primitive(), right.get_primitive()) {
+                        (Some(left), Some(right)) => {
+                            let result = left <= right;
+                            Ok(TypeAnnotatedValue::Bool(result))
+                        }
+                        _ => Err(EvaluationError::Message(
+                            "Unsupported json type to compare".to_string(),
+                        )),
+                    }
                 }
+
                 Expr::Not(expr) => {
-                    let evaluated_expr = expr.evaluate(resolved_variables)?;
+                    let evaluated_expr = expr.evaluate(input)?;
 
-                    let bool = evaluated_expr.as_bool().ok_or(EvaluationError::Message(format!(
-                        "The expression is evaluated to {} but it is not a boolean expression to apply not (!) operator on",
-                        evaluated_expr
-                    )))?;
-
-                    Ok(ValueTyped::Boolean(!bool))
+                    match evaluated_expr {
+                        TypeAnnotatedValue::Bool(value) => Ok(TypeAnnotatedValue::Bool(!value)),
+                        _ => Err(EvaluationError::Message(format!(
+                            "The expression is evaluated to {} but it is not a boolean expression to apply not (!) operator on",
+                            JsonFunctionResult::from(&evaluated_expr).0
+                        ))),
+                    }
                 }
 
                 Expr::Cond(pred0, left, right) => {
-                    let pred = go(&pred0, resolved_variables)?;
-                    let left = go(&left, resolved_variables)?;
-                    let right = go(&right, resolved_variables)?;
+                    let pred = go(&pred0, input)?;
+                    let left = go(&left, input)?;
+                    let right = go(&right, input)?;
 
-                    let bool: bool = pred.as_bool().ok_or(EvaluationError::Message(format!(
-                        "The predicate expression is evaluated to {}, but it is not a boolean expression",
-                        pred
-                    )))?;
-
-                    if bool {
-                        Ok(left)
-                    } else {
-                        Ok(right)
+                    match pred {
+                        TypeAnnotatedValue::Bool(value) => {
+                            if value {
+                                Ok(left)
+                            } else {
+                                Ok(right)
+                            }
+                        }
+                        _ => Err(EvaluationError::Message(format!(
+                            "The predicate expression is evaluated to {} but it is not a boolean expression",
+                            JsonFunctionResult::from(&pred).0
+                        ))),
                     }
                 }
 
                 Expr::Sequence(exprs) => {
-                    let mut result: Vec<Value> = vec![];
+                    let mut result: Vec<TypeAnnotatedValue> = vec![];
 
                     for expr in exprs {
-                        match go(&expr, resolved_variables) {
-                            Ok(value) => result.push(value.to_json()),
+                        match go(&expr, input) {
+                            Ok(value) => {
+                                result.push(value)
+                            },
                             Err(result) => return Err(result),
                         }
                     }
-
-                    Ok(ValueTyped::ComplexJson(Value::Array(result)))
+                    match result.get(0) {
+                        Some(value) =>
+                            Ok(TypeAnnotatedValue::List { values: result.clone(), typ: AnalysedType::from(value) }),
+                        None =>
+                            Ok(TypeAnnotatedValue::List { values: result.clone(), typ: AnalysedType::Tuple(vec![]) }), // Support optional type in List
+                    }
                 }
 
                 Expr::Record(tuples) => {
-                    let mut map: serde_json::Map<String, Value> = serde_json::Map::new();
+                    let mut values: Vec<(String, TypeAnnotatedValue)> = vec![];
 
                     for (key, expr) in tuples {
-                        match go(&expr, resolved_variables) {
+                        match go(&expr, input) {
                             Ok(value) => {
-                                map.insert(key, value.to_json());
+                                values.push((key, value));
                             }
 
                             Err(result) => return Err(result),
                         }
                     }
 
-                    Ok(ValueTyped::ComplexJson(Value::Object(map)))
+                    let types: Vec<(String, AnalysedType)> =
+                        values.iter().map(|(key, value)| (key.clone(), AnalysedType::from(value))).collect();
+
+                    Ok(TypeAnnotatedValue::Record { value: values, typ: types })
                 }
 
                 Expr::Concat(exprs) => {
                     let mut result = String::new();
 
                     for expr in exprs {
-                        match go(&expr, resolved_variables) {
+                        match go(&expr, input) {
                             Ok(value) => {
-                                if let Some(primitive) = value.get_primitive_string() {
-                                    result.push_str(primitive.as_str())
+                                if let Some(primitive) = value.get_primitive() {
+                                    result.push_str(primitive.to_string().as_str())
                                 } else {
                                     return Err(EvaluationError::Message(format!("Cannot append a complex expression {} to form strings. Please check the expression", value)));
                                 }
@@ -277,7 +297,7 @@ impl Evaluator<Value> for Expr {
                         }
                     }
 
-                    Ok(ValueTyped::String(result))
+                    Ok(TypeAnnotatedValue::Str(result))
                 }
 
                 Expr::Literal(literal) => Ok(ValueTyped::from_string(literal.as_str())),

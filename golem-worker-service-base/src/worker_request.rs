@@ -2,7 +2,7 @@ use golem_common::model::TemplateId;
 use serde_json::Value;
 
 use crate::api_request_route_resolver::ResolvedWorkerBinding;
-use crate::evaluator::{Evaluator, Primitive};
+use crate::evaluator::{Evaluator, RawString};
 
 // Every input request can be resolved to a worker request,
 // along with the value of any variables that's associated with it.
@@ -25,7 +25,7 @@ impl WorkerRequest {
             .evaluate(&resolved_route.resolved_variables)
             .map_err(|err| err.to_string())?;
 
-        let function_name = Primitive::new(
+        let function_name = RawString::new(
             &resolved_route
                 .resolved_worker_binding_template
                 .function_name,
