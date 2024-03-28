@@ -733,7 +733,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         );
 
         Ok(calculate_worker_status(
-            self.state.recovery_management.clone(),
             &retry_config,
             error,
             previous_tries,

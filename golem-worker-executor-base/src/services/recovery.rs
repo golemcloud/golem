@@ -66,13 +66,6 @@ pub trait RecoveryManagement {
         retry_config: &RetryConfig,
         last_error: &Option<LastError>,
     ) -> RecoveryDecision;
-
-    fn is_retriable(
-        &self,
-        retry_config: &RetryConfig,
-        error: &WorkerError,
-        retry_count: u64,
-    ) -> bool;
 }
 
 pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
@@ -345,7 +338,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             TrapType::Interrupt(InterruptKind::Jump) => RecoveryDecision::Immediate,
             TrapType::Exit => RecoveryDecision::None,
             TrapType::Error(error) => {
-                if self.is_retriable(retry_config, error, previous_tries) {
+                if is_worker_error_retriable(retry_config, error, previous_tries) {
                     match get_delay(retry_config, previous_tries) {
                         Some(delay) => RecoveryDecision::Delayed(delay),
                         None => RecoveryDecision::None,
@@ -364,7 +357,11 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
     ) -> RecoveryDecision {
         match last_error {
             Some(last_error) => {
-                if self.is_retriable(retry_config, &last_error.error, last_error.retry_count) {
+                if is_worker_error_retriable(
+                    retry_config,
+                    &last_error.error,
+                    last_error.retry_count,
+                ) {
                     RecoveryDecision::Immediate
                 } else {
                     RecoveryDecision::None
@@ -491,18 +488,6 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
         )
         .await
     }
-
-    fn is_retriable(
-        &self,
-        retry_config: &RetryConfig,
-        error: &WorkerError,
-        retry_count: u64,
-    ) -> bool {
-        match error {
-            WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
-            WorkerError::StackOverflow => false,
-        }
-    }
 }
 
 async fn recover_worker<Ctx: WorkerCtx, T>(this: &T, worker_id: &VersionedWorkerId)
@@ -530,6 +515,17 @@ where
         None => {
             warn!("Worker {} not found", worker_id);
         }
+    }
+}
+
+pub fn is_worker_error_retriable(
+    retry_config: &RetryConfig,
+    error: &WorkerError,
+    retry_count: u64,
+) -> bool {
+    match error {
+        WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
+        WorkerError::StackOverflow => false,
     }
 }
 
@@ -570,15 +566,6 @@ impl RecoveryManagement for RecoveryManagementMock {
         _retry_config: &RetryConfig,
         _previous_error: &Option<LastError>,
     ) -> RecoveryDecision {
-        todo!()
-    }
-
-    fn is_retriable(
-        &self,
-        _retry_config: &RetryConfig,
-        _error: &WorkerError,
-        _previous_tries: u64,
-    ) -> bool {
         todo!()
     }
 }

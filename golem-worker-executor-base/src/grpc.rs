@@ -685,11 +685,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .ok_or(GolemError::invalid_request("Invalid template id"))?;
 
         let filter: Option<WorkerFilter> = match request.filter {
-            Some(f) => {
-                let f = f.try_into().map_err(|e| GolemError::invalid_request(e))?;
-                Some(f)
-            }
-            None => None,
+            Some(f) => Some(f.try_into().map_err(GolemError::invalid_request)?),
+            _ => None,
         };
 
         let workers = self
@@ -713,11 +710,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .ok_or(GolemError::invalid_request("Invalid template id"))?;
 
         let filter: Option<WorkerFilter> = match request.filter {
-            Some(f) => {
-                let f = f.try_into().map_err(|e| GolemError::invalid_request(e))?;
-                Some(f)
-            }
-            None => None,
+            Some(f) => Some(f.try_into().map_err(GolemError::invalid_request)?),
+            _ => None,
         };
 
         let (new_cursor, workers) = self

@@ -1,12 +1,16 @@
 use crate::error::GolemError;
 use crate::services::active_workers::ActiveWorkers;
-use crate::services::oplog::OplogServiceDefault;
+use crate::services::golem_config::GolemConfig;
+use crate::services::oplog::{OplogService, OplogServiceDefault};
 use crate::services::worker::{WorkerService, WorkerServiceInMemory, WorkerServiceRedis};
+use crate::services::{golem_config, HasConfig, HasOplogService, HasWorkerService};
+use crate::worker::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::{TemplateId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus};
 use golem_common::redis::RedisPool;
 use std::sync::Arc;
+use tracing::info;
 
 #[async_trait]
 pub trait RunningWorkerEnumerationService {
@@ -31,6 +35,12 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
         template_id: &TemplateId,
         filter: Option<WorkerFilter>,
     ) -> Result<Vec<WorkerMetadata>, GolemError> {
+        info!(
+            "Get workers for template: {}, filter: {}",
+            template_id,
+            filter.is_some()
+        );
+
         let active_workers = self.active_workers.enum_workers();
 
         let mut template_workers: Vec<WorkerMetadata> = vec![];
@@ -106,6 +116,7 @@ pub struct WorkerEnumerationServiceRedis {
     redis: RedisPool,
     worker_service: Arc<WorkerServiceRedis>,
     oplog_service: Arc<OplogServiceDefault>,
+    golem_config: Arc<golem_config::GolemConfig>,
 }
 
 impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
@@ -113,11 +124,13 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
         redis: RedisPool,
         worker_service: Arc<WorkerServiceRedis>,
         oplog_service: Arc<OplogServiceDefault>,
+        golem_config: Arc<golem_config::GolemConfig>,
     ) -> Self {
         Self {
             redis,
             worker_service,
             oplog_service,
+            golem_config,
         }
     }
 
@@ -129,7 +142,6 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
         count: usize,
         precise: bool,
     ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
-        // TODO implement precise
         let mut new_cursor: Option<usize> = None;
         let mut template_workers: Vec<WorkerMetadata> = vec![];
 
@@ -144,12 +156,26 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
 
         for worker_redis_key in worker_redis_keys {
             let worker_id = get_worker_id_from_redis_key(&worker_redis_key, template_id)?;
-
             let worker_metadata = self.worker_service.get(&worker_id).await;
 
             if let Some(worker_metadata) = worker_metadata {
-                if filter.clone().map_or(true, |f| f.matches(&worker_metadata)) {
-                    template_workers.push(worker_metadata);
+                let metadata = if precise {
+                    let last_known_status = calculate_last_known_status(
+                        self,
+                        &worker_id,
+                        &Some(worker_metadata.clone()),
+                    )
+                    .await?;
+                    WorkerMetadata {
+                        last_known_status,
+                        ..worker_metadata
+                    }
+                } else {
+                    worker_metadata
+                };
+
+                if filter.clone().map_or(true, |f| f.matches(&metadata)) {
+                    template_workers.push(metadata);
                 }
             }
         }
@@ -159,6 +185,24 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
         }
 
         Ok((new_cursor, template_workers))
+    }
+}
+
+impl HasOplogService for WorkerEnumerationServiceRedis {
+    fn oplog_service(&self) -> Arc<dyn OplogService + Send + Sync> {
+        self.oplog_service.clone()
+    }
+}
+
+impl HasWorkerService for WorkerEnumerationServiceRedis {
+    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync> {
+        self.worker_service.clone()
+    }
+}
+
+impl HasConfig for WorkerEnumerationServiceRedis {
+    fn config(&self) -> Arc<GolemConfig> {
+        self.golem_config.clone()
     }
 }
 
@@ -174,6 +218,14 @@ impl WorkerEnumerationService
         count: usize,
         precise: bool,
     ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
+        info!(
+            "Get workers for template: {}, filter: {}, cursor: {}, count: {}, precise: {}",
+            template_id,
+            filter.is_some(),
+            cursor,
+            count,
+            precise
+        );
         let mut new_cursor: Option<usize> = Some(cursor);
         let mut template_workers: Vec<WorkerMetadata> = vec![];
 

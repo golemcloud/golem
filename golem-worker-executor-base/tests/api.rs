@@ -15,8 +15,8 @@ use redis::Commands;
 use golem_api_grpc::proto::golem::worker::{worker_execution_error, LogEvent, TemplateParseFailed};
 use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;
 use golem_common::model::{
-    AccountId, InvocationKey, PromiseId, StringFilterComparator, TemplateId, WorkerFilter,
-    WorkerId, WorkerStatus,
+    AccountId, FilterComparator, InvocationKey, PromiseId, StringFilterComparator, TemplateId,
+    WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_worker_executor_base::error::GolemError;
 use serde_json::Value;
@@ -674,36 +674,10 @@ async fn delete_instance() {
 #[tokio::test]
 #[tracing::instrument]
 async fn get_workers() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
-
-    let template_id = executor.store_template(Path::new("../test-templates/option-service.wasm"));
-    let worker_id1 = executor.start_worker(&template_id, "test-instance-1").await;
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id1,
-            "golem:it/api/echo",
-            vec![common::val_option(Some(common::val_string("Hello")))],
-        )
-        .await
-        .unwrap();
-
-    let worker_id2 = executor.start_worker(&template_id, "test-instance-2").await;
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id2,
-            "golem:it/api/echo",
-            vec![common::val_option(Some(common::val_string("Hello")))],
-        )
-        .await
-        .unwrap();
-
     async fn get_check(
         template_id: &TemplateId,
         filter: Option<WorkerFilter>,
-        expected: usize,
+        expected_worker_ids: Vec<WorkerId>,
         executor: &mut TestWorkerExecutor,
     ) {
         let metadatas1r = executor
@@ -711,35 +685,53 @@ async fn get_workers() {
             .await;
 
         let (cursor1, metadatas1) = executor
-            .get_worker_metadatas(&template_id, filter, 0, 10, true)
+            .get_worker_metadatas(&template_id, filter, 0, 20, true)
             .await;
 
-        check!(metadatas1r.len() == expected);
-        check!(metadatas1.len() == expected);
+        let expected_count = expected_worker_ids.len();
+
+        check!(metadatas1r.len() == expected_count);
+        check!(metadatas1.len() == expected_count);
         check!(cursor1.is_none());
     }
 
-    get_check(
-        &template_id,
-        Some(WorkerFilter::new_name(
-            StringFilterComparator::Equal,
-            worker_id1.worker_name.clone(),
-        )),
-        1,
-        &mut executor,
-    )
-    .await;
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
 
-    get_check(
-        &template_id,
-        Some(WorkerFilter::new_name(
-            StringFilterComparator::Equal,
-            worker_id2.worker_name.clone(),
-        )),
-        1,
-        &mut executor,
-    )
-    .await;
+    let template_id = executor.store_template(Path::new("../test-templates/option-service.wasm"));
+
+    let workers_count = 10;
+    let mut worker_ids = vec![];
+
+    for i in 0..workers_count {
+        let worker_id = executor
+            .start_worker(&template_id, &format!("test-instance-{}", i))
+            .await;
+
+        worker_ids.push(worker_id);
+    }
+
+    for worker_id in worker_ids.clone() {
+        let _ = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem:it/api/echo",
+                vec![common::val_option(Some(common::val_string("Hello")))],
+            )
+            .await
+            .unwrap();
+
+        get_check(
+            &template_id,
+            Some(WorkerFilter::new_name(
+                StringFilterComparator::Equal,
+                worker_id.worker_name.clone(),
+            )),
+            vec![worker_id],
+            &mut executor,
+        )
+        .await;
+    }
 
     get_check(
         &template_id,
@@ -747,7 +739,22 @@ async fn get_workers() {
             StringFilterComparator::Like,
             "test".to_string(),
         )),
-        2,
+        worker_ids.clone(),
+        &mut executor,
+    )
+    .await;
+
+    get_check(
+        &template_id,
+        Some(
+            WorkerFilter::new_name(StringFilterComparator::Like, "test".to_string())
+                .and(
+                    WorkerFilter::new_status(WorkerStatus::Idle)
+                        .or(WorkerFilter::new_status(WorkerStatus::Running)),
+                )
+                .and(WorkerFilter::new_version(FilterComparator::Equal, 0)),
+        ),
+        worker_ids.clone(),
         &mut executor,
     )
     .await;
@@ -755,19 +762,38 @@ async fn get_workers() {
     get_check(
         &template_id,
         Some(WorkerFilter::new_name(StringFilterComparator::Like, "test".to_string()).not()),
-        0,
+        vec![],
         &mut executor,
     )
     .await;
 
-    get_check(&template_id, None, 2, &mut executor).await;
+    get_check(&template_id, None, worker_ids.clone(), &mut executor).await;
 
-    get_check(&template_id, None, 2, &mut executor).await;
+    let (cursor1, metadatas1) = executor
+        .get_worker_metadatas(&template_id, None, 0, workers_count / 2, true)
+        .await;
 
-    executor.delete_worker(&worker_id1).await;
-    executor.delete_worker(&worker_id2).await;
+    check!(cursor1.is_some());
+    check!(metadatas1.len() == workers_count / 2);
 
-    get_check(&template_id, None, 0, &mut executor).await;
+    let (cursor2, metadatas2) = executor
+        .get_worker_metadatas(
+            &template_id,
+            None,
+            cursor1.unwrap(),
+            workers_count - metadatas1.len(),
+            true,
+        )
+        .await;
+
+    check!(cursor2.is_none());
+    check!(metadatas2.len() == workers_count - metadatas1.len());
+
+    for worker_id in worker_ids {
+        executor.delete_worker(&worker_id).await;
+    }
+
+    get_check(&template_id, None, vec![], &mut executor).await;
 }
 
 #[tokio::test]

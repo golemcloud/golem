@@ -170,6 +170,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                         pool.clone(),
                         worker_service.clone(),
                         oplog_service.clone(),
+                        golem_config.clone(),
                     ));
 
                 (
