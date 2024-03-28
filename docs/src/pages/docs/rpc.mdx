@@ -124,7 +124,7 @@ Options:
 The parameters have the following meaning:
 
 - `--source-wit-root` must point to the directory of the WIT specification of the **worker to be called remotely**. This is usually a `wit` subdirectory in the worker's template's source code.
-- `--dest-crate-root` is a new directory where the generated RPC stub will be put. The tool's current version does not generate a WASM file directly, instead it outputs a complete Rust crate which can be compiled via `cargo component build` (as described on the [Rust page](/docs/building-templates/tier-2/rust)) or included in a Rust workspace.
+- `--dest-crate-root` is a new directory where the generated RPC stub will be put. The tool's current version does not generate a WASM file directly, instead it outputs a complete Rust crate which can be compiled via `cargo component build` (as described on the [Rust page](/docs/building-templates/tier-1/rust)) or included in a Rust workspace.
 - `--world` can be used to select the exported world from the source WIT, if there are more than one. If there is only one world defined, there is no need to use this parameter.
 - `--stub-crate-version` sets the generated Rust crate's version to the given value.
 - `--wasm-rpc-path-override` is useful when working on the `wasm-rpc` crate itself, to point the dependency to a local path instead of using the published version.

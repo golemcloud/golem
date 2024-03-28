@@ -3,32 +3,26 @@ import { Card, Cards } from "nextra/components"
 
 # Tier 2 languages
 
-Tier 2 languages can be compiled to WASM **modules** their standard library is built on **WASI Preview 1** and there is a **WIT binding** generator available for them.
+Tier 2 languages can be compiled to WASM **modules** and they support **WASI Preview 1** but there is no way to generate bindings for WIT interfaces.
 
-Using the binding generator Tier 2 languages can take full advantage of Golem's features:
+This restricts them to only expose a single, parameterless `run` function and they can only access the host functionalities part of **WASI Preview 1**. (standard IO, files and filesystems, clock, random, cmd args / environment variables).
 
-- They can define their own typed interface that can be invoked via Golem
-- They can use additional host interfaces such as WASI-HTTP and the Golem Promise API
+It is possible to pass input to these functions using the **standard input** and to get back their **standard output** as the call's results, but this function can only be called once for each worker.
 
-This makes Tier 2 languages applicable in both **actor-like** and **workflow-like** use cases.
+Golem provides two special **calling conventions** for workers implemented with a **tier 2** language:
+
+- The `stdio` calling convention passes the invocation's parameters through the worker's standard input, and parses it's standard output as JSON, returning as the invocation's result. A worker after an `stdio` invocation is no longer usable.
+- The `stdio-eventloop` calling convention makes it possible to implement stateful workers with a **tier 2** language but it requires the worker to be implemented as a **loop** that in each iteration reads a single line containing the invocation parameters as JSON, and before reading the next line is responsible to write the response to the standard output as a single-line JSON.
 
 The currently supported Tier 2 languages are:
 
 <Cards>
-  <Card title="Rust" href="/docs/building-templates/tier-2/rust" />
-  <Card title="Go" href="/docs/building-templates/tier-2/go" />
-  <Card title="Go" href="/docs/building-templates/tier-2/c" />
-  <Card title="Python" href="/docs/building-templates/tier-2/python" />
-  <Card title="Javascript" href="/docs/building-templates/tier-2/javascript" />
-  <Card title="Scala (through Scala.js)" href="/docs/building-templates/tier-2/scala" />
+  <Card title="Swift" href="/docs/building-templates/tier-2/swift" />
+  <Card title="Zig" href="/docs/building-templates/tier-2/zig" />
+  <Card title="Grain" href="/docs/building-templates/tier-2/grain" />
 </Cards>
 
 <Callout>
- **Zig** may be lifted to be a Tier 2 guest language in the near future, as it is supposed to work with bindings generated for C.
-
-**JVM** languages like **Java, Scala, Kotlin and Clojure** could in theory be Tier 2 guest languages by using the experimental https://github.com/fermyon/teavm-wasi but it is not working currently. However,
-Scala 2 is supported by first compiling to Javascript using Scala.JS and then using the Javascript tooling.
-
-**C#** binding generator is under development, but was not tested with Golem yet.
+ Possible other supported Tier 2 languages added in the near future are **Ruby,** **PHP and Haskell**.
 
 </Callout>

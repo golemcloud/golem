@@ -45,7 +45,7 @@ wasm-tools 1.0.57
 ### Install `wit-bindgen`
 
 <Callout type="info">
-    Only required for non-Rust [Tier 2 Languages](/docs/building-templates/tier-2)
+    Only required for non-Rust [Tier 1 Languages](/docs/building-templates/tier-1)
 
     Rust users can skip this step as `wit-bindgen` is encapsulated by `cargo-component`
 
@@ -70,19 +70,16 @@ An optional tool for making the `wasm` modules smaller (recommended for Swift) i
 
 First you need to install the latest version of Go:
 
-<Tabs items={["macos", "other"]}>
-  {/* prettier-ignore */}
-  <Tabs.Tab>
-    ```bash copy
-    brew install golang
-    ```
-  </Tabs.Tab>
-  <Tabs.Tab>
-
 {/* prettier-ignore */}
-> View the [official installation instructions](https://go.dev/doc/install)
-
-  </Tabs.Tab>
+<Tabs items={["macos", "other"]}>
+    <Tabs.Tab>
+        ```bash copy
+        brew install golang
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        View the [official installation instructions](https://go.dev/doc/install)
+    </Tabs.Tab>
 </Tabs>
 
 Then use it to install `wasm-opt`:

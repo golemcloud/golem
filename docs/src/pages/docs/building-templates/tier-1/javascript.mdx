@@ -2,7 +2,7 @@ import { Callout } from "nextra/components"
 
 # JavaScript
 
-JavaScript can be used as a Tier 2 guest language using https://github.com/bytecodealliance/componentize-js.
+JavaScript can be used as a Tier 1 guest language using https://github.com/bytecodealliance/componentize-js.
 
 The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/docs/quickstart).
 
@@ -39,14 +39,14 @@ const jsSource = await readFile("main.js", "utf8")
 const { component } = await componentize(jsSource, {
   witPath: resolve("wit"),
   enableStdout: true,
-  preview2Adapter: "adapters/tier2/wasi_snapshot_preview1.wasm",
+  preview2Adapter: "adapters/tier1/wasi_snapshot_preview1.wasm",
 })
 
 await mkdir("out", { recursive: true })
 await writeFile("out/component_name.wasm", component)
 ```
 
-The `adapters/tier2/wasi_snapshot_preview1.wasm` to be used can be downloaded from the `golem-wit` repository: [https://github.com/golemcloud/golem-wit/blob/main/adapters/tier2/wasi_snapshot_preview1.wasm](https://github.com/golemcloud/golem-wit/blob/main/adapters/tier2/wasi_snapshot_preview1.wasm)
+The `adapters/tier1/wasi_snapshot_preview1.wasm` to be used can be downloaded from the `golem-wit` repository: [https://github.com/golemcloud/golem-wit/blob/main/adapters/tier1/wasi_snapshot_preview1.wasm](https://github.com/golemcloud/golem-wit/blob/main/adapters/tier1/wasi_snapshot_preview1.wasm)
 
 <Callout>
 When using `golem new` to generate the project, the correct version of the adapter WASM is automatically put in the project's directory.

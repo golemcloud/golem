@@ -1,0 +1,37 @@
+import { Callout } from "nextra/components"
+import { Card, Cards } from "nextra/components"
+
+# Tier 1 languages
+
+Tier 1 languages can be either:
+
+- compiled to WASM **modules** their with standard library built on **WASI Preview 1** and there is a **WIT binding** generator available for them
+- or compiled directly to WASM **components** supporting **WASI Preview 2**
+
+By supporting WIT bindings Tier 1 languages can take full advantage of Golem's features:
+
+- They can define their own typed interface that can be invoked via Golem
+- They can use additional host interfaces such as WASI-HTTP and the Golem Promise API
+
+This makes Tier 1 languages applicable in both **actor-like** and **workflow-like** use cases.
+
+The currently supported Tier 1 languages are:
+
+<Cards>
+  <Card title="Rust" href="/docs/building-templates/tier-1/rust" />
+  <Card title="Go" href="/docs/building-templates/tier-1/go" />
+  <Card title="Go" href="/docs/building-templates/tier-1/c" />
+  <Card title="Python" href="/docs/building-templates/tier-1/python" />
+  <Card title="Javascript" href="/docs/building-templates/tier-1/javascript" />
+  <Card title="Scala (through Scala.js)" href="/docs/building-templates/tier-1/scala" />
+</Cards>
+
+<Callout>
+ **Zig** may be lifted to be a Tier 1 guest language in the near future, as it is supposed to work with bindings generated for C.
+
+**JVM** languages like **Java, Scala, Kotlin and Clojure** could in theory be Tier 1 guest languages by using the experimental https://github.com/fermyon/teavm-wasi but it is not working currently. However,
+Scala 2 is supported by first compiling to Javascript using Scala.JS and then using the Javascript tooling.
+
+**C#** binding generator is under development, but was not tested with Golem yet.
+
+</Callout>

@@ -71,7 +71,7 @@ The resulting `main.wasm` is a WASM **module** which already has the binary repr
 So the only remaining step is to turn this into a WASM **component** using `wasm-tools`:
 
 ```bash
-wasm-tools component new main.wasm --adapt tier2/wasi_snapshot_preview1.wasm -o template.wasm
+wasm-tools component new main.wasm --adapt tier1/wasi_snapshot_preview1.wasm -o template.wasm
 ```
 
 The resulting `template.wasm` is ready to be uploaded to Golem!
