@@ -259,10 +259,14 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
     async fn set_oplog_persistence_level(
         &mut self,
-        _new_persistence_level: PersistenceLevel,
+        new_persistence_level: PersistenceLevel,
     ) -> anyhow::Result<()> {
         // commit all pending entries and change persistence level
-        unimplemented!()
+        if self.state.is_live() {
+            self.state.commit_oplog().await;
+        }
+        self.state.persistence_level = new_persistence_level.into();
+        Ok(())
     }
 
     async fn get_idempotence_mode(&mut self) -> anyhow::Result<bool> {
@@ -270,8 +274,10 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         Ok(self.state.assume_idempotence)
     }
 
-    async fn set_idempotence_mode(&mut self, _idempotent: bool) -> anyhow::Result<()> {
-        unimplemented!()
+    async fn set_idempotence_mode(&mut self, idempotent: bool) -> anyhow::Result<()> {
+        record_host_function_call("golem::api", "set_idempotence_mode");
+        self.state.assume_idempotence = idempotent;
+        Ok(())
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem::api::host::Uuid> {
