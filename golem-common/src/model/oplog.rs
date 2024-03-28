@@ -82,6 +82,15 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         begin_index: u64,
     },
+    /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
+    /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
+    /// unfinished remote writes cannot be recovered.
+    BeginRemoteWrite { timestamp: Timestamp },
+    /// Marks the end of a remote write operation. Only used when idempotence mode is off.
+    EndRemoteWrite {
+        timestamp: Timestamp,
+        begin_index: u64,
+    },
 }
 
 impl OplogEntry {
@@ -199,6 +208,27 @@ impl OplogEntry {
             timestamp: Timestamp::now_utc(),
             begin_index,
         }
+    }
+
+    pub fn begin_remote_write() -> OplogEntry {
+        OplogEntry::BeginRemoteWrite {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn end_remote_write(begin_index: u64) -> OplogEntry {
+        OplogEntry::EndRemoteWrite {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn is_end_atomic_region(&self, idx: u64) -> bool {
+        matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_end_remote_write(&self, idx: u64) -> bool {
+        matches!(self, OplogEntry::EndRemoteWrite { begin_index, .. } if *begin_index == idx)
     }
 
     /// True if the oplog entry is a "hint" that should be skipped during replay

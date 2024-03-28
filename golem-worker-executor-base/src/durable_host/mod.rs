@@ -47,7 +47,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cap_std::ambient_authority;
 use golem_common::config::RetryConfig;
-use golem_common::model::oplog::OplogEntry;
+use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, PromiseId, VersionedWorkerId, WorkerId,
@@ -197,6 +197,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         overridden_retry_policy: None,
                         persistence_level: PersistenceLevel::Smart,
                         assume_idempotence: true,
+                        open_function_table: HashMap::new(),
                     },
                     temp_dir,
                     execution_status,
@@ -780,12 +781,12 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
     config: Arc<GolemConfig>,
-    pub worker_id: WorkerId,
-    pub account_id: AccountId,
+    worker_id: WorkerId,
+    account_id: AccountId,
     current_invocation_key: Option<InvocationKey>,
-    pub active_workers: Arc<ActiveWorkers<Ctx>>,
-    pub recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
-    pub rpc: Arc<dyn Rpc + Send + Sync>,
+    active_workers: Arc<ActiveWorkers<Ctx>>,
+    recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+    rpc: Arc<dyn Rpc + Send + Sync>,
     resources: HashMap<u64, ResourceAny>,
     last_resource_id: u64,
     deleted_regions: DeletedRegions,
@@ -793,6 +794,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     overridden_retry_policy: Option<RetryConfig>,
     persistence_level: PersistenceLevel,
     assume_idempotence: bool,
+    open_function_table: HashMap<u32, u64>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -813,6 +815,54 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         self.oplog_service
             .wait_for_replicas(replicas, timeout)
             .await
+    }
+
+    pub async fn begin_function(
+        &mut self,
+        wrapped_function_type: &WrappedFunctionType,
+    ) -> Result<u64, GolemError> {
+        let begin_index = self.oplog_idx;
+        if !self.assume_idempotence && *wrapped_function_type == WrappedFunctionType::WriteRemote {
+            if self.is_live() {
+                self.set_oplog_entry(OplogEntry::begin_remote_write()).await;
+                self.commit_oplog().await;
+                Ok(begin_index)
+            } else {
+                let begin_index = self.oplog_idx;
+                let _ = crate::get_oplog_entry!(self, OplogEntry::BeginRemoteWrite)?;
+                let end_index = self
+                    .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
+                    .await;
+                if end_index == None {
+                    Err(GolemError::runtime(
+                        "Non-idempotent remote write operation was not completed, cannot retry",
+                    ))
+                } else {
+                    Ok(begin_index)
+                }
+            }
+        } else {
+            Ok(begin_index)
+        }
+    }
+
+    pub async fn end_function(
+        &mut self,
+        wrapped_function_type: &WrappedFunctionType,
+        begin_index: u64,
+    ) -> Result<(), GolemError> {
+        if !self.assume_idempotence && *wrapped_function_type == WrappedFunctionType::WriteRemote {
+            if self.is_live() {
+                self.set_oplog_entry(OplogEntry::end_remote_write(begin_index))
+                    .await;
+                Ok(())
+            } else {
+                let _ = crate::get_oplog_entry!(self, OplogEntry::EndRemoteWrite)?;
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn get_oplog_size(&mut self) -> u64 {
@@ -877,7 +927,11 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         oplog_entry
     }
 
-    async fn lookup_oplog_entry_end_operation(&mut self, begin_idx: u64) -> Option<u64> {
+    async fn lookup_oplog_entry(
+        &mut self,
+        begin_idx: u64,
+        check: impl Fn(&OplogEntry, u64) -> bool,
+    ) -> Option<u64> {
         let mut start = self.oplog_idx;
         const CHUNK_SIZE: u64 = 1024;
         while start < self.oplog_size {
@@ -886,13 +940,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 .read(&self.worker_id, start, CHUNK_SIZE)
                 .await;
             for (n, entry) in entries.iter().enumerate() {
-                match entry {
-                    OplogEntry::EndAtomicRegion { begin_index, .. }
-                        if begin_idx == *begin_index =>
-                    {
-                        return Some(start + n as u64);
-                    }
-                    _ => {}
+                if check(entry, begin_idx) {
+                    return Some(start + n as u64);
                 }
             }
             start += entries.len() as u64;

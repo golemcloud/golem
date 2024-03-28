@@ -779,6 +779,12 @@ fn calculate_latest_worker_status(
             OplogEntry::EndAtomicRegion { .. } => {
                 result = WorkerStatus::Running;
             }
+            OplogEntry::BeginRemoteWrite { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::EndRemoteWrite { .. } => {
+                result = WorkerStatus::Running;
+            }
         }
     }
     result

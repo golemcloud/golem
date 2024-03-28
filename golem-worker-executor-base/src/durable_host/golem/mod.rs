@@ -181,7 +181,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
             match self
                 .state
-                .lookup_oplog_entry_end_operation(begin_index)
+                .lookup_oplog_entry(begin_index, OplogEntry::is_end_atomic_region)
                 .await
             {
                 Some(end_index) => {

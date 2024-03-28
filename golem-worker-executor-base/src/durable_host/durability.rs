@@ -125,6 +125,11 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
             + Send,
     {
         self.state.consume_hint_entries().await;
+        let begin_index = self
+            .state
+            .begin_function(&wrapped_function_type.clone())
+            .await
+            .map_err(|err| Into::<SerializedErr>::into(err).into())?;
         if self.state.is_live() {
             let result = function(self).await;
             let serializable_result: Result<SerializedSuccess, SerializedErr> = result
@@ -143,7 +148,11 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
                 )
             });
             self.state.set_oplog_entry(oplog_entry).await;
-            if matches!(wrapped_function_type, WrappedFunctionType::WriteRemote) {
+            self.state
+                .end_function(&wrapped_function_type, begin_index)
+                .await
+                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+            if wrapped_function_type == WrappedFunctionType::WriteRemote {
                 self.state.commit_oplog().await;
             }
             result
@@ -160,6 +169,11 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
                     )
                 })
                 .unwrap();
+
+            self.state
+                .end_function(&wrapped_function_type, begin_index)
+                .await
+                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
 
             response
                 .map(|serialized_success| serialized_success.into())
@@ -202,6 +216,11 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
             + Send,
     {
         self.state.consume_hint_entries().await;
+        let begin_index = self
+            .state
+            .begin_function(&wrapped_function_type.clone())
+            .await
+            .map_err(|err| Into::<SerializedErr>::into(err).into())?;
         if self.state.is_live() {
             let result = function(self).await;
             let serializable_result: Result<SerializedSuccess, SerializedErr> = result
@@ -221,7 +240,11 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
                 )
             });
             self.state.set_oplog_entry(oplog_entry).await;
-            if matches!(wrapped_function_type, WrappedFunctionType::WriteRemote) {
+            self.state
+                .end_function(&wrapped_function_type, begin_index)
+                .await
+                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+            if wrapped_function_type == WrappedFunctionType::WriteRemote {
                 self.state.commit_oplog().await;
             }
             result
@@ -238,6 +261,11 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
                     )
                 })
                 .unwrap();
+
+            self.state
+                .end_function(&wrapped_function_type, begin_index)
+                .await
+                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
 
             match response {
                 Ok(serialized_success) => {

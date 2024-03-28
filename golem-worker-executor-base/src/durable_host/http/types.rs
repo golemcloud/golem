@@ -19,6 +19,7 @@ use http::{HeaderName, HeaderValue};
 
 use std::collections::HashMap;
 use std::str::FromStr;
+use tracing::warn;
 
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::subscribe;
@@ -549,6 +550,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         // the body is stored in the oplog, so we can replay it later. In replay mode we initialize the body with a
         // fake stream which can only be read in the oplog, and fails if we try to read it in live mode.
         self.state.consume_hint_entries().await;
+        let handle = self_.rep();
         if self.state.is_live() {
             let response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
@@ -575,11 +577,26 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             )
             .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
             self.state.set_oplog_entry(oplog_entry).await;
+
+            if matches!(serializable_response, SerializableResponse::Pending) {
+                match self.state.open_function_table.get(&handle) {
+                    Some(begin_index) => {
+                        self.state
+                            .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
+                            .await?;
+                        self.state.open_function_table.remove(&handle);
+                    }
+                    None => {
+                        warn!("No matching BeginRemoteWrite index was found when HTTP response arrived for {}. Handle: {}; open functions: {:?}", self.worker_id, handle, self.state.open_function_table);
+                    }
+                }
+            }
             self.state.commit_oplog().await;
 
             response
         } else {
             let oplog_entry = get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
+
             let serialized_response = oplog_entry
                 .response::<SerializableResponse>()
                 .unwrap_or_else(|err| {
@@ -589,6 +606,20 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     )
                 })
                 .unwrap();
+
+            if matches!(serialized_response, SerializableResponse::Pending) {
+                match self.state.open_function_table.get(&handle) {
+                    Some(begin_index) => {
+                        self.state
+                            .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
+                            .await?;
+                        self.state.open_function_table.remove(&handle);
+                    }
+                    None => {
+                        warn!("No matching BeginRemoteWrite index was found when HTTP response arrived for {}. Handle: {}; open functions: {:?}", self.worker_id, handle, self.state.open_function_table);
+                    }
+                }
+            }
 
             match serialized_response {
                 SerializableResponse::Pending => Ok(None),
