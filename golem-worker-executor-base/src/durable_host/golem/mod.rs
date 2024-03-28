@@ -289,7 +289,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             |_ctx| {
                 Box::pin(async move {
                     let uuid = Uuid::new_v4();
-                    Ok::<Uuid, GolemError>(uuid.into())
+                    Ok::<Uuid, GolemError>(uuid)
                 })
             },
             |_ctx, uuid: &Uuid| Ok(uuid.as_u64_pair()),

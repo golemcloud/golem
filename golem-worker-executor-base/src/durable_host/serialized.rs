@@ -310,7 +310,9 @@ impl From<GolemError> for SerializableError {
 
 impl From<&GolemError> for SerializableError {
     fn from(value: &GolemError) -> Self {
-        Self::Golem { error: value.clone() }
+        Self::Golem {
+            error: value.clone(),
+        }
     }
 }
 

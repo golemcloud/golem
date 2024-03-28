@@ -833,7 +833,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 let end_index = self
                     .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
                     .await;
-                if end_index == None {
+                if end_index.is_none() {
+                    // Must switch to live mode before failing to be able to commit an Error entry
+                    self.oplog_idx = self.oplog_size;
                     Err(GolemError::runtime(
                         "Non-idempotent remote write operation was not completed, cannot retry",
                     ))

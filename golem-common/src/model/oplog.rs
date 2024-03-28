@@ -310,7 +310,7 @@ impl OplogEntry {
                 let deserialized_array: Vec<Vec<u8>> = serde_json::from_slice(payload)
                     .unwrap_or_else(|err| {
                         panic!(
-                            "Failed to deserialize oplog payload: {:?}: {err}",
+                            "Failed to deserialize oplog payload for {function_name}: {:?}: {err}",
                             std::str::from_utf8(payload).unwrap_or("???")
                         )
                     });
@@ -359,9 +359,7 @@ mod tests {
 
     #[test]
     fn oplog_entry_imported_function_invoked_payload_roundtrip() {
-        let timestamp = Timestamp::now_utc();
         let entry = OplogEntry::imported_function_invoked(
-            timestamp,
             "function_name".to_string(),
             &("example payload".to_string()),
             WrappedFunctionType::ReadLocal,
@@ -396,8 +394,6 @@ mod tests {
 
     #[test]
     fn oplog_entry_exported_function_invoked_payload_roundtrip() {
-        let timestamp = Timestamp::now_utc();
-
         let val1 = Val {
             val: Some(val::Val::Result(Box::new(ValResult {
                 discriminant: 0,
@@ -407,7 +403,6 @@ mod tests {
             }))),
         };
         let entry = OplogEntry::exported_function_invoked(
-            timestamp,
             "function_name".to_string(),
             &vec![val1.clone()],
             Some(InvocationKey {
@@ -459,8 +454,6 @@ mod tests {
 
     #[test]
     fn oplog_entry_exported_function_completed_roundtrip() {
-        let timestamp = Timestamp::now_utc();
-
         let val1 = Val {
             val: Some(val::Val::Result(Box::new(ValResult {
                 discriminant: 0,
@@ -474,7 +467,6 @@ mod tests {
         };
 
         let entry = OplogEntry::exported_function_completed(
-            timestamp,
             &vec![val1.clone(), val2.clone()],
             1_000_000_000,
         )
