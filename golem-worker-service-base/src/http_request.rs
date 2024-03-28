@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
 use derive_more::{Display, FromStr, Into};
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
-use crate::path::{Path, ResolvedVariables};
+use crate::path::{Path};
 use crate::tokeniser::tokenizer::Token;
+use crate::merge::Merge;
 
 // An input request from external API gateways, that is then resolved to a worker request, using API definitions
 pub struct InputHttpRequest<'a> {
@@ -18,59 +20,89 @@ pub struct InputHttpRequest<'a> {
 impl InputHttpRequest {
     pub fn get_type_annotated_value(
         &self,
-        request_query_variables: HashMap<String, String>,
         spec_query_variables: Vec<String>,
-        request_path_values: &HashMap<usize, String>,
         spec_path_variables: &HashMap<usize, String>,
     ) -> Result<TypeAnnotatedValue, Vec<String>> {
 
-        let mut headers: serde_json::Map<String, Value> = serde_json::Map::new();
+        let request_body = &self.req_body;
+        let request_header = self.headers;
+        let request_path_values: HashMap<usize, String> =
+            self.input_path.path_components();
+
+        let request_query_variables: HashMap<String, String> =
+            self.input_path.query_components();
+
+        let mut headers: Vec<(String, TypeAnnotatedValue)> = vec![];
 
         for (header_name, header_value) in request_header {
             let header_value_str = header_value.to_str().map_err(|err| vec![err.to_string()])?;
 
-            headers.insert(
+            headers.push((
                 header_name.to_string(),
-                Value::String(header_value_str.to_string()),
-            );
+                TypeAnnotatedValue::Str(header_value_str.to_string()),
+            ));
         }
 
-        let request_headers = Value::Object(headers.clone());
-        let mut request_query_values = ResolvedVariables::get_request_query_values(
+        let request_headers = TypeAnnotatedValue::Record {
+            value: headers,
+            typ: headers.iter().map(|(key, _)| (key.clone(), AnalysedType::Str)).collect(),
+        };
+
+        let mut request_query_values = Self::get_request_query_values(
             request_query_variables,
             spec_query_variables,
         )?;
 
         let request_path_values =
-            ResolvedVariables::get_request_path_values(request_path_values, spec_path_variables)?;
+            Self::get_request_path_values(&request_path_values, spec_path_variables)?;
 
-        request_query_values.extend(request_path_values);
+        let path_values = request_query_values.merge(&request_path_values);
 
-        let mut request_details = serde_json::Map::new();
-        request_details.insert("body".to_string(), request_body.clone());
-        request_details.insert("header".to_string(), request_headers);
-        request_details.insert("path".to_string(), Value::Object(request_query_values));
+        let body_value = match crate::type_inference::infer_analysed_type(request_body) {
+            Some(inferred_type) => {
+                TypeAnnotatedValue::Record {
+                    value: vec![("body".to_string(), TypeAnnotatedValue::from_json_value(&request_body, &inferred_type)?)],
+                    typ: vec![("body".to_string(), inferred_type)],
+                }
+            }
+            None => {
+                return Err(vec!["Unable to infer type of request body".to_string()]);
+            }
+        };
 
-        gateway_variables.insert(
-            Path::from_string_unsafe(Token::Request.to_string().as_str()),
-            Value::Object(request_details),
-        );
+        let header_value = TypeAnnotatedValue::Record {
+            value: vec![("header".to_string(), request_headers)],
+            typ: vec![("header".to_string(), AnalysedType::from(request_headers.clone()))],
+        };
 
-        Ok(gateway_variables)
+        let path_value = TypeAnnotatedValue::Record {
+            value: vec![("path".to_string(), path_values)],
+            typ: vec![("path".to_string(), AnalysedType::from(path_values.clone()))],
+        };
+
+        let merged = body_value.merge(&header_value).merge(&path_value);
+
+        let request_type_annotated_value = TypeAnnotatedValue::Record {
+            value: vec![(Token::Request.to_string(), merged)],
+            typ: vec![(Token::Request.to_string(), AnalysedType::from(merged.clone()))],
+        };
+
+
+        Ok(request_type_annotated_value)
     }
 
     fn get_request_path_values(
         request_path_values: &HashMap<usize, String>,
         spec_path_variables: &HashMap<usize, String>,
-    ) -> Result<serde_json::Map<String, Value>, Vec<String>> {
+    ) -> Result<TypeAnnotatedValue, Vec<String>> {
         let mut unavailable_path_variables: Vec<String> = vec![];
-        let mut path_variables_map = serde_json::Map::new();
+        let mut path_variables_map = vec![];
 
         for (index, spec_path_variable) in spec_path_variables.iter() {
             if let Some(path_value) = request_path_values.get(index) {
-                path_variables_map.insert(
-                    spec_path_variable.clone(),
-                    serde_json::Value::String(path_value.trim().to_string()),
+                path_variables_map.push(
+                    (spec_path_variable.clone(),
+                    TypeAnnotatedValue::Str(path_value.trim().to_string()))
                 );
             } else {
                 unavailable_path_variables.push(spec_path_variable.to_string());
@@ -78,7 +110,11 @@ impl InputHttpRequest {
         }
 
         if unavailable_path_variables.is_empty() {
-            Ok(path_variables_map)
+            let type_annotated_value = TypeAnnotatedValue::Record {
+                value: path_variables_map.clone(),
+                typ: path_variables_map.clone().iter().map(|(key, _)| (key.clone(), AnalysedType::Str)).collect(),
+            };
+            Ok(type_annotated_value)
         } else {
             Err(unavailable_path_variables)
         }
@@ -87,15 +123,14 @@ impl InputHttpRequest {
     fn get_request_query_values(
         request_query_variables: HashMap<String, String>,
         spec_query_variables: Vec<String>,
-    ) -> Result<serde_json::Map<String, Value>, Vec<String>> {
+    ) -> Result<TypeAnnotatedValue, Vec<String>> {
         let mut unavailable_query_variables: Vec<String> = vec![];
-        let mut query_variable_map = serde_json::Map::new();
+        let mut query_variable_map: Vec<(String, TypeAnnotatedValue)> = vec![];
 
         for spec_query_variable in spec_query_variables.iter() {
             if let Some(query_value) = request_query_variables.get(spec_query_variable) {
-                query_variable_map.insert(
-                    spec_query_variable.clone(),
-                    serde_json::Value::String(query_value.trim().to_string()),
+                query_variable_map.push(
+                    (spec_query_variable.clone(), TypeAnnotatedValue::Str(query_value.trim().to_string()))
                 );
             } else {
                 unavailable_query_variables.push(spec_query_variable.to_string());
@@ -103,7 +138,11 @@ impl InputHttpRequest {
         }
 
         if unavailable_query_variables.is_empty() {
-            Ok(query_variable_map)
+            let type_annotated_value = TypeAnnotatedValue::Record {
+                value: query_variable_map.clone(),
+                typ: query_variable_map.clone().iter().map(|(key, _)| (key.clone(), AnalysedType::Str)).collect::<Vec<(String, AnalysedType)>>(),
+            };
+            Ok(type_annotated_value)
         } else {
             Err(unavailable_query_variables)
         }

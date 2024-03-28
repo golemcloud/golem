@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use golem_wasm_rpc::TypeAnnotatedValue;
 
 use hyper::http::Method;
 
@@ -12,10 +13,10 @@ pub trait WorkerBindingResolver {
     fn resolve(&self, api_specification: &ApiDefinition) -> Option<ResolvedWorkerBinding>;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ResolvedWorkerBinding {
     pub resolved_worker_binding_template: GolemWorkerBinding,
-    pub resolved_variables: ResolvedVariables,
+    pub resolved_variables: TypeAnnotatedValue,
 }
 
 impl<'a> WorkerBindingResolver for InputHttpRequest<'a> {
@@ -32,21 +33,12 @@ impl<'a> WorkerBindingResolver for InputHttpRequest<'a> {
             let request_method: &Method = api_request.req_method;
             let request_path_components: HashMap<usize, String> =
                 api_request.input_path.path_components();
-            let request_query_values: HashMap<String, String> =
-                api_request.input_path.query_components();
-
-            let request_body = &api_request.req_body;
-            let request_header = api_request.headers;
 
             if match_method(request_method, spec_method)
                 && match_literals(&request_path_components, &spec_path_literals)
             {
-                let request_details: ResolvedVariables = ResolvedVariables::from_http_request(
-                    request_body,
-                    request_header,
-                    request_query_values,
+                let request_details: TypeAnnotatedValue = api_request.get_type_annotated_value(
                     spec_query_variables,
-                    &request_path_components,
                     &spec_path_variables,
                 )
                 .ok()?;
