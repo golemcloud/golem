@@ -108,7 +108,7 @@ impl CustomHttpRequestApi {
                     .execute(
                         resolved_worker_request.clone(),
                         &resolved_route.resolved_worker_binding_template.response,
-                        &resolved_route.resolved_variables,
+                        &resolved_route.typed_value_from_input,
                     )
                     .await
             }

@@ -28,10 +28,10 @@ impl WorkerResponse {
     pub fn to_http_response(
         &self,
         response_mapping: &Option<ResponseMapping>,
-        request_type_annotated_value: &TypeAnnotatedValue,
+        type_value_from_request: &TypeAnnotatedValue,
     ) -> poem::Response {
         if let Some(mapping) = response_mapping {
-            match &self.to_intermediate_http_response(mapping, request_type_annotated_value) {
+            match &self.to_intermediate_http_response(mapping, type_value_from_request) {
                 Ok(intermediate_response) => intermediate_response.to_http_response(),
                 Err(e) => poem::Response::builder()
                     .status(StatusCode::BAD_REQUEST)

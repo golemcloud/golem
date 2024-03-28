@@ -5,7 +5,6 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
-use crate::path::{Path};
 use crate::tokeniser::tokenizer::Token;
 use crate::merge::Merge;
 
@@ -32,55 +31,17 @@ impl InputHttpRequest {
         let request_query_variables: HashMap<String, String> =
             self.input_path.query_components();
 
-        let mut headers: Vec<(String, TypeAnnotatedValue)> = vec![];
 
-        for (header_name, header_value) in request_header {
-            let header_value_str = header_value.to_str().map_err(|err| vec![err.to_string()])?;
-
-            headers.push((
-                header_name.to_string(),
-                TypeAnnotatedValue::Str(header_value_str.to_string()),
-            ));
-        }
-
-        let request_headers = TypeAnnotatedValue::Record {
-            value: headers,
-            typ: headers.iter().map(|(key, _)| (key.clone(), AnalysedType::Str)).collect(),
-        };
-
-        let mut request_query_values = Self::get_request_query_values(
+        let request_header_values = Self::get_headers(request_header)?;
+        let body_value = Self::get_request_body(request_body)?;
+        let path_value = Self::get_request_path_query_values(
             request_query_variables,
             spec_query_variables,
+            &request_path_values,
+            spec_path_variables,
         )?;
 
-        let request_path_values =
-            Self::get_request_path_values(&request_path_values, spec_path_variables)?;
-
-        let path_values = request_query_values.merge(&request_path_values);
-
-        let body_value = match crate::type_inference::infer_analysed_type(request_body) {
-            Some(inferred_type) => {
-                TypeAnnotatedValue::Record {
-                    value: vec![("body".to_string(), TypeAnnotatedValue::from_json_value(&request_body, &inferred_type)?)],
-                    typ: vec![("body".to_string(), inferred_type)],
-                }
-            }
-            None => {
-                return Err(vec!["Unable to infer type of request body".to_string()]);
-            }
-        };
-
-        let header_value = TypeAnnotatedValue::Record {
-            value: vec![("header".to_string(), request_headers)],
-            typ: vec![("header".to_string(), AnalysedType::from(request_headers.clone()))],
-        };
-
-        let path_value = TypeAnnotatedValue::Record {
-            value: vec![("path".to_string(), path_values)],
-            typ: vec![("path".to_string(), AnalysedType::from(path_values.clone()))],
-        };
-
-        let merged = body_value.merge(&header_value).merge(&path_value);
+        let merged = body_value.merge(&request_header_values).merge(&path_value);
 
         let request_type_annotated_value = TypeAnnotatedValue::Record {
             value: vec![(Token::Request.to_string(), merged)],
@@ -91,7 +52,70 @@ impl InputHttpRequest {
         Ok(request_type_annotated_value)
     }
 
-    fn get_request_path_values(
+    pub fn get_request_body(
+        request_body: &Value,
+    ) -> Result<TypeAnnotatedValue, Vec<String>> {
+        match crate::type_inference::infer_analysed_type(request_body) {
+            Some(inferred_type) => {
+                Ok(TypeAnnotatedValue::Record {
+                    value: vec![("body".to_string(), TypeAnnotatedValue::from_json_value(&request_body, &inferred_type)?)],
+                    typ: vec![("body".to_string(), inferred_type)],
+                })
+            }
+            None => {
+                Err(vec!["Unable to infer type of request body".to_string()])
+            }
+        }
+    }
+
+    pub fn get_headers(
+        headers: &HeaderMap,
+    ) -> Result<TypeAnnotatedValue, Vec<String>> {
+        let mut headers_map: Vec<(String, TypeAnnotatedValue)> = vec![];
+
+        for (header_name, header_value) in headers {
+            let header_value_str = header_value.to_str().map_err(|err| vec![err.to_string()])?;
+
+            headers_map.push((
+                header_name.to_string(),
+                TypeAnnotatedValue::Str(header_value_str.to_string()),
+            ));
+        }
+
+        let type_annotated_value = TypeAnnotatedValue::Record {
+            value: headers_map.clone(),
+            typ: headers_map.clone().iter().map(|(key, _)| (key.clone(), AnalysedType::Str)).collect(),
+        };
+
+        Ok(TypeAnnotatedValue::Record {
+            value: vec![("header".to_string(), type_annotated_value.clone())],
+            typ: vec![("header".to_string(), AnalysedType::from(type_annotated_value.clone()))],
+        })
+    }
+
+    pub fn get_request_path_query_values(
+        request_query_variables: HashMap<String, String>,
+        spec_query_variables: Vec<String>,
+        request_path_values: &HashMap<usize, String>,
+        spec_path_variables: &HashMap<usize, String>,
+    ) -> Result<TypeAnnotatedValue, Vec<String>> {
+        let request_query_values = Self::get_request_query_values(
+            request_query_variables,
+            spec_query_variables,
+        )?;
+
+        let request_path_values =
+            Self::get_request_path_values(&request_path_values, spec_path_variables)?;
+
+        let path_values = request_query_values.merge(&request_path_values);
+
+        Ok(TypeAnnotatedValue::Record {
+            value: vec![("path".to_string(), path_values)],
+            typ: vec![("path".to_string(), AnalysedType::from(path_values.clone()))],
+        })
+    }
+
+    pub fn get_request_path_values(
         request_path_values: &HashMap<usize, String>,
         spec_path_variables: &HashMap<usize, String>,
     ) -> Result<TypeAnnotatedValue, Vec<String>> {

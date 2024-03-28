@@ -485,43 +485,39 @@ fn handle_pattern_match(
 mod tests {
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expr::Expr;
-    use crate::path::ResolvedVariables;
     use http::HeaderMap;
     use serde_json::Value;
     use std::collections::HashMap;
+    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_service_base::model::Type;
+    use crate::http_request::InputHttpRequest;
+    use crate::worker_response::WorkerResponse;
+    use crate::merge::Merge;
+    use crate::type_inference::infer_analysed_type;
 
-    fn resolved_variables_from_worker_response(input: &str) -> ResolvedVariables {
-        let worker_response: Value = serde_json::from_str(input).expect("Failed to parse json");
+    fn resolved_variables_from_worker_response(input: &str) -> TypeAnnotatedValue {
+        let value: Value = serde_json::from_str(input).expect("Failed to parse json");
 
-        ResolvedVariables::from_worker_response(&worker_response)
+        let expected_type = infer_analysed_type(&value).unwrap();
+        TypeAnnotatedValue::from_json_value(&value, &expected_type).unwrap()
     }
 
     fn resolved_variables_from_request_body(
         input: &str,
         header_map: &HeaderMap,
-    ) -> ResolvedVariables {
+    ) -> TypeAnnotatedValue {
         let request_body: Value = serde_json::from_str(input).expect("Failed to parse json");
 
-        ResolvedVariables::from_http_request(
-            &request_body,
-            header_map,
-            HashMap::new(),
-            vec![],
-            &HashMap::new(),
-            &HashMap::new(),
-        )
-        .unwrap()
+        InputHttpRequest::get_request_body(&request_body)
+            .unwrap()
+            .merge(&InputHttpRequest::get_headers(header_map).unwrap())
     }
 
     fn resolved_variables_from_request_path(
         path_values: &HashMap<usize, String>,
         spec_variables: &HashMap<usize, String>,
-    ) -> ResolvedVariables {
-        ResolvedVariables::from_http_request(
-            &Value::Null,
-            &HeaderMap::new(),
-            HashMap::new(),
-            vec![],
+    ) -> TypeAnnotatedValue {
+        InputHttpRequest::get_request_path_values(
             path_values,
             spec_variables,
         )

@@ -16,7 +16,7 @@ pub trait WorkerBindingResolver {
 #[derive(Debug, Clone)]
 pub struct ResolvedWorkerBinding {
     pub resolved_worker_binding_template: GolemWorkerBinding,
-    pub resolved_variables: TypeAnnotatedValue,
+    pub typed_value_from_input: TypeAnnotatedValue,
 }
 
 impl<'a> WorkerBindingResolver for InputHttpRequest<'a> {
@@ -45,7 +45,7 @@ impl<'a> WorkerBindingResolver for InputHttpRequest<'a> {
 
                 let resolved_binding = ResolvedWorkerBinding {
                     resolved_worker_binding_template: route.binding.clone(),
-                    resolved_variables: { request_details },
+                    typed_value_from_input: { request_details },
                 };
                 return Some(resolved_binding);
             } else {

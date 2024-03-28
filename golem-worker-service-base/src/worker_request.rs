@@ -1,3 +1,5 @@
+use golem_wasm_rpc::json::JsonFunctionResult;
+use golem_wasm_rpc::TypeAnnotatedValue;
 use golem_common::model::TemplateId;
 use serde_json::Value;
 
@@ -19,18 +21,23 @@ impl WorkerRequest {
     pub fn from_resolved_route(
         resolved_route: ResolvedWorkerBinding,
     ) -> Result<WorkerRequest, String> {
-        let worker_id: Value = resolved_route
+        let worker_id_value: TypeAnnotatedValue = resolved_route
             .resolved_worker_binding_template
             .worker_id
-            .evaluate(&resolved_route.resolved_variables)
+            .evaluate(&resolved_route.typed_value_from_input)
             .map_err(|err| err.to_string())?;
+
+        let worker_id = match worker_id_value {
+            TypeAnnotatedValue::Str(value) => value,
+            _ => return Err(format!("Worker id is not a string. {}", JsonFunctionResult::from(worker_id_value).0))
+        };
 
         let function_name = RawString::new(
             &resolved_route
                 .resolved_worker_binding_template
                 .function_name,
         )
-        .evaluate(&resolved_route.resolved_variables)
+        .evaluate(&resolved_route.typed_value_from_input)
         .map_err(|err| err.to_string())?;
 
         let mut function_params: Vec<Value> = vec![];
@@ -39,9 +46,11 @@ impl WorkerRequest {
             .resolved_worker_binding_template
             .function_params
         {
-            let json = expr
-                .evaluate(&resolved_route.resolved_variables)
+            let type_annotated_value = expr
+                .evaluate(&resolved_route.typed_value_from_input)
                 .map_err(|err| err.to_string())?;
+
+            let json = JsonFunctionResult::from(type_annotated_value).0;
 
             function_params.push(json);
         }
