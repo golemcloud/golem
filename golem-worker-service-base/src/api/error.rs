@@ -1,7 +1,6 @@
 use crate::service::template::TemplateServiceError;
 use crate::service::worker::WorkerServiceError;
 use golem_service_base::model::*;
-use golem_service_base::service::auth::AuthError;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tonic::Status;
@@ -67,7 +66,6 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
         }
 
         match error {
-            ServiceError::Auth(error) => error.into(),
             ServiceError::Internal(_) => internal(error.to_string()),
             ServiceError::TypeChecker(_) => WorkerApiBaseError::BadRequest(Json(ErrorsBody {
                 errors: vec![error.to_string()],
@@ -102,28 +100,16 @@ impl From<TemplateServiceError> for WorkerApiBaseError {
                     }),
                 }))
             }
-            TemplateServiceError::Auth(error) => error.into(),
-        }
-    }
-}
 
-impl From<AuthError> for WorkerApiBaseError {
-    fn from(error: AuthError) -> Self {
-        match error {
-            AuthError::Unauthorized(_) => WorkerApiBaseError::Unauthorized(Json(ErrorBody {
-                error: error.to_string(),
-            })),
-            AuthError::Forbidden(_) => WorkerApiBaseError::Forbidden(Json(ErrorBody {
-                error: error.to_string(),
-            })),
-            AuthError::NotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {
-                error: error.to_string(),
-            })),
-            AuthError::Internal(_) => WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                golem_error: GolemError::Unknown(GolemErrorUnknown {
-                    details: error.to_string(),
-                }),
-            })),
+            TemplateServiceError::NotFound(error) => {
+                WorkerApiBaseError::NotFound(Json(ErrorBody { error }))
+            }
+            TemplateServiceError::Unauthorized(error) => {
+                WorkerApiBaseError::Unauthorized(Json(ErrorBody { error }))
+            }
+            TemplateServiceError::Forbidden(error) => {
+                WorkerApiBaseError::Forbidden(Json(ErrorBody { error }))
+            }
         }
     }
 }

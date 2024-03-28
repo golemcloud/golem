@@ -23,6 +23,7 @@ use poem::web::websocket::WebSocket;
 use poem::web::Data;
 use poem::*;
 
+use crate::empty_worker_metadata;
 use crate::service::worker::WorkerService;
 
 #[derive(Clone)]
@@ -81,10 +82,9 @@ async fn get_worker_stream(
 
     let worker_stream = service
         .worker_service
-        .connect(&worker_id, &EmptyAuthCtx {})
+        .connect(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
         .await
-        .map_err(|e| (http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .value;
+        .map_err(|e| (http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok((worker_id, worker_stream))
 }
