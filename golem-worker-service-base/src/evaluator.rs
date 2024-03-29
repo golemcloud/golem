@@ -1,21 +1,18 @@
-use golem_wasm_rpc::TypeAnnotatedValue;
-use std::fmt::Display;
-use std::ops::Deref;
+use super::tokeniser::tokenizer::{Token, Tokenizer};
+use crate::expr::{
+    ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber,
+};
+use crate::getter::Getter;
+use crate::merge::Merge;
+use crate::path::Path;
+use crate::primitive::GetPrimitive;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::JsonFunctionResult;
-use super::tokeniser::tokenizer::{Token, Tokenizer};
-use crate::expr::{ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber};
-use crate::path::{Path};
-use crate::getter::Getter;
-use crate::primitive::GetPrimitive;
-use crate::merge::Merge;
-
+use golem_wasm_rpc::TypeAnnotatedValue;
+use std::fmt::Display;
 
 pub trait Evaluator {
-    fn evaluate(
-        &self,
-        input: &TypeAnnotatedValue,
-    ) -> Result<TypeAnnotatedValue, EvaluationError>;
+    fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -73,7 +70,7 @@ impl<'t> Evaluator for RawString<'t> {
                                         )));
                                     }
                                 }
-                            },
+                            }
 
                             None => {
                                 return Result::Err(EvaluationError::Message(format!(
@@ -104,9 +101,7 @@ impl Evaluator for Expr {
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
             match expr.clone() {
                 Expr::Request() => {
-                    match input.get(&Path::from_raw_string(
-                        Token::Request.to_string().as_str(),
-                    )) {
+                    match input.get(&Path::from_raw_string(Token::Request.to_string().as_str())) {
                         Some(v) => Ok(v),
                         None => Err(EvaluationError::Message(
                             "Details of request is missing".to_string(),
@@ -127,7 +122,8 @@ impl Evaluator for Expr {
                 Expr::SelectIndex(expr, index) => {
                     let evaluation_result = go(&expr, input)?;
 
-                    evaluation_result.get(&Path::from_index(index))
+                    evaluation_result
+                        .get(&Path::from_index(index))
                         .ok_or(EvaluationError::Message(format!(
                             "Unable to fetch the element at index {}",
                             index
@@ -253,17 +249,19 @@ impl Evaluator for Expr {
 
                     for expr in exprs {
                         match go(&expr, input) {
-                            Ok(value) => {
-                                result.push(value)
-                            },
+                            Ok(value) => result.push(value),
                             Err(result) => return Err(result),
                         }
                     }
                     match result.get(0) {
-                        Some(value) =>
-                            Ok(TypeAnnotatedValue::List { values: result.clone(), typ: AnalysedType::from(value.clone()) }),
-                        None =>
-                            Ok(TypeAnnotatedValue::List { values: result.clone(), typ: AnalysedType::Tuple(vec![]) }), // Support optional type in List
+                        Some(value) => Ok(TypeAnnotatedValue::List {
+                            values: result.clone(),
+                            typ: AnalysedType::from(value.clone()),
+                        }),
+                        None => Ok(TypeAnnotatedValue::List {
+                            values: result.clone(),
+                            typ: AnalysedType::Tuple(vec![]),
+                        }), // Support optional type in List
                     }
                 }
 
@@ -280,10 +278,15 @@ impl Evaluator for Expr {
                         }
                     }
 
-                    let types: Vec<(String, AnalysedType)> =
-                        values.iter().map(|(key, value)| (key.clone(), AnalysedType::from(value.clone()))).collect();
+                    let types: Vec<(String, AnalysedType)> = values
+                        .iter()
+                        .map(|(key, value)| (key.clone(), AnalysedType::from(value.clone())))
+                        .collect();
 
-                    Ok(TypeAnnotatedValue::Record { value: values, typ: types })
+                    Ok(TypeAnnotatedValue::Record {
+                        value: values,
+                        typ: types,
+                    })
                 }
 
                 Expr::Concat(exprs) => {
@@ -312,28 +315,30 @@ impl Evaluator for Expr {
                     InnerNumber::UnsignedInteger(u64) => Ok(TypeAnnotatedValue::U64(u64)),
                     InnerNumber::Integer(i64) => Ok(TypeAnnotatedValue::S64(i64)),
                     InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(f64)),
-                }
+                },
 
-                Expr::PathVar(path_var) => input
-                    .get(&Path::from_key(path_var.as_str()))
-                    .ok_or(EvaluationError::Message(format!(
-                        "The result doesn't contain the field {}",
-                        path_var
-                    ))),
-
-                Expr::Variable(variable) => {
-                    input.get(&Path::from_raw_string(variable.as_str()))
+                Expr::PathVar(path_var) => {
+                    input
+                        .get(&Path::from_key(path_var.as_str()))
                         .ok_or(EvaluationError::Message(format!(
                             "The result doesn't contain the field {}",
-                            variable
+                            path_var
                         )))
-                },
+                }
+
+                Expr::Variable(variable) => input
+                    .get(&Path::from_raw_string(variable.as_str()))
+                    .ok_or(EvaluationError::Message(format!(
+                        "The result doesn't contain the field {}",
+                        variable
+                    ))),
 
                 Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(bool)),
                 Expr::PatternMatch(input_expr, constructors) => {
-
-                    let constructors: &Vec<(ConstructorPattern, Expr)> =
-                        &constructors.iter().map(|(constructor)| (constructor.0.0.clone(), *constructor.0.1.clone())).collect();
+                    let constructors: &Vec<(ConstructorPattern, Expr)> = &constructors
+                        .iter()
+                        .map(|constructor| (constructor.0 .0.clone(), *constructor.0 .1.clone()))
+                        .collect();
 
                     handle_pattern_match(&input_expr, constructors, input)
                 }
@@ -368,14 +373,12 @@ fn handle_pattern_match(
                     ));
                 } else {
                     let pattern_expr_variable = match &patterns[0] {
-                        ConstructorPattern::Literal(expr) => {
-                            match *expr.clone() {
-                                Expr::Variable(variable) => variable,
-                                _ => {
-                                    return Err(EvaluationError::Message(
+                        ConstructorPattern::Literal(expr) => match *expr.clone() {
+                            Expr::Variable(variable) => variable,
+                            _ => {
+                                return Err(EvaluationError::Message(
                                         "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
                                     ));
-                                }
                             }
                         },
                         _ => {
@@ -385,89 +388,91 @@ fn handle_pattern_match(
                         }
                     };
                     match condition_key {
-                        ConstructorTypeName::InBuiltConstructor(constructor_type) => match constructor_type {
-                            InBuiltConstructorInner::Some => {
-                                match &match_evaluated {
-                                    TypeAnnotatedValue::Option { value, .. } => {
-                                        match value {
-                                            Some(v) => {
-                                                let result = possible_resolution.evaluate(&input.merge(
-                                                    &TypeAnnotatedValue::Record {
-                                                        value: vec![(pattern_expr_variable.to_string(), *v.clone())],
-                                                        typ: vec![(pattern_expr_variable.to_string(), AnalysedType::from(*v.clone()))]
-                                                    }
-                                                ))?;
+                        ConstructorTypeName::InBuiltConstructor(constructor_type) => {
+                            match constructor_type {
+                                InBuiltConstructorInner::Some => match &match_evaluated {
+                                    TypeAnnotatedValue::Option { value, .. } => match value {
+                                        Some(v) => {
+                                            let result = possible_resolution.evaluate(
+                                                &input.merge(&TypeAnnotatedValue::Record {
+                                                    value: vec![(
+                                                        pattern_expr_variable.to_string(),
+                                                        *v.clone(),
+                                                    )],
+                                                    typ: vec![(
+                                                        pattern_expr_variable.to_string(),
+                                                        AnalysedType::from(*v.clone()),
+                                                    )],
+                                                }),
+                                            )?;
 
-                                                resolved_result = Some(result);
-                                            }
-
-                                            None => {}
+                                            resolved_result = Some(result);
                                         }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            InBuiltConstructorInner::None => {
-                                match &match_evaluated {
-                                    TypeAnnotatedValue::Option { value, .. } => {
-                                        match value {
-                                            Some(_) => {}
-                                            None => {
-                                                let result = possible_resolution.evaluate(input)?;
 
-                                                resolved_result = Some(result);
-                                                break;
-                                            }
+                                        None => {}
+                                    },
+                                    _ => {}
+                                },
+                                InBuiltConstructorInner::None => match &match_evaluated {
+                                    TypeAnnotatedValue::Option { value, .. } => match value {
+                                        Some(_) => {}
+                                        None => {
+                                            let result = possible_resolution.evaluate(input)?;
+
+                                            resolved_result = Some(result);
+                                            break;
                                         }
-                                    }
+                                    },
                                     _ => {}
-                                }
-                            }
+                                },
 
-                            InBuiltConstructorInner::Ok => {
-                                match &match_evaluated {
-                                    TypeAnnotatedValue::Result { value, .. } => {
-                                        match value {
-                                            Ok(v) => {
-                                                let result = possible_resolution.evaluate(&input.merge(
-                                                    &TypeAnnotatedValue::Record {
-                                                        value: vec![(pattern_expr_variable.to_string(), *v.clone().unwrap())],
-                                                        typ: vec![(pattern_expr_variable.to_string(), AnalysedType::from(*v.clone().unwrap()))]
-                                                    }
-                                                ))?;
+                                InBuiltConstructorInner::Ok => match &match_evaluated {
+                                    TypeAnnotatedValue::Result { value, .. } => match value {
+                                        Ok(v) => {
+                                            let result = possible_resolution.evaluate(
+                                                &input.merge(&TypeAnnotatedValue::Record {
+                                                    value: vec![(
+                                                        pattern_expr_variable.to_string(),
+                                                        *v.clone().unwrap(),
+                                                    )],
+                                                    typ: vec![(
+                                                        pattern_expr_variable.to_string(),
+                                                        AnalysedType::from(*v.clone().unwrap()),
+                                                    )],
+                                                }),
+                                            )?;
 
-                                                resolved_result = Some(result);
-                                                break;
-                                            }
-
-                                            Err(_) => {}
+                                            resolved_result = Some(result);
+                                            break;
                                         }
-                                    }
+
+                                        Err(_) => {}
+                                    },
                                     _ => {}
-                                }
-                            },
-                            InBuiltConstructorInner::Err => {
-                                match &match_evaluated {
-                                    TypeAnnotatedValue::Result {value, ..} => {
-                                        match value {
-                                            Ok(_) => {}
-                                            Err(v) => {
-                                                let result =
-                                                    &possible_resolution.evaluate(
-                                                        &input.merge( &TypeAnnotatedValue::Record {
-                                                            value: vec![(pattern_expr_variable.to_string(), *v.clone().unwrap())],
-                                                            typ: vec![(pattern_expr_variable.to_string(), AnalysedType::from(*v.clone().unwrap()))]
-                                                        })
-                                                    )?;
+                                },
+                                InBuiltConstructorInner::Err => match &match_evaluated {
+                                    TypeAnnotatedValue::Result { value, .. } => match value {
+                                        Ok(_) => {}
+                                        Err(v) => {
+                                            let result = &possible_resolution.evaluate(
+                                                &input.merge(&TypeAnnotatedValue::Record {
+                                                    value: vec![(
+                                                        pattern_expr_variable.to_string(),
+                                                        *v.clone().unwrap(),
+                                                    )],
+                                                    typ: vec![(
+                                                        pattern_expr_variable.to_string(),
+                                                        AnalysedType::from(*v.clone().unwrap()),
+                                                    )],
+                                                }),
+                                            )?;
 
-                                                resolved_result = Some(result.clone());
-                                                break;
-                                            }
-
+                                            resolved_result = Some(result.clone());
+                                            break;
                                         }
-                                    }
+                                    },
                                     _ => {}
-                                }
+                                },
                             }
                         }
                         ConstructorTypeName::CustomConstructor(_) => {
@@ -486,25 +491,24 @@ fn handle_pattern_match(
         }
     }
 
-    resolved_result
-        .ok_or(EvaluationError::Message(
-            "Pattern matching failed".to_string(),
-        ))
+    resolved_result.ok_or(EvaluationError::Message(
+        "Pattern matching failed".to_string(),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expr::Expr;
+    use crate::http_request::InputHttpRequest;
+    use crate::merge::Merge;
+    use crate::type_inference::infer_analysed_type;
+    use crate::worker_response::WorkerResponse;
+    use golem_service_base::model::Type;
+    use golem_wasm_rpc::TypeAnnotatedValue;
     use http::HeaderMap;
     use serde_json::Value;
     use std::collections::HashMap;
-    use golem_wasm_rpc::TypeAnnotatedValue;
-    use golem_service_base::model::Type;
-    use crate::http_request::InputHttpRequest;
-    use crate::worker_response::WorkerResponse;
-    use crate::merge::Merge;
-    use crate::type_inference::infer_analysed_type;
 
     fn resolved_variables_from_worker_response(input: &str) -> TypeAnnotatedValue {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");
@@ -528,11 +532,7 @@ mod tests {
         path_values: &HashMap<usize, String>,
         spec_variables: &HashMap<usize, String>,
     ) -> TypeAnnotatedValue {
-        InputHttpRequest::get_request_path_values(
-            path_values,
-            spec_variables,
-        )
-        .unwrap()
+        InputHttpRequest::get_request_path_values(path_values, spec_variables).unwrap()
     }
 
     #[test]

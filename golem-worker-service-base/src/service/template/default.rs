@@ -30,8 +30,6 @@ pub trait TemplateService<AuthCtx> {
         template_id: &TemplateId,
         auth_ctx: &AuthCtx,
     ) -> TemplateResult<Template>;
-
-
 }
 
 #[derive(Clone)]

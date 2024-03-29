@@ -3,21 +3,18 @@ use std::collections::HashMap;
 use crate::api_definition::ResponseMapping;
 use crate::evaluator::{EvaluationError, Evaluator};
 use crate::expr::Expr;
+use crate::merge::Merge;
+use crate::primitive::{GetPrimitive, Primitive};
 use crate::type_inference::*;
 use crate::worker_request::WorkerRequest;
 use crate::worker_request_to_response::WorkerRequestToResponse;
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::JsonFunctionResult;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use http::{HeaderMap, StatusCode};
 use poem::{Body, ResponseParts};
-use serde_json::{json, Value};
+use serde_json::json;
 use tracing::info;
-use crate::primitive::{GetPrimitive, Primitive};
-use crate::service::worker::ConnectProxyError::Json;
-use crate::tokeniser::tokenizer::Token;
-use crate::merge::Merge;
 
 pub struct WorkerResponse {
     pub result: TypeAnnotatedValue,
@@ -57,7 +54,8 @@ impl WorkerResponse {
 
         let status_code = get_status_code(&response_mapping.status, &type_annotated_value)?;
 
-        let headers = ResolvedResponseHeaders::from(&response_mapping.headers, &type_annotated_value)?;
+        let headers =
+            ResolvedResponseHeaders::from(&response_mapping.headers, &type_annotated_value)?;
 
         let response_body = response_mapping.body.evaluate(&type_annotated_value)?;
 
@@ -132,10 +130,12 @@ impl ResolvedResponseHeaders {
         for (header_name, header_value_expr) in header_mapping {
             let value = header_value_expr.evaluate(input)?;
 
-            let value_str = value.get_primitive().ok_or(EvaluationError::Message(format!(
-                "Header value is not a string. {}",
-                JsonFunctionResult::from(value).0
-            )))?;
+            let value_str = value
+                .get_primitive()
+                .ok_or(EvaluationError::Message(format!(
+                    "Header value is not a string. {}",
+                    JsonFunctionResult::from(value).0
+                )))?;
 
             resolved_headers.insert(header_name.clone(), value_str.to_string());
         }

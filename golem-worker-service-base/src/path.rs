@@ -20,23 +20,6 @@ impl Path {
     }
 }
 
-pub struct RemainingPath(Path);
-
-impl RemainingPath {
-
-    pub fn get_index(&self) -> Option<&Index> {
-        let first = self.0 .0.first()?;
-        first.get_index()
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.0
-    }
-    pub fn all_components(&self) -> &Vec<PathComponent> {
-        &self.path().0
-    }
-}
-
 impl Path {
     pub fn new() -> Path {
         Path(vec![])
@@ -87,22 +70,6 @@ pub enum PathComponent {
 }
 
 impl PathComponent {
-
-    fn key(input: &str) -> PathComponent {
-        PathComponent::KeyName(KeyName(input.to_string()))
-    }
-
-    fn ind(index: usize) -> PathComponent {
-        PathComponent::Index(Index(index))
-    }
-
-    fn get_index(&self) -> Option<&Index> {
-        match self {
-            PathComponent::KeyName(_) => None,
-            PathComponent::Index(index) => Some(index),
-        }
-    }
-
     fn key_name(input: &str) -> PathComponent {
         PathComponent::KeyName(KeyName(input.to_string()))
     }

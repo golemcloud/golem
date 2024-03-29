@@ -1,6 +1,5 @@
-use std::cmp::Ordering;
-use std::fmt::Display;
 use golem_wasm_rpc::TypeAnnotatedValue;
+use std::fmt::Display;
 
 pub trait GetPrimitive {
     fn get_primitive(&self) -> Option<Primitive>;
@@ -56,11 +55,9 @@ impl Display for Primitive {
     }
 }
 
-
 impl GetPrimitive for TypeAnnotatedValue {
     fn get_primitive(&self) -> Option<Primitive> {
         let optional_number = get_number(self);
-
 
         match optional_number {
             Some(number) => Some(Primitive::Num(number)),
@@ -68,7 +65,7 @@ impl GetPrimitive for TypeAnnotatedValue {
                 TypeAnnotatedValue::Str(value) => Some(Primitive::String(value.clone())),
                 TypeAnnotatedValue::Bool(value) => Some(Primitive::Bool(*value)),
                 _ => None,
-            }
+            },
         }
     }
 }

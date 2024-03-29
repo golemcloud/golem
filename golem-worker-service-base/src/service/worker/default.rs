@@ -100,7 +100,6 @@ pub trait WorkerService<AuthCtx> {
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult>;
 
-
     async fn invoke_function(
         &self,
         worker_id: &WorkerId,
@@ -445,7 +444,6 @@ where
                 WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
 
-
         let params_val = params
             .validate_function_parameters(
                 function_type
@@ -474,11 +472,13 @@ where
             .map(|x| x.clone().into())
             .collect();
 
-        let invoke_response_json = golem_service_base::typechecker::validate_function_result_typed_value(
-            results_val.result,
-            function_results,
-            calling_convention.clone(),
-        ).map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
+        let invoke_response_json =
+            golem_service_base::typechecker::validate_function_result_typed_value(
+                results_val.result,
+                function_results,
+                calling_convention.clone(),
+            )
+            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         Ok(invoke_response_json)
     }
@@ -968,7 +968,6 @@ where
     }
 }
 
-
 fn is_connection_failure(message: &str) -> bool {
     message.contains("UNAVAILABLE")
         || message.contains("CHANNEL CLOSED")
@@ -1057,10 +1056,19 @@ where
         Ok(Value::default())
     }
 
-    async fn invoke_and_await_function_typed_value(&self, worker_id: &WorkerId, function_name: String, invocation_key: &InvocationKey, params: Value, calling_convention: &CallingConvention, metadata: WorkerRequestMetadata, auth_ctx: &AuthCtx) -> WorkerResult<TypeAnnotatedValue> {
-        Ok(TypeAnnotatedValue::Tuple{
+    async fn invoke_and_await_function_typed_value(
+        &self,
+        _worker_id: &WorkerId,
+        _function_name: String,
+        _invocation_key: &InvocationKey,
+        _params: Value,
+        _calling_convention: &CallingConvention,
+        _metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<TypeAnnotatedValue> {
+        Ok(TypeAnnotatedValue::Tuple {
             value: vec![],
-            typ: vec![]
+            typ: vec![],
         })
     }
 

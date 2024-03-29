@@ -1,6 +1,5 @@
-use crate::path::{KeyName, Path, PathComponent};
+use crate::path::{Path, PathComponent};
 use golem_wasm_rpc::TypeAnnotatedValue;
-use std::collections::HashMap;
 
 pub trait Getter<T> {
     fn get(&self, key: &Path) -> Option<T>;

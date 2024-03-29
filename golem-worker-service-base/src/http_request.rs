@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
+use crate::merge::Merge;
+use crate::tokeniser::tokenizer::Token;
 use derive_more::{Display, FromStr, Into};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
-use crate::tokeniser::tokenizer::Token;
-use crate::merge::Merge;
 
 // An input request from external API gateways, that is then resolved to a worker request, using API definitions
 pub struct InputHttpRequest<'a> {
@@ -22,15 +22,11 @@ impl InputHttpRequest<'_> {
         spec_query_variables: Vec<String>,
         spec_path_variables: &HashMap<usize, String>,
     ) -> Result<TypeAnnotatedValue, Vec<String>> {
-
         let request_body = &self.req_body;
         let request_header = self.headers;
-        let request_path_values: HashMap<usize, String> =
-            self.input_path.path_components();
+        let request_path_values: HashMap<usize, String> = self.input_path.path_components();
 
-        let request_query_variables: HashMap<String, String> =
-            self.input_path.query_components();
-
+        let request_query_variables: HashMap<String, String> = self.input_path.query_components();
 
         let request_header_values = Self::get_headers(request_header)?;
         let body_value = Self::get_request_body(request_body)?;
@@ -45,32 +41,29 @@ impl InputHttpRequest<'_> {
 
         let request_type_annotated_value = TypeAnnotatedValue::Record {
             value: vec![(Token::Request.to_string(), merged.clone())],
-            typ: vec![(Token::Request.to_string(), AnalysedType::from(merged.clone()))],
+            typ: vec![(
+                Token::Request.to_string(),
+                AnalysedType::from(merged.clone()),
+            )],
         };
-
 
         Ok(request_type_annotated_value)
     }
 
-    pub fn get_request_body(
-        request_body: &Value,
-    ) -> Result<TypeAnnotatedValue, Vec<String>> {
+    pub fn get_request_body(request_body: &Value) -> Result<TypeAnnotatedValue, Vec<String>> {
         match crate::type_inference::infer_analysed_type(request_body) {
-            Some(inferred_type) => {
-                Ok(TypeAnnotatedValue::Record {
-                    value: vec![("body".to_string(), TypeAnnotatedValue::from_json_value(&request_body, &inferred_type)?)],
-                    typ: vec![("body".to_string(), inferred_type)],
-                })
-            }
-            None => {
-                Err(vec!["Unable to infer type of request body".to_string()])
-            }
+            Some(inferred_type) => Ok(TypeAnnotatedValue::Record {
+                value: vec![(
+                    "body".to_string(),
+                    TypeAnnotatedValue::from_json_value(&request_body, &inferred_type)?,
+                )],
+                typ: vec![("body".to_string(), inferred_type)],
+            }),
+            None => Err(vec!["Unable to infer type of request body".to_string()]),
         }
     }
 
-    pub fn get_headers(
-        headers: &HeaderMap,
-    ) -> Result<TypeAnnotatedValue, Vec<String>> {
+    pub fn get_headers(headers: &HeaderMap) -> Result<TypeAnnotatedValue, Vec<String>> {
         let mut headers_map: Vec<(String, TypeAnnotatedValue)> = vec![];
 
         for (header_name, header_value) in headers {
@@ -84,12 +77,19 @@ impl InputHttpRequest<'_> {
 
         let type_annotated_value = TypeAnnotatedValue::Record {
             value: headers_map.clone(),
-            typ: headers_map.clone().iter().map(|(key, _)| (key.clone(), AnalysedType::Str)).collect(),
+            typ: headers_map
+                .clone()
+                .iter()
+                .map(|(key, _)| (key.clone(), AnalysedType::Str))
+                .collect(),
         };
 
         Ok(TypeAnnotatedValue::Record {
             value: vec![("header".to_string(), type_annotated_value.clone())],
-            typ: vec![("header".to_string(), AnalysedType::from(type_annotated_value.clone()))],
+            typ: vec![(
+                "header".to_string(),
+                AnalysedType::from(type_annotated_value.clone()),
+            )],
         })
     }
 
@@ -99,10 +99,8 @@ impl InputHttpRequest<'_> {
         request_path_values: &HashMap<usize, String>,
         spec_path_variables: &HashMap<usize, String>,
     ) -> Result<TypeAnnotatedValue, Vec<String>> {
-        let request_query_values = Self::get_request_query_values(
-            request_query_variables,
-            spec_query_variables,
-        )?;
+        let request_query_values =
+            Self::get_request_query_values(request_query_variables, spec_query_variables)?;
 
         let request_path_values =
             Self::get_request_path_values(&request_path_values, spec_path_variables)?;
@@ -124,10 +122,10 @@ impl InputHttpRequest<'_> {
 
         for (index, spec_path_variable) in spec_path_variables.iter() {
             if let Some(path_value) = request_path_values.get(index) {
-                path_variables_map.push(
-                    (spec_path_variable.clone(),
-                    TypeAnnotatedValue::Str(path_value.trim().to_string()))
-                );
+                path_variables_map.push((
+                    spec_path_variable.clone(),
+                    TypeAnnotatedValue::Str(path_value.trim().to_string()),
+                ));
             } else {
                 unavailable_path_variables.push(spec_path_variable.to_string());
             }
@@ -136,7 +134,11 @@ impl InputHttpRequest<'_> {
         if unavailable_path_variables.is_empty() {
             let type_annotated_value = TypeAnnotatedValue::Record {
                 value: path_variables_map.clone(),
-                typ: path_variables_map.clone().iter().map(|(key, _)| (key.clone(), AnalysedType::Str)).collect(),
+                typ: path_variables_map
+                    .clone()
+                    .iter()
+                    .map(|(key, _)| (key.clone(), AnalysedType::Str))
+                    .collect(),
             };
             Ok(type_annotated_value)
         } else {
@@ -153,9 +155,10 @@ impl InputHttpRequest<'_> {
 
         for spec_query_variable in spec_query_variables.iter() {
             if let Some(query_value) = request_query_variables.get(spec_query_variable) {
-                query_variable_map.push(
-                    (spec_query_variable.clone(), TypeAnnotatedValue::Str(query_value.trim().to_string()))
-                );
+                query_variable_map.push((
+                    spec_query_variable.clone(),
+                    TypeAnnotatedValue::Str(query_value.trim().to_string()),
+                ));
             } else {
                 unavailable_query_variables.push(spec_query_variable.to_string());
             }
@@ -164,14 +167,17 @@ impl InputHttpRequest<'_> {
         if unavailable_query_variables.is_empty() {
             let type_annotated_value = TypeAnnotatedValue::Record {
                 value: query_variable_map.clone(),
-                typ: query_variable_map.clone().iter().map(|(key, _)| (key.clone(), AnalysedType::Str)).collect::<Vec<(String, AnalysedType)>>(),
+                typ: query_variable_map
+                    .clone()
+                    .iter()
+                    .map(|(key, _)| (key.clone(), AnalysedType::Str))
+                    .collect::<Vec<(String, AnalysedType)>>(),
             };
             Ok(type_annotated_value)
         } else {
             Err(unavailable_query_variables)
         }
     }
-
 }
 
 #[derive(PartialEq, Debug, Display, FromStr, Into)]

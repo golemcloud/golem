@@ -1,8 +1,7 @@
+use golem_common::model::TemplateId;
 use golem_wasm_rpc::json::JsonFunctionResult;
 use golem_wasm_rpc::TypeAnnotatedValue;
-use golem_common::model::TemplateId;
 use serde_json::Value;
-use golem_service_base::model::{ExportFunction, TemplateMetadata};
 
 use crate::api_request_route_resolver::ResolvedWorkerBinding;
 use crate::evaluator::{Evaluator, RawString};
@@ -30,7 +29,12 @@ impl WorkerRequest {
 
         let worker_id = match worker_id_value {
             TypeAnnotatedValue::Str(value) => value,
-            _ => return Err(format!("Worker id is not a string. {}", JsonFunctionResult::from(worker_id_value).0))
+            _ => {
+                return Err(format!(
+                    "Worker id is not a string. {}",
+                    JsonFunctionResult::from(worker_id_value).0
+                ))
+            }
         };
 
         let function_name_value = RawString::new(
@@ -43,7 +47,12 @@ impl WorkerRequest {
 
         let function_name = match function_name_value {
             TypeAnnotatedValue::Str(value) => value,
-            _ => return Err(format!("Function name is not a string. {}", JsonFunctionResult::from(function_name_value).0))
+            _ => {
+                return Err(format!(
+                    "Function name is not a string. {}",
+                    JsonFunctionResult::from(function_name_value).0
+                ))
+            }
         };
 
         let mut function_params: Vec<Value> = vec![];
