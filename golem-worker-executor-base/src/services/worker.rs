@@ -27,7 +27,6 @@ use tracing::debug;
 
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
-use crate::services::golem_config::WorkersServiceConfig;
 use crate::services::shard::ShardService;
 
 /// Service for persisting the current set of Golem workers represented by their metadata
@@ -51,19 +50,6 @@ pub trait WorkerService {
         overridden_retry_config: Option<RetryConfig>,
         oplog_idx: u64,
     );
-}
-
-pub fn configured(
-    config: &WorkersServiceConfig,
-    redis_pool: RedisPool,
-    shard_service: Arc<dyn ShardService + Send + Sync>,
-) -> Arc<dyn WorkerService + Send + Sync> {
-    match config {
-        WorkersServiceConfig::InMemory => Arc::new(WorkerServiceInMemory::new()),
-        WorkersServiceConfig::Redis => {
-            Arc::new(WorkerServiceRedis::new(redis_pool.clone(), shard_service))
-        }
-    }
 }
 
 #[derive(Clone)]

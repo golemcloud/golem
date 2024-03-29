@@ -118,6 +118,27 @@ impl<'de> bincode::BorrowDecode<'de> for Timestamp {
     }
 }
 
+impl From<Timestamp> for prost_types::Timestamp {
+    fn from(value: Timestamp) -> Self {
+        let d = value
+            .0
+            .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH);
+        Self {
+            seconds: d.whole_seconds(),
+            nanos: d.subsec_nanoseconds(),
+        }
+    }
+}
+
+impl From<prost_types::Timestamp> for Timestamp {
+    fn from(value: prost_types::Timestamp) -> Self {
+        Timestamp(
+            iso8601_timestamp::Timestamp::UNIX_EPOCH
+                .add(Duration::new(value.seconds as u64, value.nanos as u32)),
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct VersionedWorkerId {
     #[serde(rename = "instance_id")]
@@ -777,12 +798,432 @@ pub fn parse_function_name(name: &str) -> ParsedFunctionName {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+pub enum WorkerFilter {
+    Name {
+        comparator: StringFilterComparator,
+        value: String,
+    },
+    Status {
+        value: WorkerStatus,
+    },
+    Version {
+        comparator: FilterComparator,
+        value: i32,
+    },
+    CreatedAt {
+        comparator: FilterComparator,
+        value: Timestamp,
+    },
+    Env {
+        name: String,
+        comparator: StringFilterComparator,
+        value: String,
+    },
+    And(Vec<WorkerFilter>),
+    Or(Vec<WorkerFilter>),
+    Not(Box<WorkerFilter>),
+}
+
+impl WorkerFilter {
+    pub fn and(&self, filter: WorkerFilter) -> Self {
+        match self.clone() {
+            WorkerFilter::And(filters) => Self::new_and([filters, vec![filter]].concat()),
+            f => Self::new_and(vec![f, filter]),
+        }
+    }
+
+    pub fn or(&self, filter: WorkerFilter) -> Self {
+        match self.clone() {
+            WorkerFilter::Or(filters) => Self::new_or([filters, vec![filter]].concat()),
+            f => Self::new_or(vec![f, filter]),
+        }
+    }
+
+    pub fn not(&self) -> Self {
+        Self::new_not(self.clone())
+    }
+
+    pub fn matches(&self, metadata: &WorkerMetadata) -> bool {
+        match self.clone() {
+            WorkerFilter::Name { comparator, value } => {
+                comparator.matches(&metadata.worker_id.worker_id.worker_name, &value)
+            }
+            WorkerFilter::Version { comparator, value } => {
+                comparator.matches(&metadata.worker_id.template_version, &value)
+            }
+            WorkerFilter::Env {
+                name,
+                comparator,
+                value,
+            } => {
+                let mut result = false;
+                let name = name.to_lowercase();
+                for env_value in metadata.env.clone() {
+                    if env_value.0.to_lowercase() == name {
+                        result = comparator.matches(&env_value.1, &value);
+
+                        break;
+                    }
+                }
+                result
+            }
+            WorkerFilter::CreatedAt {
+                comparator: _,
+                value: _,
+            } => {
+                true // TODO implement when we will have timestamp in metadata
+            }
+            WorkerFilter::Status { value } => metadata.last_known_status.status == value,
+            WorkerFilter::Not(filter) => !filter.matches(metadata),
+            WorkerFilter::And(filters) => {
+                let mut result = true;
+                for filter in filters {
+                    if !filter.matches(metadata) {
+                        result = false;
+                        break;
+                    }
+                }
+                result
+            }
+            WorkerFilter::Or(filters) => {
+                let mut result = true;
+                if !filters.is_empty() {
+                    result = false;
+                    for filter in filters {
+                        if filter.matches(metadata) {
+                            result = true;
+                            break;
+                        }
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    pub fn new_and(filters: Vec<WorkerFilter>) -> Self {
+        WorkerFilter::And(filters)
+    }
+
+    pub fn new_or(filters: Vec<WorkerFilter>) -> Self {
+        WorkerFilter::Or(filters)
+    }
+
+    pub fn new_not(filter: WorkerFilter) -> Self {
+        WorkerFilter::Not(Box::new(filter))
+    }
+
+    pub fn new_name(comparator: StringFilterComparator, value: String) -> Self {
+        WorkerFilter::Name { comparator, value }
+    }
+
+    pub fn new_env(name: String, comparator: StringFilterComparator, value: String) -> Self {
+        WorkerFilter::Env {
+            name,
+            comparator,
+            value,
+        }
+    }
+
+    pub fn new_version(comparator: FilterComparator, value: i32) -> Self {
+        WorkerFilter::Version { comparator, value }
+    }
+
+    pub fn new_status(value: WorkerStatus) -> Self {
+        WorkerFilter::Status { value }
+    }
+
+    pub fn new_created_at(comparator: FilterComparator, value: Timestamp) -> Self {
+        WorkerFilter::CreatedAt { comparator, value }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilter {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::WorkerFilter,
+    ) -> Result<Self, Self::Error> {
+        match value.filter {
+            Some(filter) => match filter {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Name(filter) => Ok(
+                    WorkerFilter::new_name(filter.comparator.try_into()?, filter.value),
+                ),
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(filter) => Ok(
+                    WorkerFilter::new_version(filter.comparator.try_into()?, filter.value),
+                ),
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Status(filter) => {
+                    Ok(WorkerFilter::new_status(filter.value.try_into()?))
+                }
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::CreatedAt(filter) => {
+                    let value = filter
+                        .value
+                        .map(|t| t.into())
+                        .ok_or_else(|| "Missing value".to_string())?;
+                    Ok(WorkerFilter::new_created_at(
+                        filter.comparator.try_into()?,
+                        value,
+                    ))
+                }
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Env(filter) => Ok(
+                    WorkerFilter::new_env(filter.name, filter.comparator.try_into()?, filter.value),
+                ),
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Not(filter) => {
+                    let filter = *filter.filter.ok_or_else(|| "Missing filter".to_string())?;
+                    Ok(WorkerFilter::new_not(filter.try_into()?))
+                }
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::And(
+                    golem_api_grpc::proto::golem::worker::WorkerAndFilter { filters },
+                ) => {
+                    let filters = filters.into_iter().map(|f| f.try_into()).collect::<Result<
+                        Vec<WorkerFilter>,
+                        String,
+                    >>(
+                    )?;
+
+                    Ok(WorkerFilter::new_and(filters))
+                }
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Or(
+                    golem_api_grpc::proto::golem::worker::WorkerOrFilter { filters },
+                ) => {
+                    let filters = filters.into_iter().map(|f| f.try_into()).collect::<Result<
+                        Vec<WorkerFilter>,
+                        String,
+                    >>(
+                    )?;
+
+                    Ok(WorkerFilter::new_or(filters))
+                }
+            },
+            None => Err("Missing filter".to_string()),
+        }
+    }
+}
+
+impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
+    fn from(value: WorkerFilter) -> Self {
+        let filter = match value {
+            WorkerFilter::Name { comparator, value } => {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Name(
+                    golem_api_grpc::proto::golem::worker::WorkerNameFilter {
+                        comparator: comparator.into(),
+                        value,
+                    },
+                )
+            }
+            WorkerFilter::Version { comparator, value } => {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(
+                    golem_api_grpc::proto::golem::worker::WorkerVersionFilter {
+                        comparator: comparator.into(),
+                        value,
+                    },
+                )
+            }
+            WorkerFilter::Env {
+                name,
+                comparator,
+                value,
+            } => golem_api_grpc::proto::golem::worker::worker_filter::Filter::Env(
+                golem_api_grpc::proto::golem::worker::WorkerEnvFilter {
+                    name,
+                    comparator: comparator.into(),
+                    value,
+                },
+            ),
+            WorkerFilter::Status { value } => {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Status(
+                    golem_api_grpc::proto::golem::worker::WorkerStatusFilter {
+                        value: value.into(),
+                    },
+                )
+            }
+            WorkerFilter::CreatedAt { comparator, value } => {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::CreatedAt(
+                    golem_api_grpc::proto::golem::worker::WorkerCreatedAtFilter {
+                        value: Some(value.into()),
+                        comparator: comparator.into(),
+                    },
+                )
+            }
+            WorkerFilter::Not(filter) => {
+                let f: golem_api_grpc::proto::golem::worker::WorkerFilter = (*filter).into();
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Not(Box::new(
+                    golem_api_grpc::proto::golem::worker::WorkerNotFilter {
+                        filter: Some(Box::new(f)),
+                    },
+                ))
+            }
+            WorkerFilter::And(filters) => {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::And(
+                    golem_api_grpc::proto::golem::worker::WorkerAndFilter {
+                        filters: filters.into_iter().map(|f| f.into()).collect(),
+                    },
+                )
+            }
+            WorkerFilter::Or(filters) => {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Or(
+                    golem_api_grpc::proto::golem::worker::WorkerOrFilter {
+                        filters: filters.into_iter().map(|f| f.into()).collect(),
+                    },
+                )
+            }
+        };
+
+        golem_api_grpc::proto::golem::worker::WorkerFilter {
+            filter: Some(filter),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Enum)]
+pub enum StringFilterComparator {
+    Equal,
+    Like,
+}
+
+impl StringFilterComparator {
+    pub fn matches<T: Display>(&self, value1: &T, value2: &T) -> bool {
+        match self {
+            StringFilterComparator::Equal => value1.to_string() == value2.to_string(),
+            StringFilterComparator::Like => {
+                value1.to_string().contains(value2.to_string().as_str())
+            } // FIXME
+        }
+    }
+}
+
+impl From<StringFilterComparator> for golem_api_grpc::proto::golem::common::StringFilterComparator {
+    fn from(value: StringFilterComparator) -> Self {
+        match value {
+            StringFilterComparator::Equal => {
+                golem_api_grpc::proto::golem::common::StringFilterComparator::StringEqual
+            }
+            StringFilterComparator::Like => {
+                golem_api_grpc::proto::golem::common::StringFilterComparator::StringLike
+            }
+        }
+    }
+}
+
+impl TryFrom<i32> for StringFilterComparator {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(StringFilterComparator::Equal),
+            1 => Ok(StringFilterComparator::Like),
+            _ => Err(format!("Unknown String Filter Comparator: {}", value)),
+        }
+    }
+}
+
+impl From<StringFilterComparator> for i32 {
+    fn from(value: StringFilterComparator) -> Self {
+        match value {
+            StringFilterComparator::Equal => 0,
+            StringFilterComparator::Like => 1,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Enum)]
+pub enum FilterComparator {
+    Equal,
+    NotEqual,
+    GreaterEqual,
+    Greater,
+    LessEqual,
+    Less,
+}
+
+impl FilterComparator {
+    pub fn matches<T: Ord>(&self, value1: &T, value2: &T) -> bool {
+        match self {
+            FilterComparator::Equal => value1 == value2,
+            FilterComparator::NotEqual => value1 != value2,
+            FilterComparator::Less => value1 < value2,
+            FilterComparator::LessEqual => value1 <= value2,
+            FilterComparator::Greater => value1 > value2,
+            FilterComparator::GreaterEqual => value1 >= value2,
+        }
+    }
+}
+
+impl From<FilterComparator> for golem_api_grpc::proto::golem::common::FilterComparator {
+    fn from(value: FilterComparator) -> Self {
+        match value {
+            FilterComparator::Equal => {
+                golem_api_grpc::proto::golem::common::FilterComparator::Equal
+            }
+            FilterComparator::NotEqual => {
+                golem_api_grpc::proto::golem::common::FilterComparator::NotEqual
+            }
+            FilterComparator::Less => golem_api_grpc::proto::golem::common::FilterComparator::Less,
+            FilterComparator::LessEqual => {
+                golem_api_grpc::proto::golem::common::FilterComparator::LessEqual
+            }
+            FilterComparator::Greater => {
+                golem_api_grpc::proto::golem::common::FilterComparator::Greater
+            }
+            FilterComparator::GreaterEqual => {
+                golem_api_grpc::proto::golem::common::FilterComparator::GreaterEqual
+            }
+        }
+    }
+}
+
+impl TryFrom<i32> for FilterComparator {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(FilterComparator::Equal),
+            1 => Ok(FilterComparator::NotEqual),
+            2 => Ok(FilterComparator::Less),
+            3 => Ok(FilterComparator::LessEqual),
+            4 => Ok(FilterComparator::Greater),
+            5 => Ok(FilterComparator::GreaterEqual),
+            _ => Err(format!("Unknown Filter Comparator: {}", value)),
+        }
+    }
+}
+
+impl From<FilterComparator> for i32 {
+    fn from(value: FilterComparator) -> Self {
+        match value {
+            FilterComparator::Equal => 0,
+            FilterComparator::NotEqual => 1,
+            FilterComparator::Less => 2,
+            FilterComparator::LessEqual => 3,
+            FilterComparator::Greater => 4,
+            FilterComparator::GreaterEqual => 5,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bincode::{Decode, Encode};
     use serde::{Deserialize, Serialize};
+    use std::vec;
 
-    use crate::model::{parse_function_name, AccountId};
+    use crate::model::{
+        parse_function_name, AccountId, FilterComparator, StringFilterComparator, TemplateId,
+        Timestamp, VersionedWorkerId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+        WorkerStatusRecord,
+    };
+
+    #[test]
+    fn timestamp_conversion() {
+        let ts: Timestamp = Timestamp::now_utc();
+
+        let prost_ts: prost_types::Timestamp = ts.into();
+
+        let ts2: Timestamp = prost_ts.into();
+
+        assert_eq!(ts2, ts);
+    }
 
     #[test]
     fn parse_function_name_global() {
@@ -904,5 +1345,151 @@ mod tests {
         };
         let json = serde_json::to_string(&example).unwrap();
         assert_eq!(json, "{\"account_id\":\"account-1\"}");
+    }
+
+    #[test]
+    fn worker_filter_combination() {
+        assert_eq!(
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).not(),
+            WorkerFilter::new_not(WorkerFilter::new_name(
+                StringFilterComparator::Equal,
+                "worker-1".to_string()
+            ))
+        );
+
+        assert_eq!(
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+                .and(WorkerFilter::new_status(WorkerStatus::Running)),
+            WorkerFilter::new_and(vec![
+                WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+                WorkerFilter::new_status(WorkerStatus::Running)
+            ])
+        );
+
+        assert_eq!(
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+                .and(WorkerFilter::new_status(WorkerStatus::Running))
+                .and(WorkerFilter::new_version(FilterComparator::Equal, 1)),
+            WorkerFilter::new_and(vec![
+                WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+                WorkerFilter::new_status(WorkerStatus::Running),
+                WorkerFilter::new_version(FilterComparator::Equal, 1)
+            ])
+        );
+
+        assert_eq!(
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+                .or(WorkerFilter::new_status(WorkerStatus::Running)),
+            WorkerFilter::new_or(vec![
+                WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+                WorkerFilter::new_status(WorkerStatus::Running)
+            ])
+        );
+
+        assert_eq!(
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+                .or(WorkerFilter::new_status(WorkerStatus::Running))
+                .or(WorkerFilter::new_version(FilterComparator::Equal, 1)),
+            WorkerFilter::new_or(vec![
+                WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+                WorkerFilter::new_status(WorkerStatus::Running),
+                WorkerFilter::new_version(FilterComparator::Equal, 1)
+            ])
+        );
+
+        assert_eq!(
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+                .and(WorkerFilter::new_status(WorkerStatus::Running))
+                .or(WorkerFilter::new_version(FilterComparator::Equal, 1)),
+            WorkerFilter::new_or(vec![
+                WorkerFilter::new_and(vec![
+                    WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+                    WorkerFilter::new_status(WorkerStatus::Running)
+                ]),
+                WorkerFilter::new_version(FilterComparator::Equal, 1)
+            ])
+        );
+
+        assert_eq!(
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+                .or(WorkerFilter::new_status(WorkerStatus::Running))
+                .and(WorkerFilter::new_version(FilterComparator::Equal, 1)),
+            WorkerFilter::new_and(vec![
+                WorkerFilter::new_or(vec![
+                    WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+                    WorkerFilter::new_status(WorkerStatus::Running)
+                ]),
+                WorkerFilter::new_version(FilterComparator::Equal, 1)
+            ])
+        );
+    }
+
+    #[test]
+    fn worker_filter_matches() {
+        let template_id = TemplateId::new_v4();
+        let worker_metadata = WorkerMetadata {
+            worker_id: VersionedWorkerId {
+                worker_id: WorkerId {
+                    worker_name: "worker-1".to_string(),
+                    template_id,
+                },
+                template_version: 1,
+            },
+            args: vec![],
+            env: vec![
+                ("env1".to_string(), "value1".to_string()),
+                ("env2".to_string(), "value2".to_string()),
+            ],
+            account_id: AccountId {
+                value: "account-1".to_string(),
+            },
+            last_known_status: WorkerStatusRecord::default(),
+        };
+
+        assert!(
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+                .and(WorkerFilter::new_status(WorkerStatus::Idle))
+                .matches(&worker_metadata)
+        );
+
+        assert!(WorkerFilter::new_env(
+            "env1".to_string(),
+            StringFilterComparator::Equal,
+            "value1".to_string(),
+        )
+        .and(WorkerFilter::new_status(WorkerStatus::Idle))
+        .matches(&worker_metadata));
+
+        assert!(WorkerFilter::new_env(
+            "env1".to_string(),
+            StringFilterComparator::Equal,
+            "value2".to_string(),
+        )
+        .not()
+        .and(
+            WorkerFilter::new_status(WorkerStatus::Running)
+                .or(WorkerFilter::new_status(WorkerStatus::Idle))
+        )
+        .matches(&worker_metadata));
+
+        assert!(
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+                .and(WorkerFilter::new_version(FilterComparator::Equal, 1))
+                .matches(&worker_metadata)
+        );
+
+        assert!(
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-2".to_string())
+                .or(WorkerFilter::new_version(FilterComparator::Equal, 1))
+                .matches(&worker_metadata)
+        );
+
+        assert!(WorkerFilter::new_version(FilterComparator::GreaterEqual, 1)
+            .and(WorkerFilter::new_version(FilterComparator::Less, 2))
+            .or(WorkerFilter::new_name(
+                StringFilterComparator::Equal,
+                "worker-2".to_string(),
+            ))
+            .matches(&worker_metadata));
     }
 }

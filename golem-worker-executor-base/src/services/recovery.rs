@@ -20,10 +20,10 @@ use crate::model::{InterruptKind, LastError, TrapType};
 use crate::services::rpc::Rpc;
 use crate::services::{
     active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, scheduler,
-    template, worker, HasActiveWorkers, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps,
-    HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
-    HasRecoveryManagement, HasRpc, HasSchedulerService, HasTemplateService, HasWasmtimeEngine,
-    HasWorkerService,
+    template, worker, worker_enumeration, HasActiveWorkers, HasAll, HasBlobStoreService, HasConfig,
+    HasExtraDeps, HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
+    HasRecoveryManagement, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasTemplateService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -66,13 +66,6 @@ pub trait RecoveryManagement {
         retry_config: &RetryConfig,
         last_error: &Option<LastError>,
     ) -> RecoveryDecision;
-
-    fn is_retriable(
-        &self,
-        retry_config: &RetryConfig,
-        error: &WorkerError,
-        retry_count: u64,
-    ) -> bool;
 }
 
 pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
@@ -83,6 +76,9 @@ pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
     runtime: Handle,
     template_service: Arc<dyn template::TemplateService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+    worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
+    running_worker_enumeration_service:
+        Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
     oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
     promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
@@ -105,6 +101,8 @@ impl<Ctx: WorkerCtx> Clone for RecoveryManagementDefault<Ctx> {
             runtime: self.runtime.clone(),
             template_service: self.template_service.clone(),
             worker_service: self.worker_service.clone(),
+            worker_enumeration_service: self.worker_enumeration_service.clone(),
+            running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
             oplog_service: self.oplog_service.clone(),
             promise_service: self.promise_service.clone(),
             scheduler_service: self.scheduler_service.clone(),
@@ -140,6 +138,22 @@ impl<Ctx: WorkerCtx> HasConfig for RecoveryManagementDefault<Ctx> {
 impl<Ctx: WorkerCtx> HasWorkerService for RecoveryManagementDefault<Ctx> {
     fn worker_service(&self) -> Arc<dyn worker::WorkerService + Send + Sync> {
         self.worker_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasWorkerEnumerationService for RecoveryManagementDefault<Ctx> {
+    fn worker_enumeration_service(
+        &self,
+    ) -> Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync> {
+        self.worker_enumeration_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasRunningWorkerEnumerationService for RecoveryManagementDefault<Ctx> {
+    fn running_worker_enumeration_service(
+        &self,
+    ) -> Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync> {
+        self.running_worker_enumeration_service.clone()
     }
 }
 
@@ -221,6 +235,12 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         runtime: Handle,
         template_service: Arc<dyn template::TemplateService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
+        running_worker_enumeration_service: Arc<
+            dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync,
+        >,
         oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
         promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
@@ -239,6 +259,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             runtime,
             template_service,
             worker_service,
+            worker_enumeration_service,
+            running_worker_enumeration_service,
             oplog_service,
             promise_service,
             scheduler_service,
@@ -260,6 +282,12 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         runtime: Handle,
         template_service: Arc<dyn template::TemplateService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
+        running_worker_enumeration_service: Arc<
+            dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync,
+        >,
         oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
         promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
@@ -282,6 +310,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             runtime,
             template_service,
             worker_service,
+            worker_enumeration_service,
+            running_worker_enumeration_service,
             oplog_service,
             promise_service,
             scheduler_service,
@@ -308,7 +338,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             TrapType::Interrupt(InterruptKind::Jump) => RecoveryDecision::Immediate,
             TrapType::Exit => RecoveryDecision::None,
             TrapType::Error(error) => {
-                if self.is_retriable(retry_config, error, previous_tries) {
+                if is_worker_error_retriable(retry_config, error, previous_tries) {
                     match get_delay(retry_config, previous_tries) {
                         Some(delay) => RecoveryDecision::Delayed(delay),
                         None => RecoveryDecision::None,
@@ -327,7 +357,11 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
     ) -> RecoveryDecision {
         match last_error {
             Some(last_error) => {
-                if self.is_retriable(retry_config, &last_error.error, last_error.retry_count) {
+                if is_worker_error_retriable(
+                    retry_config,
+                    &last_error.error,
+                    last_error.retry_count,
+                ) {
                     RecoveryDecision::Immediate
                 } else {
                     RecoveryDecision::None
@@ -454,18 +488,6 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
         )
         .await
     }
-
-    fn is_retriable(
-        &self,
-        retry_config: &RetryConfig,
-        error: &WorkerError,
-        retry_count: u64,
-    ) -> bool {
-        match error {
-            WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
-            WorkerError::StackOverflow => false,
-        }
-    }
 }
 
 async fn recover_worker<Ctx: WorkerCtx, T>(this: &T, worker_id: &VersionedWorkerId)
@@ -493,6 +515,17 @@ where
         None => {
             warn!("Worker {} not found", worker_id);
         }
+    }
+}
+
+pub fn is_worker_error_retriable(
+    retry_config: &RetryConfig,
+    error: &WorkerError,
+    retry_count: u64,
+) -> bool {
+    match error {
+        WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
+        WorkerError::StackOverflow => false,
     }
 }
 
@@ -535,15 +568,6 @@ impl RecoveryManagement for RecoveryManagementMock {
     ) -> RecoveryDecision {
         todo!()
     }
-
-    fn is_retriable(
-        &self,
-        _retry_config: &RetryConfig,
-        _error: &WorkerError,
-        _previous_tries: u64,
-    ) -> bool {
-        todo!()
-    }
 }
 
 #[cfg(test)]
@@ -566,8 +590,8 @@ mod tests {
     use crate::services::worker_event::WorkerEventService;
     use crate::services::{
         All, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps, HasInvocationKeyService,
-        HasKeyValueService, HasPromiseService, HasRpc, HasTemplateService, HasWasmtimeEngine,
-        HasWorkerService,
+        HasKeyValueService, HasPromiseService, HasRpc, HasRunningWorkerEnumerationService,
+        HasTemplateService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
     };
     use crate::workerctx::{
         ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
@@ -900,6 +924,8 @@ mod tests {
             runtime,
             deps.template_service(),
             deps.worker_service(),
+            deps.worker_enumeration_service(),
+            deps.running_worker_enumeration_service(),
             oplog,
             deps.promise_service(),
             scheduler,

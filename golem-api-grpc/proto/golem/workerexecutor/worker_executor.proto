@@ -12,6 +12,7 @@ import public "golem/template/template_id.proto";
 import public "golem/worker/worker_id.proto";
 import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/worker_status.proto";
+import public "golem/worker/worker_filter.proto";
 import public "golem/worker/worker_execution_error.proto";
 import public "wasm/rpc/val.proto";
 
@@ -30,6 +31,8 @@ service WorkerExecutor {
   rpc AssignShards(AssignShardsRequest) returns (AssignShardsResponse);
   rpc GetWorkerMetadata(golem.worker.WorkerId) returns (GetWorkerMetadataResponse);
   rpc ResumeWorker(ResumeWorkerRequest) returns (ResumeWorkerResponse);
+  rpc GetRunningWorkerMetadatas(GetRunningWorkerMetadatasRequest) returns (GetRunningWorkerMetadatasResponse);
+  rpc GetWorkerMetadatas(GetWorkerMetadatasRequest) returns (GetWorkerMetadatasResponse);
 }
 
 message InvokeWorkerResponse {
@@ -178,4 +181,42 @@ message ResumeWorkerResponse {
     golem.common.Empty success = 1;
     golem.worker.WorkerExecutionError failure = 2;
   }
+}
+
+message GetRunningWorkerMetadatasRequest {
+  golem.template.TemplateId template_id = 1;
+  golem.worker.WorkerFilter filter = 2;
+}
+
+
+message GetRunningWorkerMetadatasResponse {
+  oneof result {
+    GetRunningWorkerMetadatasSuccessResponse success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetRunningWorkerMetadatasSuccessResponse {
+  repeated golem.worker.WorkerMetadata workers = 1;
+}
+
+message GetWorkerMetadatasRequest {
+  golem.template.TemplateId template_id = 1;
+  golem.worker.WorkerFilter filter = 2;
+  uint64 cursor = 3;
+  uint64 count = 4;
+  bool precise = 5;
+}
+
+
+message GetWorkerMetadatasResponse {
+  oneof result {
+    GetWorkerMetadatasSuccessResponse success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetWorkerMetadatasSuccessResponse {
+  repeated golem.worker.WorkerMetadata workers = 1;
+  uint64 cursor = 2;
 }
