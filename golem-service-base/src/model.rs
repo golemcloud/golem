@@ -20,32 +20,19 @@ use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use http::Uri;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct WorkerCreationRequest {
     pub name: String,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    serde::Serialize,
-    serde::Deserialize,
-    NewType,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
 pub struct TemplateName(pub String);
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct VersionedTemplateId {
@@ -87,9 +74,7 @@ impl std::fmt::Display for VersionedTemplateId {
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct UserTemplateId {
@@ -125,9 +110,7 @@ impl UserTemplateId {
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ProtectedTemplateId {
@@ -163,7 +146,7 @@ impl From<ProtectedTemplateId> for golem_api_grpc::proto::golem::template::Prote
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct Empty {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Object)]
@@ -817,7 +800,7 @@ impl Serialize for TypeBool {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Enum)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
 pub enum ResourceMode {
     Borrowed,
     Owned,
@@ -841,7 +824,7 @@ impl From<ResourceMode> for AnalysedResourceMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct TypeHandle {
     resource_id: u64,
     mode: ResourceMode,
@@ -874,7 +857,7 @@ impl From<TypeHandle> for golem_wasm_rpc::protobuf::TypeHandle {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Union)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 pub enum Type {
     Variant(TypeVariant),
@@ -1171,7 +1154,7 @@ impl From<Type> for golem_wasm_rpc::protobuf::Type {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct FunctionParameter {
     pub name: String,
     //  TODO: Fix this in DB. Temp fix for now.
@@ -1201,7 +1184,7 @@ impl From<FunctionParameter> for golem_api_grpc::proto::golem::template::Functio
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct FunctionResult {
     pub name: Option<String>,
     // TODO: Fix this in DB. Temp fix for now.
@@ -1231,7 +1214,7 @@ impl From<FunctionResult> for golem_api_grpc::proto::golem::template::FunctionRe
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct ExportInstance {
     pub name: String,
     pub functions: Vec<ExportFunction>,
@@ -1267,7 +1250,7 @@ impl From<ExportInstance> for golem_api_grpc::proto::golem::template::ExportInst
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct ExportFunction {
     pub name: String,
     pub parameters: Vec<FunctionParameter>,
@@ -1314,7 +1297,7 @@ impl From<ExportFunction> for golem_api_grpc::proto::golem::template::ExportFunc
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Union)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 pub enum Export {
     Instance(ExportInstance),
@@ -1360,9 +1343,7 @@ impl From<Export> for golem_api_grpc::proto::golem::template::Export {
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct VersionedName {
     pub name: String,
     pub version: String,
@@ -1386,9 +1367,7 @@ impl From<VersionedName> for golem_api_grpc::proto::golem::template::VersionedNa
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct ProducerField {
     pub name: String,
     pub values: Vec<VersionedName>,
@@ -1412,9 +1391,7 @@ impl From<ProducerField> for golem_api_grpc::proto::golem::template::ProducerFie
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct Producers {
     pub fields: Vec<ProducerField>,
 }
@@ -1712,7 +1689,7 @@ impl From<Type> for golem_wasm_ast::analysis::AnalysedType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct TemplateMetadata {
     pub exports: Vec<Export>,
     pub producers: Vec<Producers>,
@@ -1818,9 +1795,7 @@ impl From<TemplateMetadata> for golem_api_grpc::proto::golem::template::Template
 }
 
 // NOTE: different from golem_common::model::WorkerId because of field name annotations
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerId {
@@ -1828,18 +1803,7 @@ pub struct WorkerId {
     pub worker_name: Id,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    serde::Serialize,
-    serde::Deserialize,
-    NewType,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
 pub struct Id(String);
 
 impl TryFrom<String> for Id {
@@ -1926,9 +1890,7 @@ impl std::fmt::Display for WorkerId {
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct VersionedWorkerId {
@@ -1958,9 +1920,7 @@ impl From<VersionedWorkerId> for golem_api_grpc::proto::golem::worker::Versioned
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct CompleteParameters {
@@ -1977,9 +1937,7 @@ impl From<CompleteParameters> for golem_api_grpc::proto::golem::worker::Complete
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct PromiseId {
@@ -2012,7 +1970,14 @@ impl From<PromiseId> for golem_api_grpc::proto::golem::worker::PromiseId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+impl Display for PromiseId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.worker_id, self.oplog_idx)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Invalid request: {details}")]
 pub struct GolemErrorInvalidRequest {
     pub details: String,
 }
@@ -2033,9 +1998,10 @@ impl From<GolemErrorInvalidRequest> for golem_api_grpc::proto::golem::worker::In
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+#[error("Worker already exists: {worker_id}")]
 pub struct GolemErrorWorkerAlreadyExists {
     pub worker_id: WorkerId,
 }
@@ -2067,9 +2033,10 @@ impl From<GolemErrorWorkerAlreadyExists>
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+#[error("Worker not found: {worker_id}")]
 pub struct GolemErrorWorkerNotFound {
     pub worker_id: WorkerId,
 }
@@ -2097,9 +2064,10 @@ impl From<GolemErrorWorkerNotFound> for golem_api_grpc::proto::golem::worker::Wo
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+#[error("Worker creation failed {worker_id}: {details}")]
 pub struct GolemErrorWorkerCreationFailed {
     pub worker_id: WorkerId,
     pub details: String,
@@ -2134,9 +2102,10 @@ impl From<GolemErrorWorkerCreationFailed>
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+#[error("Failed to resume worker: {worker_id}")]
 pub struct GolemErrorFailedToResumeWorker {
     pub worker_id: WorkerId,
 }
@@ -2168,9 +2137,10 @@ impl From<GolemErrorFailedToResumeWorker>
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+#[error("Failed to download template {template_id}: {reason}")]
 pub struct GolemErrorTemplateDownloadFailed {
     pub template_id: VersionedTemplateId,
     pub reason: String,
@@ -2213,9 +2183,10 @@ impl From<GolemErrorTemplateDownloadFailed>
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+#[error("Failed to parse template {template_id}: {reason}")]
 pub struct GolemErrorTemplateParseFailed {
     pub template_id: VersionedTemplateId,
     pub reason: String,
@@ -2258,9 +2229,10 @@ impl From<GolemErrorTemplateParseFailed>
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+#[error("Failed to get latest version of template {template_id}: {reason}")]
 pub struct GolemErrorGetLatestVersionOfTemplateFailed {
     pub template_id: TemplateId,
     pub reason: String,
@@ -2295,9 +2267,10 @@ impl From<GolemErrorGetLatestVersionOfTemplateFailed>
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+#[error("Failed to find promise: {promise_id}")]
 pub struct GolemErrorPromiseNotFound {
     pub promise_id: PromiseId,
 }
@@ -2325,9 +2298,10 @@ impl From<GolemErrorPromiseNotFound> for golem_api_grpc::proto::golem::worker::P
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+#[error("Promise dropped: {promise_id}")]
 pub struct GolemErrorPromiseDropped {
     pub promise_id: PromiseId,
 }
@@ -2355,9 +2329,10 @@ impl From<GolemErrorPromiseDropped> for golem_api_grpc::proto::golem::worker::Pr
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+#[error("Promise already completed: {promise_id}")]
 pub struct GolemErrorPromiseAlreadyCompleted {
     pub promise_id: PromiseId,
 }
@@ -2389,13 +2364,13 @@ impl From<GolemErrorPromiseAlreadyCompleted>
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+#[error("Worker Interrupted: {}", if *.recover_immediately { "recovering immediately" } else { "not recovering immediately" })]
 pub struct GolemErrorInterrupted {
     pub recover_immediately: bool,
 }
-
 impl From<golem_api_grpc::proto::golem::worker::Interrupted> for GolemErrorInterrupted {
     fn from(value: golem_api_grpc::proto::golem::worker::Interrupted) -> Self {
         Self {
@@ -2412,7 +2387,8 @@ impl From<GolemErrorInterrupted> for golem_api_grpc::proto::golem::worker::Inter
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Parameter type mismatch")]
 pub struct GolemErrorParamTypeMismatch {}
 
 impl From<golem_api_grpc::proto::golem::worker::ParamTypeMismatch> for GolemErrorParamTypeMismatch {
@@ -2427,7 +2403,8 @@ impl From<GolemErrorParamTypeMismatch> for golem_api_grpc::proto::golem::worker:
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("No value in message")]
 pub struct GolemErrorNoValueInMessage {}
 
 impl From<golem_api_grpc::proto::golem::worker::NoValueInMessage> for GolemErrorNoValueInMessage {
@@ -2442,7 +2419,8 @@ impl From<GolemErrorNoValueInMessage> for golem_api_grpc::proto::golem::worker::
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Value mismatch: {details}")]
 pub struct GolemErrorValueMismatch {
     pub details: String,
 }
@@ -2463,7 +2441,8 @@ impl From<GolemErrorValueMismatch> for golem_api_grpc::proto::golem::worker::Val
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Unexpected oplog entry: expected {expected}, got {got}")]
 pub struct GolemErrorUnexpectedOplogEntry {
     pub expected: String,
     pub got: String,
@@ -2491,7 +2470,8 @@ impl From<GolemErrorUnexpectedOplogEntry>
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Runtime error: {details}")]
 pub struct GolemErrorRuntimeError {
     pub details: String,
 }
@@ -2512,9 +2492,10 @@ impl From<GolemErrorRuntimeError> for golem_api_grpc::proto::golem::worker::Runt
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+#[error("Invalid shard id: {shard_id}, valid shard ids: {shard_ids:?}")]
 pub struct GolemErrorInvalidShardId {
     pub shard_id: ShardId,
     pub shard_ids: std::collections::HashSet<ShardId>,
@@ -2541,7 +2522,8 @@ impl From<GolemErrorInvalidShardId> for golem_api_grpc::proto::golem::worker::In
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Previous invocation failed: {details}")]
 pub struct GolemErrorPreviousInvocationFailed {
     pub details: String,
 }
@@ -2566,7 +2548,8 @@ impl From<GolemErrorPreviousInvocationFailed>
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Previous invocation exited")]
 pub struct GolemErrorPreviousInvocationExited {}
 
 impl From<golem_api_grpc::proto::golem::worker::PreviousInvocationExited>
@@ -2585,7 +2568,8 @@ impl From<GolemErrorPreviousInvocationExited>
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Unknown error: {details}")]
 pub struct GolemErrorUnknown {
     pub details: String,
 }
@@ -2606,7 +2590,8 @@ impl From<GolemErrorUnknown> for golem_api_grpc::proto::golem::worker::UnknownEr
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Invalid account")]
 pub struct GolemErrorInvalidAccount {}
 
 impl From<golem_api_grpc::proto::golem::worker::InvalidAccount> for GolemErrorInvalidAccount {
@@ -2621,7 +2606,7 @@ impl From<GolemErrorInvalidAccount> for golem_api_grpc::proto::golem::worker::In
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct InvokeParameters {
     pub params: serde_json::value::Value,
 }
@@ -2632,27 +2617,19 @@ impl InvokeParameters {
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct DeleteWorkerResponse {}
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct InvokeResponse {}
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct InterruptResponse {}
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct ResumeResponse {}
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerMetadata {
@@ -2697,35 +2674,57 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct InvokeResult {
     pub result: serde_json::value::Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Union)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union, thiserror::Error)]
 #[oai(discriminator_name = "type", one_of = true)]
 pub enum GolemError {
+    #[error(transparent)]
     InvalidRequest(GolemErrorInvalidRequest),
+    #[error(transparent)]
     WorkerAlreadyExists(GolemErrorWorkerAlreadyExists),
+    #[error(transparent)]
     WorkerNotFound(GolemErrorWorkerNotFound),
+    #[error(transparent)]
     WorkerCreationFailed(GolemErrorWorkerCreationFailed),
+    #[error(transparent)]
     FailedToResumeWorker(GolemErrorFailedToResumeWorker),
+    #[error(transparent)]
     TemplateDownloadFailed(GolemErrorTemplateDownloadFailed),
+    #[error(transparent)]
     TemplateParseFailed(GolemErrorTemplateParseFailed),
+    #[error(transparent)]
     GetLatestVersionOfTemplateFailed(GolemErrorGetLatestVersionOfTemplateFailed),
+    #[error(transparent)]
     PromiseNotFound(GolemErrorPromiseNotFound),
+    #[error(transparent)]
     PromiseDropped(GolemErrorPromiseDropped),
+    #[error(transparent)]
     PromiseAlreadyCompleted(GolemErrorPromiseAlreadyCompleted),
+    #[error(transparent)]
     Interrupted(GolemErrorInterrupted),
+    #[error(transparent)]
     ParamTypeMismatch(GolemErrorParamTypeMismatch),
+    #[error(transparent)]
     NoValueInMessage(GolemErrorNoValueInMessage),
+    #[error(transparent)]
     ValueMismatch(GolemErrorValueMismatch),
+    #[error(transparent)]
     UnexpectedOplogEntry(GolemErrorUnexpectedOplogEntry),
+    #[error(transparent)]
     RuntimeError(GolemErrorRuntimeError),
+    #[error(transparent)]
     InvalidShardId(GolemErrorInvalidShardId),
+    #[error(transparent)]
     PreviousInvocationFailed(GolemErrorPreviousInvocationFailed),
+    #[error(transparent)]
     PreviousInvocationExited(GolemErrorPreviousInvocationExited),
+    #[error(transparent)]
     Unknown(GolemErrorUnknown),
+    #[error(transparent)]
     InvalidAccount(GolemErrorInvalidAccount),
 }
 
@@ -2946,12 +2945,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerExecutionError> for Gol
     }
 }
 
-#[derive(Object, serde::Serialize)]
+#[derive(Object, Serialize)]
 pub struct ErrorsBody {
     pub errors: Vec<String>,
 }
 
-#[derive(Object, serde::Serialize)]
+#[derive(Object, Serialize)]
 pub struct ErrorBody {
     pub error: String,
 }
@@ -2970,7 +2969,7 @@ impl From<golem_api_grpc::proto::golem::common::ErrorsBody> for ErrorsBody {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct Template {
@@ -3113,6 +3112,32 @@ impl From<GrpcRoutingTableEntry> for RoutingTableEntry {
         Self {
             shard_id: value.shard_id.unwrap().into(),
             pod: value.pod.unwrap().into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ResourceLimits {
+    pub available_fuel: i64,
+    pub max_memory_per_worker: i64,
+}
+
+impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
+    fn from(value: ResourceLimits) -> Self {
+        Self {
+            available_fuel: value.available_fuel,
+            max_memory_per_worker: value.max_memory_per_worker,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimits {
+    fn from(value: golem_api_grpc::proto::golem::common::ResourceLimits) -> Self {
+        Self {
+            available_fuel: value.available_fuel,
+            max_memory_per_worker: value.max_memory_per_worker,
         }
     }
 }
