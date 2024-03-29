@@ -15,3 +15,4 @@
 pub mod errors;
 pub mod template;
 pub mod worker;
+pub mod health_check;
