@@ -314,7 +314,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .worker_service
             .update_status(
                 &self.worker_id.worker_id,
-                status,
+                status.clone(),
                 self.state.deleted_regions.clone(),
                 self.state.overridden_retry_policy.clone(),
                 oplog_idx,
