@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_client::api::{TemplateError, WorkerError};
+use golem_client::api::{HealthCheckError, TemplateError, WorkerError};
 use golem_client::model::{
     GolemError, GolemErrorFailedToResumeWorker, GolemErrorGetLatestVersionOfTemplateFailed,
     GolemErrorInterrupted, GolemErrorInvalidRequest, GolemErrorInvalidShardId,
@@ -51,6 +51,13 @@ impl ResponseContentErrorMapper for WorkerError {
             WorkerError::Error409(error) => error.error,
             WorkerError::Error500(error) => display_golem_error(error.golem_error),
         }
+    }
+}
+
+
+impl ResponseContentErrorMapper for HealthCheckError {
+    fn map(self) -> String {
+        "Invalid request".to_string()
     }
 }
 
