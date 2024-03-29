@@ -20,6 +20,16 @@ pub enum Number {
     Float(f64),
 }
 
+impl Display for Number {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Number::PosInt(value) => write!(f, "{}", value),
+            Number::NegInt(value) => write!(f, "{}", value),
+            Number::Float(value) => write!(f, "{}", value),
+        }
+    }
+}
+
 impl Display for Primitive {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

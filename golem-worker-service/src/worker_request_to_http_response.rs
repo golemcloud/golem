@@ -68,7 +68,7 @@ async fn execute(
         worker_name.clone(),
         worker_request_params.function
     );
-    
+
     let invocation_key = default_executor
         .worker_service
         .get_invocation_key(&worker_id, &EmptyAuthCtx {})

@@ -1057,6 +1057,13 @@ where
         Ok(Value::default())
     }
 
+    async fn invoke_and_await_function_typed_value(&self, worker_id: &WorkerId, function_name: String, invocation_key: &InvocationKey, params: Value, calling_convention: &CallingConvention, metadata: WorkerRequestMetadata, auth_ctx: &AuthCtx) -> WorkerResult<TypeAnnotatedValue> {
+        Ok(TypeAnnotatedValue::Tuple{
+            value: vec![],
+            typ: vec![]
+        })
+    }
+
     async fn invoke_and_await_function_proto(
         &self,
         _worker_id: &WorkerId,

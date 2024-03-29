@@ -17,8 +17,6 @@ pub mod type_inference;
 pub mod worker_request;
 pub mod worker_request_to_response;
 pub mod worker_response;
-
-pub mod template_metadata_cache;
 pub mod merge;
 pub mod getter;
 pub mod primitive;

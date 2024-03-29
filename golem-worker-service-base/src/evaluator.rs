@@ -128,8 +128,8 @@ impl Evaluator for Expr {
 
                     evaluation_result.get(&Path::from_index(index))
                         .ok_or(EvaluationError::Message(format!(
-                            "Unable to fetch the element at index {} in {}",
-                            index, JsonFunctionResult::from(&evaluation_result).0
+                            "Unable to fetch the element at index {}",
+                            index
                         )))
                 }
 
@@ -139,8 +139,8 @@ impl Evaluator for Expr {
                     evaluation_result
                         .get(&Path::from_key(field_name.as_str()))
                         .ok_or(EvaluationError::Message(format!(
-                            "The result {} doesn't contain the field {}",
-                            JsonFunctionResult::from(&evaluation_result).0, field_name
+                            "Unable to obtaint the field {}",
+                            field_name
                         )))
                 }
 
@@ -222,7 +222,7 @@ impl Evaluator for Expr {
                         TypeAnnotatedValue::Bool(value) => Ok(TypeAnnotatedValue::Bool(!value)),
                         _ => Err(EvaluationError::Message(format!(
                             "The expression is evaluated to {} but it is not a boolean expression to apply not (!) operator on",
-                            JsonFunctionResult::from(&evaluated_expr).0
+                            JsonFunctionResult::from(evaluated_expr).0
                         ))),
                     }
                 }
@@ -242,7 +242,7 @@ impl Evaluator for Expr {
                         }
                         _ => Err(EvaluationError::Message(format!(
                             "The predicate expression is evaluated to {} but it is not a boolean expression",
-                            JsonFunctionResult::from(&pred).0
+                            JsonFunctionResult::from(pred).0
                         ))),
                     }
                 }

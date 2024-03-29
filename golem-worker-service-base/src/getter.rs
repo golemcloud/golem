@@ -2,11 +2,11 @@ use crate::path::{KeyName, Path, PathComponent};
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::collections::HashMap;
 
-pub trait Getter {
-    fn get(&self, key: &Path) -> Option<Self>;
+pub trait Getter<T> {
+    fn get(&self, key: &Path) -> Option<T>;
 }
 
-impl Getter for TypeAnnotatedValue {
+impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
     fn get(&self, key: &Path) -> Option<TypeAnnotatedValue> {
         let size = key.0.len();
         fn go(

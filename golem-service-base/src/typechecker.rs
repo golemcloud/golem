@@ -17,7 +17,6 @@ use golem_wasm_rpc::protobuf::{val, Val};
 
 use crate::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType};
-use golem_wasm_rpc::json::JsonFunctionResult;
 use golem_wasm_rpc::{json, protobuf, TypeAnnotatedValue, TypeAnnotatedValueResult};
 use serde_json::Value;
 
@@ -167,8 +166,8 @@ pub fn validate_function_result_typed_value(
                     match result {
                         TypeAnnotatedValueResult::WithoutNames(values) => {
                             let mut types = vec![];
-                            for v in values {
-                                let analysed_type = AnalysedType::from(v);
+                            for v in values.iter() {
+                                let analysed_type = AnalysedType::from(v.clone());
                                 types.push(analysed_type);
                             }
 
@@ -179,9 +178,9 @@ pub fn validate_function_result_typed_value(
                         }
                         TypeAnnotatedValueResult::WithNames(values) => {
                             let mut types = vec![];
-                            for (name, v) in values {
-                                let analysed_type = AnalysedType::from(v);
-                                types.push((name, analysed_type));
+                            for (name, v) in values.iter() {
+                                let analysed_type = AnalysedType::from(v.clone());
+                                types.push((name.clone(), analysed_type));
                             }
 
                             TypeAnnotatedValue::Record {

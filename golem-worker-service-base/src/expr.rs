@@ -638,7 +638,6 @@ impl Display for InternalValue {
 mod tests {
     use crate::evaluator::Evaluator;
     use crate::expr::Expr;
-    use crate::path::ResolvedVariables;
     use serde_json::{json, Value};
 
     #[test]
