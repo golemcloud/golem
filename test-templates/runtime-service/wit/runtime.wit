@@ -7,6 +7,7 @@ interface api {
   explicit-commit: func(replicas: u8) -> ();
   atomic-region: func() -> ();
   idempotence-flag: func(enabled: bool) -> ();
+  persist-nothing: func() -> ();
 }
 
 world runtime-service {

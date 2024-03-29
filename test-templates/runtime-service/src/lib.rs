@@ -130,6 +130,28 @@ impl Guest for Component {
 
         println!("Received response from remote side-effect: {} {}", incoming_response.status(), String::from_utf8(body).unwrap());
     }
+
+    fn persist_nothing() {
+        println!("Initial level: {:?}", get_oplog_persistence_level());
+
+        remote_side_effect("1"); // repeated 1x
+
+        set_oplog_persistence_level(PersistenceLevel::PersistNothing);
+        remote_side_effect("2"); // repeated 3x
+        println!("Changed level: {:?}", get_oplog_persistence_level());
+        set_oplog_persistence_level(PersistenceLevel::Smart);
+
+        remote_side_effect("3"); // only performed once
+
+        let begin = mark_begin_operation();
+        let decision = remote_call(1); // will return false on the 3rd call
+        if decision {
+            panic!("crash 1");
+        }
+        mark_end_operation(begin);
+
+        remote_side_effect("4"); // only performed once
+    }
 }
 
 fn remote_call(param: u64) -> bool {
