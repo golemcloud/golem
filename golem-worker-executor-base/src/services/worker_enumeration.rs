@@ -44,13 +44,11 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
         let active_workers = self.active_workers.enum_workers();
 
         let mut template_workers: Vec<WorkerMetadata> = vec![];
-        for worker in active_workers {
-            if worker.0.template_id == *template_id
-                && (worker.1.metadata.last_known_status.status == WorkerStatus::Running
-                    || worker.1.metadata.last_known_status.status == WorkerStatus::Idle)
-                && filter
-                    .clone()
-                    .map_or(true, |f| f.matches(&worker.1.metadata))
+        for (worker_id, worker) in active_workers {
+            let metadata = worker.get_metadata();
+            if worker_id.template_id == *template_id
+                && (metadata.last_known_status.status == WorkerStatus::Running)
+                && filter.clone().map_or(true, |f| f.matches(&metadata))
             {
                 template_workers.push(metadata);
             }

@@ -1298,12 +1298,30 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
 
     sleep(Duration::from_secs(2)).await;
     let status1 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadatas1 = executor
+        .get_running_worker_metadatas(
+            &worker_id.template_id,
+            Some(WorkerFilter::new_name(
+                StringFilterComparator::Equal,
+                worker_id.worker_name.clone(),
+            )),
+        )
+        .await;
 
     sleep(Duration::from_secs(4)).await;
     executor.interrupt(&worker_id).await;
 
     sleep(Duration::from_secs(2)).await;
     let status2 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadatas2 = executor
+        .get_running_worker_metadatas(
+            &worker_id.template_id,
+            Some(WorkerFilter::new_name(
+                StringFilterComparator::Equal,
+                worker_id.worker_name.clone(),
+            )),
+        )
+        .await;
 
     let mut executor_clone = executor.async_clone().await;
     let worker_id_clone = worker_id.clone();
@@ -1344,8 +1362,10 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
     http_server.abort();
 
     check!(status1.last_known_status.status == WorkerStatus::Running);
+    check!(!metadatas1.is_empty());
     // first running
     check!(status2.last_known_status.status == WorkerStatus::Interrupted);
+    check!(metadatas2.is_empty());
     // first interrupted
     check!(status3.last_known_status.status == WorkerStatus::Running);
     // first resumed

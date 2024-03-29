@@ -407,17 +407,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running { last_known_status }=> {
+            ExecutionStatus::Running { last_known_status } => {
                 let (sender, receiver) = tokio::sync::broadcast::channel(1);
                 *execution_status = ExecutionStatus::Interrupting {
                     interrupt_kind,
                     await_interruption: Arc::new(sender),
-                    last_known_status
+                    last_known_status,
                 };
                 Some(receiver)
             }
-            ExecutionStatus::Suspended { last_known_status }=> {
-                *execution_status = ExecutionStatus::Interrupted { interrupt_kind, last_known_status };
+            ExecutionStatus::Suspended { last_known_status } => {
+                *execution_status = ExecutionStatus::Interrupted {
+                    interrupt_kind,
+                    last_known_status,
+                };
                 None
             }
             ExecutionStatus::Interrupting {
