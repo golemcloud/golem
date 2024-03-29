@@ -15,8 +15,10 @@
 use golem_common::model::CallingConvention;
 use golem_wasm_rpc::protobuf::{val, Val};
 
-use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
-use golem_wasm_rpc::{json, protobuf};
+use crate::type_inference::infer_analysed_type;
+use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType};
+use golem_wasm_rpc::json::JsonFunctionResult;
+use golem_wasm_rpc::{json, protobuf, TypeAnnotatedValue, TypeAnnotatedValueResult};
 use serde_json::Value;
 
 pub trait TypeCheckIn {
@@ -139,6 +141,82 @@ impl TypeCheckOut for Vec<Val> {
                 } else {
                     Err(vec!["Expecting a single string as the result value when using stdio calling convention".to_string()])
                 }
+            }
+        }
+    }
+}
+
+pub fn validate_function_result_typed_value(
+    outputs: Vec<Val>,
+    expected_types: Vec<AnalysedFunctionResult>,
+    calling_convention: CallingConvention,
+) -> Result<TypeAnnotatedValue, Vec<String>> {
+    match calling_convention {
+        CallingConvention::Component => {
+            let mut errors = Vec::new();
+            let mut results = Vec::new();
+            for proto_value in outputs {
+                match proto_value.try_into() {
+                    Ok(value) => results.push(value),
+                    Err(err) => errors.push(err),
+                }
+            }
+
+            if errors.is_empty() {
+                TypeAnnotatedValueResult::from_values(results, &expected_types).map(|result| {
+                    match result {
+                        TypeAnnotatedValueResult::WithoutNames(values) => {
+                            let mut types = vec![];
+                            for v in values {
+                                let analysed_type = AnalysedType::from(v);
+                                types.push(analysed_type);
+                            }
+
+                            TypeAnnotatedValue::Tuple {
+                                value: values,
+                                typ: types,
+                            }
+                        }
+                        TypeAnnotatedValueResult::WithNames(values) => {
+                            let mut types = vec![];
+                            for (name, v) in values {
+                                let analysed_type = AnalysedType::from(v);
+                                types.push((name, analysed_type));
+                            }
+
+                            TypeAnnotatedValue::Record {
+                                value: values,
+                                typ: types,
+                            }
+                        }
+                    }
+                })
+            } else {
+                Err(errors)
+            }
+        }
+
+        CallingConvention::Stdio | CallingConvention::StdioEventloop => {
+            if outputs.len() == 1 {
+                let value_opt = &outputs[0].val;
+
+                match value_opt {
+                    Some(val::Val::String(s)) => {
+                        if s.is_empty() {
+                            Ok(TypeAnnotatedValue::Option {
+                                value: None,
+                                typ: AnalysedType::Str
+                            })
+                        } else {
+                            let result: Value = serde_json::from_str(s).unwrap_or(Value::String(s.to_string()));
+                            let typ = infer_analysed_type(&result).ok_or(vec!["Could not infer type".to_string()])?;
+                            TypeAnnotatedValue::from_json_value(&result, &typ)
+                        }
+                    }
+                    _ => Err(vec!["Expecting a single string as the result value when using stdio calling convention".to_string()]),
+                }
+            } else {
+                Err(vec!["Expecting a single string as the result value when using stdio calling convention".to_string()])
             }
         }
     }

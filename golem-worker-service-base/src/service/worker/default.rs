@@ -24,6 +24,7 @@ use golem_service_base::{
 };
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
+use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
 use tokio::time::sleep;
 use tonic::transport::Channel;
@@ -77,6 +78,17 @@ pub trait WorkerService<AuthCtx> {
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value>;
 
+    async fn invoke_and_await_function_typed_value(
+        &self,
+        worker_id: &WorkerId,
+        function_name: String,
+        invocation_key: &InvocationKey,
+        params: Value,
+        calling_convention: &CallingConvention,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<TypeAnnotatedValue>;
+
     async fn invoke_and_await_function_proto(
         &self,
         worker_id: &WorkerId,
@@ -87,6 +99,7 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult>;
+
 
     async fn invoke_function(
         &self,
@@ -407,6 +420,65 @@ where
             .result
             .validate_function_result(function_results, calling_convention.clone())
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
+
+        Ok(invoke_response_json)
+    }
+
+    async fn invoke_and_await_function_typed_value(
+        &self,
+        worker_id: &WorkerId,
+        function_name: String,
+        invocation_key: &InvocationKey,
+        params: Value,
+        calling_convention: &CallingConvention,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<TypeAnnotatedValue> {
+        let template_details = self
+            .try_get_template_for_worker(worker_id, auth_ctx)
+            .await?;
+
+        let function_type = template_details
+            .metadata
+            .function_by_name(&function_name)
+            .ok_or_else(|| {
+                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
+            })?;
+
+
+        let params_val = params
+            .validate_function_parameters(
+                function_type
+                    .parameters
+                    .into_iter()
+                    .map(|parameter| parameter.into())
+                    .collect(),
+                calling_convention.clone(),
+            )
+            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
+        let results_val = self
+            .invoke_and_await_function_proto(
+                worker_id,
+                function_name,
+                invocation_key,
+                params_val,
+                calling_convention,
+                metadata,
+                auth_ctx,
+            )
+            .await?;
+
+        let function_results: Vec<AnalysedFunctionResult> = function_type
+            .results
+            .iter()
+            .map(|x| x.clone().into())
+            .collect();
+
+        let invoke_response_json = golem_service_base::typechecker::validate_function_result_typed_value(
+            results_val.result,
+            function_results,
+            calling_convention.clone(),
+        ).map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         Ok(invoke_response_json)
     }
@@ -895,6 +967,7 @@ where
         }
     }
 }
+
 
 fn is_connection_failure(message: &str) -> bool {
     message.contains("UNAVAILABLE")

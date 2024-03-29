@@ -25,6 +25,7 @@ pub struct ApiDefinition {
 #[serde(rename_all = "camelCase")]
 pub struct GolemWorkerBinding {
     pub template: TemplateId,
+    pub template_version: i32,
     pub worker_id: Expr,
     pub function_name: String,
     pub function_params: Vec<Expr>,

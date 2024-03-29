@@ -15,7 +15,6 @@ pub struct WorkerRequest {
     pub worker_id: String,
     pub function: String,
     pub function_params: Value,
-    pub template_metadata: ExportFunction
 }
 
 impl WorkerRequest {

@@ -2,12 +2,15 @@ use std::error::Error;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use golem_wasm_rpc::TypeAnnotatedValue;
 use golem_common::model::CallingConvention;
 use golem_service_base::model::WorkerId;
+use golem_wasm_ast::analysis::AnalysedFunctionResult;
+use golem_wasm_rpc::TypeAnnotatedValue;
 use golem_worker_service_base::api_definition::ResponseMapping;
 use golem_worker_service_base::auth::EmptyAuthCtx;
+use golem_worker_service_base::service::template::TemplateService;
 use golem_worker_service_base::service::worker::WorkerService;
+use golem_worker_service_base::template_metadata_cache::TemplateMetadataCache;
 use golem_worker_service_base::worker_request::WorkerRequest;
 use golem_worker_service_base::worker_request_to_response::WorkerRequestToResponse;
 use golem_worker_service_base::worker_response::WorkerResponse;
@@ -66,6 +69,15 @@ async fn execute(
         worker_request_params.function
     );
 
+    let export_function = default_executor
+        .template_service
+        .get_by_version(
+            &template_id,
+            worker_request_params.template_version,
+            &EmptyAuthCtx {},
+        )
+        .await?;
+
     let invocation_key = default_executor
         .worker_service
         .get_invocation_key(&worker_id, &EmptyAuthCtx {})
@@ -81,7 +93,7 @@ async fn execute(
 
     let invoke_result = default_executor
         .worker_service
-        .invoke_and_await_function(
+        .invoke_and_await_function_typed_value(
             &worker_id,
             worker_request_params.function,
             &invocation_key,
