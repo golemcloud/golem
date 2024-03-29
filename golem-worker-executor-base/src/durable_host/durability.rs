@@ -39,7 +39,7 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
             )
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
-        SerializedSuccess: Encode + Decode + DeserializeOwned + Debug + Send,
+        SerializedSuccess: Encode + Decode + DeserializeOwned + Debug + Send + Sync,
         SerializedErr: Encode
             + Decode
             + DeserializeOwned
@@ -47,7 +47,8 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
             + From<GolemError>
             + Into<Err>
             + Debug
-            + Send;
+            + Send
+            + Sync;
 
     /// Wrap a WASI call with durability handling
     ///
@@ -84,8 +85,14 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
             )
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
-        SerializedSuccess:
-            Encode + Decode + DeserializeOwned + From<Success> + Into<Success> + Debug + Send,
+        SerializedSuccess: Encode
+            + Decode
+            + DeserializeOwned
+            + From<Success>
+            + Into<Success>
+            + Debug
+            + Send
+            + Sync,
         SerializedErr: Encode
             + Decode
             + DeserializeOwned
@@ -93,11 +100,12 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
             + From<GolemError>
             + Into<Err>
             + Debug
-            + Send;
+            + Send
+            + Sync;
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
+impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
     Durability<Ctx, SerializedSuccess, SerializedErr> for DurableWorkerCtx<Ctx>
 {
     async fn custom_wrap<Success, Err, AsyncFn, GetFn, PutFn>(
@@ -259,7 +267,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    async fn write_to_oplog<Success, SerializedSuccess, Err, SerializedErr>(
+    async fn write_to_oplog<SerializedSuccess, Err, SerializedErr>(
         &mut self,
         wrapped_function_type: &WrappedFunctionType,
         function_name: &str,
@@ -267,8 +275,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         serializable_result: &Result<SerializedSuccess, SerializedErr>,
     ) -> Result<(), Err>
     where
-        Success: Send,
         Err: Send,
+        SerializedSuccess: Encode + Debug + Send,
+        SerializedErr: Encode + Debug + From<GolemError> + Into<Err> + Send,
     {
         if self.state.persistence_level != PersistenceLevel::PersistNothing {
             let oplog_entry = OplogEntry::imported_function_invoked(
@@ -284,10 +293,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             });
             self.state.set_oplog_entry(oplog_entry).await;
             self.state
-                .end_function(&wrapped_function_type, begin_index)
+                .end_function(wrapped_function_type, begin_index)
                 .await
                 .map_err(|err| Into::<SerializedErr>::into(err).into())?;
-            if wrapped_function_type == WrappedFunctionType::WriteRemote {
+            if *wrapped_function_type == WrappedFunctionType::WriteRemote {
                 self.state.commit_oplog().await;
             }
         }

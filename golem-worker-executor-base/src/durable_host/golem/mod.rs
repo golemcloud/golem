@@ -267,7 +267,10 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             self.state.commit_oplog().await;
         }
         self.state.persistence_level = new_persistence_level.into();
-        debug!("Worker {}'s oplog persistence level is set to {:?}", self.worker_id, self.state.persistence_level);
+        debug!(
+            "Worker {}'s oplog persistence level is set to {:?}",
+            self.worker_id, self.state.persistence_level
+        );
         Ok(())
     }
 

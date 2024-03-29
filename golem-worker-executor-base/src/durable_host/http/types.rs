@@ -32,6 +32,7 @@ use crate::durable_host::http::serialized::{
 };
 use crate::durable_host::serialized::SerializableError;
 use crate::get_oplog_entry;
+use crate::model::PersistenceLevel;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use wasmtime_wasi_http::bindings::wasi::http::types::{
@@ -45,7 +46,6 @@ use wasmtime_wasi_http::bindings::wasi::http::types::{
 };
 use wasmtime_wasi_http::types::FieldMap;
 use wasmtime_wasi_http::types_impl::get_fields;
-use crate::model::PersistenceLevel;
 
 impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
     fn new(&mut self) -> anyhow::Result<Resource<Fields>> {
@@ -552,7 +552,8 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         // fake stream which can only be read in the oplog, and fails if we try to read it in live mode.
         self.state.consume_hint_entries().await;
         let handle = self_.rep();
-        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing {
+        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
+        {
             let response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
 
@@ -577,7 +578,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     &serializable_response,
                     WrappedFunctionType::WriteRemote,
                 )
-                    .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
+                .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
                 self.state.set_oplog_entry(oplog_entry).await;
 
                 if matches!(serializable_response, SerializableResponse::Pending) {
