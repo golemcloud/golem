@@ -31,7 +31,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     InvokeWorkerRequest, ResumeWorkerRequest,
 };
 use golem_common::model::{
-    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerId, WorkerMetadata,
+    AccountId, InvocationKey, TemplateId, Timestamp, VersionedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
@@ -269,6 +269,7 @@ impl TestWorkerExecutor {
                     overridden_retry_config: None, // not passed through gRPC
                     deleted_regions: DeletedRegions::new(),
                 },
+                created_at: Timestamp::now_utc(), // TODO: add to gRPC once worker enumeration PR is merged
             }),
             Some(get_worker_metadata_response::Result::Failure(WorkerExecutionError {
                 error: Some(worker_execution_error::Error::WorkerNotFound(_)),

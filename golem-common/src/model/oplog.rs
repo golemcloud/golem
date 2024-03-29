@@ -1,6 +1,8 @@
 use crate::config::RetryConfig;
 use crate::model::regions::OplogRegion;
-use crate::model::{CallingConvention, InvocationKey, PromiseId, Timestamp};
+use crate::model::{
+    AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId,
+};
 use crate::serialization::{
     deserialize_with_version, serialize, try_deserialize, SERIALIZATION_VERSION_V1,
 };
@@ -12,6 +14,13 @@ use std::fmt::{Display, Formatter};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub enum OplogEntry {
+    Create {
+        timestamp: Timestamp,
+        worker_id: VersionedWorkerId,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+        account_id: AccountId,
+    },
     /// The worker invoked a host function
     ImportedFunctionInvoked {
         timestamp: Timestamp,
@@ -94,6 +103,21 @@ pub enum OplogEntry {
 }
 
 impl OplogEntry {
+    pub fn create(
+        worker_id: VersionedWorkerId,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+        account_id: AccountId,
+    ) -> OplogEntry {
+        OplogEntry::Create {
+            timestamp: Timestamp::now_utc(),
+            worker_id,
+            args,
+            env,
+            account_id,
+        }
+    }
+
     pub fn imported_function_invoked<R: Encode>(
         function_name: String,
         response: &R,

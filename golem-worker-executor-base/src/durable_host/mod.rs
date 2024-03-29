@@ -172,7 +172,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     },
                     state: PrivateDurableWorkerState {
                         buffer: VecDeque::new(),
-                        oplog_idx: 0,
+                        oplog_idx: 1,
                         oplog_size,
                         oplog_service,
                         promise_service: promise_service.clone(),
@@ -684,10 +684,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     }
 
     async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        worker_id: &WorkerId,
+        _this: &T,
+        _worker_id: &WorkerId,
     ) -> Result<(), GolemError> {
-        this.oplog_service().delete(worker_id).await;
         Ok(())
     }
 

@@ -141,10 +141,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         let promise_service = promise::configured(&golem_config.promises, pool.clone());
         let shard_service = Arc::new(ShardServiceDefault::new());
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
+        let oplog_service = Arc::new(OplogServiceDefault::new(pool.clone()).await);
         let worker_service = services::worker::configured(
             &golem_config.workers,
             pool.clone(),
             shard_service.clone(),
+            oplog_service.clone(),
         );
         let active_workers = self.create_active_workers(&golem_config);
 
@@ -174,8 +176,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             key_value::configured(&golem_config.key_value_service, pool.clone());
 
         let blob_store_service = blob_store::configured(&golem_config.blob_store_service).await;
-
-        let oplog_service = Arc::new(OplogServiceDefault::new(pool.clone()).await);
 
         let scheduler_service = SchedulerServiceDefault::new(
             pool.clone(),
