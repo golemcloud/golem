@@ -246,7 +246,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let execution_status = self.execution_status.read().unwrap().clone();
         match execution_status {
             ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(interrupt_kind),
-            ExecutionStatus::Interrupted { interrupt_kind } => Some(interrupt_kind),
+            ExecutionStatus::Interrupted { interrupt_kind, .. } => Some(interrupt_kind),
             _ => None,
         }
     }
@@ -255,15 +255,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running => {
-                *execution_status = ExecutionStatus::Suspended;
+            ExecutionStatus::Running { last_known_status } => {
+                *execution_status = ExecutionStatus::Suspended { last_known_status };
             }
-            ExecutionStatus::Suspended => {}
+            ExecutionStatus::Suspended { .. } => {}
             ExecutionStatus::Interrupting {
                 interrupt_kind,
                 await_interruption,
+                last_known_status,
             } => {
-                *execution_status = ExecutionStatus::Interrupted { interrupt_kind };
+                *execution_status = ExecutionStatus::Interrupted {
+                    interrupt_kind,
+                    last_known_status,
+                };
                 await_interruption.send(()).ok();
             }
             ExecutionStatus::Interrupted { .. } => {}
@@ -274,9 +278,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running => {}
-            ExecutionStatus::Suspended => {
-                *execution_status = ExecutionStatus::Running;
+            ExecutionStatus::Running { .. } => {}
+            ExecutionStatus::Suspended { last_known_status } => {
+                *execution_status = ExecutionStatus::Running { last_known_status };
             }
             ExecutionStatus::Interrupting { .. } => {}
             ExecutionStatus::Interrupted { .. } => {}
@@ -307,12 +311,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .worker_service
             .update_status(
                 &self.worker_id.worker_id,
-                status,
+                status.clone(),
                 self.state.deleted_regions.clone(),
                 self.state.overridden_retry_policy.clone(),
                 oplog_idx,
             )
-            .await
+            .await;
+
+        let mut execution_status = self.execution_status.write().unwrap();
+        execution_status.set_last_known_status(WorkerStatusRecord {
+            status,
+            deleted_regions: self.state.deleted_regions.clone(),
+            overridden_retry_config: self.state.overridden_retry_policy.clone(),
+            oplog_idx,
+        });
     }
 
     pub fn get_stdio(&self) -> ManagedStandardIo {
@@ -733,7 +745,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         );
 
         Ok(calculate_worker_status(
-            self.state.recovery_management.clone(),
             &retry_config,
             error,
             previous_tries,

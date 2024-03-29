@@ -38,11 +38,10 @@ use crate::metrics::wasm::{record_create_worker, record_create_worker_failure};
 use crate::model::{ExecutionStatus, InterruptKind, TrapType, WorkerConfig};
 use crate::services::golem_config::GolemConfig;
 use crate::services::invocation_key::LookupResult;
-use crate::services::recovery::RecoveryManagement;
+use crate::services::recovery::is_worker_error_retriable;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    HasAll, HasConfig, HasInvocationKeyService, HasOplogService, HasRecoveryManagement,
-    HasWorkerService,
+    HasAll, HasConfig, HasInvocationKeyService, HasOplogService, HasWorkerService,
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
@@ -132,7 +131,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             this.worker_service().add(&worker_metadata).await?;
 
-            let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended));
+            let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
+                last_known_status: worker_metadata.last_known_status.clone(),
+            }));
 
             let context = Ctx::create(
                 worker_metadata.worker_id.clone(),
@@ -406,16 +407,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running => {
+            ExecutionStatus::Running { last_known_status } => {
                 let (sender, receiver) = tokio::sync::broadcast::channel(1);
                 *execution_status = ExecutionStatus::Interrupting {
                     interrupt_kind,
                     await_interruption: Arc::new(sender),
+                    last_known_status,
                 };
                 Some(receiver)
             }
-            ExecutionStatus::Suspended => {
-                *execution_status = ExecutionStatus::Interrupted { interrupt_kind };
+            ExecutionStatus::Suspended { last_known_status } => {
+                *execution_status = ExecutionStatus::Interrupted {
+                    interrupt_kind,
+                    last_known_status,
+                };
                 None
             }
             ExecutionStatus::Interrupting {
@@ -426,6 +431,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             ExecutionStatus::Interrupted { .. } => None,
         }
+    }
+
+    pub fn get_metadata(&self) -> WorkerMetadata {
+        let mut result = self.metadata.clone();
+        result.last_known_status = self
+            .execution_status
+            .read()
+            .unwrap()
+            .last_known_status()
+            .clone();
+        result
     }
 }
 
@@ -666,7 +682,7 @@ pub async fn calculate_last_known_status<T>(
     metadata: &Option<WorkerMetadata>,
 ) -> Result<WorkerStatusRecord, GolemError>
 where
-    T: HasOplogService + HasWorkerService + HasRecoveryManagement + HasConfig,
+    T: HasOplogService + HasWorkerService + HasConfig,
 {
     let last_known = metadata
         .as_ref()
@@ -691,7 +707,6 @@ where
             &new_entries,
         );
         let status = calculate_latest_worker_status(
-            this.recovery_management().clone(),
             &last_known.status,
             &this.config().retry,
             last_known.overridden_retry_config.clone(),
@@ -709,7 +724,6 @@ where
 }
 
 fn calculate_latest_worker_status(
-    recovery_manager: Arc<dyn RecoveryManagement + Send + Sync>,
     initial: &WorkerStatus,
     default_retry_policy: &RetryConfig,
     initial_retry_policy: Option<RetryConfig>,
@@ -745,7 +759,7 @@ fn calculate_latest_worker_status(
             OplogEntry::Error { error, .. } => {
                 last_error_count += 1;
 
-                if recovery_manager.is_retriable(
+                if is_worker_error_retriable(
                     current_retry_policy
                         .as_ref()
                         .unwrap_or(default_retry_policy),
@@ -795,7 +809,6 @@ fn calculate_deleted_regions(initial: DeletedRegions, entries: &[OplogEntry]) ->
 }
 
 pub fn calculate_worker_status(
-    recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
     retry_config: &RetryConfig,
     trap_type: &TrapType,
     previous_tries: u64,
@@ -807,7 +820,7 @@ pub fn calculate_worker_status(
         TrapType::Interrupt(InterruptKind::Restart) => WorkerStatus::Running,
         TrapType::Exit => WorkerStatus::Exited,
         TrapType::Error(error) => {
-            if recovery_management.is_retriable(retry_config, error, previous_tries) {
+            if is_worker_error_retriable(retry_config, error, previous_tries) {
                 WorkerStatus::Retrying
             } else {
                 WorkerStatus::Failed
