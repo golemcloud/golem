@@ -1,5 +1,6 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
+use crate::model::PersistenceLevel;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
@@ -99,88 +100,6 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
 impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
     Durability<Ctx, SerializedSuccess, SerializedErr> for DurableWorkerCtx<Ctx>
 {
-    async fn wrap<Success, Err, AsyncFn>(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        function: AsyncFn,
-    ) -> Result<Success, Err>
-    where
-        Success: Clone + Send,
-        Err: Send,
-        AsyncFn: for<'b> FnOnce(
-                &'b mut DurableWorkerCtx<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
-            + Send,
-        SerializedSuccess:
-            Encode + Decode + DeserializeOwned + From<Success> + Into<Success> + Debug + Send,
-        SerializedErr: Encode
-            + Decode
-            + DeserializeOwned
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug
-            + Send,
-    {
-        self.state.consume_hint_entries().await;
-        let begin_index = self
-            .state
-            .begin_function(&wrapped_function_type.clone())
-            .await
-            .map_err(|err| Into::<SerializedErr>::into(err).into())?;
-        if self.state.is_live() {
-            let result = function(self).await;
-            let serializable_result: Result<SerializedSuccess, SerializedErr> = result
-                .as_ref()
-                .map(|result| result.clone().into())
-                .map_err(|err| err.into());
-            let oplog_entry = OplogEntry::imported_function_invoked(
-                function_name.to_string(),
-                &serializable_result,
-                wrapped_function_type.clone(),
-            )
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to serialize function response: {:?}: {err}",
-                    serializable_result
-                )
-            });
-            self.state.set_oplog_entry(oplog_entry).await;
-            self.state
-                .end_function(&wrapped_function_type, begin_index)
-                .await
-                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
-            if wrapped_function_type == WrappedFunctionType::WriteRemote {
-                self.state.commit_oplog().await;
-            }
-            result
-        } else {
-            let oplog_entry =
-                crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)
-                    .map_err(|err| Into::<SerializedErr>::into(err).into())?;
-            let response = oplog_entry
-                .response::<Result<SerializedSuccess, SerializedErr>>()
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to deserialize function response: {:?}: {err}",
-                        oplog_entry
-                    )
-                })
-                .unwrap();
-
-            self.state
-                .end_function(&wrapped_function_type, begin_index)
-                .await
-                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
-
-            response
-                .map(|serialized_success| serialized_success.into())
-                .map_err(|serialized_err| serialized_err.into())
-        }
-    }
-
     async fn custom_wrap<Success, Err, AsyncFn, GetFn, PutFn>(
         &mut self,
         wrapped_function_type: WrappedFunctionType,
@@ -221,32 +140,21 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
             .begin_function(&wrapped_function_type.clone())
             .await
             .map_err(|err| Into::<SerializedErr>::into(err).into())?;
-        if self.state.is_live() {
+        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
+        {
             let result = function(self).await;
             let serializable_result: Result<SerializedSuccess, SerializedErr> = result
                 .as_ref()
                 .map_err(|err| err.into())
                 .and_then(|result| get_serializable(self, result).map_err(|err| (&err).into()));
 
-            let oplog_entry = OplogEntry::imported_function_invoked(
-                function_name.to_string(),
+            self.write_to_oplog(
+                &wrapped_function_type,
+                function_name,
+                begin_index,
                 &serializable_result,
-                wrapped_function_type.clone(),
             )
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to serialize function response: {:?}: {err}",
-                    serializable_result
-                )
-            });
-            self.state.set_oplog_entry(oplog_entry).await;
-            self.state
-                .end_function(&wrapped_function_type, begin_index)
-                .await
-                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
-            if wrapped_function_type == WrappedFunctionType::WriteRemote {
-                self.state.commit_oplog().await;
-            }
+            .await?;
             result
         } else {
             let oplog_entry =
@@ -275,5 +183,114 @@ impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
                 Err(serialized_err) => Err(serialized_err.into()),
             }
         }
+    }
+
+    async fn wrap<Success, Err, AsyncFn>(
+        &mut self,
+        wrapped_function_type: WrappedFunctionType,
+        function_name: &str,
+        function: AsyncFn,
+    ) -> Result<Success, Err>
+    where
+        Success: Clone + Send,
+        Err: Send,
+        AsyncFn: for<'b> FnOnce(
+                &'b mut DurableWorkerCtx<Ctx>,
+            )
+                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
+            + Send,
+        SerializedSuccess:
+            Encode + Decode + DeserializeOwned + From<Success> + Into<Success> + Debug + Send,
+        SerializedErr: Encode
+            + Decode
+            + DeserializeOwned
+            + for<'b> From<&'b Err>
+            + From<GolemError>
+            + Into<Err>
+            + Debug
+            + Send,
+    {
+        self.state.consume_hint_entries().await;
+        let begin_index = self
+            .state
+            .begin_function(&wrapped_function_type.clone())
+            .await
+            .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
+        {
+            let result = function(self).await;
+            let serializable_result: Result<SerializedSuccess, SerializedErr> = result
+                .as_ref()
+                .map(|result| result.clone().into())
+                .map_err(|err| err.into());
+
+            self.write_to_oplog(
+                &wrapped_function_type,
+                function_name,
+                begin_index,
+                &serializable_result,
+            )
+            .await?;
+            result
+        } else {
+            let oplog_entry =
+                crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)
+                    .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+            let response = oplog_entry
+                .response::<Result<SerializedSuccess, SerializedErr>>()
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to deserialize function response: {:?}: {err}",
+                        oplog_entry
+                    )
+                })
+                .unwrap();
+
+            self.state
+                .end_function(&wrapped_function_type, begin_index)
+                .await
+                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+
+            response
+                .map(|serialized_success| serialized_success.into())
+                .map_err(|serialized_err| serialized_err.into())
+        }
+    }
+}
+
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    async fn write_to_oplog<Success, SerializedSuccess, Err, SerializedErr>(
+        &mut self,
+        wrapped_function_type: &WrappedFunctionType,
+        function_name: &str,
+        begin_index: u64,
+        serializable_result: &Result<SerializedSuccess, SerializedErr>,
+    ) -> Result<(), Err>
+    where
+        Success: Send,
+        Err: Send,
+    {
+        if self.state.persistence_level != PersistenceLevel::PersistNothing {
+            let oplog_entry = OplogEntry::imported_function_invoked(
+                function_name.to_string(),
+                &serializable_result,
+                wrapped_function_type.clone(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to serialize function response: {:?}: {err}",
+                    serializable_result
+                )
+            });
+            self.state.set_oplog_entry(oplog_entry).await;
+            self.state
+                .end_function(&wrapped_function_type, begin_index)
+                .await
+                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+            if wrapped_function_type == WrappedFunctionType::WriteRemote {
+                self.state.commit_oplog().await;
+            }
+        }
+        Ok(())
     }
 }

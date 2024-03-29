@@ -799,15 +799,13 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     pub async fn commit_oplog(&mut self) {
-        if self.persistence_level != PersistenceLevel::PersistNothing {
-            let worker_id = &self.worker_id;
-            let mut arrays: Vec<OplogEntry> = Vec::new();
-            self.buffer.iter().for_each(|oplog_entry| {
-                arrays.push(oplog_entry.clone());
-            });
-            self.buffer.clear();
-            self.oplog_service.append(worker_id, &arrays).await
-        }
+        let worker_id = &self.worker_id;
+        let mut arrays: Vec<OplogEntry> = Vec::new();
+        self.buffer.iter().for_each(|oplog_entry| {
+            arrays.push(oplog_entry.clone());
+        });
+        self.buffer.clear();
+        self.oplog_service.append(worker_id, &arrays).await
     }
 
     pub async fn commit_oplog_to_replicas(&mut self, replicas: u8, timeout: Duration) -> bool {
@@ -822,7 +820,10 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         wrapped_function_type: &WrappedFunctionType,
     ) -> Result<u64, GolemError> {
         let begin_index = self.oplog_idx;
-        if !self.assume_idempotence && *wrapped_function_type == WrappedFunctionType::WriteRemote {
+        if !self.assume_idempotence
+            && *wrapped_function_type == WrappedFunctionType::WriteRemote
+            && self.persistence_level != PersistenceLevel::PersistNothing
+        {
             if self.is_live() {
                 self.set_oplog_entry(OplogEntry::begin_remote_write()).await;
                 self.commit_oplog().await;
@@ -853,7 +854,10 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         wrapped_function_type: &WrappedFunctionType,
         begin_index: u64,
     ) -> Result<(), GolemError> {
-        if !self.assume_idempotence && *wrapped_function_type == WrappedFunctionType::WriteRemote {
+        if !self.assume_idempotence
+            && *wrapped_function_type == WrappedFunctionType::WriteRemote
+            && self.persistence_level != PersistenceLevel::PersistNothing
+        {
             if self.is_live() {
                 self.set_oplog_entry(OplogEntry::end_remote_write(begin_index))
                     .await;
@@ -877,8 +881,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
-        self.persistence_level == PersistenceLevel::PersistNothing
-            || self.oplog_idx >= self.oplog_size
+        self.oplog_idx >= self.oplog_size
     }
 
     /// Returns whether we are in replay mode where we are replaying old calls.
@@ -887,15 +890,13 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     }
 
     async fn set_oplog_entry(&mut self, oplog_entry: OplogEntry) {
-        if self.persistence_level != PersistenceLevel::PersistNothing {
-            assert!(self.is_live());
-            self.buffer.push_back(oplog_entry);
-            if self.buffer.len() > self.config.oplog.max_operations_before_commit as usize {
-                self.commit_oplog().await;
-            }
-            self.oplog_idx += 1;
-            self.oplog_size += 1;
+        assert!(self.is_live());
+        self.buffer.push_back(oplog_entry);
+        if self.buffer.len() > self.config.oplog.max_operations_before_commit as usize {
+            self.commit_oplog().await;
         }
+        self.oplog_idx += 1;
+        self.oplog_size += 1;
     }
 
     async fn get_oplog_entry(&mut self) -> OplogEntry {

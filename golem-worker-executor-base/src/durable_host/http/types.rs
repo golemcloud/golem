@@ -45,6 +45,7 @@ use wasmtime_wasi_http::bindings::wasi::http::types::{
 };
 use wasmtime_wasi_http::types::FieldMap;
 use wasmtime_wasi_http::types_impl::get_fields;
+use crate::model::PersistenceLevel;
 
 impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
     fn new(&mut self) -> anyhow::Result<Resource<Fields>> {
@@ -551,7 +552,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         // fake stream which can only be read in the oplog, and fails if we try to read it in live mode.
         self.state.consume_hint_entries().await;
         let handle = self_.rep();
-        if self.state.is_live() {
+        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing {
             let response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
 
@@ -570,28 +571,30 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 Err(err) => SerializableResponse::InternalError(Some(err.into())),
             };
 
-            let oplog_entry = OplogEntry::imported_function_invoked(
-                "http::types::future_incoming_response::get".to_string(),
-                &serializable_response,
-                WrappedFunctionType::WriteRemote,
-            )
-            .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
-            self.state.set_oplog_entry(oplog_entry).await;
+            if self.state.persistence_level != PersistenceLevel::PersistNothing {
+                let oplog_entry = OplogEntry::imported_function_invoked(
+                    "http::types::future_incoming_response::get".to_string(),
+                    &serializable_response,
+                    WrappedFunctionType::WriteRemote,
+                )
+                    .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
+                self.state.set_oplog_entry(oplog_entry).await;
 
-            if matches!(serializable_response, SerializableResponse::Pending) {
-                match self.state.open_function_table.get(&handle) {
-                    Some(begin_index) => {
-                        self.state
-                            .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
-                            .await?;
-                        self.state.open_function_table.remove(&handle);
-                    }
-                    None => {
-                        warn!("No matching BeginRemoteWrite index was found when HTTP response arrived for {}. Handle: {}; open functions: {:?}", self.worker_id, handle, self.state.open_function_table);
+                if matches!(serializable_response, SerializableResponse::Pending) {
+                    match self.state.open_function_table.get(&handle) {
+                        Some(begin_index) => {
+                            self.state
+                                .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
+                                .await?;
+                            self.state.open_function_table.remove(&handle);
+                        }
+                        None => {
+                            warn!("No matching BeginRemoteWrite index was found when HTTP response arrived for {}. Handle: {}; open functions: {:?}", self.worker_id, handle, self.state.open_function_table);
+                        }
                     }
                 }
+                self.state.commit_oplog().await;
             }
-            self.state.commit_oplog().await;
 
             response
         } else {
