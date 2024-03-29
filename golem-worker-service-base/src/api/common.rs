@@ -99,7 +99,6 @@ impl ApiEndpointError {
 }
 
 mod conversion {
-    use golem_service_base::service::auth::AuthError;
     use poem_openapi::payload::Json;
 
     use super::{
@@ -112,12 +111,6 @@ mod conversion {
     impl From<ApiRegistrationError> for ApiEndpointError {
         fn from(error: ApiRegistrationError) -> Self {
             match error {
-                ApiRegistrationError::AuthenticationError(auth) => match auth {
-                    AuthError::Forbidden(_) => ApiEndpointError::forbidden(auth),
-                    AuthError::Unauthorized(_) => ApiEndpointError::unauthorized(auth),
-                    AuthError::Internal(_) => ApiEndpointError::internal(auth),
-                    AuthError::NotFound(_) => ApiEndpointError::not_found(auth),
-                },
                 ApiRegistrationError::RepoError(error) => match error {
                     ApiRegistrationRepoError::AlreadyExists(_) => {
                         ApiEndpointError::already_exists(error)

@@ -35,6 +35,7 @@ use golem_worker_service_base::service::worker::ConnectWorkerStream;
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
 
+use crate::empty_worker_metadata;
 use crate::service::template::TemplateService;
 use crate::service::worker::WorkerService;
 
@@ -264,8 +265,7 @@ impl WorkerGrpcApi {
                 error: Some(worker_error::Error::NotFound(ErrorBody {
                     error: format!("Template not found: {}", &template_id),
                 })),
-            })?
-            .value;
+            })?;
 
         let worker_id = make_worker_id(template_id, request.name)?;
 
@@ -276,10 +276,10 @@ impl WorkerGrpcApi {
                 latest_template_version.versioned_template_id.version,
                 request.args,
                 request.env,
+                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
-            .await?
-            .value;
+            .await?;
 
         Ok(worker.into())
     }
@@ -312,8 +312,7 @@ impl WorkerGrpcApi {
                 parameters.data,
                 &EmptyAuthCtx {},
             )
-            .await?
-            .value;
+            .await?;
 
         Ok(result)
     }
@@ -327,8 +326,7 @@ impl WorkerGrpcApi {
         let metadata = self
             .worker_service
             .get_metadata(&worker_id, &EmptyAuthCtx {})
-            .await?
-            .value;
+            .await?;
 
         Ok(metadata.into())
     }
@@ -355,8 +353,7 @@ impl WorkerGrpcApi {
         let invocation_key = self
             .worker_service
             .get_invocation_key(&worker_id, &EmptyAuthCtx {})
-            .await?
-            .value;
+            .await?;
 
         Ok(invocation_key.into())
     }
@@ -373,6 +370,7 @@ impl WorkerGrpcApi {
                 &worker_id,
                 request.function,
                 params.params,
+                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
             .await?;
@@ -407,10 +405,10 @@ impl WorkerGrpcApi {
                 &invocation_key.into(),
                 params.params,
                 &calling_convention,
+                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
-            .await?
-            .value;
+            .await?;
 
         Ok(result)
     }
@@ -433,7 +431,13 @@ impl WorkerGrpcApi {
                 .map_err(|e| bad_request_error(format!("Error parsing invoke parameters: {e}")))?;
 
         self.worker_service
-            .invoke_function(&worker_id, request.function, params, &EmptyAuthCtx {})
+            .invoke_function(
+                &worker_id,
+                request.function,
+                params,
+                empty_worker_metadata(),
+                &EmptyAuthCtx {},
+            )
             .await?;
 
         Ok(())
@@ -466,10 +470,10 @@ impl WorkerGrpcApi {
                 &invocation_key.into(),
                 params,
                 &calling_convention,
+                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
-            .await?
-            .value;
+            .await?;
 
         Ok(result)
     }
@@ -481,9 +485,8 @@ impl WorkerGrpcApi {
         let worker_id = make_crate_worker_id(request.worker_id)?;
         let stream = self
             .worker_service
-            .connect(&worker_id, &EmptyAuthCtx {})
-            .await?
-            .value;
+            .connect(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
+            .await?;
 
         Ok(stream)
     }

@@ -1545,6 +1545,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "copy_dir"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "543d1dd138ef086e2ff05e3a48cf9da045da2033d16f8538fd76b86cd49b2ca3"
+dependencies = [
+ "walkdir",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2879,13 +2888,16 @@ dependencies = [
 
 [[package]]
 name = "golem-examples"
-version = "0.1.12"
+version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b4c71f4bf85c07873de5b4894386dcb340ad4b42b099cc90599e961077bd95a"
+checksum = "5324164fe3b1def57fd7c6dda44ba3236dda230d6a37b324e005b365feea51bf"
 dependencies = [
  "Inflector",
+ "cargo_metadata",
+ "copy_dir",
  "derive_more",
  "fancy-regex",
+ "golem-wit",
  "include_dir",
  "once_cell",
  "serde",
@@ -3103,9 +3115,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f5059d77382e5c8423984eac1277540b49d0e351cc8560d13fc657b23cb4fda"
+checksum = "6872b982e68657bec508f10eb636f50dc11d5d3732fab067e56b5f6bde38998d"
 
 [[package]]
 name = "golem-worker-executor"
