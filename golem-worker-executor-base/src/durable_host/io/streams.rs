@@ -145,7 +145,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let event_service = &self.public_state.event_service;
 
         let mut is_std = false;
-        let is_live = self.is_live();
+        let is_live = self.state.is_live();
         let output = self.table.get(&self_)?;
         if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
             if is_live {
@@ -176,7 +176,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let event_service = &self.public_state.event_service;
 
         let mut is_std = false;
-        let is_live = self.is_live();
+        let is_live = self.state.is_live();
         let output = self.table.get(&self_)?;
         if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
             if is_live {

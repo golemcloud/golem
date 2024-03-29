@@ -31,6 +31,7 @@ use crate::durable_host::http::serialized::{
     SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
 };
 use crate::durable_host::serialized::SerializableError;
+use crate::get_oplog_entry;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use wasmtime_wasi_http::bindings::wasi::http::types::{
@@ -380,7 +381,7 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
     fn subscribe(&mut self, self_: Resource<FutureTrailers>) -> anyhow::Result<Resource<Pollable>> {
         record_host_function_call("http::types::future_trailers", "subscribe");
-        if self.is_replay() {
+        if self.state.is_replay() {
             let ready = self.table.push(Ready {})?;
             subscribe(&mut self.table, ready, None)
         } else {
@@ -548,8 +549,8 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         // Note that the response body is streaming, so at this point we don't have it in memory. Each chunk read from
         // the body is stored in the oplog, so we can replay it later. In replay mode we initialize the body with a
         // fake stream which can only be read in the oplog, and fails if we try to read it in live mode.
-        self.consume_hint_entries().await;
-        if self.is_live() {
+        self.state.consume_hint_entries().await;
+        if self.state.is_live() {
             let response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
 
@@ -575,12 +576,21 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 WrappedFunctionType::WriteRemote,
             )
             .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
-            self.set_oplog_entry(oplog_entry).await;
-            self.commit_oplog().await;
+            self.state.set_oplog_entry(oplog_entry).await;
+            self.state.commit_oplog().await;
 
             response
         } else {
-            let serialized_response = self.get_oplog_entry_imported_function_invoked::<SerializableResponse>().await.map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
+            let oplog_entry = get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
+            let serialized_response = oplog_entry
+                .response::<SerializableResponse>()
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to deserialize function response: {:?}: {err}",
+                        oplog_entry
+                    )
+                })
+                .unwrap();
 
             match serialized_response {
                 SerializableResponse::Pending => Ok(None),
