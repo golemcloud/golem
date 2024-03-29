@@ -311,7 +311,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .worker_service
             .update_status(
                 &self.worker_id.worker_id,
-                status,
+                status.clone(),
                 self.state.deleted_regions.clone(),
                 self.state.overridden_retry_policy.clone(),
                 oplog_idx,
@@ -321,8 +321,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         execution_status.set_last_known_status(WorkerStatusRecord {
             status,
-            deleted_regions: self.private_state.deleted_regions.clone(),
-            overridden_retry_config: self.private_state.overridden_retry_policy.clone(),
+            deleted_regions: self.state.deleted_regions.clone(),
+            overridden_retry_config: self.state.overridden_retry_policy.clone(),
             oplog_idx,
         });
     }
