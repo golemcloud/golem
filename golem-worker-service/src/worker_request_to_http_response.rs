@@ -68,16 +68,7 @@ async fn execute(
         worker_name.clone(),
         worker_request_params.function
     );
-
-    let export_function = default_executor
-        .template_service
-        .get_by_version(
-            &template_id,
-            worker_request_params.template_version,
-            &EmptyAuthCtx {},
-        )
-        .await?;
-
+    
     let invocation_key = default_executor
         .worker_service
         .get_invocation_key(&worker_id, &EmptyAuthCtx {})
