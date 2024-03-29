@@ -639,9 +639,9 @@ impl<'a> RedisLabelledApi<'a> {
     pub async fn scan<K>(
         &self,
         pattern: K,
-        cursor: usize,
-        count: usize,
-    ) -> RedisResult<(usize, Vec<String>)>
+        cursor: u64,
+        count: u64,
+    ) -> RedisResult<(u64, Vec<String>)>
     where
         K: AsRef<str>,
     {
@@ -670,11 +670,11 @@ impl<'a> RedisLabelledApi<'a> {
         )
     }
 
-    fn parse_key_scan_frame(&self, frame: Resp3Frame) -> RedisResult<(usize, Vec<String>)> {
+    fn parse_key_scan_frame(&self, frame: Resp3Frame) -> RedisResult<(u64, Vec<String>)> {
         use fred::prelude::*;
         if let Resp3Frame::Array { mut data, .. } = frame {
             if data.len() == 2 {
-                let cursor: usize = data[0]
+                let cursor: u64 = data[0]
                     .clone()
                     .try_into()
                     .and_then(|value: RedisValue| value.convert())?;

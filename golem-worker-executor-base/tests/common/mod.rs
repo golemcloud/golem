@@ -296,10 +296,10 @@ impl TestWorkerExecutor {
         &mut self,
         template_id: &TemplateId,
         filter: Option<WorkerFilter>,
-        cursor: usize,
-        count: usize,
+        cursor: u64,
+        count: u64,
         precise: bool,
-    ) -> (Option<usize>, Vec<WorkerMetadata>) {
+    ) -> (Option<u64>, Vec<WorkerMetadata>) {
         let template_id: golem_api_grpc::proto::golem::template::TemplateId =
             template_id.clone().into();
         let response = self
@@ -307,8 +307,8 @@ impl TestWorkerExecutor {
             .get_worker_metadatas(GetWorkerMetadatasRequest {
                 template_id: Some(template_id),
                 filter: filter.map(|f| f.into()),
-                cursor: cursor as u64,
-                count: count as u64,
+                cursor,
+                count,
                 precise,
             })
             .await
@@ -320,11 +320,7 @@ impl TestWorkerExecutor {
             Some(get_worker_metadatas_response::Result::Success(
                 GetWorkerMetadatasSuccessResponse { workers, cursor },
             )) => {
-                let cursor: Option<usize> = if cursor == 0 {
-                    None
-                } else {
-                    Some(cursor as usize)
-                };
+                let cursor: Option<u64> = if cursor == 0 { None } else { Some(cursor) };
 
                 (cursor, workers.iter().map(to_worker_metadata).collect())
             }

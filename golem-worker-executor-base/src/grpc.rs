@@ -705,7 +705,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_worker_metadatas_internal(
         &self,
         request: golem::workerexecutor::GetWorkerMetadatasRequest,
-    ) -> Result<(Option<usize>, Vec<golem::worker::WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<u64>, Vec<golem::worker::WorkerMetadata>), GolemError> {
         let template_id: common_model::TemplateId = request
             .template_id
             .and_then(|t| t.try_into().ok())
@@ -721,8 +721,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .get(
                 &template_id,
                 filter,
-                request.cursor as usize,
-                request.count as usize,
+                request.cursor,
+                request.count,
                 request.precise,
             )
             .await?;
@@ -1342,7 +1342,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         golem::workerexecutor::get_worker_metadatas_response::Result::Success(
                             golem::workerexecutor::GetWorkerMetadatasSuccessResponse {
                                 workers,
-                                cursor: cursor.unwrap_or(0) as u64, // FIXME can we do option in proto?
+                                cursor: cursor.unwrap_or(0), // FIXME can we do option in proto?
                             },
                         ),
                     ),

@@ -756,7 +756,7 @@ async fn get_workers() {
     get_check(&template_id, None, workers_count, &mut executor).await;
 
     let (cursor1, metadatas1) = executor
-        .get_worker_metadatas(&template_id, None, 0, workers_count / 2, true)
+        .get_worker_metadatas(&template_id, None, 0, (workers_count / 2) as u64, true)
         .await;
 
     check!(cursor1.is_some());
@@ -767,7 +767,7 @@ async fn get_workers() {
             &template_id,
             None,
             cursor1.unwrap(),
-            workers_count - metadatas1.len(),
+            (workers_count - metadatas1.len()) as u64,
             true,
         )
         .await;
@@ -776,7 +776,7 @@ async fn get_workers() {
 
     if let Some(cursor2) = cursor2 {
         let (_, metadatas3) = executor
-            .get_worker_metadatas(&template_id, None, cursor2, workers_count, true)
+            .get_worker_metadatas(&template_id, None, cursor2, workers_count as u64, true)
             .await;
         check!(metadatas3.len() == 0);
     }

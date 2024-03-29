@@ -104,10 +104,10 @@ pub trait WorkerEnumerationService {
         &self,
         template_id: &TemplateId,
         filter: Option<WorkerFilter>,
-        cursor: usize,
-        count: usize,
+        cursor: u64,
+        count: u64,
         precise: bool,
-    ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError>;
+    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError>;
 }
 
 #[derive(Clone)]
@@ -137,11 +137,11 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
         &self,
         template_id: &TemplateId,
         filter: Option<WorkerFilter>,
-        cursor: usize,
-        count: usize,
+        cursor: u64,
+        count: u64,
         precise: bool,
-    ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
-        let mut new_cursor: Option<usize> = None;
+    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
+        let mut new_cursor: Option<u64> = None;
         let mut template_workers: Vec<WorkerMetadata> = vec![];
 
         let template_worker_redis_key = get_template_worker_redis_key(template_id);
@@ -213,10 +213,10 @@ impl WorkerEnumerationService
         &self,
         template_id: &TemplateId,
         filter: Option<WorkerFilter>,
-        cursor: usize,
-        count: usize,
+        cursor: u64,
+        count: u64,
         precise: bool,
-    ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
         info!(
             "Get workers for template: {}, filter: {}, cursor: {}, count: {}, precise: {}",
             template_id,
@@ -225,11 +225,11 @@ impl WorkerEnumerationService
             count,
             precise
         );
-        let mut new_cursor: Option<usize> = Some(cursor);
+        let mut new_cursor: Option<u64> = Some(cursor);
         let mut template_workers: Vec<WorkerMetadata> = vec![];
 
-        while new_cursor.is_some() && template_workers.len() < count {
-            let new_count = count - template_workers.len();
+        while new_cursor.is_some() && (template_workers.len() as u64) < count {
+            let new_count = count - (template_workers.len() as u64);
 
             let (next_cursor, workers) = self
                 .get_internal(
@@ -291,13 +291,13 @@ impl WorkerEnumerationService
         &self,
         template_id: &TemplateId,
         filter: Option<WorkerFilter>,
-        cursor: usize,
-        count: usize,
+        cursor: u64,
+        count: u64,
         _precise: bool,
-    ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
         let workers = self.worker_service.enumerate().await;
 
-        let all_workers_count = workers.len();
+        let all_workers_count = workers.len() as u64;
 
         if all_workers_count > cursor {
             let mut template_workers: Vec<WorkerMetadata> = vec![];
@@ -312,7 +312,7 @@ impl WorkerEnumerationService
 
                 index += 1;
 
-                if template_workers.len() == count {
+                if (template_workers.len() as u64) == count {
                     break;
                 }
             }
@@ -353,10 +353,10 @@ impl WorkerEnumerationService
         &self,
         _template_id: &TemplateId,
         _filter: Option<WorkerFilter>,
-        _cursor: usize,
-        _count: usize,
+        _cursor: u64,
+        _count: u64,
         _precise: bool,
-    ) -> Result<(Option<usize>, Vec<WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
         unimplemented!()
     }
 }
