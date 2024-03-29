@@ -131,7 +131,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             this.worker_service().add(&worker_metadata).await?;
 
-            let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended));
+            let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
+                last_known_status: worker_metadata.last_known_status.clone(),
+            }));
 
             let context = Ctx::create(
                 worker_metadata.worker_id.clone(),
@@ -405,16 +407,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running => {
+            ExecutionStatus::Running { last_known_status }=> {
                 let (sender, receiver) = tokio::sync::broadcast::channel(1);
                 *execution_status = ExecutionStatus::Interrupting {
                     interrupt_kind,
                     await_interruption: Arc::new(sender),
+                    last_known_status
                 };
                 Some(receiver)
             }
-            ExecutionStatus::Suspended => {
-                *execution_status = ExecutionStatus::Interrupted { interrupt_kind };
+            ExecutionStatus::Suspended { last_known_status }=> {
+                *execution_status = ExecutionStatus::Interrupted { interrupt_kind, last_known_status };
                 None
             }
             ExecutionStatus::Interrupting {
@@ -425,6 +428,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             ExecutionStatus::Interrupted { .. } => None,
         }
+    }
+
+    pub fn get_metadata(&self) -> WorkerMetadata {
+        let mut result = self.metadata.clone();
+        result.last_known_status = self
+            .execution_status
+            .read()
+            .unwrap()
+            .last_known_status()
+            .clone();
+        result
     }
 }
 
