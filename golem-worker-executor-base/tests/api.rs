@@ -16,7 +16,7 @@ use golem_api_grpc::proto::golem::worker::{worker_execution_error, LogEvent, Tem
 use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;
 use golem_common::model::{
     AccountId, FilterComparator, InvocationKey, PromiseId, StringFilterComparator, TemplateId,
-    WorkerFilter, WorkerId, WorkerStatus,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use golem_worker_executor_base::error::GolemError;
 use serde_json::Value;
@@ -638,15 +638,7 @@ async fn delete_instance() {
         .unwrap();
 
     let metadata1 = executor.get_worker_metadata(&worker_id).await;
-    let metadatas1r = executor
-        .get_running_worker_metadatas(
-            &worker_id.template_id,
-            Some(WorkerFilter::new_name(
-                StringFilterComparator::Equal,
-                worker_id.worker_name.clone(),
-            )),
-        )
-        .await;
+
     let (cursor1, metadatas1) = executor
         .get_worker_metadatas(
             &worker_id.template_id,
@@ -664,7 +656,6 @@ async fn delete_instance() {
 
     let metadata2 = executor.get_worker_metadata(&worker_id).await;
 
-    check!(metadatas1r.len() == 1);
     check!(metadatas1.len() == 1);
     check!(cursor1.is_none());
     check!(metadata1.is_some());
@@ -677,22 +668,17 @@ async fn get_workers() {
     async fn get_check(
         template_id: &TemplateId,
         filter: Option<WorkerFilter>,
-        expected_worker_ids: Vec<WorkerId>,
+        expected_count: usize,
         executor: &mut TestWorkerExecutor,
-    ) {
-        let metadatas1r = executor
-            .get_running_worker_metadatas(template_id, filter.clone())
-            .await;
-
-        let (cursor1, metadatas1) = executor
+    ) -> Vec<WorkerMetadata> {
+        let (cursor, metadatas) = executor
             .get_worker_metadatas(template_id, filter, 0, 20, true)
             .await;
 
-        let expected_count = expected_worker_ids.len();
+        check!(metadatas.len() == expected_count);
+        check!(cursor.is_none());
 
-        check!(metadatas1r.len() == expected_count);
-        check!(metadatas1.len() == expected_count);
-        check!(cursor1.is_none());
+        metadatas
     }
 
     let context = common::TestContext::new();
@@ -727,7 +713,7 @@ async fn get_workers() {
                 StringFilterComparator::Equal,
                 worker_id.worker_name.clone(),
             )),
-            vec![worker_id],
+            1,
             &mut executor,
         )
         .await;
@@ -739,7 +725,7 @@ async fn get_workers() {
             StringFilterComparator::Like,
             "test".to_string(),
         )),
-        worker_ids.clone(),
+        workers_count,
         &mut executor,
     )
     .await;
@@ -754,7 +740,7 @@ async fn get_workers() {
                 )
                 .and(WorkerFilter::new_version(FilterComparator::Equal, 0)),
         ),
-        worker_ids.clone(),
+        workers_count,
         &mut executor,
     )
     .await;
@@ -762,12 +748,12 @@ async fn get_workers() {
     get_check(
         &template_id,
         Some(WorkerFilter::new_name(StringFilterComparator::Like, "test".to_string()).not()),
-        vec![],
+        0,
         &mut executor,
     )
     .await;
 
-    get_check(&template_id, None, worker_ids.clone(), &mut executor).await;
+    get_check(&template_id, None, workers_count, &mut executor).await;
 
     let (cursor1, metadatas1) = executor
         .get_worker_metadatas(&template_id, None, 0, workers_count / 2, true)
@@ -799,7 +785,7 @@ async fn get_workers() {
         executor.delete_worker(&worker_id).await;
     }
 
-    get_check(&template_id, None, vec![], &mut executor).await;
+    get_check(&template_id, None, 0, &mut executor).await;
 }
 
 #[tokio::test]

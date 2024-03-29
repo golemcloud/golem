@@ -46,8 +46,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
         let mut template_workers: Vec<WorkerMetadata> = vec![];
         for worker in active_workers {
             if worker.0.template_id == *template_id
-                && (worker.1.metadata.last_known_status.status == WorkerStatus::Running
-                    || worker.1.metadata.last_known_status.status == WorkerStatus::Idle)
+                && worker.1.metadata.last_known_status.status == WorkerStatus::Running
                 && filter
                     .clone()
                     .map_or(true, |f| f.matches(&worker.1.metadata))

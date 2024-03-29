@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::str::FromStr;
@@ -27,7 +27,6 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
-use golem_api_grpc::proto::golem;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
 use poem_openapi::{Enum, Object};
@@ -116,6 +115,27 @@ impl<'de> bincode::BorrowDecode<'de> for Timestamp {
         Ok(Timestamp(
             iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(timestamp as u64)),
         ))
+    }
+}
+
+impl From<Timestamp> for prost_types::Timestamp {
+    fn from(value: Timestamp) -> Self {
+        let d = value
+            .0
+            .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH);
+        Self {
+            seconds: d.whole_seconds(),
+            nanos: d.subsec_nanoseconds(),
+        }
+    }
+}
+
+impl From<prost_types::Timestamp> for Timestamp {
+    fn from(value: prost_types::Timestamp) -> Self {
+        Timestamp(
+            iso8601_timestamp::Timestamp::UNIX_EPOCH
+                .add(Duration::new(value.seconds as u64, value.nanos as u32)),
+        )
     }
 }
 
@@ -521,21 +541,6 @@ impl WorkerMetadata {
     }
 }
 
-impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
-    fn from(value: WorkerMetadata) -> Self {
-        golem_api_grpc::proto::golem::worker::WorkerMetadata {
-            worker_id: Some(value.worker_id.worker_id.into_proto()),
-            account_id: Some(value.account_id.into()),
-            args: value.args,
-            env: HashMap::from_iter(value.env.iter().cloned()),
-            template_version: value.worker_id.template_version,
-            status: Into::<golem::worker::WorkerStatus>::into(value.last_known_status.status)
-                .into(),
-            retry_count: 0, // FIXME
-        }
-    }
-}
-
 /// Contains status information about a worker according to a given oplog index.
 /// This status is just cached information, all fields must be computable by the oplog alone.
 /// By having an associated oplog_idx, the cached information can be used together with the
@@ -793,31 +798,6 @@ pub fn parse_function_name(name: &str) -> ParsedFunctionName {
     }
 }
 
-// #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
-// pub struct WorkerNameFilter {
-//     pub comparator: StringFilterComparator,
-//     pub value: String,
-// }
-//
-// #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
-// pub struct WorkerStatusFilter {
-//     pub value: WorkerStatus
-// }
-//
-//
-// #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
-// pub struct WorkerVersionFilter {
-//     pub comparator: FilterComparator,
-//     pub value: i32,
-// }
-//
-// #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
-// pub struct WorkerVersionEnvFilter {
-//     pub name: String,
-//     pub comparator: StringFilterComparator,
-//     pub value: String
-// }
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub enum WorkerFilter {
     Name {
@@ -831,10 +811,10 @@ pub enum WorkerFilter {
         comparator: FilterComparator,
         value: i32,
     },
-    // CreatedAt {
-    //     comparator: FilterComparator,
-    //     value: String,
-    // },
+    CreatedAt {
+        comparator: FilterComparator,
+        value: Timestamp,
+    },
     Env {
         name: String,
         comparator: StringFilterComparator,
@@ -878,14 +858,21 @@ impl WorkerFilter {
                 value,
             } => {
                 let mut result = false;
+                let name = name.to_lowercase();
                 for env_value in metadata.env.clone() {
-                    if env_value.0 == name {
+                    if env_value.0.to_lowercase() == name {
                         result = comparator.matches(&env_value.1, &value);
 
                         break;
                     }
                 }
                 result
+            }
+            WorkerFilter::CreatedAt {
+                comparator: _,
+                value: _,
+            } => {
+                true // TODO implement when we will have timestamp in metadata
             }
             WorkerFilter::Status { value } => metadata.last_known_status.status == value,
             WorkerFilter::Not(filter) => !filter.matches(metadata),
@@ -946,6 +933,10 @@ impl WorkerFilter {
     pub fn new_status(value: WorkerStatus) -> Self {
         WorkerFilter::Status { value }
     }
+
+    pub fn new_created_at(comparator: FilterComparator, value: Timestamp) -> Self {
+        WorkerFilter::CreatedAt { comparator, value }
+    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilter {
@@ -964,6 +955,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilte
                 ),
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Status(filter) => {
                     Ok(WorkerFilter::new_status(filter.value.try_into()?))
+                }
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::CreatedAt(filter) => {
+                    let value = filter
+                        .value
+                        .map(|t| t.into())
+                        .ok_or_else(|| "Missing value".to_string())?;
+                    Ok(WorkerFilter::new_created_at(
+                        filter.comparator.try_into()?,
+                        value,
+                    ))
                 }
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Env(filter) => Ok(
                     WorkerFilter::new_env(filter.name, filter.comparator.try_into()?, filter.value),
@@ -991,6 +992,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilte
                         String,
                     >>(
                     )?;
+
                     Ok(WorkerFilter::new_or(filters))
                 }
             },
@@ -1033,6 +1035,14 @@ impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Status(
                     golem_api_grpc::proto::golem::worker::WorkerStatusFilter {
                         value: value.into(),
+                    },
+                )
+            }
+            WorkerFilter::CreatedAt { comparator, value } => {
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::CreatedAt(
+                    golem_api_grpc::proto::golem::worker::WorkerCreatedAtFilter {
+                        value: Some(value.into()),
+                        comparator: comparator.into(),
                     },
                 )
             }
@@ -1200,9 +1210,20 @@ mod tests {
 
     use crate::model::{
         parse_function_name, AccountId, FilterComparator, StringFilterComparator, TemplateId,
-        VersionedWorkerId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+        Timestamp, VersionedWorkerId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
         WorkerStatusRecord,
     };
+
+    #[test]
+    fn timestamp_conversion() {
+        let ts: Timestamp = Timestamp::now_utc();
+
+        let prost_ts: prost_types::Timestamp = ts.into();
+
+        let ts2: Timestamp = prost_ts.into();
+
+        assert_eq!(ts2, ts);
+    }
 
     #[test]
     fn parse_function_name_global() {

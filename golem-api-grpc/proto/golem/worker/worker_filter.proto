@@ -7,16 +7,18 @@ import "golem/common/string_filter_comparator.proto";
 import "golem/common/filter_comparator.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_status.proto";
+import "google/protobuf/timestamp.proto";
 
 message WorkerFilter {
   oneof filter {
     WorkerNameFilter name = 1;
     WorkerVersionFilter version = 2;
     WorkerStatusFilter status = 3;
-    WorkerEnvFilter env = 4;
-    WorkerAndFilter and = 5;
-    WorkerOrFilter or = 6;
-    WorkerNotFilter not = 7;
+    WorkerCreatedAtFilter created_at = 4;
+    WorkerEnvFilter env = 5;
+    WorkerAndFilter and = 6;
+    WorkerOrFilter or = 7;
+    WorkerNotFilter not = 8;
   }
 }
 
@@ -40,6 +42,11 @@ message WorkerNameFilter {
 message WorkerVersionFilter {
   golem.common.FilterComparator comparator = 1;
   int32 value = 2;
+}
+
+message WorkerCreatedAtFilter {
+  golem.common.FilterComparator comparator = 1;
+  google.protobuf.Timestamp value = 2;
 }
 
 message WorkerStatusFilter {

@@ -694,8 +694,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .get(&template_id, filter)
             .await?;
 
-        let result: Vec<golem::worker::WorkerMetadata> =
-            workers.iter().map(|worker| worker.clone().into()).collect();
+        let result: Vec<golem::worker::WorkerMetadata> = workers
+            .iter()
+            .map(|worker| self.to_proto_metadata(worker.clone()))
+            .collect();
 
         Ok(result)
     }
@@ -725,10 +727,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
-        let result: Vec<golem::worker::WorkerMetadata> =
-            workers.iter().map(|worker| worker.clone().into()).collect();
+        let result: Vec<golem::worker::WorkerMetadata> = workers
+            .iter()
+            .map(|worker| self.to_proto_metadata(worker.clone()))
+            .collect();
 
         Ok((new_cursor, result))
+    }
+
+    fn to_proto_metadata(&self, value: WorkerMetadata) -> golem::worker::WorkerMetadata {
+        golem::worker::WorkerMetadata {
+            worker_id: Some(value.worker_id.worker_id.into_proto()),
+            account_id: Some(value.account_id.into()),
+            args: value.args,
+            env: HashMap::from_iter(value.env.iter().cloned()),
+            template_version: value.worker_id.template_version,
+            status: Into::<golem::worker::WorkerStatus>::into(value.last_known_status.status)
+                .into(),
+            retry_count: 0,
+        }
     }
 }
 

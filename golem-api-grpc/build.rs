@@ -11,7 +11,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .file_descriptor_set_path(out_dir.join("services.bin"))
         .extern_path(".wasm.rpc", "::golem_wasm_rpc::protobuf")
         .type_attribute(
-            ".",
+            "golem.worker.LogEvent",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.LogEvent.event",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.StdOutLog",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.StdErrLog",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.Level",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.Log",
             "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
         )
         .include_file("mod.rs")
