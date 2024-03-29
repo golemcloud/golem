@@ -1,5 +1,6 @@
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
+use std::ops::Deref;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::JsonFunctionResult;
 use super::tokeniser::tokenizer::{Token, Tokenizer};
@@ -260,7 +261,7 @@ impl Evaluator for Expr {
                     }
                     match result.get(0) {
                         Some(value) =>
-                            Ok(TypeAnnotatedValue::List { values: result.clone(), typ: AnalysedType::from(value) }),
+                            Ok(TypeAnnotatedValue::List { values: result.clone(), typ: AnalysedType::from(value.clone()) }),
                         None =>
                             Ok(TypeAnnotatedValue::List { values: result.clone(), typ: AnalysedType::Tuple(vec![]) }), // Support optional type in List
                     }
@@ -280,7 +281,7 @@ impl Evaluator for Expr {
                     }
 
                     let types: Vec<(String, AnalysedType)> =
-                        values.iter().map(|(key, value)| (key.clone(), AnalysedType::from(value))).collect();
+                        values.iter().map(|(key, value)| (key.clone(), AnalysedType::from(value.clone()))).collect();
 
                     Ok(TypeAnnotatedValue::Record { value: values, typ: types })
                 }
@@ -332,7 +333,7 @@ impl Evaluator for Expr {
                 Expr::PatternMatch(input_expr, constructors) => {
 
                     let constructors: &Vec<(ConstructorPattern, Expr)> =
-                        &constructors.iter().map(|(constructor)| (constructor.0.0.clone(), constructor.0.1.clone())).collect();
+                        &constructors.iter().map(|(constructor)| (constructor.0.0.clone(), *constructor.0.1.clone())).collect();
 
                     handle_pattern_match(&input_expr, constructors, input)
                 }
@@ -343,7 +344,7 @@ impl Evaluator for Expr {
             }
         }
 
-        go(expr, input).map(|v| v.to_json())
+        go(expr, input)
     }
 }
 
@@ -368,8 +369,8 @@ fn handle_pattern_match(
                 } else {
                     let pattern_expr_variable = match &patterns[0] {
                         ConstructorPattern::Literal(expr) => {
-                            match expr {
-                                Expr::Variable(variable) => variable.clone(),
+                            match *expr.clone() {
+                                Expr::Variable(variable) => variable,
                                 _ => {
                                     return Err(EvaluationError::Message(
                                         "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
@@ -390,7 +391,7 @@ fn handle_pattern_match(
                                     TypeAnnotatedValue::Option { value, .. } => {
                                         match value {
                                             Some(v) => {
-                                                let result = v.evaluate(&input.merge(
+                                                let result = possible_resolution.evaluate(&input.merge(
                                                     &TypeAnnotatedValue::Record {
                                                         value: vec![(pattern_expr_variable.to_string(), *v.clone())],
                                                         typ: vec![(pattern_expr_variable.to_string(), AnalysedType::from(*v.clone()))]

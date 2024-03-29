@@ -47,10 +47,10 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
     }
 }
 
-fn get_array<'a>(value: &TypeAnnotatedValue) -> Option<&'a Vec<TypeAnnotatedValue>> {
+fn get_array(value: &TypeAnnotatedValue) -> Option<Vec<TypeAnnotatedValue>> {
     match value {
-        TypeAnnotatedValue::List { values, .. } => Some(values),
-        TypeAnnotatedValue::Tuple { value, .. } => Some(value),
+        TypeAnnotatedValue::List { values, .. } => Some(values.clone()),
+        TypeAnnotatedValue::Tuple { value, .. } => Some(value.clone()),
 
         _ => None,
     }

@@ -16,7 +16,7 @@ pub struct InputHttpRequest<'a> {
     pub req_body: serde_json::Value,
 }
 
-impl InputHttpRequest {
+impl InputHttpRequest<'_> {
     pub fn get_type_annotated_value(
         &self,
         spec_query_variables: Vec<String>,
@@ -44,7 +44,7 @@ impl InputHttpRequest {
         let merged = body_value.merge(&request_header_values).merge(&path_value);
 
         let request_type_annotated_value = TypeAnnotatedValue::Record {
-            value: vec![(Token::Request.to_string(), merged)],
+            value: vec![(Token::Request.to_string(), merged.clone())],
             typ: vec![(Token::Request.to_string(), AnalysedType::from(merged.clone()))],
         };
 
@@ -110,7 +110,7 @@ impl InputHttpRequest {
         let path_values = request_query_values.merge(&request_path_values);
 
         Ok(TypeAnnotatedValue::Record {
-            value: vec![("path".to_string(), path_values)],
+            value: vec![("path".to_string(), path_values.clone())],
             typ: vec![("path".to_string(), AnalysedType::from(path_values.clone()))],
         })
     }

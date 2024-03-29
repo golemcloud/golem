@@ -61,13 +61,8 @@ impl WorkerRequest {
             function_params.push(json);
         }
 
-        let worker_id_str = worker_id.as_str().ok_or(format!(
-            "Worker id is not evaluated to a valid string. {}",
-            worker_id
-        ))?;
-
         Ok(WorkerRequest {
-            worker_id: worker_id_str.to_string(),
+            worker_id,
             template: resolved_route
                 .resolved_worker_binding_template
                 .template

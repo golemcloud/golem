@@ -7,7 +7,6 @@ use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
 use crate::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 use async_trait::async_trait;
 use golem_service_base::model::Template;
-use crate::template_metadata_cache::TemplateMetadataCache;
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationError};
 use super::template::TemplateService;

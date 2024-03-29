@@ -13,6 +13,22 @@ pub enum Primitive {
     Bool(bool),
 }
 
+impl From<String> for Primitive {
+    fn from(value: String) -> Self {
+        if let Ok(u64) = value.parse::<u64>() {
+            Primitive::Num(Number::PosInt(u64))
+        } else if let Ok(i64_value) = value.parse::<i64>() {
+            Primitive::Num(Number::NegInt(i64_value))
+        } else if let Ok(f64_value) = value.parse::<f64>() {
+            Primitive::Num(Number::Float(f64_value))
+        } else if let Ok(bool) = value.parse::<bool>() {
+            Primitive::Bool(bool)
+        } else {
+            Primitive::String(value.to_string())
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum Number {
     PosInt(u64),

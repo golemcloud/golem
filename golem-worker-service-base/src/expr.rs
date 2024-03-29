@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::parser::expr_parser::ExprParser;
 use crate::parser::{GolemParser, ParseError};
-use crate::value_typed::ValueTyped;
+use crate::primitive::Primitive;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
@@ -344,8 +344,8 @@ impl Expr {
                     Ok(InternalValue::RawJson(Value::Array(vs)))
                 }
 
-                Expr::Literal(value) => match ValueTyped::from_string(value) {
-                    ValueTyped::String(string) => {
+                Expr::Literal(value) => match Primitive::from(value.clone()) {
+                    Primitive::String(string) => {
                         if is_code {
                             Ok(InternalValue::Quoted(string.clone()))
                         } else {
@@ -353,13 +353,8 @@ impl Expr {
                         }
                     }
 
-                    ValueTyped::I64(i64) => Ok(InternalValue::NonInterpolated(i64.to_string())),
-                    ValueTyped::U64(u64) => Ok(InternalValue::NonInterpolated(u64.to_string())),
-                    ValueTyped::Float(f64) => Ok(InternalValue::NonInterpolated(f64.to_string())),
-                    ValueTyped::Boolean(bool) => {
-                        Ok(InternalValue::NonInterpolated(bool.to_string()))
-                    }
-                    ValueTyped::ComplexJson(value) => Ok(InternalValue::RawJson(value)),
+                    Primitive::Num(num) => Ok(InternalValue::NonInterpolated(num.to_string())),
+                    Primitive::Bool(bool) => Ok(InternalValue::NonInterpolated(bool.to_string())),
                 },
 
                 Expr::PathVar(value) => Ok(InternalValue::Interpolated(value.clone())),
