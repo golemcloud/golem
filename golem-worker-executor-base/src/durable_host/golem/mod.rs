@@ -280,6 +280,10 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     async fn set_idempotence_mode(&mut self, _idempotent: bool) -> anyhow::Result<()> {
         unimplemented!()
     }
+
+    async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem::api::host::Uuid> {
+        unimplemented!()
+    }
 }
 
 impl From<WorkerId> for golem::api::host::WorkerId {
