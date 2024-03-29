@@ -14,7 +14,7 @@ use http::{HeaderMap, StatusCode};
 use poem::{Body, ResponseParts};
 use serde_json::{json, Value};
 use tracing::info;
-use crate::primitive::GetPrimitive;
+use crate::primitive::{GetPrimitive, Primitive};
 use crate::service::worker::ConnectProxyError::Json;
 use crate::tokeniser::tokenizer::Token;
 use crate::merge::Merge;
@@ -203,14 +203,14 @@ fn get_status_code(
 ) -> Result<StatusCode, EvaluationError> {
     let status_value = status_expr.evaluate(resolved_variables)?;
     let status_res: Result<u16, EvaluationError> =
-        match status_value {
-            Value::String(status_str) => status_str.parse().map_err(|e| {
+        match status_value.get_primitive() {
+            Some(Primitive::String(status_str)) => status_str.parse().map_err(|e| {
                 EvaluationError::Message(format!(
                     "Invalid Status Code Expression. It is resolved to a string but not a number {}. Error: {}",
                     status_str, e
                 ))
             }),
-            Value::Number(number) => number.to_string().parse().map_err(|e| {
+            Some(Primitive::Num(number)) => number.to_string().parse().map_err(|e| {
                 EvaluationError::Message(format!(
                     "Invalid Status Code Expression. It is resolved to a number but not a u16 {}. Error: {}",
                     number, e

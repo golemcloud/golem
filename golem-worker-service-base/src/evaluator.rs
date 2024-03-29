@@ -320,20 +320,21 @@ impl Evaluator for Expr {
                         path_var
                     ))),
 
-                Expr::Variable(variable) => input
-                    .get(Path::from_raw_string(variable.as_str())
-                    .ok_or(EvaluationError::Message(format!(
-                        "The result doesn't contain the field {}",
-                        variable
-                    )))),
+                Expr::Variable(variable) => {
+                    input.get(&Path::from_raw_string(variable.as_str()))
+                        .ok_or(EvaluationError::Message(format!(
+                            "The result doesn't contain the field {}",
+                            variable
+                        )))
+                },
 
                 Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(bool)),
                 Expr::PatternMatch(input_expr, constructors) => {
 
-                    let constructors: Vec<(ConstructorPattern, Expr)> =
+                    let constructors: &Vec<(ConstructorPattern, Expr)> =
                         &constructors.iter().map(|(constructor)| (constructor.0.0.clone(), constructor.0.1.clone())).collect();
 
-                    handle_pattern_match(&input_expr, &constructors, input)
+                    handle_pattern_match(&input_expr, constructors, input)
                 }
                 // TODO; Constructing Expr is not done yet
                 Expr::Constructor0(_) => Err(EvaluationError::Message(
@@ -366,7 +367,16 @@ fn handle_pattern_match(
                     ));
                 } else {
                     let pattern_expr_variable = match &patterns[0] {
-                        ConstructorPattern::Literal(Expr::Variable(v)) => v,
+                        ConstructorPattern::Literal(expr) => {
+                            match expr {
+                                Expr::Variable(variable) => variable.clone(),
+                                _ => {
+                                    return Err(EvaluationError::Message(
+                                        "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
+                                    ));
+                                }
+                            }
+                        },
                         _ => {
                             return Err(EvaluationError::Message(
                                 "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
@@ -380,7 +390,7 @@ fn handle_pattern_match(
                                     TypeAnnotatedValue::Option { value, .. } => {
                                         match value {
                                             Some(v) => {
-                                                let result = v.evaluate(input.merge(
+                                                let result = v.evaluate(&input.merge(
                                                     &TypeAnnotatedValue::Record {
                                                         value: vec![(pattern_expr_variable.to_string(), *v.clone())],
                                                         typ: vec![(pattern_expr_variable.to_string(), AnalysedType::from(*v.clone()))]
@@ -418,9 +428,9 @@ fn handle_pattern_match(
                                     TypeAnnotatedValue::Result { value, .. } => {
                                         match value {
                                             Ok(v) => {
-                                                let result = possible_resolution.evaluate(input.merge(
+                                                let result = possible_resolution.evaluate(&input.merge(
                                                     &TypeAnnotatedValue::Record {
-                                                        value: vec![(pattern_expr_variable.to_string(), v.clone().unwrap())],
+                                                        value: vec![(pattern_expr_variable.to_string(), *v.clone().unwrap())],
                                                         typ: vec![(pattern_expr_variable.to_string(), AnalysedType::from(*v.clone().unwrap()))]
                                                     }
                                                 ))?;
@@ -429,7 +439,7 @@ fn handle_pattern_match(
                                                 break;
                                             }
 
-                                            None => {}
+                                            Err(_) => {}
                                         }
                                     }
                                     _ => {}
@@ -443,13 +453,13 @@ fn handle_pattern_match(
                                             Err(v) => {
                                                 let result =
                                                     &possible_resolution.evaluate(
-                                                        input.merge( &TypeAnnotatedValue::Record {
-                                                            value: vec![(pattern_expr_variable.to_string(), v.clone().unwrap())],
+                                                        &input.merge( &TypeAnnotatedValue::Record {
+                                                            value: vec![(pattern_expr_variable.to_string(), *v.clone().unwrap())],
                                                             typ: vec![(pattern_expr_variable.to_string(), AnalysedType::from(*v.clone().unwrap()))]
                                                         })
                                                     )?;
 
-                                                resolved_result = Some(result);
+                                                resolved_result = Some(result.clone());
                                                 break;
                                             }
 

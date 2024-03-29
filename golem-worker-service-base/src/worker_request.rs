@@ -33,13 +33,18 @@ impl WorkerRequest {
             _ => return Err(format!("Worker id is not a string. {}", JsonFunctionResult::from(worker_id_value).0))
         };
 
-        let function_name = RawString::new(
+        let function_name_value = RawString::new(
             &resolved_route
                 .resolved_worker_binding_template
                 .function_name,
         )
         .evaluate(&resolved_route.typed_value_from_input)
         .map_err(|err| err.to_string())?;
+
+        let function_name = match function_name_value {
+            TypeAnnotatedValue::Str(value) => value,
+            _ => return Err(format!("Function name is not a string. {}", JsonFunctionResult::from(function_name_value).0))
+        };
 
         let mut function_params: Vec<Value> = vec![];
 
