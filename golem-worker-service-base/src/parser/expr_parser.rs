@@ -816,10 +816,10 @@ mod tests {
     fn expr_parser_with_vars() {
         let expression_parser = ExprParser {};
 
-        let result = expression_parser.parse("worker-id-${request.path.user_id}");
+        let result = expression_parser.parse("foo-id-${request.path.user_id}");
 
         let expected = Expr::Concat(vec![
-            Expr::Literal("worker-id-".to_string()),
+            Expr::Literal("foo-id-".to_string()),
             Expr::SelectField(
                 Box::new(Expr::SelectField(
                     Box::new(Expr::Request()),
