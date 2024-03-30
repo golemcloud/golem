@@ -508,7 +508,7 @@ mod tests {
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, Method, Uri};
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::collections::HashMap;
     use golem_wasm_rpc::json::get_typed_value_from_json;
     use crate::api_definition::PathPattern;
@@ -551,11 +551,6 @@ mod tests {
         uri: Uri,
         path_pattern: PathPattern,
     ) -> TypeAnnotatedValue {
-        let api_input_path = ApiInputPath {
-            base_path: uri.path(),
-            query_path: uri.query()
-        };
-
         let input_http_request = InputHttpRequest {
             req_body: serde_json::Value::Null,
             headers: &HeaderMap::new(),
@@ -754,7 +749,15 @@ mod tests {
         let expr = Expr::from_primitive_string("${request.body.address[4]}").unwrap();
         let expected_evaluated_result =
             EvaluationError::InvalidReference {
-                get_error: GetError::IndexNotFound(4),
+                get_error: GetError::NotArray {
+                    index: 4,
+                    found: json!(
+                        {
+                            "street": "bStreet",
+                            "city": "bCity"
+                        }
+                    ).to_string()
+                },
             };
 
         let result = expr.evaluate(&resolved_variables);
@@ -889,7 +892,7 @@ mod tests {
         let mut resolved_variables_path =
             resolved_variables_from_request_path(uri, path_pattern);
 
-        let resolved_variables =
+        let success_response_with_input_variables =
             resolved_variables_path.merge(&get_worker_response(
                 r#"
                     {
@@ -904,7 +907,7 @@ mod tests {
         )
             .unwrap();
 
-        let result1 = expr1.evaluate(&resolved_variables);
+        let result1 = expr1.evaluate(&success_response_with_input_variables);
 
         // Intentionally bringing an curly brace
         let expr2 = Expr::from_primitive_string(
@@ -912,9 +915,9 @@ mod tests {
 
         ).unwrap();
 
-        let result2 = expr2.evaluate(&resolved_variables);
+        let result2 = expr2.evaluate(&success_response_with_input_variables);
 
-        let new_worker_response = get_worker_response(
+        let error_worker_response = get_worker_response(
             r#"
                     {
                         "err": {
@@ -923,14 +926,14 @@ mod tests {
                     }"#,
         );
 
-        let new_resolved_variables = resolved_variables.merge(&new_worker_response.result_with_worker_response_key());
+        let error_response_with_request_variables = resolved_variables_path.merge(&error_worker_response.result_with_worker_response_key());
 
         let expr3 = Expr::from_primitive_string(
             "${if request.path.id == 'bar' then 'foo' else { match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }} }",
 
         ).unwrap();
 
-        let result3 = expr3.evaluate(&new_resolved_variables);
+        let result3 = expr3.evaluate(&error_response_with_request_variables);
 
         assert_eq!(
             (result1, result2, result3),
