@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn expr_to_string_round_trip_match_expr_ok() {
-        let worker_response = get_worker_response();
+        let worker_response = get_ok_worker_response();
 
         let expr1_string = "${match worker.response { ok(x) => '${x.id}-foo', err(msg) => msg }}";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
@@ -718,7 +718,7 @@ mod tests {
 
     #[test]
     fn expr_to_string_round_trip_match_expr_err() {
-        let worker_response = get_worker_response();
+        let worker_response = get_err_worker_response();
 
         let expr1_string = "${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
@@ -736,7 +736,7 @@ mod tests {
         assert_eq!((&value1, &value2), (&expected, &expected));
     }
 
-    fn get_worker_response() -> WorkerResponse {
+    fn get_err_worker_response() -> WorkerResponse {
         let worker_response_value = get_typed_value_from_json(
             &json!({"err": { "id" : "afsal"} }),
             &AnalysedType::Result {
@@ -754,9 +754,27 @@ mod tests {
         }
     }
 
+    fn get_ok_worker_response() -> WorkerResponse {
+        let worker_response_value = get_typed_value_from_json(
+            &json!({"ok": { "id" : "afsal"} }),
+            &AnalysedType::Result {
+                ok: Some(Box::new(AnalysedType::Record(vec![(
+                    "id".to_string(),
+                    AnalysedType::Str,
+                )]))),
+                error: None,
+            },
+        )
+        .unwrap();
+
+        WorkerResponse {
+            result: worker_response_value,
+        }
+    }
+
     #[test]
     fn expr_to_string_round_trip_match_expr_append() {
-        let worker_response = get_worker_response();
+        let worker_response = get_err_worker_response();
 
         let expr1_string =
             "append-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
@@ -777,7 +795,7 @@ mod tests {
 
     #[test]
     fn expr_to_string_round_trip_match_expr_append_suffix() {
-        let worker_response = get_worker_response();
+        let worker_response = get_err_worker_response();
 
         let expr1_string =
             "prefix-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}-suffix";
