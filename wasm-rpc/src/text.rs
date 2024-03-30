@@ -528,7 +528,7 @@ mod tests {
 
         let s = to_string(&typed_value).unwrap();
         let round_trip_value: TypeAnnotatedValue =
-            from_str(&super::AnalysedType(AnalysedType::from(typed_value)), &s).unwrap();
+            from_str(&super::AnalysedType(AnalysedType::from(&typed_value)), &s).unwrap();
         let result: Value = round_trip_value.try_into().unwrap();
         assert_eq!(value, result);
     }
