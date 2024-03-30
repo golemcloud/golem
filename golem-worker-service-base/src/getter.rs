@@ -62,7 +62,7 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
                     },
                     PathComponent::Index(value_index) => match get_array(type_annotated_value) {
                         Some(type_values) => {
-                            let new_value = type_values.get(value_index.0).map(|v| v);
+                            let new_value = type_values.get(value_index.0);
                             match new_value {
                                 Some(new_value) => go(new_value, paths, index + 1, size),
                                 None => Err(GetError::IndexNotFound(value_index.0)),

@@ -235,7 +235,7 @@ impl Evaluator for Expr {
                             Err(result) => return Err(result),
                         }
                     }
-                    match result.get(0) {
+                    match result.first() {
                         Some(value) => Ok(TypeAnnotatedValue::List {
                             values: result.clone(),
                             typ: AnalysedType::from(value),
@@ -348,7 +348,7 @@ fn handle_pattern_match(
                 } else {
                     // Lazily evaluated. We need to look at the patterns only when it is required
                     let pattern_expr_variable = || {
-                        match &patterns.get(0) {
+                        match &patterns.first() {
                         Some(ConstructorPattern::Literal(expr)) => match *expr.clone() {
                             Expr::Variable(variable) => Ok(variable),
                             _ => {
@@ -371,8 +371,8 @@ fn handle_pattern_match(
                         ConstructorTypeName::InBuiltConstructor(constructor_type) => {
                             match constructor_type {
                                 InBuiltConstructorInner::Some => match &match_evaluated {
-                                    TypeAnnotatedValue::Option { value, .. } => match value {
-                                        Some(v) => {
+                                    TypeAnnotatedValue::Option { value, .. } => {
+                                        if let Some(v) = value {
                                             let pattern_expr_variable = pattern_expr_variable()?;
                                             let result = possible_resolution.evaluate(
                                                 &input.merge(&TypeAnnotatedValue::Record {
@@ -389,9 +389,7 @@ fn handle_pattern_match(
 
                                             resolved_result = Some(result);
                                         }
-
-                                        None => {}
-                                    },
+                                    }
                                     // We allow all other type annotated value to be a success, even if it is not an Option.
                                     // This is for user-friendliness. Example: Say we have a request body `{user-id : 10}`
                                     // and we allow users to perform `match request.body.user-id { some(value) => value, none => 'not found'}`
@@ -415,21 +413,20 @@ fn handle_pattern_match(
                                     }
                                 },
                                 InBuiltConstructorInner::None => match &match_evaluated {
-                                    TypeAnnotatedValue::Option { value, .. } => match value {
-                                        Some(_) => {}
-                                        None => {
+                                    TypeAnnotatedValue::Option { value, .. } => {
+                                        if let None = value {
                                             let result = possible_resolution.evaluate(input)?;
 
                                             resolved_result = Some(result);
                                             break;
                                         }
-                                    },
+                                    }
                                     _ => {}
                                 },
 
                                 InBuiltConstructorInner::Ok => match &match_evaluated {
-                                    TypeAnnotatedValue::Result { value, .. } => match value {
-                                        Ok(v) => {
+                                    TypeAnnotatedValue::Result { value, .. } => {
+                                        if let Ok(v) = value {
                                             let result = possible_resolution.evaluate(
                                                 &input.merge(&TypeAnnotatedValue::Record {
                                                     value: vec![(
@@ -448,15 +445,12 @@ fn handle_pattern_match(
                                             resolved_result = Some(result);
                                             break;
                                         }
-
-                                        Err(_) => {}
-                                    },
+                                    }
                                     _ => {}
                                 },
                                 InBuiltConstructorInner::Err => match &match_evaluated {
-                                    TypeAnnotatedValue::Result { value, .. } => match value {
-                                        Ok(_) => {}
-                                        Err(v) => {
+                                    TypeAnnotatedValue::Result { value, .. } => {
+                                        if let Err(v) = value {
                                             let result = &possible_resolution.evaluate(
                                                 &input.merge(&TypeAnnotatedValue::Record {
                                                     value: vec![(
@@ -475,7 +469,7 @@ fn handle_pattern_match(
                                             resolved_result = Some(result.clone());
                                             break;
                                         }
-                                    },
+                                    }
                                     _ => {}
                                 },
                             }

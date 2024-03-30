@@ -20,13 +20,15 @@ impl Path {
     }
 }
 
-impl Path {
-    pub fn new() -> Path {
-        Path(vec![])
+impl Default for Path {
+    fn default() -> Self {
+        Path(Vec::new())
     }
+}
 
+impl Path {
     pub fn from_raw_string(input: &str) -> Path {
-        let mut path = Path::new();
+        let mut path = Path::default();
         path.update_key(input);
         path
     }

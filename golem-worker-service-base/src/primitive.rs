@@ -74,12 +74,12 @@ fn get_number(type_annotated_value: &TypeAnnotatedValue) -> Option<Number> {
     match type_annotated_value {
         TypeAnnotatedValue::S16(value) => Some(Number::NegInt(*value as i64)),
         TypeAnnotatedValue::S32(value) => Some(Number::NegInt(*value as i64)),
-        TypeAnnotatedValue::S64(value) => Some(Number::NegInt(*value as i64)),
+        TypeAnnotatedValue::S64(value) => Some(Number::NegInt(*value)),
         TypeAnnotatedValue::U16(value) => Some(Number::PosInt(*value as u64)),
         TypeAnnotatedValue::U32(value) => Some(Number::PosInt(*value as u64)),
-        TypeAnnotatedValue::U64(value) => Some(Number::PosInt(*value as u64)),
+        TypeAnnotatedValue::U64(value) => Some(Number::PosInt(*value)),
         TypeAnnotatedValue::F32(value) => Some(Number::Float(*value as f64)),
-        TypeAnnotatedValue::F64(value) => Some(Number::Float(*value as f64)),
+        TypeAnnotatedValue::F64(value) => Some(Number::Float(*value)),
         _ => None,
     }
 }

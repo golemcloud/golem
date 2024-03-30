@@ -54,7 +54,7 @@ impl InputHttpRequest<'_> {
 
     pub fn get_request_body(request_body: &Value) -> Result<TypeAnnotatedValue, Vec<String>> {
         let inferred_type = infer_analysed_type(request_body);
-        let typed_value = get_typed_value_from_json(&request_body, &inferred_type)?;
+        let typed_value = get_typed_value_from_json(request_body, &inferred_type)?;
 
         Ok(TypeAnnotatedValue::Record {
             value: vec![("body".to_string(), typed_value)],
@@ -101,7 +101,7 @@ impl InputHttpRequest<'_> {
             Self::get_request_query_values(request_query_variables, spec_query_variables)?;
 
         let request_path_values =
-            Self::get_request_path_values(&request_path_values, spec_path_variables)?;
+            Self::get_request_path_values(request_path_values, spec_path_variables)?;
 
         let path_values = request_query_values.merge(&request_path_values);
 

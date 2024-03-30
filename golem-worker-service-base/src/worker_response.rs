@@ -114,7 +114,7 @@ impl IntermediateHttpResponse {
                     headers: response_headers,
                     extensions: Default::default(),
                 };
-                let body: Body = Body::from_json(get_json_from_typed_value(&body)).unwrap();
+                let body: Body = Body::from_json(get_json_from_typed_value(body)).unwrap();
                 poem::Response::from_parts(parts, body)
             }
             Err(err) => poem::Response::builder()
