@@ -988,8 +988,8 @@ fn get_string(input_json: &JsonValue) -> Result<String, Vec<String>> {
     }
 }
 
-impl From<TypeAnnotatedValue> for AnalysedType {
-    fn from(value: TypeAnnotatedValue) -> Self {
+impl From<&TypeAnnotatedValue> for AnalysedType {
+    fn from(value: &TypeAnnotatedValue) -> Self {
         match value {
             TypeAnnotatedValue::Bool(_) => AnalysedType::Bool,
             TypeAnnotatedValue::S8(_) => AnalysedType::S8,
@@ -1004,28 +1004,38 @@ impl From<TypeAnnotatedValue> for AnalysedType {
             TypeAnnotatedValue::F64(_) => AnalysedType::F64,
             TypeAnnotatedValue::Chr(_) => AnalysedType::Chr,
             TypeAnnotatedValue::Str(_) => AnalysedType::Str,
-            TypeAnnotatedValue::List { typ, values: _ } => AnalysedType::List(Box::new(typ)),
-            TypeAnnotatedValue::Tuple { typ, value: _ } => AnalysedType::Tuple(typ),
-            TypeAnnotatedValue::Record { typ, value: _ } => AnalysedType::Record(typ),
-            TypeAnnotatedValue::Flags { typ, values: _ } => AnalysedType::Flags(typ),
-            TypeAnnotatedValue::Enum { typ, value: _ } => AnalysedType::Enum(typ),
-            TypeAnnotatedValue::Option { typ, value: _ } => AnalysedType::Option(Box::new(typ)),
+            TypeAnnotatedValue::List { typ, values: _ } => {
+                AnalysedType::List(Box::new(typ.clone()))
+            }
+            TypeAnnotatedValue::Tuple { typ, value: _ } => AnalysedType::Tuple(typ.clone()),
+            TypeAnnotatedValue::Record { typ, value: _ } => AnalysedType::Record(typ.clone()),
+            TypeAnnotatedValue::Flags { typ, values: _ } => AnalysedType::Flags(typ.clone()),
+            TypeAnnotatedValue::Enum { typ, value: _ } => AnalysedType::Enum(typ.clone()),
+            TypeAnnotatedValue::Option { typ, value: _ } => {
+                AnalysedType::Option(Box::new(typ.clone()))
+            }
             TypeAnnotatedValue::Result {
                 ok,
                 error,
                 value: _,
-            } => AnalysedType::Result { ok, error },
+            } => AnalysedType::Result {
+                ok: ok.clone(),
+                error: error.clone(),
+            },
             TypeAnnotatedValue::Handle {
                 id,
                 resource_mode,
                 uri: _,
                 resource_id: _,
-            } => AnalysedType::Resource { id, resource_mode },
+            } => AnalysedType::Resource {
+                id: id.clone(),
+                resource_mode: resource_mode.clone(),
+            },
             TypeAnnotatedValue::Variant {
                 typ,
                 case_name: _,
                 case_value: _,
-            } => AnalysedType::Variant(typ),
+            } => AnalysedType::Variant(typ.clone()),
         }
     }
 }

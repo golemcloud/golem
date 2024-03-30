@@ -120,7 +120,7 @@ impl WasmType for AnalysedType {
 impl WasmValue for TypeAnnotatedValue {
     type Type = AnalysedType;
     fn ty(&self) -> Self::Type {
-        AnalysedType(golem_wasm_ast::analysis::AnalysedType::from(self.clone()))
+        AnalysedType(golem_wasm_ast::analysis::AnalysedType::from(self))
     }
 
     fn make_bool(val: bool) -> Self {

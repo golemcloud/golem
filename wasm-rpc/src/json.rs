@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Display;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
 use serde_json::{Number, Value as JsonValue};
+use std::fmt::Display;
 
 use crate::{TypeAnnotatedValue, Value};
 
