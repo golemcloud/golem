@@ -1443,6 +1443,7 @@ mod tests {
             account_id: AccountId {
                 value: "account-1".to_string(),
             },
+            created_at: Timestamp::now_utc(),
             last_known_status: WorkerStatusRecord::default(),
         };
 

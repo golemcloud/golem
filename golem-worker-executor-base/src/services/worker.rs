@@ -27,7 +27,7 @@ use tracing::debug;
 
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
-use crate::services::golem_config::WorkersServiceConfig;
+
 use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
 
