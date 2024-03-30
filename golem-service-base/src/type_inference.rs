@@ -10,22 +10,23 @@ pub fn infer_analysed_type(value: &Value) -> AnalysedType {
     match value {
         Value::Bool(_) => AnalysedType::Bool,
         Value::Number(n) => {
-            if let Some(n) = n.as_i64() {
-                AnalysedType::S64
-            } else if let Some(n) = n.as_f64() {
-                AnalysedType::F64
-            } else {
+            if n.as_u64().is_some() {
                 AnalysedType::U64
+            } else if n.as_i64().is_some() {
+                AnalysedType::S64
+            } else {
+                // Only other possibility in serde_json::Number ADT is f64
+                AnalysedType::F64
             }
         }
         Value::String(value) => {
-                if let Ok(u64) = value.parse::<u64>() {
+                if value.parse::<u64>().is_ok() {
                     AnalysedType::U64
-                } else if let Ok(i64_value) = value.parse::<i64>() {
+                } else if value.parse::<i64>().is_ok() {
                     AnalysedType::S64
-                } else if let Ok(f64_value) = value.parse::<f64>() {
+                } else if value.parse::<f64>().is_ok() {
                     AnalysedType::F64
-                } else if let Ok(bool) = value.parse::<bool>() {
+                } else if value.parse::<bool>().is_ok() {
                     AnalysedType::Bool
                 } else {
                     AnalysedType::Str

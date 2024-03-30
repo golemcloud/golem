@@ -143,9 +143,7 @@ impl Evaluator for Expr {
 
                     match (left.get_primitive(), right.get_primitive()) {
                         (Some(left), Some(right)) => {
-                            dbg!("The result is {}, {}", left.clone(), right.clone());
                             let result = left > right;
-                            dbg!("The result afterwards is {}", result);
                             Ok(TypeAnnotatedValue::Bool(result))
                         }
                         _ => Err(EvaluationError::Message(
@@ -334,7 +332,6 @@ fn handle_pattern_match(
     constructors: &Vec<(ConstructorPattern, Expr)>,
     input: &TypeAnnotatedValue,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
-    dbg!("the constructors are {}", constructors);
     let match_evaluated = input_expr.evaluate(input)?;
 
     let mut resolved_result: Option<TypeAnnotatedValue> = None;
