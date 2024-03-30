@@ -1,19 +1,47 @@
+use std::fmt::Display;
 use crate::path::{Path, PathComponent};
 use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::json::get_json_from_typed_value;
 
 pub trait Getter<T> {
-    fn get(&self, key: &Path) -> Option<T>;
+    fn get(&self, key: &Path) -> Result<T, GetError>;
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum GetError {
+    KeyNotFound(String),
+    IndexNotFound(usize),
+    NotRecord {
+        key_name: String,
+        found: String
+    },
+    NotArray {
+        index: usize,
+        found: String
+    }
+}
+
+// TypeAnnotatedValue doesn't have a display instance, therefore no generic display impl
+impl Display for GetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GetError::KeyNotFound(key) => write!(f, "Key not found: {}", key),
+            GetError::IndexNotFound(index) => write!(f, "Index not found: {}", index),
+            GetError::NotRecord { key_name, found } => write!(f, "Not a record: key_name: {}, original_value: {}", key_name,  found),
+            GetError::NotArray { index, found } => write!(f, "Not an array: index: {}, original_value: {}", index, found),
+        }
+    }
 }
 
 impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
-    fn get(&self, key: &Path) -> Option<TypeAnnotatedValue> {
+    fn get(&self, key: &Path) -> Result<TypeAnnotatedValue, GetError> {
         let size = key.0.len();
         fn go(
             type_annotated_value: &TypeAnnotatedValue,
             paths: Vec<PathComponent>,
             index: usize,
             size: usize,
-        ) -> Option<TypeAnnotatedValue> {
+        ) -> Result<TypeAnnotatedValue, GetError> {
             if index < size {
                 match &paths[index] {
                     PathComponent::KeyName(key) => match type_annotated_value {
@@ -21,24 +49,30 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
                             let new_value = value.iter().find(|(k, _)| k == &key.0).map(|(_, v)| v);
                             match new_value {
                                 Some(new_value) => go(new_value, paths, index + 1, size),
-                                None => None,
+                                None => Err(GetError::KeyNotFound(key.0.clone())),
                             }
                         }
-                        _ => None,
+                        _ => Err(GetError::NotRecord {
+                            key_name: key.0.clone(),
+                            found: get_json_from_typed_value(&type_annotated_value.clone()).to_string(),
+                        }),
                     },
                     PathComponent::Index(value_index) => match get_array(type_annotated_value) {
                         Some(type_values) => {
                             let new_value = type_values.get(value_index.0).map(|v| v);
                             match new_value {
                                 Some(new_value) => go(new_value, paths, index + 1, size),
-                                None => None,
+                                None => Err(GetError::IndexNotFound(value_index.0)),
                             }
                         }
-                        None => None,
+                        None => Err(GetError::NotArray {
+                            index: value_index.0,
+                            found: get_json_from_typed_value(type_annotated_value).to_string(),
+                        })
                     },
                 }
             } else {
-                Some(type_annotated_value.clone())
+                Ok(type_annotated_value.clone())
             }
         }
 

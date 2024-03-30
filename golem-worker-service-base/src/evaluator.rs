@@ -2,7 +2,7 @@ use super::tokeniser::tokenizer::{Token, Tokenizer};
 use crate::expr::{
     ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber,
 };
-use crate::getter::Getter;
+use crate::getter::{GetError, Getter};
 use crate::merge::Merge;
 use crate::path::Path;
 use crate::primitive::GetPrimitive;
@@ -16,8 +16,11 @@ pub trait Evaluator {
     fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum EvaluationError {
+    InvalidReference {
+        get_error: GetError,
+    },
     Message(String),
 }
 
@@ -25,7 +28,14 @@ impl Display for EvaluationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EvaluationError::Message(string) => write!(f, "{}", string),
+            EvaluationError::InvalidReference { get_error } => write!(f, "{}", get_error),
         }
+    }
+}
+
+impl From<GetError> for EvaluationError {
+    fn from(get_error: GetError) -> Self {
+        EvaluationError::InvalidReference { get_error }
     }
 }
 
@@ -57,25 +67,16 @@ impl<'t> Evaluator for RawString<'t> {
                         .capture_string_until(vec![&Token::InterpolationStart], &Token::CloseParen);
 
                     if let Some(place_holder_name) = place_holder_name {
-                        match input.get(&Path::from_key(place_holder_name.as_str())) {
-                            Some(type_annotated_value) => {
-                                match type_annotated_value.get_primitive() {
-                                    Some(primitive) => {
-                                        combined_string.push_str(primitive.to_string().as_str())
-                                    }
+                        let type_annotated_value = input.get(&Path::from_key(place_holder_name.as_str()))?;
 
-                                    None => {
-                                        return Result::Err(EvaluationError::Message(format!(
-                                            "Unsupported json type to be replaced in place holder. Make sure the values are primitive {}",
-                                            place_holder_name,
-                                        )));
-                                    }
-                                }
+                        match type_annotated_value.get_primitive() {
+                            Some(primitive) => {
+                                combined_string.push_str(primitive.to_string().as_str())
                             }
 
                             None => {
-                                return Result::Err(EvaluationError::Message(format!(
-                                    "No value for the place holder {}",
+                                return Err(EvaluationError::Message(format!(
+                                    "Unsupported json type to be replaced in place holder. Make sure the values are primitive {}",
                                     place_holder_name,
                                 )));
                             }
@@ -102,42 +103,22 @@ impl Evaluator for Expr {
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
             match expr.clone() {
                 Expr::Request() => {
-                    match input.get(&Path::from_raw_string(Token::Request.to_string().as_str())) {
-                        Some(v) => Ok(v),
-                        None => Err(EvaluationError::Message(
-                            "Details of request is missing".to_string(),
-                        )),
-                    }
+                    input.get(&Path::from_raw_string(Token::Request.to_string().as_str())).map_err(|err| err.into())
                 }
                 Expr::Worker() => {
-                    match input.get(&Path::from_raw_string(Token::Worker.to_string().as_str())) {
-                        Some(v) => Ok(v),
-                        None => Err(EvaluationError::Message(
-                            "Details of worker response is missing".to_string(),
-                        )),
-                    }
+                    input.get(&Path::from_raw_string(Token::Worker.to_string().as_str())).map_err(|err| err.into())
                 }
 
                 Expr::SelectIndex(expr, index) => {
                     let evaluation_result = go(&expr, input)?;
-
-                    evaluation_result
-                        .get(&Path::from_index(index))
-                        .ok_or(EvaluationError::Message(format!(
-                            "Unable to fetch the element at index {}",
-                            index
-                        )))
+                    evaluation_result.get(&Path::from_index(index)).map_err(|err| err.into())
                 }
 
                 Expr::SelectField(expr, field_name) => {
                     let evaluation_result = go(&expr, input)?;
 
                     evaluation_result
-                        .get(&Path::from_key(field_name.as_str()))
-                        .ok_or(EvaluationError::Message(format!(
-                            "Unable to obtain the field {}",
-                            field_name
-                        )))
+                        .get(&Path::from_key(field_name.as_str())).map_err(|err| err.into())
                 }
 
                 Expr::EqualTo(left, right) => {
@@ -317,20 +298,12 @@ impl Evaluator for Expr {
                 },
 
                 Expr::PathVar(path_var) => {
-                    input
-                        .get(&Path::from_key(path_var.as_str()))
-                        .ok_or(EvaluationError::Message(format!(
-                            "The result doesn't contain the field {}",
-                            path_var
-                        )))
+                    input.get(&Path::from_key(path_var.as_str())).map_err(|err| err.into())
                 }
 
                 Expr::Variable(variable) => input
                     .get(&Path::from_raw_string(variable.as_str()))
-                    .ok_or(EvaluationError::Message(format!(
-                        "The result doesn't contain the field {}",
-                        variable
-                    ))),
+                    .map_err(|err| err.into()),
 
                 Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(bool)),
                 Expr::PatternMatch(input_expr, constructors) => {
@@ -529,16 +502,19 @@ fn handle_pattern_match(
 mod tests {
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expr::Expr;
-    use crate::http_request::InputHttpRequest;
+    use crate::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
     use golem_service_base::type_inference::infer_analysed_type;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::TypeAnnotatedValue;
-    use http::HeaderMap;
+    use http::{HeaderMap, Method, Uri};
     use serde_json::Value;
     use std::collections::HashMap;
     use golem_wasm_rpc::json::get_typed_value_from_json;
+    use crate::api_definition::PathPattern;
     use crate::worker_response::WorkerResponse;
+    use std::str::FromStr;
+    use crate::getter::GetError;
 
     fn get_worker_response(input: &str) -> WorkerResponse {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");
@@ -555,28 +531,55 @@ mod tests {
     ) -> TypeAnnotatedValue {
         let request_body: Value = serde_json::from_str(input).expect("Failed to parse json");
 
-        InputHttpRequest::get_request_body(&request_body)
+        let input_http_request = InputHttpRequest {
+            req_body: request_body.clone(),
+            headers: &header_map,
+            req_method: &Method::GET,
+            input_path: ApiInputPath {
+                base_path: "/api",
+                query_path: None,
+
+            },
+        };
+
+        input_http_request.get_type_annotated_value(vec![], &HashMap::new())
             .unwrap()
             .merge(&InputHttpRequest::get_headers(header_map).unwrap())
     }
 
     fn resolved_variables_from_request_path(
-        path_values: &HashMap<usize, String>,
-        spec_variables: &HashMap<usize, String>,
+        uri: Uri,
+        path_pattern: PathPattern,
     ) -> TypeAnnotatedValue {
-        InputHttpRequest::get_request_path_values(path_values, spec_variables).unwrap()
+        let api_input_path = ApiInputPath {
+            base_path: uri.path(),
+            query_path: uri.query()
+        };
+
+        let input_http_request = InputHttpRequest {
+            req_body: serde_json::Value::Null,
+            headers: &HeaderMap::new(),
+            req_method: &Method::GET,
+            input_path: ApiInputPath {
+                base_path: uri.path(),
+                query_path: uri.query()
+            },
+        };
+
+        input_http_request.get_type_annotated_value(path_pattern.get_query_variables(), &path_pattern.get_path_variables()).unwrap()
     }
 
     #[test]
     fn test_evaluation_with_request_path() {
-        let mut request_path_values = HashMap::new();
-        request_path_values.insert(0, "pId".to_string());
+        let uri = Uri::builder()
+            .path_and_query("/pId/items")
+            .build()
+            .unwrap();
 
-        let mut spec_path_variables = HashMap::new();
-        spec_path_variables.insert(0, "id".to_string());
+        let path_pattern = PathPattern::from_str("/{id}/items").unwrap();
 
         let resolved_variables =
-            resolved_variables_from_request_path(&request_path_values, &spec_path_variables);
+            resolved_variables_from_request_path(uri, path_pattern);
 
         let expr = Expr::from_primitive_string("${request.path.id}").unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("pId".to_string());
@@ -699,7 +702,10 @@ mod tests {
 
         let expr = Expr::from_primitive_string("${request.body.address.street2}").unwrap();
         let expected_evaluated_result =
-            EvaluationError::Message("The result doesn't contain the field street2".to_string());
+            EvaluationError::InvalidReference {
+                get_error: GetError::KeyNotFound("street2".to_string()),
+            };
+
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
@@ -723,7 +729,10 @@ mod tests {
 
         let expr = Expr::from_primitive_string("${request.body.titles[4]}").unwrap();
         let expected_evaluated_result =
-            EvaluationError::Message("The array doesn't contain 4 elements".to_string());
+            EvaluationError::InvalidReference {
+                get_error: GetError::IndexNotFound(4),
+            };
+
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
@@ -744,7 +753,10 @@ mod tests {
 
         let expr = Expr::from_primitive_string("${request.body.address[4]}").unwrap();
         let expected_evaluated_result =
-            EvaluationError::Message("Result is not an array to get the index 4".to_string());
+            EvaluationError::InvalidReference {
+                get_error: GetError::IndexNotFound(4),
+            };
+
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
@@ -802,7 +814,10 @@ mod tests {
 
         let expr = Expr::from_primitive_string("${request.body.address.street.name}").unwrap();
         let expected_evaluated_result =
-            EvaluationError::Message("Result is not an object to get the field name".to_string());
+            EvaluationError::InvalidReference {
+                get_error: GetError::KeyNotFound("name".to_string()),
+            };
+
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
@@ -863,14 +878,16 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_with_other_exprs() {
-        let mut request_path_values = HashMap::new();
-        request_path_values.insert(0, "foo".to_string());
 
-        let mut spec_path_variables = HashMap::new();
-        spec_path_variables.insert(0, "id".to_string());
+        let uri = Uri::builder()
+            .path_and_query("/shopping-cart/foo")
+            .build()
+            .unwrap();
+
+        let path_pattern = PathPattern::from_str("/shopping-cart/{id}").unwrap();
 
         let mut resolved_variables_path =
-            resolved_variables_from_request_path(&request_path_values, &spec_path_variables);
+            resolved_variables_from_request_path(uri, path_pattern);
 
         let resolved_variables =
             resolved_variables_path.merge(&get_worker_response(

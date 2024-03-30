@@ -19,6 +19,8 @@ pub struct InputHttpRequest<'a> {
 }
 
 impl InputHttpRequest<'_> {
+    // Converts all request details to type-annotated-value
+    // and place them under the key `request`
     pub fn get_type_annotated_value(
         &self,
         spec_query_variables: Vec<String>,
