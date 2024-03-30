@@ -412,66 +412,59 @@ fn handle_pattern_match(
                                         resolved_result = Some(result);
                                     }
                                 },
-                                InBuiltConstructorInner::None => match &match_evaluated {
-                                    TypeAnnotatedValue::Option { value, .. } => {
-                                        if let None = value {
-                                            let result = possible_resolution.evaluate(input)?;
+                                InBuiltConstructorInner::None => {
+                                    if let TypeAnnotatedValue::Option { value: None, .. } =
+                                        &match_evaluated
+                                    {
+                                        let result = possible_resolution.evaluate(input)?;
 
-                                            resolved_result = Some(result);
-                                            break;
-                                        }
+                                        resolved_result = Some(result);
+                                        break;
                                     }
-                                    _ => {}
-                                },
+                                }
 
-                                InBuiltConstructorInner::Ok => match &match_evaluated {
-                                    TypeAnnotatedValue::Result { value, .. } => {
-                                        if let Ok(v) = value {
-                                            let result = possible_resolution.evaluate(
-                                                &input.merge(&TypeAnnotatedValue::Record {
-                                                    value: vec![(
-                                                        pattern_expr_variable()?.to_string(),
-                                                        *v.clone().unwrap(),
-                                                    )],
-                                                    typ: vec![(
-                                                        pattern_expr_variable()?.to_string(),
-                                                        AnalysedType::from(
-                                                            v.as_ref().unwrap().deref(),
-                                                        ),
-                                                    )],
-                                                }),
-                                            )?;
+                                InBuiltConstructorInner::Ok => {
+                                    if let TypeAnnotatedValue::Result { value: Ok(v), .. } =
+                                        &match_evaluated
+                                    {
+                                        let result = possible_resolution.evaluate(&input.merge(
+                                            &TypeAnnotatedValue::Record {
+                                                value: vec![(
+                                                    pattern_expr_variable()?.to_string(),
+                                                    *v.clone().unwrap(),
+                                                )],
+                                                typ: vec![(
+                                                    pattern_expr_variable()?.to_string(),
+                                                    AnalysedType::from(v.as_ref().unwrap().deref()),
+                                                )],
+                                            },
+                                        ))?;
 
-                                            resolved_result = Some(result);
-                                            break;
-                                        }
+                                        resolved_result = Some(result);
+                                        break;
                                     }
-                                    _ => {}
-                                },
-                                InBuiltConstructorInner::Err => match &match_evaluated {
-                                    TypeAnnotatedValue::Result { value, .. } => {
-                                        if let Err(v) = value {
-                                            let result = &possible_resolution.evaluate(
-                                                &input.merge(&TypeAnnotatedValue::Record {
-                                                    value: vec![(
-                                                        pattern_expr_variable()?.to_string(),
-                                                        *v.clone().unwrap(),
-                                                    )],
-                                                    typ: vec![(
-                                                        pattern_expr_variable()?.to_string(),
-                                                        AnalysedType::from(
-                                                            v.as_ref().unwrap().deref(),
-                                                        ),
-                                                    )],
-                                                }),
-                                            )?;
+                                }
+                                InBuiltConstructorInner::Err => {
+                                    if let TypeAnnotatedValue::Result { value: Err(v), .. } =
+                                        &match_evaluated
+                                    {
+                                        let result = &possible_resolution.evaluate(
+                                            &input.merge(&TypeAnnotatedValue::Record {
+                                                value: vec![(
+                                                    pattern_expr_variable()?.to_string(),
+                                                    *v.clone().unwrap(),
+                                                )],
+                                                typ: vec![(
+                                                    pattern_expr_variable()?.to_string(),
+                                                    AnalysedType::from(v.as_ref().unwrap().deref()),
+                                                )],
+                                            }),
+                                        )?;
 
-                                            resolved_result = Some(result.clone());
-                                            break;
-                                        }
+                                        resolved_result = Some(result.clone());
+                                        break;
                                     }
-                                    _ => {}
-                                },
+                                }
                             }
                         }
                         ConstructorTypeName::CustomConstructor(_) => {

@@ -3,26 +3,20 @@ use std::fmt::Display;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct Path(pub Vec<PathComponent>);
 
 impl Path {
     pub fn from_key(input: &str) -> Path {
-        let mut path = Path::new();
+        let mut path = Path::default();
         path.update_key(input);
         path
     }
 
     pub fn from_index(index: usize) -> Path {
-        let mut path = Path::new();
+        let mut path = Path::default();
         path.update_index(index);
         path
-    }
-}
-
-impl Default for Path {
-    fn default() -> Self {
-        Path(Vec::new())
     }
 }
 
