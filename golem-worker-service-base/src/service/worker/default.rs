@@ -149,6 +149,7 @@ pub trait WorkerService<AuthCtx> {
         cursor: u64,
         count: u64,
         precise: bool,
+        auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)>;
 
     async fn resume(&self, worker_id: &WorkerId, auth_ctx: &AuthCtx) -> WorkerResult<()>;
@@ -790,8 +791,55 @@ where
         cursor: u64,
         count: u64,
         precise: bool,
+        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
-        todo!()
+        let result = self.execute_with_client(
+            || Box::pin(self.random_worker_executor_client()),
+            &(template_id.clone(), filter.clone(), cursor, count, precise),
+            |worker_executor_client, (template_id, filter, cursor, count, precise)| {
+                Box::pin(async move {
+                    let template_id: golem_api_grpc::proto::golem::template::TemplateId =
+                        template_id.clone().into();
+                    let response = worker_executor_client.get_worker_metadatas(
+                        golem_api_grpc::proto::golem::workerexecutor::GetWorkerMetadatasRequest {
+                            template_id: Some(template_id),
+                            filter: filter.clone().map(|f| f.into()),
+                            cursor: *cursor,
+                            count: *count,
+                            precise: *precise,
+                        }
+                    ).await.map_err(|err| {
+                        GolemError::RuntimeError(GolemErrorRuntimeError {
+                            details: err.to_string(),
+                        })
+                    })?;
+                    match response.into_inner() {
+                        workerexecutor::GetWorkerMetadatasResponse {
+                            result:
+                            Some(workerexecutor::get_worker_metadatas_response::Result::Success(workerexecutor::GetWorkerMetadatasSuccessResponse {
+                                workers, cursor })),
+                        } => {
+                            let cursor: Option<u64> = if cursor == 0 { None } else { Some(cursor) };
+                            let workers = workers.iter().map(| w| w.clone().try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::Unknown(GolemErrorUnknown {
+                                details: "Convert response error".to_string(),
+                            }))?;
+                            Ok((cursor, workers))
+                        },
+                        workerexecutor::GetWorkerMetadatasResponse {
+                            result:
+                            Some(workerexecutor::get_worker_metadatas_response::Result::Failure(err)),
+                        } => Err(err.try_into().unwrap()),
+                        workerexecutor::GetWorkerMetadatasResponse { .. } => {
+                            Err(GolemError::Unknown(GolemErrorUnknown {
+                                details: "Empty response".to_string(),
+                            }))
+                        }
+                    }
+                })
+            },
+        ).await?;
+
+        Ok(result)
     }
 
     async fn resume(&self, worker_id: &WorkerId, _auth_ctx: &AuthCtx) -> WorkerResult<()> {
@@ -901,6 +949,107 @@ where
             match self.get_worker_executor_client(worker_id).await {
                 Ok(Some(mut worker_executor_client)) => {
                     match f(&mut worker_executor_client, i).await {
+                        Ok(result) => return Ok(result),
+                        Err(GolemError::InvalidShardId(GolemErrorInvalidShardId {
+                            shard_id,
+                            shard_ids,
+                        })) => {
+                            info!("InvalidShardId: {} not in {:?}", shard_id, shard_ids);
+                            info!("Invalidating routing table");
+                            self.routing_table_service.invalidate_routing_table().await;
+                            sleep(Duration::from_secs(1)).await;
+                        }
+                        Err(GolemError::RuntimeError(GolemErrorRuntimeError { details }))
+                            if is_connection_failure(&details) =>
+                        {
+                            info!("Worker executor unavailable");
+                            info!("Invalidating routing table and retrying immediately");
+                            self.routing_table_service.invalidate_routing_table().await;
+                        }
+                        Err(other) => {
+                            debug!("Got {:?}, not retrying", other);
+                            return Err(WorkerServiceError::Golem(other));
+                        }
+                    }
+                }
+                Ok(None) => {
+                    info!("No active shards");
+                    info!("Invalidating routing table");
+                    self.routing_table_service.invalidate_routing_table().await;
+                    sleep(Duration::from_secs(1)).await;
+                }
+                Err(GetWorkerExecutorClientError::FailedToGetRoutingTable(
+                    RoutingTableError::Unexpected(details),
+                )) if is_connection_failure(&details) => {
+                    info!("Shard manager unavailable");
+                    info!("Invalidating routing table and retrying in 1 seconds");
+                    self.routing_table_service.invalidate_routing_table().await;
+                    sleep(Duration::from_secs(1)).await;
+                }
+                Err(GetWorkerExecutorClientError::FailedToConnectToPod(details))
+                    if is_connection_failure(&details) =>
+                {
+                    info!("Worker executor unavailable");
+                    info!("Invalidating routing table and retrying immediately");
+                    self.routing_table_service.invalidate_routing_table().await;
+                }
+                Err(other) => {
+                    debug!("Got {}, not retrying", other);
+                    // let err = anyhow::Error::new(other);
+                    return Err(WorkerServiceError::internal(other));
+                }
+            }
+        }
+    }
+
+    async fn random_worker_executor_client(
+        &self,
+    ) -> Result<Option<WorkerExecutorClient<Channel>>, GetWorkerExecutorClientError> {
+        let routing_table = self
+            .routing_table_service
+            .get_routing_table()
+            .await
+            .map_err(GetWorkerExecutorClientError::FailedToGetRoutingTable)?;
+        match routing_table.random() {
+            None => Ok(None),
+            Some(pod) => {
+                let worker_executor_client = self
+                    .worker_executor_clients
+                    .lookup(pod.clone())
+                    .await
+                    .map_err(GetWorkerExecutorClientError::FailedToConnectToPod)?;
+                Ok(Some(worker_executor_client))
+            }
+        }
+    }
+
+    async fn execute_with_client<F, G, In, Out>(
+        &self,
+        get_client: F,
+        i: &In,
+        execute: G,
+    ) -> Result<Out, WorkerServiceError>
+    where
+        F: Fn() -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            Option<WorkerExecutorClient<Channel>>,
+                            GetWorkerExecutorClientError,
+                        >,
+                    > + Send,
+            >,
+        >,
+        G: for<'b> Fn(
+            &'b mut WorkerExecutorClient<Channel>,
+            &'b In,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
+    {
+        loop {
+            match get_client().await {
+                Ok(Some(mut worker_executor_client)) => {
+                    match execute(&mut worker_executor_client, i).await {
                         Ok(result) => return Ok(result),
                         Err(GolemError::InvalidShardId(GolemErrorInvalidShardId {
                             shard_id,
@@ -1135,6 +1284,7 @@ where
         _cursor: u64,
         _count: u64,
         _precise: bool,
+        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
         Ok((None, vec![]))
     }

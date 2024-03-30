@@ -379,6 +379,7 @@ impl WorkerGrpcApi {
                 request.cursor,
                 request.count,
                 request.precise,
+                &EmptyAuthCtx {},
             )
             .await?;
 
