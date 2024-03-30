@@ -23,6 +23,7 @@ use golem_service_base::{
     worker_executor_clients::WorkerExecutorClients,
 };
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
+use golem_wasm_rpc::json::Json;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
@@ -415,12 +416,12 @@ where
             .map(|x| x.clone().into())
             .collect();
 
-        let invoke_response_json = results_val
+        let typed_value = results_val
             .result
             .validate_function_result(function_results, calling_convention.clone())
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
-        Ok(invoke_response_json)
+        Ok(Json::from(typed_value).0)
     }
 
     async fn invoke_and_await_function_typed_value(

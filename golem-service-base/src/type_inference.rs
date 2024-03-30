@@ -54,3 +54,41 @@ pub fn infer_analysed_type(value: &Value) -> Option<AnalysedType> {
         _ => None,
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_infer_analysed_type() {
+        let value = Value::Bool(true);
+        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::Bool));
+
+        let value = Value::Number(serde_json::Number::from(42));
+        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::S8));
+
+        let value = Value::Number(serde_json::Number::from(42.0));
+        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::F64));
+
+        let value = Value::String("hello".to_string());
+        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::Str));
+
+        let value = Value::Array(vec![Value::Number(serde_json::Number::from(42))]);
+        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::List(Box::new(AnalysedType::S8))));
+
+        let value = Value::Array(vec![]);
+        assert_eq!(infer_analysed_type(&value), None);
+
+        let value = Value::Object(serde_json::Map::new());
+        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::Record(vec![])));
+
+        let value = Value::Object({
+            let mut map = serde_json::Map::new();
+            map.insert("foo".to_string(), Value::Number(serde_json::Number::from(42)));
+            map
+        });
+        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::Record(vec![("foo".to_string(), AnalysedType::S8)])));
+    }
+}
+```
