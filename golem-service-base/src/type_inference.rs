@@ -95,4 +95,3 @@ mod tests {
         assert_eq!(infer_analysed_type(&value), Some(AnalysedType::Record(vec![("foo".to_string(), AnalysedType::S8)])));
     }
 }
-```

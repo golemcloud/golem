@@ -9,7 +9,7 @@ use crate::type_inference::*;
 use crate::worker_request::WorkerRequest;
 use crate::worker_request_to_response::WorkerRequestToResponse;
 use async_trait::async_trait;
-use golem_wasm_rpc::json::JsonFunctionResult;
+use golem_wasm_rpc::json::Json;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use http::{HeaderMap, StatusCode};
 use poem::{Body, ResponseParts};
@@ -37,7 +37,7 @@ impl WorkerResponse {
                     ))),
             }
         } else {
-            let json = JsonFunctionResult::from(self.result.clone());
+            let json = Json::from(self.result.clone());
             let body: Body = Body::from_json(json.0).unwrap();
             poem::Response::builder().body(body)
         }
@@ -90,7 +90,7 @@ impl IntermediateHttpResponse {
                     headers: response_headers,
                     extensions: Default::default(),
                 };
-                let body: Body = Body::from_json(JsonFunctionResult::from(body.clone()).0).unwrap();
+                let body: Body = Body::from_json(Json::from(body.clone()).0).unwrap();
                 poem::Response::from_parts(parts, body)
             }
             Err(err) => poem::Response::builder()
@@ -134,7 +134,7 @@ impl ResolvedResponseHeaders {
                 .get_primitive()
                 .ok_or(EvaluationError::Message(format!(
                     "Header value is not a string. {}",
-                    JsonFunctionResult::from(value).0
+                    Json::from(value)
                 )))?;
 
             resolved_headers.insert(header_name.clone(), value_str.to_string());

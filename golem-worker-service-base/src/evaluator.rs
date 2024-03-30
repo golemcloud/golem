@@ -7,7 +7,7 @@ use crate::merge::Merge;
 use crate::path::Path;
 use crate::primitive::GetPrimitive;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::JsonFunctionResult;
+use golem_wasm_rpc::json::Json;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
 
@@ -219,7 +219,7 @@ impl Evaluator for Expr {
                         TypeAnnotatedValue::Bool(value) => Ok(TypeAnnotatedValue::Bool(!value)),
                         _ => Err(EvaluationError::Message(format!(
                             "The expression is evaluated to {} but it is not a boolean expression to apply not (!) operator on",
-                            JsonFunctionResult::from(evaluated_expr).0
+                            Json::from(evaluated_expr)
                         ))),
                     }
                 }
@@ -239,7 +239,7 @@ impl Evaluator for Expr {
                         }
                         _ => Err(EvaluationError::Message(format!(
                             "The predicate expression is evaluated to {} but it is not a boolean expression",
-                            JsonFunctionResult::from(pred).0
+                            Json::from(pred)
                         ))),
                     }
                 }
@@ -298,7 +298,7 @@ impl Evaluator for Expr {
                                 if let Some(primitive) = value.get_primitive() {
                                     result.push_str(primitive.to_string().as_str())
                                 } else {
-                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} to form strings. Please check the expression", JsonFunctionResult::from(value).0)));
+                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} to form strings. Please check the expression", Json::from(value))));
                                 }
                             }
 
@@ -503,11 +503,11 @@ mod tests {
     use crate::http_request::InputHttpRequest;
     use crate::merge::Merge;
     use crate::type_inference::infer_analysed_type;
+    use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::HeaderMap;
     use serde_json::Value;
     use std::collections::HashMap;
-    use golem_wasm_ast::analysis::AnalysedType;
 
     fn resolved_variables_from_worker_response(input: &str) -> TypeAnnotatedValue {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");
@@ -809,7 +809,10 @@ mod tests {
         )
         .unwrap();
         let result = expr.evaluate(&resolved_variables);
-        assert_eq!(result, Ok(TypeAnnotatedValue::Str("personal-id".to_string())));
+        assert_eq!(
+            result,
+            Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
+        );
     }
 
     #[test]
@@ -904,7 +907,10 @@ mod tests {
         )
         .unwrap();
         let result = expr.evaluate(&resolved_variables);
-        assert_eq!(result, Ok(TypeAnnotatedValue::Str("personal-id".to_string())));
+        assert_eq!(
+            result,
+            Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
+        );
     }
 
     #[test]
@@ -924,7 +930,7 @@ mod tests {
         .unwrap();
         let result = expr.evaluate(&resolved_variables);
 
-        let expected_result=  TypeAnnotatedValue::Record {
+        let expected_result = TypeAnnotatedValue::Record {
             value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
             typ: vec![("id".to_string(), AnalysedType::Str)],
         };

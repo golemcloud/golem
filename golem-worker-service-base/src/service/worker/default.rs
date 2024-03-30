@@ -378,48 +378,17 @@ where
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value> {
-        let template_details = self
-            .try_get_template_for_worker(worker_id, auth_ctx)
-            .await?;
-
-        let function_type = template_details
-            .metadata
-            .function_by_name(&function_name)
-            .ok_or_else(|| {
-                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
-            })?;
-        let params_val = params
-            .validate_function_parameters(
-                function_type
-                    .parameters
-                    .into_iter()
-                    .map(|parameter| parameter.into())
-                    .collect(),
-                calling_convention.clone(),
-            )
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
-        let results_val = self
-            .invoke_and_await_function_proto(
+        let typed_value = self
+            .invoke_and_await_function_typed_value(
                 worker_id,
                 function_name,
                 invocation_key,
-                params_val,
+                params,
                 calling_convention,
                 metadata,
                 auth_ctx,
             )
             .await?;
-
-        let function_results: Vec<AnalysedFunctionResult> = function_type
-            .results
-            .iter()
-            .map(|x| x.clone().into())
-            .collect();
-
-        let typed_value = results_val
-            .result
-            .validate_function_result(function_results, calling_convention.clone())
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         Ok(Json::from(typed_value).0)
     }
@@ -473,15 +442,10 @@ where
             .map(|x| x.clone().into())
             .collect();
 
-        let invoke_response_json =
-            golem_service_base::typechecker::validate_function_result_typed_value(
-                results_val.result,
-                function_results,
-                calling_convention.clone(),
-            )
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
-
-        Ok(invoke_response_json)
+        results_val
+            .result
+            .validate_function_result(function_results, calling_convention.clone())
+            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
     }
 
     async fn invoke_and_await_function_proto(
