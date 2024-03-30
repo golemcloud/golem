@@ -7,9 +7,10 @@ use crate::merge::Merge;
 use crate::path::Path;
 use crate::primitive::GetPrimitive;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::Json;
+use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
+use std::ops::Deref;
 
 pub trait Evaluator {
     fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
@@ -226,7 +227,7 @@ impl Evaluator for Expr {
                         TypeAnnotatedValue::Bool(value) => Ok(TypeAnnotatedValue::Bool(!value)),
                         _ => Err(EvaluationError::Message(format!(
                             "The expression is evaluated to {} but it is not a boolean expression to apply not (!) operator on",
-                            Json::from(evaluated_expr)
+                            get_json_from_typed_value(&evaluated_expr)
                         ))),
                     }
                 }
@@ -246,7 +247,7 @@ impl Evaluator for Expr {
                         }
                         _ => Err(EvaluationError::Message(format!(
                             "The predicate expression is evaluated to {} but it is not a boolean expression",
-                            Json::from(pred)
+                            get_json_from_typed_value(&pred)
                         ))),
                     }
                 }
@@ -263,7 +264,7 @@ impl Evaluator for Expr {
                     match result.get(0) {
                         Some(value) => Ok(TypeAnnotatedValue::List {
                             values: result.clone(),
-                            typ: AnalysedType::from(value.clone()),
+                            typ: AnalysedType::from(value),
                         }),
                         None => Ok(TypeAnnotatedValue::List {
                             values: result.clone(),
@@ -287,7 +288,7 @@ impl Evaluator for Expr {
 
                     let types: Vec<(String, AnalysedType)> = values
                         .iter()
-                        .map(|(key, value)| (key.clone(), AnalysedType::from(value.clone())))
+                        .map(|(key, value)| (key.clone(), AnalysedType::from(value)))
                         .collect();
 
                     Ok(TypeAnnotatedValue::Record {
@@ -305,7 +306,7 @@ impl Evaluator for Expr {
                                 if let Some(primitive) = value.get_primitive() {
                                     result.push_str(primitive.to_string().as_str())
                                 } else {
-                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} to form strings. Please check the expression", Json::from(value))));
+                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} to form strings. Please check the expression", get_json_from_typed_value(&value))));
                                 }
                             }
 
@@ -408,7 +409,7 @@ fn handle_pattern_match(
                                                     )],
                                                     typ: vec![(
                                                         pattern_expr_variable.to_string(),
-                                                        AnalysedType::from(*v.clone()),
+                                                        AnalysedType::from(v.as_ref()),
                                                     )],
                                                 }),
                                             )?;
@@ -444,7 +445,9 @@ fn handle_pattern_match(
                                                     )],
                                                     typ: vec![(
                                                         pattern_expr_variable.to_string(),
-                                                        AnalysedType::from(*v.clone().unwrap()),
+                                                        AnalysedType::from(
+                                                            v.as_ref().unwrap().deref(),
+                                                        ),
                                                     )],
                                                 }),
                                             )?;
@@ -469,7 +472,9 @@ fn handle_pattern_match(
                                                     )],
                                                     typ: vec![(
                                                         pattern_expr_variable.to_string(),
-                                                        AnalysedType::from(*v.clone().unwrap()),
+                                                        AnalysedType::from(
+                                                            v.as_ref().unwrap().deref(),
+                                                        ),
                                                     )],
                                                 }),
                                             )?;

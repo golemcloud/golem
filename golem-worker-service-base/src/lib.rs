@@ -16,7 +16,6 @@ pub mod path;
 pub mod primitive;
 pub mod service;
 pub mod tokeniser;
-pub mod type_inference;
 pub mod worker_request;
 pub mod worker_request_to_response;
 pub mod worker_response;

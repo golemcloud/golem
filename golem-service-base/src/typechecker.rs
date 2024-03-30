@@ -115,8 +115,7 @@ impl TypeCheckOut for Vec<Val> {
                 }
 
                 if errors.is_empty() {
-                    let result_json =
-                        TypeAnnotatedValue::from_function_results(results, &expected_types)?;
+                    let result_json = json::function_result_typed(results, &expected_types)?;
                     Ok(result_json)
                 } else {
                     Err(errors)
@@ -136,8 +135,8 @@ impl TypeCheckOut for Vec<Val> {
                                 })
                             } else {
                                 let result: Value = serde_json::from_str(s).unwrap_or(Value::String(s.to_string()));
-                                let typ = infer_analysed_type(&result).ok_or(vec!["Could not infer type".to_string()])?;
-                                TypeAnnotatedValue::from_json_value(&result, &typ)
+                                let typ = infer_analysed_type(&result);
+                                json::get_typed_value_from_json(&result, &typ)
                             }
                         }
                         _ => Err(vec!["Expecting a single string as the result value when using stdio calling convention".to_string()]),
@@ -155,7 +154,7 @@ mod tests {
     use crate::typechecker::TypeCheckOut;
     use golem_common::model::CallingConvention;
     use golem_wasm_ast::analysis::{AnalysedFunctionResult, AnalysedType};
-    use golem_wasm_rpc::json::Json;
+    use golem_wasm_rpc::json;
     use golem_wasm_rpc::protobuf::{val, Val};
     use serde_json::Value;
 
@@ -173,7 +172,7 @@ mod tests {
                 }],
                 CallingConvention::Stdio,
             )
-            .map(|x| Json::from(x).0);
+            .map(json::get_json_from_typed_value);
 
         assert_eq!(res, Ok(Value::String("str".to_string())));
 
@@ -189,7 +188,7 @@ mod tests {
                 }],
                 CallingConvention::Stdio,
             )
-            .map(|x| Json::from(x).0);
+            .map(json::get_json_from_typed_value);
 
         assert_eq!(
             res,
@@ -208,7 +207,7 @@ mod tests {
                 }],
                 CallingConvention::Stdio,
             )
-            .map(|x| Json::from(x).0);
+            .map(json::get_json_from_typed_value);
 
         assert_eq!(res, Ok(Value::Bool(true)));
     }

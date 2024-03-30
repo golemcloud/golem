@@ -294,13 +294,11 @@ impl Expr {
                     }
                 }
 
-                // A request is a valid code, hence we interpolate
                 Expr::Request() => Ok(InternalValue::Interpolated("request".to_string())),
 
-                // A worker response is a valid code, hence we interpolate
-                Expr::WorkerResponse() => {
-                    Ok(InternalValue::Interpolated("worker.response".to_string()))
-                }
+                Expr::Worker() => Ok(InternalValue::Interpolated("worker".to_string())),
+
+                Expr::Response() => Ok(InternalValue::Interpolated("worker".to_string())),
 
                 Expr::Record(values) => {
                     let mut mapping = serde_json::Map::new();

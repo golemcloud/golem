@@ -5,12 +5,13 @@ use crate::evaluator::{EvaluationError, Evaluator};
 use crate::expr::Expr;
 use crate::merge::Merge;
 use crate::primitive::{GetPrimitive, Primitive};
-use crate::type_inference::*;
+use crate::tokeniser::tokenizer::Token;
 use crate::worker_request::WorkerRequest;
 use crate::worker_request_to_response::WorkerRequestToResponse;
 use async_trait::async_trait;
+use golem_service_base::type_inference::*;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::Json;
+use golem_wasm_rpc::json::{get_json_from_typed_value, get_typed_value_from_json};
 use golem_wasm_rpc::TypeAnnotatedValue;
 use http::{HeaderMap, StatusCode};
 use poem::{Body, ResponseParts};
@@ -38,8 +39,8 @@ impl WorkerResponse {
                     ))),
             }
         } else {
-            let json = Json::from(self.result.clone());
-            let body: Body = Body::from_json(json.0).unwrap();
+            let json = get_json_from_typed_value(&self.result);
+            let body: Body = Body::from_json(json).unwrap();
             poem::Response::builder().body(body)
         }
     }
@@ -50,25 +51,25 @@ impl WorkerResponse {
         input_request: &TypeAnnotatedValue,
     ) -> Result<IntermediateHttpResponse, EvaluationError> {
         let worker_response_value = &self.result;
-        let worker_response_typ = AnalysedType::from(worker_response_value.clone());
+        let worker_response_typ = AnalysedType::from(worker_response_value);
 
-        let response_type = vec![("response".to_string(), worker_response_typ)];
+        let response_type = vec![(Token::Response.to_string(), worker_response_typ.clone())];
 
         let worker_response_type_annotated_value = TypeAnnotatedValue::Record {
             typ: vec![(
-                "worker".to_string(),
-                AnalysedType::Record(vec![("response".to_string(), worker_response_typ)]),
+                Token::Worker.to_string(), // at key worker, a record from response to worker_response type
+                AnalysedType::Record(response_type.clone()),
             )],
             value: vec![(
-                "worker".to_string(),
+                Token::Worker.to_string(),
                 TypeAnnotatedValue::Record {
-                    typ: vec![("response".to_string(), worker_response_typ.clone())],
-                    value: vec![("response".to_string(), worker_response_value.clone())],
+                    typ: response_type.clone(),
+                    value: vec![(Token::Response.to_string(), worker_response_value.clone())],
                 },
             )],
         };
 
-        let type_annotated_value = input_request.merge(worker_response_value);
+        let type_annotated_value = input_request.merge(&worker_response_type_annotated_value);
 
         let status_code = get_status_code(&response_mapping.status, &type_annotated_value)?;
 
@@ -108,7 +109,7 @@ impl IntermediateHttpResponse {
                     headers: response_headers,
                     extensions: Default::default(),
                 };
-                let body: Body = Body::from_json(Json::from(body.clone()).0).unwrap();
+                let body: Body = Body::from_json(get_json_from_typed_value(&body)).unwrap();
                 poem::Response::from_parts(parts, body)
             }
             Err(err) => poem::Response::builder()
@@ -152,7 +153,7 @@ impl ResolvedResponseHeaders {
                 .get_primitive()
                 .ok_or(EvaluationError::Message(format!(
                     "Header value is not a string. {}",
-                    Json::from(value)
+                    get_json_from_typed_value(&value)
                 )))?;
 
             resolved_headers.insert(header_name.clone(), value_str.to_string());
@@ -203,9 +204,9 @@ impl WorkerRequestToResponse<ResponseMapping, poem::Response> for NoOpWorkerRequ
         );
 
         // From request body you can infer analysed type
-        let analyzed_type = infer_analysed_type(&sample_json_data).unwrap();
+        let analysed_type = infer_analysed_type(&sample_json_data);
         let type_anntoated_value =
-            TypeAnnotatedValue::from_json_value(&sample_json_data, &analyzed_type).unwrap();
+            get_typed_value_from_json(&sample_json_data, &analysed_type).unwrap();
 
         let worker_response = WorkerResponse {
             result: type_anntoated_value,

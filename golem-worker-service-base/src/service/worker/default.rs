@@ -23,7 +23,7 @@ use golem_service_base::{
     worker_executor_clients::WorkerExecutorClients,
 };
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::json::Json;
+use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
@@ -390,7 +390,7 @@ where
             )
             .await?;
 
-        Ok(Json::from(typed_value).0)
+        Ok(get_json_from_typed_value(&typed_value))
     }
 
     async fn invoke_and_await_function_typed_value(

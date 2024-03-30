@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use crate::merge::Merge;
 use crate::tokeniser::tokenizer::Token;
 use derive_more::{Display, FromStr, Into};
+use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
@@ -41,26 +43,20 @@ impl InputHttpRequest<'_> {
 
         let request_type_annotated_value = TypeAnnotatedValue::Record {
             value: vec![(Token::Request.to_string(), merged.clone())],
-            typ: vec![(
-                Token::Request.to_string(),
-                AnalysedType::from(merged.clone()),
-            )],
+            typ: vec![(Token::Request.to_string(), AnalysedType::from(&merged))],
         };
 
         Ok(request_type_annotated_value)
     }
 
     pub fn get_request_body(request_body: &Value) -> Result<TypeAnnotatedValue, Vec<String>> {
-        match crate::type_inference::infer_analysed_type(request_body) {
-            Some(inferred_type) => Ok(TypeAnnotatedValue::Record {
-                value: vec![(
-                    "body".to_string(),
-                    TypeAnnotatedValue::from_json_value(&request_body, &inferred_type)?,
-                )],
-                typ: vec![("body".to_string(), inferred_type)],
-            }),
-            None => Err(vec!["Unable to infer type of request body".to_string()]),
-        }
+        let inferred_type = infer_analysed_type(request_body);
+        let typed_value = get_typed_value_from_json(&request_body, &inferred_type)?;
+
+        Ok(TypeAnnotatedValue::Record {
+            value: vec![("body".to_string(), typed_value)],
+            typ: vec![("body".to_string(), inferred_type)],
+        })
     }
 
     pub fn get_headers(headers: &HeaderMap) -> Result<TypeAnnotatedValue, Vec<String>> {
@@ -88,7 +84,7 @@ impl InputHttpRequest<'_> {
             value: vec![("header".to_string(), type_annotated_value.clone())],
             typ: vec![(
                 "header".to_string(),
-                AnalysedType::from(type_annotated_value.clone()),
+                AnalysedType::from(&type_annotated_value),
             )],
         })
     }
@@ -109,7 +105,7 @@ impl InputHttpRequest<'_> {
 
         Ok(TypeAnnotatedValue::Record {
             value: vec![("path".to_string(), path_values.clone())],
-            typ: vec![("path".to_string(), AnalysedType::from(path_values.clone()))],
+            typ: vec![("path".to_string(), AnalysedType::from(&path_values))],
         })
     }
 

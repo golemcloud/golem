@@ -1,5 +1,5 @@
 use golem_common::model::TemplateId;
-use golem_wasm_rpc::json::Json;
+use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
 
@@ -32,7 +32,7 @@ impl WorkerRequest {
             _ => {
                 return Err(format!(
                     "Worker id is not a string. {}",
-                    Json::from(worker_id_value)
+                    get_json_from_typed_value(&worker_id_value)
                 ))
             }
         };
@@ -50,7 +50,7 @@ impl WorkerRequest {
             _ => {
                 return Err(format!(
                     "Function name is not a string. {}",
-                    Json::from(function_name_value)
+                    get_json_from_typed_value(&function_name_value)
                 ))
             }
         };
@@ -65,7 +65,7 @@ impl WorkerRequest {
                 .evaluate(&resolved_route.typed_value_from_input)
                 .map_err(|err| err.to_string())?;
 
-            let json = Json::from(type_annotated_value).0;
+            let json = get_json_from_typed_value(&type_annotated_value);
 
             function_params.push(json);
         }
