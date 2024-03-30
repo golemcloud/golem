@@ -793,8 +793,7 @@ where
         precise: bool,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
-        let result = self.execute_with_client(
-            || Box::pin(self.random_worker_executor_client()),
+        let result = self.execute_with_random_client(
             &(template_id.clone(), filter.clone(), cursor, count, precise),
             |worker_executor_client, (template_id, filter, cursor, count, precise)| {
                 Box::pin(async move {
@@ -1023,31 +1022,20 @@ where
         }
     }
 
-    async fn execute_with_client<F, G, In, Out>(
+    async fn execute_with_random_client<F, In, Out>(
         &self,
-        get_client: F,
         input: &In,
-        execute: G,
+        execute: F,
     ) -> Result<Out, WorkerServiceError>
     where
-        F: FnOnce() -> Pin<
-            Box<
-                dyn Future<
-                        Output = Result<
-                            Option<WorkerExecutorClient<Channel>>,
-                            GetWorkerExecutorClientError,
-                        >,
-                    > + Send,
-            >,
-        >,
-        G: for<'b> Fn(
+        F: for<'b> Fn(
             &'b mut WorkerExecutorClient<Channel>,
             &'b In,
         )
             -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
     {
         loop {
-            match get_client().await {
+            match self.random_worker_executor_client().await {
                 Ok(Some(mut worker_executor_client)) => {
                     match execute(&mut worker_executor_client, input).await {
                         Ok(result) => return Ok(result),
