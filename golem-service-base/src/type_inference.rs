@@ -1,6 +1,10 @@
 use golem_wasm_ast::analysis::AnalysedType;
 use serde_json::Value;
 
+// If we to get analysed type from arbitrary json, and not to be used
+// unless necessary, we can use this function.
+// This is mostly used in worker-bridge functionaltiies where users
+// can send arbitrary json to the worker and do operations on expressions.
 pub fn infer_analysed_type(value: &Value) -> Option<AnalysedType> {
     match value {
         Value::Bool(_) => Some(AnalysedType::Bool),
