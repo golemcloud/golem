@@ -1026,11 +1026,11 @@ where
     async fn execute_with_client<F, G, In, Out>(
         &self,
         get_client: F,
-        i: &In,
+        input: &In,
         execute: G,
     ) -> Result<Out, WorkerServiceError>
     where
-        F: Fn() -> Pin<
+        F: FnOnce() -> Pin<
             Box<
                 dyn Future<
                         Output = Result<
@@ -1049,7 +1049,7 @@ where
         loop {
             match get_client().await {
                 Ok(Some(mut worker_executor_client)) => {
-                    match execute(&mut worker_executor_client, i).await {
+                    match execute(&mut worker_executor_client, input).await {
                         Ok(result) => return Ok(result),
                         Err(GolemError::InvalidShardId(GolemErrorInvalidShardId {
                             shard_id,
