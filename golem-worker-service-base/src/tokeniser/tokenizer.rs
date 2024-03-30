@@ -13,7 +13,6 @@ use super::cursor::TokenCursor;
 #[derive(Clone, PartialEq, Debug)]
 pub enum Token {
     Worker,
-    Response,
     Request,
     Ok,
     Err,
@@ -66,7 +65,6 @@ impl Token {
             Token::ClosedSquareBracket => false,
             Token::Dot => false,
             Token::Worker => false,
-            Token::Response => false,
             Token::Request => false,
             Token::Ok => false,
             Token::Err => false,
@@ -123,7 +121,6 @@ impl Display for Token {
                 Token::ClosedSquareBracket => "]",
                 Token::Dot => ".",
                 Token::Worker => "worker",
-                Token::Response => "response",
                 Token::Request => "request",
                 Token::Ok => "ok",
                 Token::Err => "err",
@@ -322,13 +319,7 @@ impl<'t> Tokenizer {
                     self.text[character_index + Token::Request.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::Request);
                 break;
-            } else if c == "response" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text =
-                    self.text[character_index + Token::Response.to_string().len()..].to_string();
-                self.state = TokenizerState::Static(Token::Response);
-                break;
-            } else if c == "ok" {
+            }  else if c == "ok" {
                 token = Some(Token::RawString(self.text[..character_index].to_string()));
                 self.text = self.text[character_index + Token::Ok.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::Ok);
@@ -414,7 +405,7 @@ fn tokenise_string_with_index(input_string: &str) -> Vec<(usize, &str)> {
     let mut result: Vec<(usize, &str)> = Vec::new();
     let mut current_index = 0;
     let token_regex_pattern = Regex::new(
-        r"(worker\.response|request|,|\.|'|<=|\$\{|}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|\bnone\b|\bmatch\b|\bok\b|\berr\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
+        r"(worker|request|,|\.|'|<=|\$\{|}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|\bnone\b|\bmatch\b|\bok\b|\berr\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
     )
         .unwrap();
 
@@ -515,11 +506,6 @@ mod tests {
         assert_eq!(tokens, vec![Token::Worker, Token::Dot]);
     }
 
-    #[test]
-    fn test_response() {
-        let tokens: Vec<Token> = Tokenizer::new("response").run().value;
-        assert_eq!(tokens, vec![Token::Response]);
-    }
 
     #[test]
     fn test_open_close_square_bracket() {
@@ -900,7 +886,7 @@ else${z}
                 Token::Space,
                 Token::Worker,
                 Token::Dot,
-                Token::Response,
+                Token::raw_string("response"),
                 Token::Space,
                 Token::OpenCurlyBrace,
                 Token::Space,
@@ -913,7 +899,7 @@ else${z}
                 Token::Space,
                 Token::Worker,
                 Token::Dot,
-                Token::Response,
+                Token::raw_string("response"),
                 Token::Comma,
                 Token::Space,
                 Token::None,

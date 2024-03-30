@@ -194,12 +194,6 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
 
                 Token::Worker => go(cursor, context, prev_expression.apply_with(Expr::Worker())),
 
-                Token::Response => go(
-                    cursor,
-                    context,
-                    prev_expression.apply_with(Expr::Response()),
-                ),
-
                 Token::InterpolationStart => {
                     let new_expr = capture_expression_until(
                         cursor,
@@ -808,8 +802,8 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser.parse("${worker.response.input[0]}");
-        let worker_response = Expr::WorkerResponse();
-        let select_input = Expr::SelectField(Box::new(worker_response), "input".to_string());
+        let worker = Expr::Worker();
+        let select_input = Expr::SelectField(Box::new(Expr::SelectField(Box::new(worker), "response".to_string())), "input".to_string());
         let first_index = Expr::SelectIndex(Box::new(select_input), 0);
 
         assert_eq!(result, Ok(first_index));
@@ -1326,7 +1320,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::WorkerResponse()),
+            Box::new(Expr::SelectField (
+                Box::new(Expr::Worker()),
+                "response".to_string())
+            ),
             vec![
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor(
@@ -1357,7 +1354,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::WorkerResponse()),
+            Box::new(Expr::SelectField (
+                Box::new(Expr::Worker()),
+                "response".to_string())
+            ),
             vec![
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor(
@@ -1394,7 +1394,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::WorkerResponse()),
+            Box::new(Expr::SelectField (
+                Box::new(Expr::Worker()),
+                "response".to_string())
+            ),
             vec![
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor(
@@ -1404,7 +1407,10 @@ mod tests {
                         )))],
                     )
                     .unwrap(),
-                    Box::new(Expr::WorkerResponse()),
+                    Box::new(Expr::SelectField (
+                        Box::new(Expr::Worker()),
+                        "response".to_string())
+                    ),
                 )),
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
@@ -1425,7 +1431,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::WorkerResponse()),
+            Box::new(Expr::SelectField (
+                Box::new(Expr::Worker()),
+                "response".to_string())
+            ),
             vec![
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor(
@@ -1439,7 +1448,10 @@ mod tests {
                         .unwrap()],
                     )
                     .unwrap(),
-                    Box::new(Expr::WorkerResponse()),
+                    Box::new(Expr::SelectField (
+                        Box::new(Expr::Worker()),
+                        "response".to_string())
+                    ),
                 )),
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
@@ -1459,7 +1471,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::WorkerResponse()),
+            Box::new(Expr::SelectField (
+                Box::new(Expr::Worker()),
+                "response".to_string())
+            ),
             vec![
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor(

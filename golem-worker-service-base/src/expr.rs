@@ -13,7 +13,6 @@ use crate::primitive::Primitive;
 pub enum Expr {
     Request(),
     Worker(),
-    Response(),
     SelectField(Box<Expr>, String),
     SelectIndex(Box<Expr>, usize),
     Sequence(Vec<Expr>),
@@ -297,8 +296,6 @@ impl Expr {
                 Expr::Request() => Ok(InternalValue::Interpolated("request".to_string())),
 
                 Expr::Worker() => Ok(InternalValue::Interpolated("worker".to_string())),
-
-                Expr::Response() => Ok(InternalValue::Interpolated("worker".to_string())),
 
                 Expr::Record(values) => {
                     let mut mapping = serde_json::Map::new();
@@ -633,6 +630,7 @@ mod tests {
     use crate::evaluator::Evaluator;
     use crate::expr::Expr;
     use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use serde_json::{json, Value};
 
@@ -699,7 +697,7 @@ mod tests {
 
     #[test]
     fn expr_to_string_round_trip_match_expr_ok() {
-        let worker_response = TypeAnnotatedValue::from_json_value(
+        let worker_response = get_typed_value_from_json(
             &json!({"ok": { "id" : "afsal"} }),
             &AnalysedType::Result {
                 ok: Some(Box::new(AnalysedType::Record(vec![(
@@ -725,7 +723,7 @@ mod tests {
 
     #[test]
     fn expr_to_string_round_trip_match_expr_err() {
-        let worker_response = TypeAnnotatedValue::from_json_value(
+        let worker_response = get_typed_value_from_json(
             &json!({"err": { "id" : "afsal"} }),
             &AnalysedType::Result {
                 error: Some(Box::new(AnalysedType::Record(vec![(
@@ -751,7 +749,7 @@ mod tests {
 
     #[test]
     fn expr_to_string_round_trip_match_expr_append() {
-        let worker_response = TypeAnnotatedValue::from_json_value(
+        let worker_response = get_typed_value_from_json(
             &json!({"err": { "id" : "afsal"} }),
             &AnalysedType::Result {
                 error: Some(Box::new(AnalysedType::Record(vec![(
@@ -778,7 +776,7 @@ mod tests {
 
     #[test]
     fn expr_to_string_round_trip_match_expr_append_suffix() {
-        let worker_response = TypeAnnotatedValue::from_json_value(
+        let worker_response = get_typed_value_from_json(
             &json!({"err": { "id" : "afsal"} }),
             &AnalysedType::Result {
                 error: Some(Box::new(AnalysedType::Record(vec![(

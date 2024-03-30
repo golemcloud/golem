@@ -23,6 +23,30 @@ pub struct WorkerResponse {
 }
 
 impl WorkerResponse {
+    // This makes sure that the result is injected into the worker.response field
+    // So that clients can refer to the worker response using worker.response keyword
+    pub fn result_with_worker_response_key(&self) -> TypeAnnotatedValue {
+        let worker_response_value = &self.result;
+        let worker_response_typ = AnalysedType::from(worker_response_value);
+        let response_key = "response".to_string();
+
+        let response_type = vec![(response_key.clone(), worker_response_typ.clone())];
+
+        TypeAnnotatedValue::Record {
+            typ: vec![(
+                Token::Worker.to_string(), // at key worker, a record from response to worker_response type
+                AnalysedType::Record(response_type.clone()),
+            )],
+            value: vec![(
+                Token::Worker.to_string(),
+                TypeAnnotatedValue::Record {
+                    typ: response_type.clone(),
+                    value: vec![(response_key.clone(), worker_response_value.clone())],
+                },
+            )],
+        }
+    }
+
     pub fn to_http_response(
         &self,
         response_mapping: &Option<ResponseMapping>,
@@ -50,26 +74,9 @@ impl WorkerResponse {
         response_mapping: &ResponseMapping,
         input_request: &TypeAnnotatedValue,
     ) -> Result<IntermediateHttpResponse, EvaluationError> {
-        let worker_response_value = &self.result;
-        let worker_response_typ = AnalysedType::from(worker_response_value);
 
-        let response_type = vec![(Token::Response.to_string(), worker_response_typ.clone())];
 
-        let worker_response_type_annotated_value = TypeAnnotatedValue::Record {
-            typ: vec![(
-                Token::Worker.to_string(), // at key worker, a record from response to worker_response type
-                AnalysedType::Record(response_type.clone()),
-            )],
-            value: vec![(
-                Token::Worker.to_string(),
-                TypeAnnotatedValue::Record {
-                    typ: response_type.clone(),
-                    value: vec![(Token::Response.to_string(), worker_response_value.clone())],
-                },
-            )],
-        };
-
-        let type_annotated_value = input_request.merge(&worker_response_type_annotated_value);
+        let type_annotated_value = input_request.merge(&self.result_with_worker_response_key());
 
         let status_code = get_status_code(&response_mapping.status, &type_annotated_value)?;
 

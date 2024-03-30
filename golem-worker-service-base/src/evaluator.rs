@@ -118,15 +118,6 @@ impl Evaluator for Expr {
                     }
                 }
 
-                Expr::Response() => {
-                    match input.get(&Path::from_raw_string(Token::Response.to_string().as_str())) {
-                        Some(v) => Ok(v),
-                        None => Err(EvaluationError::Message(
-                            "Details of worker response is missing".to_string(),
-                        )),
-                    }
-                }
-
                 Expr::SelectIndex(expr, index) => {
                     let evaluation_result = go(&expr, input)?;
 
@@ -144,7 +135,7 @@ impl Evaluator for Expr {
                     evaluation_result
                         .get(&Path::from_key(field_name.as_str()))
                         .ok_or(EvaluationError::Message(format!(
-                            "Unable to obtaint the field {}",
+                            "Unable to obtain the field {}",
                             field_name
                         )))
                 }
@@ -419,7 +410,24 @@ fn handle_pattern_match(
 
                                         None => {}
                                     },
-                                    _ => {}
+                                    // We allow all other type annotated value to be a success, even if it is not an Option.
+                                    // This is for user-friendliness. Example: Say we have a request body `{user-id : 10}`
+                                    // and we allow users to perform `match request.body.user-id { some(value) => value, none => 'not found'}`
+                                    // even if request.body.user-id type is not Option
+                                    other_type_annotated_value => {
+                                        possible_resolution.evaluate(
+                                            &input.merge(&TypeAnnotatedValue::Record {
+                                                value: vec![(
+                                                    pattern_expr_variable.to_string(),
+                                                    other_type_annotated_value.clone(),
+                                                )],
+                                                typ: vec![(
+                                                    pattern_expr_variable.to_string(),
+                                                    AnalysedType::from(other_type_annotated_value),
+                                                )],
+                                            }),
+                                        )?;
+                                    }
                                 },
                                 InBuiltConstructorInner::None => match &match_evaluated {
                                     TypeAnnotatedValue::Option { value, .. } => match value {
@@ -514,18 +522,22 @@ mod tests {
     use crate::expr::Expr;
     use crate::http_request::InputHttpRequest;
     use crate::merge::Merge;
-    use crate::type_inference::infer_analysed_type;
+    use golem_service_base::type_inference::infer_analysed_type;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::HeaderMap;
     use serde_json::Value;
     use std::collections::HashMap;
+    use golem_wasm_rpc::json::get_typed_value_from_json;
+    use crate::worker_response::WorkerResponse;
 
-    fn get_typed_value_from_worker_response_json(input: &str) -> TypeAnnotatedValue {
+    fn get_worker_response(input: &str) -> WorkerResponse {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");
 
-        let expected_type = infer_analysed_type(&value).unwrap();
-        TypeAnnotatedValue::from_json_value(&value, &expected_type).unwrap()
+        let expected_type = infer_analysed_type(&value);
+        dbg!(expected_type.clone());
+        let result_as_typed_value = get_typed_value_from_json(&value, &expected_type).unwrap();
+        WorkerResponse {result: result_as_typed_value}
     }
 
     fn resolved_variables_from_request_body(
@@ -807,20 +819,20 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_optional() {
-        let resolved_variables = get_typed_value_from_worker_response_json(
+        let worker_response = get_worker_response(
             r#"
                         {
 
                            "id": "pId"
                         }
                    "#,
-        );
+        ).result_with_worker_response_key();
 
         let expr = Expr::from_primitive_string(
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate(&worker_response);
         assert_eq!(
             result,
             Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
@@ -829,14 +841,14 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_none() {
-        let resolved_variables =
-            get_typed_value_from_worker_response_json(Value::Null.to_string().as_str());
+        let worker_response =
+            get_worker_response(Value::Null.to_string().as_str()).result_with_worker_response_key();
 
         let expr = Expr::from_primitive_string(
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate(&worker_response);
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("not found".to_string())));
     }
 
@@ -852,14 +864,14 @@ mod tests {
             resolved_variables_from_request_path(&request_path_values, &spec_path_variables);
 
         let resolved_variables =
-            resolved_variables_path.merge(&get_typed_value_from_worker_response_json(
+            resolved_variables_path.merge(&get_worker_response(
                 r#"
                     {
                         "ok": {
                            "id": "baz"
                         }
                     }"#,
-            ));
+            ).result_with_worker_response_key());
 
         let expr1 = Expr::from_primitive_string(
             "${if request.path.id == 'foo' then 'bar' else match worker.response { ok(value) => value.id, err(msg) => 'empty' }}",
@@ -876,7 +888,7 @@ mod tests {
 
         let result2 = expr2.evaluate(&resolved_variables);
 
-        let new_worker_response = get_typed_value_from_worker_response_json(
+        let new_worker_response = get_worker_response(
             r#"
                     {
                         "err": {
@@ -885,7 +897,7 @@ mod tests {
                     }"#,
         );
 
-        let new_resolved_variables = resolved_variables.merge(&new_worker_response);
+        let new_resolved_variables = resolved_variables.merge(&new_worker_response.result_with_worker_response_key());
 
         let expr3 = Expr::from_primitive_string(
             "${if request.path.id == 'bar' then 'foo' else { match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }} }",
@@ -906,7 +918,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match() {
-        let resolved_variables = get_typed_value_from_worker_response_json(
+        let worker_response = get_worker_response(
             r#"
                     {
                         "ok": {
@@ -919,7 +931,7 @@ mod tests {
             "${match worker.response { ok(value) => 'personal-id', err(msg) => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         assert_eq!(
             result,
             Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
@@ -928,7 +940,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_use_success_variable() {
-        let resolved_variables = get_typed_value_from_worker_response_json(
+        let worker_response = get_worker_response(
             r#"
                     {
                         "ok": {
@@ -941,7 +953,7 @@ mod tests {
             "${match worker.response { ok(value) => value, err(msg) => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
 
         let expected_result = TypeAnnotatedValue::Record {
             value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
@@ -953,7 +965,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_with_select_field() {
-        let resolved_variables = get_typed_value_from_worker_response_json(
+        let worker_response = get_worker_response(
             r#"
                     {
                         "ok": {
@@ -966,13 +978,13 @@ mod tests {
             "${match worker.response { ok(value) => value.id, err(msg) => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("pId".to_string())));
     }
 
     #[test]
     fn test_evaluation_with_pattern_match_with_select_from_array() {
-        let resolved_variables = get_typed_value_from_worker_response_json(
+        let worker_response = get_worker_response(
             r#"
                     {
                         "ok": {
@@ -985,7 +997,7 @@ mod tests {
             "${match worker.response { ok(value) => value.ids[0], none => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("id1".to_string())));
     }
 }

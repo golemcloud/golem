@@ -52,21 +52,20 @@ pub fn infer_analysed_type(value: &Value) -> AnalysedType {
             for (key, value) in map {
                 let field_type0 = infer_analysed_type(value);
 
-                let field_type = if key == "ok" {
-                    AnalysedType::Result {
+                // We break and return as soon as we find ok or err
+                if key == "ok" {
+                    return AnalysedType::Result {
                         ok: Some(Box::new(field_type0)),
                         error: None,
                     }
                 } else if key == "err" {
-                    AnalysedType::Result {
+                    return AnalysedType::Result {
                         ok: None,
                         error: Some(Box::new(field_type0)),
                     }
                 } else {
-                    field_type0
-                };
-
-                fields.push((key.clone(), field_type));
+                    fields.push((key.clone(), field_type0));
+                }
             }
 
             AnalysedType::Record(fields)
