@@ -803,7 +803,10 @@ mod tests {
 
         let result = expression_parser.parse("${worker.response.input[0]}");
         let worker = Expr::Worker();
-        let select_input = Expr::SelectField(Box::new(Expr::SelectField(Box::new(worker), "response".to_string())), "input".to_string());
+        let select_input = Expr::SelectField(
+            Box::new(Expr::SelectField(Box::new(worker), "response".to_string())),
+            "input".to_string(),
+        );
         let first_index = Expr::SelectIndex(Box::new(select_input), 0);
 
         assert_eq!(result, Ok(first_index));
@@ -1320,10 +1323,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::SelectField (
+            Box::new(Expr::SelectField(
                 Box::new(Expr::Worker()),
-                "response".to_string())
-            ),
+                "response".to_string(),
+            )),
             vec![
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor(
@@ -1354,10 +1357,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::SelectField (
+            Box::new(Expr::SelectField(
                 Box::new(Expr::Worker()),
-                "response".to_string())
-            ),
+                "response".to_string(),
+            )),
             vec![
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor(
@@ -1394,10 +1397,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::SelectField (
+            Box::new(Expr::SelectField(
                 Box::new(Expr::Worker()),
-                "response".to_string())
-            ),
+                "response".to_string(),
+            )),
             vec![
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor(
@@ -1407,10 +1410,10 @@ mod tests {
                         )))],
                     )
                     .unwrap(),
-                    Box::new(Expr::SelectField (
+                    Box::new(Expr::SelectField(
                         Box::new(Expr::Worker()),
-                        "response".to_string())
-                    ),
+                        "response".to_string(),
+                    )),
                 )),
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
@@ -1431,10 +1434,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::SelectField (
+            Box::new(Expr::SelectField(
                 Box::new(Expr::Worker()),
-                "response".to_string())
-            ),
+                "response".to_string(),
+            )),
             vec![
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor(
@@ -1448,10 +1451,10 @@ mod tests {
                         .unwrap()],
                     )
                     .unwrap(),
-                    Box::new(Expr::SelectField (
+                    Box::new(Expr::SelectField(
                         Box::new(Expr::Worker()),
-                        "response".to_string())
-                    ),
+                        "response".to_string(),
+                    )),
                 )),
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
@@ -1471,10 +1474,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::SelectField (
+            Box::new(Expr::SelectField(
                 Box::new(Expr::Worker()),
-                "response".to_string())
-            ),
+                "response".to_string(),
+            )),
             vec![
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor(

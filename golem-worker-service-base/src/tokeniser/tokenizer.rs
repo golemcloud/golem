@@ -319,7 +319,7 @@ impl<'t> Tokenizer {
                     self.text[character_index + Token::Request.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::Request);
                 break;
-            }  else if c == "ok" {
+            } else if c == "ok" {
                 token = Some(Token::RawString(self.text[..character_index].to_string()));
                 self.text = self.text[character_index + Token::Ok.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::Ok);
@@ -505,7 +505,6 @@ mod tests {
         let tokens: Vec<Token> = Tokenizer::new("worker.").run().value;
         assert_eq!(tokens, vec![Token::Worker, Token::Dot]);
     }
-
 
     #[test]
     fn test_open_close_square_bracket() {

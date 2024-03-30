@@ -74,8 +74,6 @@ impl WorkerResponse {
         response_mapping: &ResponseMapping,
         input_request: &TypeAnnotatedValue,
     ) -> Result<IntermediateHttpResponse, EvaluationError> {
-
-
         let type_annotated_value = input_request.merge(&self.result_with_worker_response_key());
 
         let status_code = get_status_code(&response_mapping.status, &type_annotated_value)?;

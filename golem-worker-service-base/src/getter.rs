@@ -1,7 +1,7 @@
-use std::fmt::Display;
 use crate::path::{Path, PathComponent};
-use golem_wasm_rpc::TypeAnnotatedValue;
 use golem_wasm_rpc::json::get_json_from_typed_value;
+use golem_wasm_rpc::TypeAnnotatedValue;
+use std::fmt::Display;
 
 pub trait Getter<T> {
     fn get(&self, key: &Path) -> Result<T, GetError>;
@@ -11,14 +11,8 @@ pub trait Getter<T> {
 pub enum GetError {
     KeyNotFound(String),
     IndexNotFound(usize),
-    NotRecord {
-        key_name: String,
-        found: String
-    },
-    NotArray {
-        index: usize,
-        found: String
-    }
+    NotRecord { key_name: String, found: String },
+    NotArray { index: usize, found: String },
 }
 
 // TypeAnnotatedValue doesn't have a display instance, therefore no generic display impl
@@ -27,8 +21,16 @@ impl Display for GetError {
         match self {
             GetError::KeyNotFound(key) => write!(f, "Key not found: {}", key),
             GetError::IndexNotFound(index) => write!(f, "Index not found: {}", index),
-            GetError::NotRecord { key_name, found } => write!(f, "Not a record: key_name: {}, original_value: {}", key_name,  found),
-            GetError::NotArray { index, found } => write!(f, "Not an array: index: {}, original_value: {}", index, found),
+            GetError::NotRecord { key_name, found } => write!(
+                f,
+                "Not a record: key_name: {}, original_value: {}",
+                key_name, found
+            ),
+            GetError::NotArray { index, found } => write!(
+                f,
+                "Not an array: index: {}, original_value: {}",
+                index, found
+            ),
         }
     }
 }
@@ -54,7 +56,8 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
                         }
                         _ => Err(GetError::NotRecord {
                             key_name: key.0.clone(),
-                            found: get_json_from_typed_value(&type_annotated_value.clone()).to_string(),
+                            found: get_json_from_typed_value(&type_annotated_value.clone())
+                                .to_string(),
                         }),
                     },
                     PathComponent::Index(value_index) => match get_array(type_annotated_value) {
@@ -68,7 +71,7 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
                         None => Err(GetError::NotArray {
                             index: value_index.0,
                             found: get_json_from_typed_value(type_annotated_value).to_string(),
-                        })
+                        }),
                     },
                 }
             } else {

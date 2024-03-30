@@ -18,9 +18,7 @@ pub trait Evaluator {
 
 #[derive(Debug, PartialEq)]
 pub enum EvaluationError {
-    InvalidReference {
-        get_error: GetError,
-    },
+    InvalidReference { get_error: GetError },
     Message(String),
 }
 
@@ -67,7 +65,8 @@ impl<'t> Evaluator for RawString<'t> {
                         .capture_string_until(vec![&Token::InterpolationStart], &Token::CloseParen);
 
                     if let Some(place_holder_name) = place_holder_name {
-                        let type_annotated_value = input.get(&Path::from_key(place_holder_name.as_str()))?;
+                        let type_annotated_value =
+                            input.get(&Path::from_key(place_holder_name.as_str()))?;
 
                         match type_annotated_value.get_primitive() {
                             Some(primitive) => {
@@ -102,23 +101,26 @@ impl Evaluator for Expr {
             input: &TypeAnnotatedValue,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
             match expr.clone() {
-                Expr::Request() => {
-                    input.get(&Path::from_raw_string(Token::Request.to_string().as_str())).map_err(|err| err.into())
-                }
-                Expr::Worker() => {
-                    input.get(&Path::from_raw_string(Token::Worker.to_string().as_str())).map_err(|err| err.into())
-                }
+                Expr::Request() => input
+                    .get(&Path::from_raw_string(Token::Request.to_string().as_str()))
+                    .map_err(|err| err.into()),
+                Expr::Worker() => input
+                    .get(&Path::from_raw_string(Token::Worker.to_string().as_str()))
+                    .map_err(|err| err.into()),
 
                 Expr::SelectIndex(expr, index) => {
                     let evaluation_result = go(&expr, input)?;
-                    evaluation_result.get(&Path::from_index(index)).map_err(|err| err.into())
+                    evaluation_result
+                        .get(&Path::from_index(index))
+                        .map_err(|err| err.into())
                 }
 
                 Expr::SelectField(expr, field_name) => {
                     let evaluation_result = go(&expr, input)?;
 
                     evaluation_result
-                        .get(&Path::from_key(field_name.as_str())).map_err(|err| err.into())
+                        .get(&Path::from_key(field_name.as_str()))
+                        .map_err(|err| err.into())
                 }
 
                 Expr::EqualTo(left, right) => {
@@ -198,7 +200,7 @@ impl Evaluator for Expr {
                     match evaluated_expr {
                         TypeAnnotatedValue::Bool(value) => Ok(TypeAnnotatedValue::Bool(!value)),
                         _ => Err(EvaluationError::Message(format!(
-                            "The expression is evaluated to {} but it is not a boolean expression to apply not (!) operator on",
+                            "The expression is evaluated to {} but it is not a boolean value to apply not (!) operator on",
                             get_json_from_typed_value(&evaluated_expr)
                         ))),
                     }
@@ -218,7 +220,7 @@ impl Evaluator for Expr {
                             }
                         }
                         _ => Err(EvaluationError::Message(format!(
-                            "The predicate expression is evaluated to {} but it is not a boolean expression",
+                            "The predicate expression is evaluated to {} but it is not a boolean value",
                             get_json_from_typed_value(&pred)
                         ))),
                     }
@@ -297,9 +299,9 @@ impl Evaluator for Expr {
                     InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(f64)),
                 },
 
-                Expr::PathVar(path_var) => {
-                    input.get(&Path::from_key(path_var.as_str())).map_err(|err| err.into())
-                }
+                Expr::PathVar(path_var) => input
+                    .get(&Path::from_key(path_var.as_str()))
+                    .map_err(|err| err.into()),
 
                 Expr::Variable(variable) => input
                     .get(&Path::from_raw_string(variable.as_str()))
@@ -309,7 +311,7 @@ impl Evaluator for Expr {
                 Expr::PatternMatch(input_expr, constructors) => {
                     let constructors: &Vec<(ConstructorPattern, Expr)> = &constructors
                         .iter()
-                        .map(|constructor| (constructor.0 .0.clone(), *constructor.0.1.clone()))
+                        .map(|constructor| (constructor.0 .0.clone(), *constructor.0 .1.clone()))
                         .collect();
 
                     handle_pattern_match(&input_expr, constructors, input)
@@ -346,7 +348,8 @@ fn handle_pattern_match(
                     ));
                 } else {
                     // Lazily evaluated. We need to look at the patterns only when it is required
-                    let pattern_expr_variable = || { match &patterns.get(0) {
+                    let pattern_expr_variable = || {
+                        match &patterns.get(0) {
                         Some(ConstructorPattern::Literal(expr)) => match *expr.clone() {
                             Expr::Variable(variable) => Ok(variable),
                             _ => {
@@ -363,7 +366,8 @@ fn handle_pattern_match(
                                 "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
                             ))
                         }
-                    }};
+                    }
+                    };
                     match condition_key {
                         ConstructorTypeName::InBuiltConstructor(constructor_type) => {
                             match constructor_type {
@@ -395,8 +399,8 @@ fn handle_pattern_match(
                                     // even if request.body.user-id type is not Option
                                     other_type_annotated_value => {
                                         let pattern_expr_variable = pattern_expr_variable()?;
-                                        let result = possible_resolution.evaluate(
-                                            &input.merge(&TypeAnnotatedValue::Record {
+                                        let result = possible_resolution.evaluate(&input.merge(
+                                            &TypeAnnotatedValue::Record {
                                                 value: vec![(
                                                     pattern_expr_variable.clone(),
                                                     other_type_annotated_value.clone(),
@@ -405,8 +409,8 @@ fn handle_pattern_match(
                                                     pattern_expr_variable.clone(),
                                                     AnalysedType::from(other_type_annotated_value),
                                                 )],
-                                            }),
-                                        )?;
+                                            },
+                                        ))?;
 
                                         resolved_result = Some(result);
                                     }
@@ -500,21 +504,21 @@ fn handle_pattern_match(
 
 #[cfg(test)]
 mod tests {
+    use crate::api_definition::PathPattern;
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expr::Expr;
+    use crate::getter::GetError;
     use crate::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
+    use crate::worker_response::WorkerResponse;
     use golem_service_base::type_inference::infer_analysed_type;
     use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, Method, Uri};
     use serde_json::{json, Value};
     use std::collections::HashMap;
-    use golem_wasm_rpc::json::get_typed_value_from_json;
-    use crate::api_definition::PathPattern;
-    use crate::worker_response::WorkerResponse;
     use std::str::FromStr;
-    use crate::getter::GetError;
 
     fn get_worker_response(input: &str) -> WorkerResponse {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");
@@ -522,7 +526,9 @@ mod tests {
         let expected_type = infer_analysed_type(&value);
         dbg!(expected_type.clone());
         let result_as_typed_value = get_typed_value_from_json(&value, &expected_type).unwrap();
-        WorkerResponse {result: result_as_typed_value}
+        WorkerResponse {
+            result: result_as_typed_value,
+        }
     }
 
     fn resolved_variables_from_request_body(
@@ -538,11 +544,11 @@ mod tests {
             input_path: ApiInputPath {
                 base_path: "/api",
                 query_path: None,
-
             },
         };
 
-        input_http_request.get_type_annotated_value(vec![], &HashMap::new())
+        input_http_request
+            .get_type_annotated_value(vec![], &HashMap::new())
             .unwrap()
             .merge(&InputHttpRequest::get_headers(header_map).unwrap())
     }
@@ -557,24 +563,25 @@ mod tests {
             req_method: &Method::GET,
             input_path: ApiInputPath {
                 base_path: uri.path(),
-                query_path: uri.query()
+                query_path: uri.query(),
             },
         };
 
-        input_http_request.get_type_annotated_value(path_pattern.get_query_variables(), &path_pattern.get_path_variables()).unwrap()
+        input_http_request
+            .get_type_annotated_value(
+                path_pattern.get_query_variables(),
+                &path_pattern.get_path_variables(),
+            )
+            .unwrap()
     }
 
     #[test]
     fn test_evaluation_with_request_path() {
-        let uri = Uri::builder()
-            .path_and_query("/pId/items")
-            .build()
-            .unwrap();
+        let uri = Uri::builder().path_and_query("/pId/items").build().unwrap();
 
         let path_pattern = PathPattern::from_str("/{id}/items").unwrap();
 
-        let resolved_variables =
-            resolved_variables_from_request_path(uri, path_pattern);
+        let resolved_variables = resolved_variables_from_request_path(uri, path_pattern);
 
         let expr = Expr::from_primitive_string("${request.path.id}").unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("pId".to_string());
@@ -696,10 +703,9 @@ mod tests {
         );
 
         let expr = Expr::from_primitive_string("${request.body.address.street2}").unwrap();
-        let expected_evaluated_result =
-            EvaluationError::InvalidReference {
-                get_error: GetError::KeyNotFound("street2".to_string()),
-            };
+        let expected_evaluated_result = EvaluationError::InvalidReference {
+            get_error: GetError::KeyNotFound("street2".to_string()),
+        };
 
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
@@ -723,10 +729,9 @@ mod tests {
         );
 
         let expr = Expr::from_primitive_string("${request.body.titles[4]}").unwrap();
-        let expected_evaluated_result =
-            EvaluationError::InvalidReference {
-                get_error: GetError::IndexNotFound(4),
-            };
+        let expected_evaluated_result = EvaluationError::InvalidReference {
+            get_error: GetError::IndexNotFound(4),
+        };
 
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
@@ -747,18 +752,18 @@ mod tests {
         );
 
         let expr = Expr::from_primitive_string("${request.body.address[4]}").unwrap();
-        let expected_evaluated_result =
-            EvaluationError::InvalidReference {
-                get_error: GetError::NotArray {
-                    index: 4,
-                    found: json!(
-                        {
-                            "street": "bStreet",
-                            "city": "bCity"
-                        }
-                    ).to_string()
-                },
-            };
+        let expected_evaluated_result = EvaluationError::InvalidReference {
+            get_error: GetError::NotArray {
+                index: 4,
+                found: json!(
+                    {
+                        "street": "bStreet",
+                        "city": "bCity"
+                    }
+                )
+                .to_string(),
+            },
+        };
 
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
@@ -786,10 +791,10 @@ mod tests {
         let expr =
             Expr::from_primitive_string("${if (request.header.authorisation) then 200 else 401}")
                 .unwrap();
-        let expected_evaluated_result = EvaluationError::Message(
-            "The predicate expression is evaluated to admin, but it is not a boolean expression"
-                .to_string(),
-        );
+        let expected_evaluated_result = EvaluationError::Message(format!(
+            "The predicate expression is evaluated to {} but it is not a boolean value",
+            json!("admin")
+        ));
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
@@ -816,10 +821,12 @@ mod tests {
         );
 
         let expr = Expr::from_primitive_string("${request.body.address.street.name}").unwrap();
-        let expected_evaluated_result =
-            EvaluationError::InvalidReference {
-                get_error: GetError::KeyNotFound("name".to_string()),
-            };
+        let expected_evaluated_result = EvaluationError::InvalidReference {
+            get_error: GetError::NotRecord {
+                key_name: "name".to_string(),
+                found: json!("bStreet").to_string(),
+            },
+        };
 
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
@@ -838,8 +845,9 @@ mod tests {
         );
 
         let expr = Expr::from_primitive_string("${worker.response.address.street}").unwrap();
-        let expected_evaluated_result =
-            EvaluationError::Message("Details of worker response is missing".to_string());
+        let expected_evaluated_result = EvaluationError::InvalidReference {
+            get_error: GetError::KeyNotFound("worker".to_string()),
+        };
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
@@ -881,7 +889,6 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_with_other_exprs() {
-
         let uri = Uri::builder()
             .path_and_query("/shopping-cart/foo")
             .build()
@@ -889,18 +896,19 @@ mod tests {
 
         let path_pattern = PathPattern::from_str("/shopping-cart/{id}").unwrap();
 
-        let mut resolved_variables_path =
-            resolved_variables_from_request_path(uri, path_pattern);
+        let resolved_variables_path = resolved_variables_from_request_path(uri, path_pattern);
 
-        let success_response_with_input_variables =
-            resolved_variables_path.merge(&get_worker_response(
+        let success_response_with_input_variables = resolved_variables_path.merge(
+            &get_worker_response(
                 r#"
                     {
                         "ok": {
                            "id": "baz"
                         }
                     }"#,
-            ).result_with_worker_response_key());
+            )
+            .result_with_worker_response_key(),
+        );
 
         let expr1 = Expr::from_primitive_string(
             "${if request.path.id == 'foo' then 'bar' else match worker.response { ok(value) => value.id, err(msg) => 'empty' }}",
@@ -926,7 +934,8 @@ mod tests {
                     }"#,
         );
 
-        let error_response_with_request_variables = resolved_variables_path.merge(&error_worker_response.result_with_worker_response_key());
+        let error_response_with_request_variables =
+            resolved_variables_path.merge(&error_worker_response.result_with_worker_response_key());
 
         let expr3 = Expr::from_primitive_string(
             "${if request.path.id == 'bar' then 'foo' else { match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }} }",
