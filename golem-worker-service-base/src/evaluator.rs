@@ -503,12 +503,11 @@ mod tests {
     use crate::http_request::InputHttpRequest;
     use crate::merge::Merge;
     use crate::type_inference::infer_analysed_type;
-    use crate::worker_response::WorkerResponse;
-    use golem_service_base::model::Type;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::HeaderMap;
     use serde_json::Value;
     use std::collections::HashMap;
+    use golem_wasm_ast::analysis::AnalysedType;
 
     fn resolved_variables_from_worker_response(input: &str) -> TypeAnnotatedValue {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");
@@ -547,7 +546,7 @@ mod tests {
             resolved_variables_from_request_path(&request_path_values, &spec_path_variables);
 
         let expr = Expr::from_primitive_string("${request.path.id}").unwrap();
-        let expected_evaluated_result = Value::String("pId".to_string());
+        let expected_evaluated_result = TypeAnnotatedValue::Str("pId".to_string());
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
@@ -573,7 +572,7 @@ mod tests {
         );
 
         let expr = Expr::from_primitive_string("${request.body.id}").unwrap();
-        let expected_evaluated_result = Value::String("bId".to_string());
+        let expected_evaluated_result = TypeAnnotatedValue::Str("bId".to_string());
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
@@ -594,7 +593,7 @@ mod tests {
         );
 
         let expr = Expr::from_primitive_string("${request.body.titles[0]}").unwrap();
-        let expected_evaluated_result = Value::String("bTitle1".to_string());
+        let expected_evaluated_result = TypeAnnotatedValue::Str("bTitle1".to_string());
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
@@ -618,7 +617,7 @@ mod tests {
             "${request.body.address.street} ${request.body.address.city}",
         )
         .unwrap();
-        let expected_evaluated_result = Value::String("bStreet bCity".to_string());
+        let expected_evaluated_result = TypeAnnotatedValue::Str("bStreet bCity".to_string());
         let result = expr.evaluate(&resolved_request);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
@@ -640,7 +639,7 @@ mod tests {
             "${if (request.header.authorisation == 'admin') then 200 else 401}",
         )
         .unwrap();
-        let expected_evaluated_result = Value::Number("200".parse().unwrap());
+        let expected_evaluated_result = TypeAnnotatedValue::U64("200".parse().unwrap());
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
@@ -810,7 +809,7 @@ mod tests {
         )
         .unwrap();
         let result = expr.evaluate(&resolved_variables);
-        assert_eq!(result, Ok(Value::String("personal-id".to_string())));
+        assert_eq!(result, Ok(TypeAnnotatedValue::Str("personal-id".to_string())));
     }
 
     #[test]
@@ -823,7 +822,7 @@ mod tests {
         )
         .unwrap();
         let result = expr.evaluate(&resolved_variables);
-        assert_eq!(result, Ok(Value::String("not found".to_string())));
+        assert_eq!(result, Ok(TypeAnnotatedValue::Str("not found".to_string())));
     }
 
     #[test]
@@ -882,9 +881,9 @@ mod tests {
         assert_eq!(
             (result1, result2, result3),
             (
-                Ok(Value::String("bar".to_string())),
-                Ok(Value::String("baz".to_string())),
-                Ok(Value::String("empty".to_string()))
+                Ok(TypeAnnotatedValue::Str("bar".to_string())),
+                Ok(TypeAnnotatedValue::Str("baz".to_string())),
+                Ok(TypeAnnotatedValue::Str("empty".to_string()))
             )
         );
     }
@@ -905,7 +904,7 @@ mod tests {
         )
         .unwrap();
         let result = expr.evaluate(&resolved_variables);
-        assert_eq!(result, Ok(Value::String("personal-id".to_string())));
+        assert_eq!(result, Ok(TypeAnnotatedValue::Str("personal-id".to_string())));
     }
 
     #[test]
@@ -924,9 +923,13 @@ mod tests {
         )
         .unwrap();
         let result = expr.evaluate(&resolved_variables);
-        let expected_result =
-            serde_json::Map::from_iter(vec![("id".to_string(), Value::String("pId".to_string()))]);
-        assert_eq!(result, Ok(Value::Object(expected_result)));
+
+        let expected_result=  TypeAnnotatedValue::Record {
+            value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
+            typ: vec![("id".to_string(), AnalysedType::Str)],
+        };
+
+        assert_eq!(result, Ok(expected_result));
     }
 
     #[test]
@@ -945,7 +948,7 @@ mod tests {
         )
         .unwrap();
         let result = expr.evaluate(&resolved_variables);
-        assert_eq!(result, Ok(Value::String("pId".to_string())));
+        assert_eq!(result, Ok(TypeAnnotatedValue::Str("pId".to_string())));
     }
 
     #[test]
@@ -964,6 +967,6 @@ mod tests {
         )
         .unwrap();
         let result = expr.evaluate(&resolved_variables);
-        assert_eq!(result, Ok(Value::String("id1".to_string())));
+        assert_eq!(result, Ok(TypeAnnotatedValue::Str("id1".to_string())));
     }
 }
