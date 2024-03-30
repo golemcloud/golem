@@ -11,34 +11,26 @@ pub fn infer_analysed_type(value: &Value) -> AnalysedType {
         Value::Bool(_) => AnalysedType::Bool,
         Value::Number(n) => {
             if let Some(n) = n.as_i64() {
-                if n >= i8::MIN as i64 && n <= i8::MAX as i64 {
-                    AnalysedType::S8
-                } else if n >= u8::MIN as i64 && n <= u8::MAX as i64 {
-                    AnalysedType::U8
-                } else if n >= i16::MIN as i64 && n <= i16::MAX as i64 {
-                    AnalysedType::S16
-                } else if n >= u16::MIN as i64 && n <= u16::MAX as i64 {
-                    AnalysedType::U16
-                } else if n >= i32::MIN as i64 && n <= i32::MAX as i64 {
-                    AnalysedType::S32
-                } else if n >= u32::MIN as i64 && n <= u32::MAX as i64 {
-                    AnalysedType::U32
-                } else if n >= i64::MIN && n <= i64::MAX {
-                    AnalysedType::S64
-                } else {
-                    AnalysedType::U64
-                }
+                AnalysedType::S64
             } else if let Some(n) = n.as_f64() {
-                if n.fract() == 0.0 {
-                    AnalysedType::F64
-                } else {
-                    AnalysedType::F32
-                }
+                AnalysedType::F64
             } else {
                 AnalysedType::U64
             }
         }
-        Value::String(_) => AnalysedType::Str,
+        Value::String(value) => {
+                if let Ok(u64) = value.parse::<u64>() {
+                    AnalysedType::U64
+                } else if let Ok(i64_value) = value.parse::<i64>() {
+                    AnalysedType::S64
+                } else if let Ok(f64_value) = value.parse::<f64>() {
+                    AnalysedType::F64
+                } else if let Ok(bool) = value.parse::<bool>() {
+                    AnalysedType::Bool
+                } else {
+                    AnalysedType::Str
+                }
+        }
         Value::Array(arr) => {
             if arr.is_empty() {
                 AnalysedType::List(Box::new(AnalysedType::Str))
@@ -81,46 +73,58 @@ mod tests {
     #[test]
     fn test_infer_analysed_type() {
         let value = Value::Bool(true);
-        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::Bool));
+        assert_eq!(infer_analysed_type(&value), AnalysedType::Bool);
 
-        let value = Value::Number(serde_json::Number::from(42));
-        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::S8));
+        let value = Value::Number(serde_json::Number::from(1));
+        assert_eq!(infer_analysed_type(&value), AnalysedType::S64);
 
-        let value = Value::Number(serde_json::Number::from(42.0));
-        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::F64));
+        let value = Value::Number(serde_json::Number::from(1.0));
+        assert_eq!(infer_analysed_type(&value), AnalysedType::F64);
 
-        let value = Value::String("hello".to_string());
-        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::Str));
+        let value = Value::String("foo".to_string());
+        assert_eq!(infer_analysed_type(&value), AnalysedType::Str);
 
-        let value = Value::Array(vec![Value::Number(serde_json::Number::from(42))]);
-        assert_eq!(
-            infer_analysed_type(&value),
-            Some(AnalysedType::List(Box::new(AnalysedType::S8)))
-        );
+        let value = Value::String("1".to_string());
+        assert_eq!(infer_analysed_type(&value), AnalysedType::U64);
+
+        let value = Value::String("-1".to_string());
+        assert_eq!(infer_analysed_type(&value), AnalysedType::S64);
+
+        let value = Value::String("1.2".to_string());
+        assert_eq!(infer_analysed_type(&value), AnalysedType::F64);
+
+        let value = Value::String("true".to_string());
+        assert_eq!(infer_analysed_type(&value), AnalysedType::Bool);
+
+        let value = Value::String("false".to_string());
+        assert_eq!(infer_analysed_type(&value), AnalysedType::Bool);
 
         let value = Value::Array(vec![]);
-        assert_eq!(infer_analysed_type(&value), None);
+        assert_eq!(infer_analysed_type(&value), AnalysedType::List(Box::new(AnalysedType::Str)));
 
-        let value = Value::Object(serde_json::Map::new());
-        assert_eq!(
-            infer_analysed_type(&value),
-            Some(AnalysedType::Record(vec![]))
-        );
+        let value = Value::Array(vec![Value::String("hello".to_string())]);
+        assert_eq!(infer_analysed_type(&value), AnalysedType::List(Box::new(AnalysedType::Str)));
 
-        let value = Value::Object({
-            let mut map = serde_json::Map::new();
-            map.insert(
-                "foo".to_string(),
-                Value::Number(serde_json::Number::from(42)),
-            );
-            map
+        let value = Value::Object(serde_json::map::Map::new());
+        assert_eq!(infer_analysed_type(&value), AnalysedType::Record(vec![]));
+
+        let value = Value::Object(serde_json::map::Map::new());
+        assert_eq!(infer_analysed_type(&value), AnalysedType::Record(vec![]));
+
+        let mut map = serde_json::map::Map::new();
+        map.insert("ok".to_string(), Value::String("hello".to_string()));
+        let value = Value::Object(map);
+        assert_eq!(infer_analysed_type(&value), AnalysedType::Result {
+            ok: Some(Box::new(AnalysedType::Str)),
+            error: None,
         });
-        assert_eq!(
-            infer_analysed_type(&value),
-            Some(AnalysedType::Record(vec![(
-                "foo".to_string(),
-                AnalysedType::S8
-            )]))
-        );
+
+        let mut map = serde_json::map::Map::new();
+        map.insert("err".to_string(), Value::String("hello".to_string()));
+        let value = Value::Object(map);
+        assert_eq!(infer_analysed_type(&value), AnalysedType::Result {
+            ok: None,
+            error: Some(Box::new(AnalysedType::Str)),
+        });
     }
 }

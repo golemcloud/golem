@@ -36,9 +36,12 @@ impl<'a> WorkerBindingResolver for InputHttpRequest<'a> {
             if match_method(request_method, spec_method)
                 && match_literals(&request_path_components, &spec_path_literals)
             {
-                let request_details: TypeAnnotatedValue = api_request
-                    .get_type_annotated_value(spec_query_variables, &spec_path_variables)
-                    .ok()?;
+                let request_details = api_request
+                    .get_type_annotated_value(spec_query_variables, &spec_path_variables);
+
+                dbg!(&request_details);
+
+                let request_details = request_details.clone().ok()?;
 
                 let resolved_binding = ResolvedWorkerBinding {
                     resolved_worker_binding_template: route.binding.clone(),

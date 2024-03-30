@@ -143,7 +143,9 @@ impl Evaluator for Expr {
 
                     match (left.get_primitive(), right.get_primitive()) {
                         (Some(left), Some(right)) => {
+                            dbg!("The result is {}, {}", left.clone(), right.clone());
                             let result = left > right;
+                            dbg!("The result afterwards is {}", result);
                             Ok(TypeAnnotatedValue::Bool(result))
                         }
                         _ => Err(EvaluationError::Message(

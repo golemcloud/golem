@@ -9,6 +9,7 @@ use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
+use crate::primitive::{Number, Primitive};
 
 // An input request from external API gateways, that is then resolved to a worker request, using API definitions
 pub struct InputHttpRequest<'a> {
@@ -67,9 +68,11 @@ impl InputHttpRequest<'_> {
         for (header_name, header_value) in headers {
             let header_value_str = header_value.to_str().map_err(|err| vec![err.to_string()])?;
 
+            let typed_header_value = get_typed_value_from_primitive(header_value_str);
+
             headers_map.push((
                 header_name.to_string(),
-                TypeAnnotatedValue::Str(header_value_str.to_string()),
+                typed_header_value
             ));
         }
 
@@ -120,9 +123,11 @@ impl InputHttpRequest<'_> {
 
         for (index, spec_path_variable) in spec_path_variables.iter() {
             if let Some(path_value) = request_path_values.get(index) {
+                let typed_value = get_typed_value_from_primitive(path_value);
+
                 path_variables_map.push((
                     spec_path_variable.clone(),
-                    TypeAnnotatedValue::Str(path_value.trim().to_string()),
+                    typed_value
                 ));
             } else {
                 unavailable_path_variables.push(spec_path_variable.to_string());
@@ -153,9 +158,10 @@ impl InputHttpRequest<'_> {
 
         for spec_query_variable in spec_query_variables.iter() {
             if let Some(query_value) = request_query_variables.get(spec_query_variable) {
+               let typed_value = get_typed_value_from_primitive(query_value);
                 query_variable_map.push((
                     spec_query_variable.clone(),
-                    TypeAnnotatedValue::Str(query_value.trim().to_string()),
+                    typed_value
                 ));
             } else {
                 unavailable_query_variables.push(spec_query_variable.to_string());
@@ -175,6 +181,19 @@ impl InputHttpRequest<'_> {
         } else {
             Err(unavailable_query_variables)
         }
+    }
+}
+
+fn get_typed_value_from_primitive(value: &str) -> TypeAnnotatedValue {
+    let query_value = Primitive::from(value.to_string());
+    match query_value {
+        Primitive::Num(number) => match number {
+            Number::PosInt(value) => TypeAnnotatedValue::U64(value),
+            Number::NegInt(value) => TypeAnnotatedValue::S64(value),
+            Number::Float(value) => TypeAnnotatedValue::F64(value),
+        }
+        Primitive::String(value) => TypeAnnotatedValue::Str(value),
+        Primitive::Bool(value) => TypeAnnotatedValue::Bool(value),
     }
 }
 
