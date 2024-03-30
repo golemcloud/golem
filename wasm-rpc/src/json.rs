@@ -19,7 +19,6 @@ use golem_wasm_ast::analysis::{
 };
 use serde_json::{Number, Value as JsonValue};
 use std::collections::HashMap;
-use std::fmt::Display;
 use std::str::FromStr;
 
 use crate::{TypeAnnotatedValue, Uri, Value};
@@ -88,7 +87,7 @@ pub fn function_result(
     values: Vec<Value>,
     expected_types: &[AnalysedFunctionResult],
 ) -> Result<JsonValue, Vec<String>> {
-    function_result_typed(values, expected_types).map(|result| Json::from(result).0)
+    function_result_typed(values, expected_types).map(|result| get_json_from_typed_value(&result))
 }
 
 pub fn function_result_typed(
@@ -676,119 +675,110 @@ fn get_u64(value: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
     }
 }
 
-pub struct Json(pub serde_json::Value);
-
-impl Display for Json {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<TypeAnnotatedValue> for Json {
-    fn from(value: TypeAnnotatedValue) -> Self {
-        match value {
-            TypeAnnotatedValue::Bool(bool) => Json(serde_json::Value::Bool(bool)),
-            TypeAnnotatedValue::Flags { typ: _, values } => Json(JsonValue::Array(
-                values.into_iter().map(JsonValue::String).collect(),
-            )),
-            TypeAnnotatedValue::S8(value) => Json(JsonValue::Number(Number::from(value))),
-            TypeAnnotatedValue::U8(value) => Json(JsonValue::Number(Number::from(value))),
-            TypeAnnotatedValue::S16(value) => Json(JsonValue::Number(Number::from(value))),
-            TypeAnnotatedValue::U16(value) => Json(JsonValue::Number(Number::from(value))),
-            TypeAnnotatedValue::S32(value) => Json(JsonValue::Number(Number::from(value))),
-            TypeAnnotatedValue::U32(value) => Json(JsonValue::Number(Number::from(value))),
-            TypeAnnotatedValue::S64(value) => Json(JsonValue::Number(Number::from(value))),
-            TypeAnnotatedValue::U64(value) => Json(JsonValue::Number(Number::from(value))),
-            TypeAnnotatedValue::F32(value) => {
-                Json(JsonValue::Number(Number::from_f64(value as f64).unwrap()))
-            }
-            TypeAnnotatedValue::F64(value) => {
-                Json(JsonValue::Number(Number::from_f64(value).unwrap()))
-            }
-            TypeAnnotatedValue::Chr(value) => Json(JsonValue::Number(Number::from(value as u32))),
-            TypeAnnotatedValue::Str(value) => Json(JsonValue::String(value)),
-            TypeAnnotatedValue::Enum { typ: _, value } => Json(JsonValue::String(value)),
-            TypeAnnotatedValue::Option { typ: _, value } => match value {
-                Some(value) => Json::from(*value),
-                None => Json(JsonValue::Null),
-            },
-            TypeAnnotatedValue::Tuple { typ: _, value } => {
-                let values: Vec<serde_json::Value> =
-                    value.into_iter().map(Json::from).map(|v| v.0).collect();
-                Json(JsonValue::Array(values))
-            }
-            TypeAnnotatedValue::List { typ: _, values } => {
-                let values: Vec<serde_json::Value> =
-                    values.into_iter().map(Json::from).map(|v| v.0).collect();
-                Json(JsonValue::Array(values))
-            }
-
-            TypeAnnotatedValue::Record { typ: _, value } => {
-                let mut map = serde_json::Map::new();
-                for (key, value) in value {
-                    map.insert(key, Json::from(value).0);
-                }
-                Json(JsonValue::Object(map))
-            }
-
-            TypeAnnotatedValue::Variant {
-                typ: _,
-                case_name,
-                case_value,
-            } => {
-                let mut map = serde_json::Map::new();
-                map.insert(
-                    case_name,
-                    case_value
-                        .map(|x| Json::from(*x))
-                        .map(|v| v.0)
-                        .unwrap_or(JsonValue::Null),
-                );
-                Json(JsonValue::Object(map))
-            }
-
-            TypeAnnotatedValue::Result {
-                ok: _,
-                error: _,
-                value,
-            } => {
-                let mut map = serde_json::Map::new();
-                match value {
-                    Ok(ok_value) => {
-                        map.insert(
-                            "ok".to_string(),
-                            ok_value
-                                .map(|x| Json::from(*x))
-                                .map(|v| v.0)
-                                .unwrap_or(JsonValue::Null),
-                        );
-                    }
-                    Err(err_value) => {
-                        map.insert(
-                            "err".to_string(),
-                            err_value
-                                .map(|x| Json::from(*x))
-                                .map(|v| v.0)
-                                .unwrap_or(JsonValue::Null),
-                        );
-                    }
-                }
-                Json(JsonValue::Object(map))
-            }
-
-            TypeAnnotatedValue::Handle {
-                id: _,
-                resource_mode: _,
-                uri,
-                resource_id,
-            } => Json(JsonValue::String(format!("{}/{}", uri.value, resource_id))),
+pub fn get_json_from_typed_value(typed_value: &TypeAnnotatedValue) -> JsonValue {
+    match typed_value {
+        TypeAnnotatedValue::Bool(bool) => JsonValue::Bool(*bool),
+        TypeAnnotatedValue::Flags { typ: _, values } => JsonValue::Array(
+            values
+                .iter()
+                .map(|x| JsonValue::String(x.clone()))
+                .collect(),
+        ),
+        TypeAnnotatedValue::S8(value) => JsonValue::Number(Number::from(*value)),
+        TypeAnnotatedValue::U8(value) => JsonValue::Number(Number::from(*value)),
+        TypeAnnotatedValue::S16(value) => JsonValue::Number(Number::from(*value)),
+        TypeAnnotatedValue::U16(value) => JsonValue::Number(Number::from(*value)),
+        TypeAnnotatedValue::S32(value) => JsonValue::Number(Number::from(*value)),
+        TypeAnnotatedValue::U32(value) => JsonValue::Number(Number::from(*value)),
+        TypeAnnotatedValue::S64(value) => JsonValue::Number(Number::from(*value)),
+        TypeAnnotatedValue::U64(value) => JsonValue::Number(Number::from(*value)),
+        TypeAnnotatedValue::F32(value) => {
+            JsonValue::Number(Number::from_f64(*value as f64).unwrap())
         }
+        TypeAnnotatedValue::F64(value) => JsonValue::Number(Number::from_f64(*value).unwrap()),
+        TypeAnnotatedValue::Chr(value) => JsonValue::Number(Number::from(*value as u32)),
+        TypeAnnotatedValue::Str(value) => JsonValue::String(value.clone()),
+        TypeAnnotatedValue::Enum { typ: _, value } => JsonValue::String(value.clone()),
+        TypeAnnotatedValue::Option { typ: _, value } => match value {
+            Some(value) => get_json_from_typed_value(value),
+            None => JsonValue::Null,
+        },
+        TypeAnnotatedValue::Tuple { typ: _, value } => {
+            let values: Vec<serde_json::Value> =
+                value.iter().map(get_json_from_typed_value).collect();
+            JsonValue::Array(values)
+        }
+        TypeAnnotatedValue::List { typ: _, values } => {
+            let values: Vec<serde_json::Value> =
+                values.iter().map(get_json_from_typed_value).collect();
+            JsonValue::Array(values)
+        }
+
+        TypeAnnotatedValue::Record { typ: _, value } => {
+            let mut map = serde_json::Map::new();
+            for (key, value) in value {
+                map.insert(key.clone(), get_json_from_typed_value(value));
+            }
+            JsonValue::Object(map)
+        }
+
+        TypeAnnotatedValue::Variant {
+            typ: _,
+            case_name,
+            case_value,
+        } => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                case_name.clone(),
+                case_value
+                    .clone()
+                    .map(|x| get_json_from_typed_value(&*x))
+                    .unwrap_or(JsonValue::Null),
+            );
+            JsonValue::Object(map)
+        }
+
+        TypeAnnotatedValue::Result {
+            ok: _,
+            error: _,
+            value,
+        } => {
+            let mut map = serde_json::Map::new();
+            match value {
+                Ok(ok_value) => {
+                    map.insert(
+                        "ok".to_string(),
+                        ok_value
+                            .clone()
+                            .map(|x| get_json_from_typed_value(&*x))
+                            .unwrap_or(JsonValue::Null),
+                    );
+                }
+                Err(err_value) => {
+                    map.insert(
+                        "err".to_string(),
+                        err_value
+                            .clone()
+                            .map(|x| get_json_from_typed_value(&*x))
+                            .unwrap_or(JsonValue::Null),
+                    );
+                }
+            }
+            JsonValue::Object(map)
+        }
+
+        TypeAnnotatedValue::Handle {
+            id: _,
+            resource_mode: _,
+            uri,
+            resource_id,
+        } => JsonValue::String(format!("{}/{}", uri.value, resource_id)),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::json::{get_typed_value_from_json, Json};
+    use crate::json::{get_json_from_typed_value, get_typed_value_from_json};
     use crate::{TypeAnnotatedValue, Value};
     use golem_wasm_ast::analysis::AnalysedType;
     use proptest::prelude::*;
@@ -799,7 +789,8 @@ mod tests {
         val: Value,
         expected_type: &AnalysedType,
     ) -> Result<JsonValue, Vec<String>> {
-        TypeAnnotatedValue::from_value(&val, expected_type).map(|result| Json::from(result).0)
+        TypeAnnotatedValue::from_value(&val, expected_type)
+            .map(|result| get_json_from_typed_value(&result))
     }
 
     fn validate_function_parameter(
