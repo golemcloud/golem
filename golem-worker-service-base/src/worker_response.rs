@@ -9,6 +9,7 @@ use crate::type_inference::*;
 use crate::worker_request::WorkerRequest;
 use crate::worker_request_to_response::WorkerRequestToResponse;
 use async_trait::async_trait;
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::Json;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use http::{HeaderMap, StatusCode};
@@ -24,10 +25,10 @@ impl WorkerResponse {
     pub fn to_http_response(
         &self,
         response_mapping: &Option<ResponseMapping>,
-        type_value_from_request: &TypeAnnotatedValue,
+        input_request: &TypeAnnotatedValue,
     ) -> poem::Response {
         if let Some(mapping) = response_mapping {
-            match &self.to_intermediate_http_response(mapping, type_value_from_request) {
+            match &self.to_intermediate_http_response(mapping, input_request) {
                 Ok(intermediate_response) => intermediate_response.to_http_response(),
                 Err(e) => poem::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
@@ -46,11 +47,28 @@ impl WorkerResponse {
     fn to_intermediate_http_response(
         &self,
         response_mapping: &ResponseMapping,
-        request_value: &TypeAnnotatedValue,
+        input_request: &TypeAnnotatedValue,
     ) -> Result<IntermediateHttpResponse, EvaluationError> {
         let worker_response_value = &self.result;
+        let worker_response_typ = AnalysedType::from(worker_response_value.clone());
 
-        let type_annotated_value = request_value.merge(worker_response_value);
+        let response_type = vec![("response".to_string(), worker_response_typ)];
+
+        let worker_response_type_annotated_value = TypeAnnotatedValue::Record {
+            typ: vec![(
+                "worker".to_string(),
+                AnalysedType::Record(vec![("response".to_string(), worker_response_typ)]),
+            )],
+            value: vec![(
+                "worker".to_string(),
+                TypeAnnotatedValue::Record {
+                    typ: vec![("response".to_string(), worker_response_typ.clone())],
+                    value: vec![("response".to_string(), worker_response_value.clone())],
+                },
+            )],
+        };
+
+        let type_annotated_value = input_request.merge(worker_response_value);
 
         let status_code = get_status_code(&response_mapping.status, &type_annotated_value)?;
 

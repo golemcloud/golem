@@ -12,7 +12,8 @@ use super::cursor::TokenCursor;
 // }
 #[derive(Clone, PartialEq, Debug)]
 pub enum Token {
-    WorkerResponse,
+    Worker,
+    Response,
     Request,
     Ok,
     Err,
@@ -64,7 +65,8 @@ impl Token {
             Token::OpenSquareBracket => false,
             Token::ClosedSquareBracket => false,
             Token::Dot => false,
-            Token::WorkerResponse => false,
+            Token::Worker => false,
+            Token::Response => false,
             Token::Request => false,
             Token::Ok => false,
             Token::Err => false,
@@ -120,7 +122,8 @@ impl Display for Token {
                 Token::OpenSquareBracket => "[",
                 Token::ClosedSquareBracket => "]",
                 Token::Dot => ".",
-                Token::WorkerResponse => "worker.response",
+                Token::Worker => "worker",
+                Token::Response => "response",
                 Token::Request => "request",
                 Token::Ok => "ok",
                 Token::Err => "err",
@@ -307,17 +310,23 @@ impl<'t> Tokenizer {
                 self.text = self.text[character_index + 1..].to_string();
                 self.state = TokenizerState::Static(Token::Dot);
                 break;
-            } else if c == "worker.response" {
+            } else if c == "worker" {
                 token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + Token::WorkerResponse.to_string().len()..]
-                    .to_string();
-                self.state = TokenizerState::Static(Token::WorkerResponse);
+                self.text =
+                    self.text[character_index + Token::Worker.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Worker);
                 break;
             } else if c == "request" {
                 token = Some(Token::RawString(self.text[..character_index].to_string()));
                 self.text =
                     self.text[character_index + Token::Request.to_string().len()..].to_string();
                 self.state = TokenizerState::Static(Token::Request);
+                break;
+            } else if c == "response" {
+                token = Some(Token::RawString(self.text[..character_index].to_string()));
+                self.text =
+                    self.text[character_index + Token::Response.to_string().len()..].to_string();
+                self.state = TokenizerState::Static(Token::Response);
                 break;
             } else if c == "ok" {
                 token = Some(Token::RawString(self.text[..character_index].to_string()));
@@ -502,8 +511,14 @@ mod tests {
 
     #[test]
     fn test_worker_response() {
-        let tokens: Vec<Token> = Tokenizer::new("worker.response.").run().value;
-        assert_eq!(tokens, vec![Token::WorkerResponse, Token::Dot,]);
+        let tokens: Vec<Token> = Tokenizer::new("worker.").run().value;
+        assert_eq!(tokens, vec![Token::Worker, Token::Dot]);
+    }
+
+    #[test]
+    fn test_response() {
+        let tokens: Vec<Token> = Tokenizer::new("response").run().value;
+        assert_eq!(tokens, vec![Token::Response]);
     }
 
     #[test]
@@ -883,7 +898,9 @@ else${z}
                 Token::InterpolationStart,
                 Token::Match,
                 Token::Space,
-                Token::WorkerResponse,
+                Token::Worker,
+                Token::Dot,
+                Token::Response,
                 Token::Space,
                 Token::OpenCurlyBrace,
                 Token::Space,
@@ -894,7 +911,9 @@ else${z}
                 Token::Space,
                 Token::Arrow,
                 Token::Space,
-                Token::WorkerResponse,
+                Token::Worker,
+                Token::Dot,
+                Token::Response,
                 Token::Comma,
                 Token::Space,
                 Token::None,

@@ -192,10 +192,12 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     Token::None
                 ))),
 
-                Token::WorkerResponse => go(
+                Token::Worker => go(cursor, context, prev_expression.apply_with(Expr::Worker())),
+
+                Token::Worker => go(
                     cursor,
                     context,
-                    prev_expression.apply_with(Expr::WorkerResponse()),
+                    prev_expression.apply_with(Expr::Response()),
                 ),
 
                 Token::InterpolationStart => {

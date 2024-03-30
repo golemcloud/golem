@@ -12,7 +12,8 @@ use crate::primitive::Primitive;
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
     Request(),
-    WorkerResponse(),
+    Worker(),
+    Response(),
     SelectField(Box<Expr>, String),
     SelectIndex(Box<Expr>, usize),
     Sequence(Vec<Expr>),
@@ -633,6 +634,8 @@ impl Display for InternalValue {
 mod tests {
     use crate::evaluator::Evaluator;
     use crate::expr::Expr;
+    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc::TypeAnnotatedValue;
     use serde_json::{json, Value};
 
     #[test]
@@ -698,83 +701,107 @@ mod tests {
 
     #[test]
     fn expr_to_string_round_trip_match_expr_ok() {
-        let worker_response = &json!({"ok": { "id" : "afsal"} });
+        let worker_response = TypeAnnotatedValue::from_json_value(
+            &json!({"ok": { "id" : "afsal"} }),
+            &AnalysedType::Result {
+                ok: Some(Box::new(AnalysedType::Record(vec![(
+                    "id".to_string(),
+                    AnalysedType::Str,
+                )]))),
+                error: None,
+            },
+        )
+        .unwrap();
 
         let expr1_string = "${match worker.response { ok(x) => '${x.id}-foo', err(msg) => msg }}";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
-        let value1 = expr1
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
-            .unwrap();
+        let value1 = expr1.evaluate(&worker_response).unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
-        let value2 = expr2
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
-            .unwrap();
+        let value2 = expr2.evaluate(&worker_response).unwrap();
 
-        let expected = Value::String("afsal-foo".to_string());
+        let expected = TypeAnnotatedValue::Str("afsal-foo".to_string());
         assert_eq!((&value1, &value2), (&expected, &expected));
     }
 
     #[test]
     fn expr_to_string_round_trip_match_expr_err() {
-        let worker_response = &json!({"err": { "id" : "afsal"} });
+        let worker_response = TypeAnnotatedValue::from_json_value(
+            &json!({"err": { "id" : "afsal"} }),
+            &AnalysedType::Result {
+                error: Some(Box::new(AnalysedType::Record(vec![(
+                    "id".to_string(),
+                    AnalysedType::Str,
+                )]))),
+                ok: None,
+            },
+        )
+        .unwrap();
 
         let expr1_string = "${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
-        let value1 = expr1
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
-            .unwrap();
+        let value1 = expr1.evaluate(&worker_response).unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
-        let value2 = expr2
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
-            .unwrap();
+        let value2 = expr2.evaluate(&worker_response).unwrap();
 
-        let expected = Value::String("error".to_string());
+        let expected = TypeAnnotatedValue::Str("error".to_string());
         assert_eq!((&value1, &value2), (&expected, &expected));
     }
 
     #[test]
     fn expr_to_string_round_trip_match_expr_append() {
-        let worker_response = &json!({"err": { "id" : "afsal"} });
+        let worker_response = TypeAnnotatedValue::from_json_value(
+            &json!({"err": { "id" : "afsal"} }),
+            &AnalysedType::Result {
+                error: Some(Box::new(AnalysedType::Record(vec![(
+                    "id".to_string(),
+                    AnalysedType::Str,
+                )]))),
+                ok: None,
+            },
+        )
+        .unwrap();
 
         let expr1_string =
             "append-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
-        let value1 = expr1
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
-            .unwrap();
+        let value1 = expr1.evaluate(&worker_response).unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
-        let value2 = expr2
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
-            .unwrap();
+        let value2 = expr2.evaluate(&worker_response).unwrap();
 
-        let expected = Value::String("append-error".to_string());
+        let expected = TypeAnnotatedValue::Str("append-error".to_string());
         assert_eq!((&value1, &value2), (&expected, &expected));
     }
 
     #[test]
     fn expr_to_string_round_trip_match_expr_append_suffix() {
-        let worker_response = &json!({"err": { "id" : "afsal"} });
+        let worker_response = TypeAnnotatedValue::from_json_value(
+            &json!({"err": { "id" : "afsal"} }),
+            &AnalysedType::Result {
+                error: Some(Box::new(AnalysedType::Record(vec![(
+                    "id".to_string(),
+                    AnalysedType::Str,
+                )]))),
+                ok: None,
+            },
+        )
+        .unwrap();
 
         let expr1_string =
             "prefix-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}-suffix";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
-        let value1 = expr1
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
-            .unwrap();
+        let value1 = expr1.evaluate(&worker_response).unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
-        let value2 = expr2
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
-            .unwrap();
+        let value2 = expr2.evaluate(&worker_response).unwrap();
 
-        let expected = Value::String("prefix-error-suffix".to_string());
+        let expected = TypeAnnotatedValue::Str("prefix-error-suffix".to_string());
         assert_eq!((&value1, &value2), (&expected, &expected));
     }
 }

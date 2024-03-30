@@ -108,10 +108,17 @@ impl Evaluator for Expr {
                         )),
                     }
                 }
-                Expr::WorkerResponse() => {
-                    match input.get(&Path::from_raw_string(
-                        Token::WorkerResponse.to_string().as_str(),
-                    )) {
+                Expr::Worker() => {
+                    match input.get(&Path::from_raw_string(Token::Worker.to_string().as_str())) {
+                        Some(v) => Ok(v),
+                        None => Err(EvaluationError::Message(
+                            "Details of worker response is missing".to_string(),
+                        )),
+                    }
+                }
+
+                Expr::Response() => {
+                    match input.get(&Path::from_raw_string(Token::Response.to_string().as_str())) {
                         Some(v) => Ok(v),
                         None => Err(EvaluationError::Message(
                             "Details of worker response is missing".to_string(),
@@ -509,7 +516,7 @@ mod tests {
     use serde_json::Value;
     use std::collections::HashMap;
 
-    fn resolved_variables_from_worker_response(input: &str) -> TypeAnnotatedValue {
+    fn get_typed_value_from_worker_response_json(input: &str) -> TypeAnnotatedValue {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");
 
         let expected_type = infer_analysed_type(&value).unwrap();
@@ -795,7 +802,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_optional() {
-        let resolved_variables = resolved_variables_from_worker_response(
+        let resolved_variables = get_typed_value_from_worker_response_json(
             r#"
                         {
 
@@ -818,7 +825,7 @@ mod tests {
     #[test]
     fn test_evaluation_with_pattern_match_none() {
         let resolved_variables =
-            resolved_variables_from_worker_response(Value::Null.to_string().as_str());
+            get_typed_value_from_worker_response_json(Value::Null.to_string().as_str());
 
         let expr = Expr::from_primitive_string(
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
@@ -836,17 +843,18 @@ mod tests {
         let mut spec_path_variables = HashMap::new();
         spec_path_variables.insert(0, "id".to_string());
 
-        let mut resolved_variables =
+        let mut resolved_variables_path =
             resolved_variables_from_request_path(&request_path_values, &spec_path_variables);
 
-        resolved_variables.extend(&resolved_variables_from_worker_response(
-            r#"
+        let resolved_variables =
+            resolved_variables_path.merge(&get_typed_value_from_worker_response_json(
+                r#"
                     {
                         "ok": {
                            "id": "baz"
                         }
                     }"#,
-        ));
+            ));
 
         let expr1 = Expr::from_primitive_string(
             "${if request.path.id == 'foo' then 'bar' else match worker.response { ok(value) => value.id, err(msg) => 'empty' }}",
@@ -863,7 +871,7 @@ mod tests {
 
         let result2 = expr2.evaluate(&resolved_variables);
 
-        let new_worker_response = resolved_variables_from_worker_response(
+        let new_worker_response = get_typed_value_from_worker_response_json(
             r#"
                     {
                         "err": {
@@ -872,14 +880,14 @@ mod tests {
                     }"#,
         );
 
-        resolved_variables.extend(&new_worker_response);
+        let new_resolved_variables = resolved_variables.merge(&new_worker_response);
 
         let expr3 = Expr::from_primitive_string(
             "${if request.path.id == 'bar' then 'foo' else { match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }} }",
 
         ).unwrap();
 
-        let result3 = expr3.evaluate(&resolved_variables);
+        let result3 = expr3.evaluate(&new_resolved_variables);
 
         assert_eq!(
             (result1, result2, result3),
@@ -893,7 +901,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match() {
-        let resolved_variables = resolved_variables_from_worker_response(
+        let resolved_variables = get_typed_value_from_worker_response_json(
             r#"
                     {
                         "ok": {
@@ -915,7 +923,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_use_success_variable() {
-        let resolved_variables = resolved_variables_from_worker_response(
+        let resolved_variables = get_typed_value_from_worker_response_json(
             r#"
                     {
                         "ok": {
@@ -940,7 +948,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_with_select_field() {
-        let resolved_variables = resolved_variables_from_worker_response(
+        let resolved_variables = get_typed_value_from_worker_response_json(
             r#"
                     {
                         "ok": {
@@ -959,7 +967,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_with_select_from_array() {
-        let resolved_variables = resolved_variables_from_worker_response(
+        let resolved_variables = get_typed_value_from_worker_response_json(
             r#"
                     {
                         "ok": {

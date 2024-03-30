@@ -4,7 +4,10 @@ use serde_json::Value;
 // If we to get analysed type from arbitrary json, and not to be used
 // unless necessary, we can use this function.
 // This is mostly used in worker-bridge functionaltiies where users
-// can send arbitrary json to the worker and do operations on expressions.
+// can send arbitrary json to without specifying analysed type, but just encoded
+// in request and want to consider them as real wit types
+// Note that json::null will be considered as optional type, but there is no
+// way to specify if a particular type is Wit::Some
 pub fn infer_analysed_type(value: &Value) -> Option<AnalysedType> {
     match value {
         Value::Bool(_) => Some(AnalysedType::Bool),
@@ -50,15 +53,28 @@ pub fn infer_analysed_type(value: &Value) -> Option<AnalysedType> {
             let mut fields = Vec::new();
             for (key, value) in map {
                 if let Some(field_type) = infer_analysed_type(value) {
+                    let field_type = if key == "ok" {
+                        AnalysedType::Result {
+                            ok: Some(Box::new(field_type)),
+                            error: None,
+                        }
+                    } else if key == "err" {
+                        AnalysedType::Result {
+                            ok: None,
+                            error: Some(Box::new(field_type)),
+                        }
+                    } else {
+                        field_type
+                    };
+
                     fields.push((key.clone(), field_type));
                 }
             }
             Some(AnalysedType::Record(fields))
         }
-        _ => None,
+        Value::Null => None, // Impossible to analyse types, and it is upto the clients to decide what the type is
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -79,19 +95,34 @@ mod tests {
         assert_eq!(infer_analysed_type(&value), Some(AnalysedType::Str));
 
         let value = Value::Array(vec![Value::Number(serde_json::Number::from(42))]);
-        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::List(Box::new(AnalysedType::S8))));
+        assert_eq!(
+            infer_analysed_type(&value),
+            Some(AnalysedType::List(Box::new(AnalysedType::S8)))
+        );
 
         let value = Value::Array(vec![]);
         assert_eq!(infer_analysed_type(&value), None);
 
         let value = Value::Object(serde_json::Map::new());
-        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::Record(vec![])));
+        assert_eq!(
+            infer_analysed_type(&value),
+            Some(AnalysedType::Record(vec![]))
+        );
 
         let value = Value::Object({
             let mut map = serde_json::Map::new();
-            map.insert("foo".to_string(), Value::Number(serde_json::Number::from(42)));
+            map.insert(
+                "foo".to_string(),
+                Value::Number(serde_json::Number::from(42)),
+            );
             map
         });
-        assert_eq!(infer_analysed_type(&value), Some(AnalysedType::Record(vec![("foo".to_string(), AnalysedType::S8)])));
+        assert_eq!(
+            infer_analysed_type(&value),
+            Some(AnalysedType::Record(vec![(
+                "foo".to_string(),
+                AnalysedType::S8
+            )]))
+        );
     }
 }

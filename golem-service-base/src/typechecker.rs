@@ -115,7 +115,8 @@ impl TypeCheckOut for Vec<Val> {
                 }
 
                 if errors.is_empty() {
-                    let result_json = TypeAnnotatedValue::from_function_results(results, &expected_types)?;
+                    let result_json =
+                        TypeAnnotatedValue::from_function_results(results, &expected_types)?;
                     Ok(result_json)
                 } else {
                     Err(errors)
@@ -149,7 +150,6 @@ impl TypeCheckOut for Vec<Val> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use crate::typechecker::TypeCheckOut;
@@ -165,13 +165,15 @@ mod tests {
             val: Some(val::Val::String("str".to_string())),
         }];
 
-        let res = str_val.validate_function_result(
-            vec![AnalysedFunctionResult {
-                name: Some("a".to_string()),
-                typ: AnalysedType::Str,
-            }],
-            CallingConvention::Stdio,
-        ).map(|x| Json::from(x).0);
+        let res = str_val
+            .validate_function_result(
+                vec![AnalysedFunctionResult {
+                    name: Some("a".to_string()),
+                    typ: AnalysedType::Str,
+                }],
+                CallingConvention::Stdio,
+            )
+            .map(|x| Json::from(x).0);
 
         assert_eq!(res, Ok(Value::String("str".to_string())));
 
@@ -179,13 +181,15 @@ mod tests {
             val: Some(val::Val::String("12.3".to_string())),
         }];
 
-        let res = num_val.validate_function_result(
-            vec![AnalysedFunctionResult {
-                name: Some("a".to_string()),
-                typ: AnalysedType::F64,
-            }],
-            CallingConvention::Stdio,
-        ).map(|x| Json::from(x).0);
+        let res = num_val
+            .validate_function_result(
+                vec![AnalysedFunctionResult {
+                    name: Some("a".to_string()),
+                    typ: AnalysedType::F64,
+                }],
+                CallingConvention::Stdio,
+            )
+            .map(|x| Json::from(x).0);
 
         assert_eq!(
             res,
@@ -196,13 +200,15 @@ mod tests {
             val: Some(val::Val::String("true".to_string())),
         }];
 
-        let res = bool_val.validate_function_result(
-            vec![AnalysedFunctionResult {
-                name: Some("a".to_string()),
-                typ: AnalysedType::Bool,
-            }],
-            CallingConvention::Stdio,
-        ).map(|x| Json::from(x).0);
+        let res = bool_val
+            .validate_function_result(
+                vec![AnalysedFunctionResult {
+                    name: Some("a".to_string()),
+                    typ: AnalysedType::Bool,
+                }],
+                CallingConvention::Stdio,
+            )
+            .map(|x| Json::from(x).0);
 
         assert_eq!(res, Ok(Value::Bool(true)));
     }

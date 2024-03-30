@@ -36,11 +36,11 @@ impl WorkerRequestToResponse<ResponseMapping, poem::Response> for WorkerRequestT
         &self,
         worker_request_params: WorkerRequest,
         response_mapping: &Option<ResponseMapping>,
-        resolved_variables: &TypeAnnotatedValue,
+        input_request: &TypeAnnotatedValue,
     ) -> poem::Response {
         match execute(self, worker_request_params.clone()).await {
             Ok(worker_response) => {
-                worker_response.to_http_response(response_mapping, resolved_variables)
+                worker_response.to_http_response(response_mapping, input_request)
             }
             Err(e) => poem::Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)

@@ -30,7 +30,7 @@ pub fn infer_analysed_type(value: &Value) -> Option<AnalysedType> {
                     Some(AnalysedType::F32)
                 }
             } else {
-                None
+                Some(AnalysedType::U64)
             }
         }
         Value::String(_) => Some(AnalysedType::Str),
@@ -46,6 +46,20 @@ pub fn infer_analysed_type(value: &Value) -> Option<AnalysedType> {
             let mut fields = Vec::new();
             for (key, value) in map {
                 if let Some(field_type) = infer_analysed_type(value) {
+                    let field_type = if key == "ok" {
+                        AnalysedType::Result {
+                            ok: Some(Box::new(field_type)),
+                            error: None,
+                        }
+                    } else if key == "err" {
+                        AnalysedType::Result {
+                            ok: None,
+                            error: Some(Box::new(field_type)),
+                        }
+                    } else {
+                        field_type
+                    };
+
                     fields.push((key.clone(), field_type));
                 }
             }
