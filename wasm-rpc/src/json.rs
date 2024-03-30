@@ -731,8 +731,8 @@ pub fn get_json_from_typed_value(typed_value: &TypeAnnotatedValue) -> JsonValue 
             map.insert(
                 case_name.clone(),
                 case_value
-                    .clone()
-                    .map(|x| get_json_from_typed_value(&*x))
+                    .as_ref()
+                    .map(|x| get_json_from_typed_value(x))
                     .unwrap_or(JsonValue::Null),
             );
             JsonValue::Object(map)
@@ -749,8 +749,8 @@ pub fn get_json_from_typed_value(typed_value: &TypeAnnotatedValue) -> JsonValue 
                     map.insert(
                         "ok".to_string(),
                         ok_value
-                            .clone()
-                            .map(|x| get_json_from_typed_value(&*x))
+                            .as_ref()
+                            .map(|x| get_json_from_typed_value(x))
                             .unwrap_or(JsonValue::Null),
                     );
                 }
@@ -758,8 +758,8 @@ pub fn get_json_from_typed_value(typed_value: &TypeAnnotatedValue) -> JsonValue 
                     map.insert(
                         "err".to_string(),
                         err_value
-                            .clone()
-                            .map(|x| get_json_from_typed_value(&*x))
+                            .as_ref()
+                            .map(|x| get_json_from_typed_value(x))
                             .unwrap_or(JsonValue::Null),
                     );
                 }
