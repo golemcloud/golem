@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::Display;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
 use serde_json::{Number, Value as JsonValue};
 
@@ -53,6 +54,12 @@ pub fn function_result(
 }
 
 pub struct Json(pub serde_json::Value);
+
+impl Display for Json {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 impl From<TypeAnnotatedValue> for Json {
     fn from(value: TypeAnnotatedValue) -> Self {
