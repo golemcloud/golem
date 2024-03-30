@@ -4,7 +4,8 @@ use std::convert::{TryFrom, TryInto};
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 
 use golem_wasm_ast::analysis::{
-    AnalysedFunctionResult, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
+    AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId, AnalysedResourceMode,
+    AnalysedType,
 };
 
 use crate::{Uri, Value, WitValue};
@@ -14,7 +15,7 @@ use serde_json::value::Value as JsonValue;
 use std::ops::Deref;
 use std::str::FromStr;
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeAnnotatedValue {
     Bool(bool),
     S8(i8),
@@ -72,6 +73,96 @@ pub enum TypeAnnotatedValue {
 }
 
 impl TypeAnnotatedValue {
+    pub fn from_function_parameters(
+        value: &JsonValue,
+        expected_parameters: &[AnalysedFunctionParameter],
+    ) -> Result<Vec<TypeAnnotatedValue>, Vec<String>> {
+        let parameters = value
+            .as_array()
+            .ok_or(vec!["Expecting an array for fn_params".to_string()])?;
+
+        let mut results = vec![];
+        let mut errors = vec![];
+
+        if parameters.len() == expected_parameters.len() {
+            for (json, fp) in parameters.iter().zip(expected_parameters.iter()) {
+                match TypeAnnotatedValue::from_json_value(json, &fp.typ) {
+                    Ok(result) => results.push(result),
+                    Err(err) => errors.extend(err),
+                }
+            }
+
+            if errors.is_empty() {
+                Ok(results)
+            } else {
+                Err(errors)
+            }
+        } else {
+            Err(vec![format!(
+                "Unexpected number of parameters (got {}, expected: {})",
+                parameters.len(),
+                expected_parameters.len()
+            )])
+        }
+    }
+
+    pub fn from_function_results(
+        values: Vec<Value>,
+        expected_types: &[AnalysedFunctionResult],
+    ) -> Result<TypeAnnotatedValue, Vec<String>> {
+        if values.len() != expected_types.len() {
+            Err(vec![format!(
+                "Unexpected number of result values (got {}, expected: {})",
+                values.len(),
+                expected_types.len()
+            )])
+        } else {
+            let mut results = vec![];
+            let mut errors = vec![];
+
+            for (value, expected) in values.into_iter().zip(expected_types.iter()) {
+                let result = TypeAnnotatedValue::from_value(&value, &expected.typ);
+
+                match result {
+                    Ok(value) => {
+                        results.push((value, expected.typ.clone()));
+                    }
+                    Err(err) => errors.extend(err),
+                }
+            }
+
+            let all_without_names = expected_types.iter().all(|t| t.name.is_none());
+
+            if all_without_names {
+                Ok(TypeAnnotatedValue::Tuple {
+                    typ: results.iter().map(|(_, typ)| typ.clone()).collect(),
+                    value: results.into_iter().map(|(v, _)| v).collect(),
+                })
+            } else {
+                let mut named_typs: Vec<(String, AnalysedType)> = vec![];
+                let mut named_values: Vec<(String, TypeAnnotatedValue)> = vec![];
+
+                for (index, ((typed_value, typ), expected)) in
+                    results.into_iter().zip(expected_types.iter()).enumerate()
+                {
+                    let name = if let Some(name) = &expected.name {
+                        name.clone()
+                    } else {
+                        index.to_string()
+                    };
+
+                    named_typs.push((name.clone(), typ.clone()));
+                    named_values.push((name, typed_value));
+                }
+
+                Ok(TypeAnnotatedValue::Record {
+                    typ: named_typs,
+                    value: named_values,
+                })
+            }
+        }
+    }
+
     pub fn from_value(
         val: &Value,
         analysed_type: &AnalysedType,
@@ -943,62 +1034,6 @@ impl TryFrom<TypeAnnotatedValue> for WitValue {
     fn try_from(value: TypeAnnotatedValue) -> Result<Self, Self::Error> {
         let value: Result<Value, String> = value.try_into();
         value.map(|v| v.into())
-    }
-}
-
-pub enum TypeAnnotatedValueResult {
-    WithoutNames(Vec<TypeAnnotatedValue>),
-    WithNames(Vec<(String, TypeAnnotatedValue)>),
-}
-
-impl TypeAnnotatedValueResult {
-    pub fn from_values(
-        values: Vec<Value>,
-        expected_types: &[AnalysedFunctionResult],
-    ) -> Result<TypeAnnotatedValueResult, Vec<String>> {
-        if values.len() != expected_types.len() {
-            Err(vec![format!(
-                "Unexpected number of result values (got {}, expected: {})",
-                values.len(),
-                expected_types.len()
-            )])
-        } else {
-            let mut results = vec![];
-            let mut errors = vec![];
-
-            for (value, expected) in values.into_iter().zip(expected_types.iter()) {
-                let result = TypeAnnotatedValue::from_value(&value, &expected.typ);
-
-                match result {
-                    Ok(value) => results.push(value),
-                    Err(err) => errors.extend(err),
-                }
-            }
-
-            let all_without_names = expected_types.iter().all(|t| t.name.is_none());
-
-            if all_without_names {
-                Ok(TypeAnnotatedValueResult::WithoutNames(results))
-            } else {
-                let mapped_values = results
-                    .iter()
-                    .zip(expected_types.iter())
-                    .enumerate()
-                    .map(|(idx, (type_annotated_value, result_def))| {
-                        (
-                            if let Some(name) = &result_def.name {
-                                name.clone()
-                            } else {
-                                idx.to_string()
-                            },
-                            type_annotated_value.clone(),
-                        )
-                    })
-                    .collect::<Vec<(String, TypeAnnotatedValue)>>();
-
-                Ok(TypeAnnotatedValueResult::WithNames(mapped_values))
-            }
-        }
     }
 }
 
