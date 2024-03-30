@@ -7,9 +7,74 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+use tokio::task::JoinHandle;
 use tonic::transport::Body;
 use tracing::{info, instrument};
 use warp::Filter;
+
+struct TestHttpServer {
+    handle: JoinHandle<()>,
+    events: Arc<Mutex<Vec<String>>>,
+}
+
+impl TestHttpServer {
+    pub fn start(host_http_port: u16, fail_per_step: u64) -> Self {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        let handle = tokio::spawn(async move {
+            let call_count_per_step = Arc::new(Mutex::new(HashMap::<u64, u64>::new()));
+            let route = warp::path("step")
+                .and(warp::path::param())
+                .and(warp::get())
+                .map(move |step: u64| {
+                    let mut steps = call_count_per_step.lock().unwrap();
+                    let step_count = steps.entry(step).and_modify(|e| *e += 1).or_insert(0);
+
+                    println!("step: {step} occurrence {step_count}");
+
+                    match step_count {
+                        n if *n < fail_per_step => Response::builder()
+                            .status(StatusCode::OK)
+                            .body(Body::from("true"))
+                            .unwrap(),
+                        _ => Response::builder()
+                            .status(StatusCode::OK)
+                            .body(Body::from("false"))
+                            .unwrap(),
+                    }
+                })
+                .or(warp::path("side-effect")
+                    .and(warp::post())
+                    .and(warp::body::bytes())
+                    .map(move |body: Bytes| {
+                        let body = String::from_utf8(body.to_vec()).unwrap();
+                        info!("received POST message: {body}");
+                        events_clone.lock().unwrap().push(body.clone());
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .body("OK")
+                            .unwrap()
+                    }));
+
+            warp::serve(route)
+                .run(
+                    format!("0.0.0.0:{}", host_http_port)
+                        .parse::<SocketAddr>()
+                        .unwrap(),
+                )
+                .await;
+        });
+        Self { handle, events }
+    }
+
+    pub fn abort(&self) {
+        self.handle.abort()
+    }
+
+    pub fn get_events(&self) -> Vec<String> {
+        self.events.lock().unwrap().clone()
+    }
+}
 
 #[tokio::test]
 #[tracing::instrument]
@@ -19,37 +84,7 @@ async fn jump() {
 
     let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async move {
-        let call_count_per_step = Arc::new(Mutex::new(HashMap::<u64, u64>::new()));
-        let route = warp::path("step")
-            .and(warp::path::param())
-            .and(warp::get())
-            .map(move |step: u64| {
-                let mut steps = call_count_per_step.lock().unwrap();
-                let step_count = steps.entry(step).and_modify(|e| *e += 1).or_insert(0);
-
-                println!("step: {step} occurrence {step_count}");
-
-                match &step_count {
-                    0 => Response::builder()
-                        .status(StatusCode::OK)
-                        .body(Body::from("true"))
-                        .unwrap(),
-                    _ => Response::builder()
-                        .status(StatusCode::OK)
-                        .body(Body::from("false"))
-                        .unwrap(),
-                }
-            });
-
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
-    });
+    let http_server = TestHttpServer::start(host_http_port, 1);
 
     let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
 
@@ -182,53 +217,7 @@ async fn atomic_region() {
 
     let host_http_port = context.host_http_port();
 
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let events_clone = events.clone();
-
-    let http_server = tokio::spawn(async move {
-        let call_count_per_step = Arc::new(Mutex::new(HashMap::<u64, u64>::new()));
-        let route = warp::path("step")
-            .and(warp::path::param())
-            .and(warp::get())
-            .map(move |step: u64| {
-                let mut steps = call_count_per_step.lock().unwrap();
-                let step_count = steps.entry(step).and_modify(|e| *e += 1).or_insert(0);
-
-                println!("step: {step} occurrence {step_count}");
-
-                match &step_count {
-                    0 | 1 => Response::builder()
-                        .status(StatusCode::OK)
-                        .body(Body::from("true"))
-                        .unwrap(),
-                    _ => Response::builder()
-                        .status(StatusCode::OK)
-                        .body(Body::from("false"))
-                        .unwrap(),
-                }
-            })
-            .or(warp::path("side-effect")
-                .and(warp::post())
-                .and(warp::body::bytes())
-                .map(move |body: Bytes| {
-                    let body = String::from_utf8(body.to_vec()).unwrap();
-                    info!("received POST message: {body}");
-                    events_clone.lock().unwrap().push(body.clone());
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .body("OK")
-                        .unwrap()
-                }));
-
-        warp::serve(route)
-            .run(
-                format!("0.0.0.0:{}", host_http_port)
-                    .parse::<SocketAddr>()
-                    .unwrap(),
-            )
-            .await;
-    });
-
+    let http_server = TestHttpServer::start(host_http_port, 2);
     let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
 
     let mut env = HashMap::new();
@@ -247,8 +236,117 @@ async fn atomic_region() {
     drop(executor);
     http_server.abort();
 
-    let events = events.lock().unwrap().clone();
+    let events = http_server.get_events();
     println!("events:\n - {}", events.join("\n - "));
 
     check!(events == vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn idempotence_on() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let host_http_port = context.host_http_port();
+    let http_server = TestHttpServer::start(host_http_port, 1);
+
+    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), context.host_http_port().to_string());
+
+    let worker_id = executor
+        .try_start_worker_versioned(&template_id, 0, "idempotence-flag", vec![], env)
+        .await
+        .unwrap();
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/idempotence-flag",
+            vec![common::val_bool(true)],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    http_server.abort();
+
+    let events = http_server.get_events();
+    println!("events:\n - {}", events.join("\n - "));
+
+    check!(events == vec!["1", "1"]);
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn idempotence_off() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let host_http_port = context.host_http_port();
+    let http_server = TestHttpServer::start(host_http_port, 1);
+
+    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), context.host_http_port().to_string());
+
+    let worker_id = executor
+        .try_start_worker_versioned(&template_id, 0, "idempotence-flag", vec![], env)
+        .await
+        .unwrap();
+
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/idempotence-flag",
+            vec![common::val_bool(false)],
+        )
+        .await;
+
+    drop(executor);
+    http_server.abort();
+
+    let events = http_server.get_events();
+    println!("events:\n - {}", events.join("\n - "));
+    println!("result: {:?}", result);
+
+    check!(events == vec!["1"]);
+    check!(result.is_err());
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn persist_nothing() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let host_http_port = context.host_http_port();
+    let http_server = TestHttpServer::start(host_http_port, 2);
+
+    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), context.host_http_port().to_string());
+
+    let worker_id = executor
+        .try_start_worker_versioned(&template_id, 0, "persist-nothing", vec![], env)
+        .await
+        .unwrap();
+
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api/persist-nothing", vec![])
+        .await;
+
+    drop(executor);
+    http_server.abort();
+
+    let events = http_server.get_events();
+    println!("events:\n - {}", events.join("\n - "));
+    println!("result: {:?}", result);
+
+    check!(events == vec!["1", "2", "3", "2", "2", "4"]);
+    check!(result.is_ok());
 }

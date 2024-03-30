@@ -19,17 +19,19 @@ use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
 
+use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UriExtensions;
-use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
 use crate::preview2::golem::api::host::{OplogIndex, PersistenceLevel, RetryPolicy};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::OplogEntry;
+use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{PromiseId, TemplateId, Timestamp, WorkerId};
+use golem_common::model::{PromiseId, TemplateId, WorkerId};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
@@ -92,9 +94,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         record_host_function_call("golem::api", "get_oplog_index");
         let result = self.state.oplog_idx;
         if self.state.is_live() {
-            self.state
-                .set_oplog_entry(OplogEntry::nop(Timestamp::now_utc()))
-                .await;
+            self.state.set_oplog_entry(OplogEntry::nop()).await;
         } else {
             let _ = get_oplog_entry!(self.state, OplogEntry::NoOp);
         }
@@ -121,9 +121,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
             // Write an oplog entry with the new jump and then restart the worker
             self.state.deleted_regions.add(jump.clone());
-            self.state
-                .set_oplog_entry(OplogEntry::jump(Timestamp::now_utc(), jump))
-                .await;
+            self.state.set_oplog_entry(OplogEntry::jump(jump)).await;
             self.state.commit_oplog().await;
 
             debug!(
@@ -176,16 +174,14 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         self.state.consume_hint_entries().await;
         if self.state.is_live() {
             self.state
-                .set_oplog_entry(OplogEntry::BeginAtomicRegion {
-                    timestamp: Timestamp::now_utc(),
-                })
+                .set_oplog_entry(OplogEntry::begin_atomic_region())
                 .await;
         } else {
             let _ = get_oplog_entry!(self.state, OplogEntry::BeginAtomicRegion)?;
 
             match self
                 .state
-                .lookup_oplog_entry_end_operation(begin_index)
+                .lookup_oplog_entry(begin_index, OplogEntry::is_end_atomic_region)
                 .await
             {
                 Some(end_index) => {
@@ -209,7 +205,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                     };
                     self.state.deleted_regions.add(deleted_region.clone());
                     self.state
-                        .set_oplog_entry(OplogEntry::jump(Timestamp::now_utc(), deleted_region))
+                        .set_oplog_entry(OplogEntry::jump(deleted_region))
                         .await;
                     self.state.commit_oplog().await;
                 }
@@ -223,10 +219,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         self.state.consume_hint_entries().await;
         if self.state.is_live() {
             self.state
-                .set_oplog_entry(OplogEntry::EndAtomicRegion {
-                    timestamp: Timestamp::now_utc(),
-                    begin_index: begin,
-                })
+                .set_oplog_entry(OplogEntry::end_atomic_region(begin))
                 .await;
         } else {
             let _ = get_oplog_entry!(self.state, OplogEntry::EndAtomicRegion)?;
@@ -251,10 +244,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         self.state.consume_hint_entries().await;
         if self.state.is_live() {
             self.state
-                .set_oplog_entry(OplogEntry::ChangeRetryPolicy {
-                    timestamp: Timestamp::now_utc(),
-                    new_policy: new_retry_policy,
-                })
+                .set_oplog_entry(OplogEntry::change_retry_policy(new_retry_policy))
                 .await;
         } else {
             let _ = get_oplog_entry!(self.state, OplogEntry::ChangeRetryPolicy)?;
@@ -263,26 +253,57 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_oplog_persistence_level(&mut self) -> anyhow::Result<PersistenceLevel> {
-        unimplemented!()
+        record_host_function_call("golem::api", "get_oplog_persistence_level");
+        Ok(self.state.persistence_level.clone().into())
     }
 
     async fn set_oplog_persistence_level(
         &mut self,
-        _new_persistence_level: PersistenceLevel,
+        new_persistence_level: PersistenceLevel,
     ) -> anyhow::Result<()> {
-        unimplemented!()
+        record_host_function_call("golem::api", "set_oplog_persistence_level");
+        // commit all pending entries and change persistence level
+        if self.state.is_live() {
+            self.state.commit_oplog().await;
+        }
+        self.state.persistence_level = new_persistence_level.into();
+        debug!(
+            "Worker {}'s oplog persistence level is set to {:?}",
+            self.worker_id, self.state.persistence_level
+        );
+        Ok(())
     }
 
     async fn get_idempotence_mode(&mut self) -> anyhow::Result<bool> {
-        unimplemented!()
+        record_host_function_call("golem::api", "get_idempotence_mode");
+        Ok(self.state.assume_idempotence)
     }
 
-    async fn set_idempotence_mode(&mut self, _idempotent: bool) -> anyhow::Result<()> {
-        unimplemented!()
+    async fn set_idempotence_mode(&mut self, idempotent: bool) -> anyhow::Result<()> {
+        record_host_function_call("golem::api", "set_idempotence_mode");
+        self.state.assume_idempotence = idempotent;
+        Ok(())
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem::api::host::Uuid> {
-        unimplemented!()
+        record_host_function_call("golem::api", "generate_idempotency_key");
+        let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
+            self,
+            WrappedFunctionType::ReadLocal,
+            "golem api::generate_idempotency_key",
+            |_ctx| {
+                Box::pin(async move {
+                    let uuid = Uuid::new_v4();
+                    Ok::<Uuid, GolemError>(uuid)
+                })
+            },
+            |_ctx, uuid: &Uuid| Ok(uuid.as_u64_pair()),
+            |_ctx, (high_bits, low_bits)| {
+                Box::pin(async move { Ok(Uuid::from_u64_pair(high_bits, low_bits)) })
+            },
+        )
+        .await?;
+        Ok(uuid.into())
     }
 }
 
@@ -362,6 +383,16 @@ impl From<RetryPolicy> for RetryConfig {
             min_delay: Duration::from_nanos(value.min_delay),
             max_delay: Duration::from_nanos(value.max_delay),
             multiplier: value.multiplier,
+        }
+    }
+}
+
+impl From<Uuid> for golem::api::host::Uuid {
+    fn from(uuid: Uuid) -> Self {
+        let (high_bits, low_bits) = uuid.as_u64_pair();
+        golem::api::host::Uuid {
+            high_bits,
+            low_bits,
         }
     }
 }

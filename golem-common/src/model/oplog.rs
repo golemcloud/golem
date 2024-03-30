@@ -82,11 +82,19 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         begin_index: u64,
     },
+    /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
+    /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
+    /// unfinished remote writes cannot be recovered.
+    BeginRemoteWrite { timestamp: Timestamp },
+    /// Marks the end of a remote write operation. Only used when idempotence mode is off.
+    EndRemoteWrite {
+        timestamp: Timestamp,
+        begin_index: u64,
+    },
 }
 
 impl OplogEntry {
     pub fn imported_function_invoked<R: Encode>(
-        timestamp: Timestamp,
         function_name: String,
         response: &R,
         wrapped_function_type: WrappedFunctionType,
@@ -94,7 +102,7 @@ impl OplogEntry {
         let serialized_response = serialize(response)?.to_vec();
 
         Ok(OplogEntry::ImportedFunctionInvoked {
-            timestamp,
+            timestamp: Timestamp::now_utc(),
             function_name,
             response: serialized_response,
             wrapped_function_type,
@@ -102,7 +110,6 @@ impl OplogEntry {
     }
 
     pub fn exported_function_invoked<R: Encode>(
-        timestamp: Timestamp,
         function_name: String,
         request: &R,
         invocation_key: Option<InvocationKey>,
@@ -110,7 +117,7 @@ impl OplogEntry {
     ) -> Result<OplogEntry, String> {
         let serialized_request = serialize(request)?.to_vec();
         Ok(OplogEntry::ExportedFunctionInvoked {
-            timestamp,
+            timestamp: Timestamp::now_utc(),
             function_name,
             request: serialized_request,
             invocation_key,
@@ -119,16 +126,120 @@ impl OplogEntry {
     }
 
     pub fn exported_function_completed<R: Encode>(
-        timestamp: Timestamp,
         response: &R,
         consumed_fuel: i64,
     ) -> Result<OplogEntry, String> {
         let serialized_response = serialize(response)?.to_vec();
         Ok(OplogEntry::ExportedFunctionCompleted {
-            timestamp,
+            timestamp: Timestamp::now_utc(),
             response: serialized_response,
             consumed_fuel,
         })
+    }
+
+    pub fn jump(jump: OplogRegion) -> OplogEntry {
+        OplogEntry::Jump {
+            timestamp: Timestamp::now_utc(),
+            jump,
+        }
+    }
+
+    pub fn nop() -> OplogEntry {
+        OplogEntry::NoOp {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn suspend() -> OplogEntry {
+        OplogEntry::Suspend {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn error(error: WorkerError) -> OplogEntry {
+        OplogEntry::Error {
+            timestamp: Timestamp::now_utc(),
+            error,
+        }
+    }
+
+    pub fn interrupted() -> OplogEntry {
+        OplogEntry::Interrupted {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn exited() -> OplogEntry {
+        OplogEntry::Exited {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn create_promise(promise_id: PromiseId) -> OplogEntry {
+        OplogEntry::CreatePromise {
+            timestamp: Timestamp::now_utc(),
+            promise_id,
+        }
+    }
+
+    pub fn complete_promise(promise_id: PromiseId, data: Vec<u8>) -> OplogEntry {
+        OplogEntry::CompletePromise {
+            timestamp: Timestamp::now_utc(),
+            promise_id,
+            data,
+        }
+    }
+
+    pub fn change_retry_policy(new_policy: RetryConfig) -> OplogEntry {
+        OplogEntry::ChangeRetryPolicy {
+            timestamp: Timestamp::now_utc(),
+            new_policy,
+        }
+    }
+
+    pub fn begin_atomic_region() -> OplogEntry {
+        OplogEntry::BeginAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn end_atomic_region(begin_index: u64) -> OplogEntry {
+        OplogEntry::EndAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn begin_remote_write() -> OplogEntry {
+        OplogEntry::BeginRemoteWrite {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn end_remote_write(begin_index: u64) -> OplogEntry {
+        OplogEntry::EndRemoteWrite {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn is_end_atomic_region(&self, idx: u64) -> bool {
+        matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_end_remote_write(&self, idx: u64) -> bool {
+        matches!(self, OplogEntry::EndRemoteWrite { begin_index, .. } if *begin_index == idx)
+    }
+
+    /// True if the oplog entry is a "hint" that should be skipped during replay
+    pub fn is_hint(&self) -> bool {
+        matches!(
+            self,
+            OplogEntry::Suspend { .. }
+                | OplogEntry::Error { .. }
+                | OplogEntry::Interrupted { .. }
+                | OplogEntry::Exited { .. }
+        )
     }
 
     pub fn response<T: DeserializeOwned + Decode>(&self) -> Result<Option<T>, String> {
@@ -199,7 +310,7 @@ impl OplogEntry {
                 let deserialized_array: Vec<Vec<u8>> = serde_json::from_slice(payload)
                     .unwrap_or_else(|err| {
                         panic!(
-                            "Failed to deserialize oplog payload: {:?}: {err}",
+                            "Failed to deserialize oplog payload for {function_name}: {:?}: {err}",
                             std::str::from_utf8(payload).unwrap_or("???")
                         )
                     });
@@ -213,25 +324,6 @@ impl OplogEntry {
                 Ok(Some(function_input))
             }
         }
-    }
-
-    pub fn jump(timestamp: Timestamp, jump: OplogRegion) -> OplogEntry {
-        OplogEntry::Jump { timestamp, jump }
-    }
-
-    pub fn nop(timestamp: Timestamp) -> OplogEntry {
-        OplogEntry::NoOp { timestamp }
-    }
-
-    /// True if the oplog entry is a "hint" that should be skipped during replay
-    pub fn is_hint(&self) -> bool {
-        matches!(
-            self,
-            OplogEntry::Suspend { .. }
-                | OplogEntry::Error { .. }
-                | OplogEntry::Interrupted { .. }
-                | OplogEntry::Exited { .. }
-        )
     }
 }
 
@@ -267,9 +359,7 @@ mod tests {
 
     #[test]
     fn oplog_entry_imported_function_invoked_payload_roundtrip() {
-        let timestamp = Timestamp::now_utc();
         let entry = OplogEntry::imported_function_invoked(
-            timestamp,
             "function_name".to_string(),
             &("example payload".to_string()),
             WrappedFunctionType::ReadLocal,
@@ -304,8 +394,6 @@ mod tests {
 
     #[test]
     fn oplog_entry_exported_function_invoked_payload_roundtrip() {
-        let timestamp = Timestamp::now_utc();
-
         let val1 = Val {
             val: Some(val::Val::Result(Box::new(ValResult {
                 discriminant: 0,
@@ -315,7 +403,6 @@ mod tests {
             }))),
         };
         let entry = OplogEntry::exported_function_invoked(
-            timestamp,
             "function_name".to_string(),
             &vec![val1.clone()],
             Some(InvocationKey {
@@ -367,8 +454,6 @@ mod tests {
 
     #[test]
     fn oplog_entry_exported_function_completed_roundtrip() {
-        let timestamp = Timestamp::now_utc();
-
         let val1 = Val {
             val: Some(val::Val::Result(Box::new(ValResult {
                 discriminant: 0,
@@ -382,7 +467,6 @@ mod tests {
         };
 
         let entry = OplogEntry::exported_function_completed(
-            timestamp,
             &vec![val1.clone(), val2.clone()],
             1_000_000_000,
         )

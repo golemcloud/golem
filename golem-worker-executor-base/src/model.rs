@@ -210,6 +210,41 @@ impl Display for LastError {
     }
 }
 
+#[derive(Clone, Debug, PartialOrd, PartialEq)]
+pub enum PersistenceLevel {
+    PersistNothing,
+    PersistRemoteSideEffects,
+    Smart,
+}
+
+impl From<crate::preview2::golem::api::host::PersistenceLevel> for PersistenceLevel {
+    fn from(value: crate::preview2::golem::api::host::PersistenceLevel) -> Self {
+        match value {
+            crate::preview2::golem::api::host::PersistenceLevel::PersistNothing => {
+                PersistenceLevel::PersistNothing
+            }
+            crate::preview2::golem::api::host::PersistenceLevel::PersistRemoteSideEffects => {
+                PersistenceLevel::PersistRemoteSideEffects
+            }
+            crate::preview2::golem::api::host::PersistenceLevel::Smart => PersistenceLevel::Smart,
+        }
+    }
+}
+
+impl From<PersistenceLevel> for crate::preview2::golem::api::host::PersistenceLevel {
+    fn from(value: PersistenceLevel) -> Self {
+        match value {
+            PersistenceLevel::PersistNothing => {
+                crate::preview2::golem::api::host::PersistenceLevel::PersistNothing
+            }
+            PersistenceLevel::PersistRemoteSideEffects => {
+                crate::preview2::golem::api::host::PersistenceLevel::PersistRemoteSideEffects
+            }
+            PersistenceLevel::Smart => crate::preview2::golem::api::host::PersistenceLevel::Smart,
+        }
+    }
+}
+
 #[cfg(test)]
 mod shard_id_tests {
     use golem_common::model::TemplateId;

@@ -20,6 +20,7 @@ use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::serialized::SerializableStreamError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
+use crate::model::PersistenceLevel;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime_wasi::preview2::bindings::wasi::io::streams::{
@@ -145,7 +146,8 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let event_service = &self.public_state.event_service;
 
         let mut is_std = false;
-        let is_live = self.state.is_live();
+        let is_live = self.state.is_live()
+            || self.state.persistence_level == PersistenceLevel::PersistNothing;
         let output = self.table.get(&self_)?;
         if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
             if is_live {
@@ -176,7 +178,8 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let event_service = &self.public_state.event_service;
 
         let mut is_std = false;
-        let is_live = self.state.is_live();
+        let is_live = self.state.is_live()
+            || self.state.persistence_level == PersistenceLevel::PersistNothing;
         let output = self.table.get(&self_)?;
         if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
             if is_live {
