@@ -11,6 +11,7 @@ import public "golem/worker/invoke_result.proto";
 import public "golem/worker/invoke_result_json.proto";
 import public "golem/worker/versioned_worker_id.proto";
 import public "golem/worker/worker_error.proto";
+import public "golem/worker/worker_filter.proto";
 import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/log_event.proto";
 import public "golem/worker/worker_id.proto";
@@ -21,12 +22,14 @@ service WorkerService {
   rpc CompletePromise (CompletePromiseRequest) returns (CompletePromiseResponse);
   rpc DeleteWorker (DeleteWorkerRequest) returns (DeleteWorkerResponse);
   rpc GetWorkerMetadata (GetWorkerMetadataRequest) returns (GetWorkerMetadataResponse);
+
   rpc InterruptWorker (InterruptWorkerRequest) returns (InterruptWorkerResponse);
   rpc InvokeAndAwait (InvokeAndAwaitRequest) returns (InvokeAndAwaitResponse);
   rpc Invoke (InvokeRequest) returns (InvokeResponse);
   rpc GetInvocationKey (GetInvocationKeyRequest) returns (GetInvocationKeyResponse);
   rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
+  rpc GetWorkerMetadatas(GetWorkerMetadatasRequest) returns (GetWorkerMetadatasResponse);
 
 
   // Temporary for proxying the REST API
@@ -175,3 +178,23 @@ message InvokeAndAwaitResponseJson {
   }
 }
 
+message GetWorkerMetadatasRequest {
+  golem.template.TemplateId template_id = 1;
+  golem.worker.WorkerFilter filter = 2;
+  uint64 cursor = 3;
+  uint64 count = 4;
+  bool precise = 5;
+}
+
+
+message GetWorkerMetadatasResponse {
+  oneof result {
+    GetWorkerMetadatasSuccessResponse success = 1;
+    WorkerError error = 2;
+  }
+}
+
+message GetWorkerMetadatasSuccessResponse {
+  repeated golem.worker.WorkerMetadata workers = 1;
+  uint64 cursor = 2;
+}

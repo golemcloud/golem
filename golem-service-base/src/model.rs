@@ -3084,6 +3084,17 @@ impl RoutingTable {
             self.number_of_shards.value,
         ))
     }
+
+    pub fn random(&self) -> Option<&Pod> {
+        use rand::seq::IteratorRandom;
+        self.shard_assignments
+            .values()
+            .choose(&mut rand::thread_rng())
+    }
+
+    pub fn first(&self) -> Option<&Pod> {
+        self.shard_assignments.values().next()
+    }
 }
 
 impl From<GrpcRoutingTable> for RoutingTable {

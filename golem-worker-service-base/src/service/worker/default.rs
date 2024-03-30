@@ -19,7 +19,8 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     GetInvocationKeyRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest,
     ResumeWorkerRequest,
 };
-use golem_common::model::{AccountId, CallingConvention, InvocationKey, TemplateId};
+
+use golem_common::model::{AccountId, CallingConvention, InvocationKey, TemplateId, WorkerFilter};
 use golem_service_base::model::{
     GolemErrorUnknown, PromiseId, ResourceLimits, VersionedWorkerId, WorkerId, WorkerMetadata,
 };
@@ -140,6 +141,15 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerMetadata>;
+
+    async fn get_metadatas(
+        &self,
+        template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: u64,
+        count: u64,
+        precise: bool,
+    ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)>;
 
     async fn resume(&self, worker_id: &WorkerId, auth_ctx: &AuthCtx) -> WorkerResult<()>;
 }
@@ -773,6 +783,17 @@ where
         Ok(metadata)
     }
 
+    async fn get_metadatas(
+        &self,
+        template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: u64,
+        count: u64,
+        precise: bool,
+    ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
+        todo!()
+    }
+
     async fn resume(&self, worker_id: &WorkerId, _auth_ctx: &AuthCtx) -> WorkerResult<()> {
         self.retry_on_invalid_shard_id(
             worker_id,
@@ -1105,6 +1126,17 @@ where
             template_version: 0,
             retry_count: 0,
         })
+    }
+
+    async fn get_metadatas(
+        &self,
+        _template_id: &TemplateId,
+        _filter: Option<WorkerFilter>,
+        _cursor: u64,
+        _count: u64,
+        _precise: bool,
+    ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
+        Ok((None, vec![]))
     }
 
     async fn resume(&self, _worker_id: &WorkerId, _auth_ctx: &AuthCtx) -> WorkerResult<()> {
