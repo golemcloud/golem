@@ -336,7 +336,7 @@ impl Evaluator for Expr {
                 Expr::PatternMatch(input_expr, constructors) => {
                     let constructors: &Vec<(ConstructorPattern, Expr)> = &constructors
                         .iter()
-                        .map(|constructor| (constructor.0 .0.clone(), *constructor.0 .1.clone()))
+                        .map(|constructor| (constructor.0 .0.clone(), *constructor.0.1.clone()))
                         .collect();
 
                     handle_pattern_match(&input_expr, constructors, input)
@@ -357,6 +357,7 @@ fn handle_pattern_match(
     constructors: &Vec<(ConstructorPattern, Expr)>,
     input: &TypeAnnotatedValue,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
+    dbg!("the constructors are {}", constructors);
     let match_evaluated = input_expr.evaluate(input)?;
 
     let mut resolved_result: Option<TypeAnnotatedValue> = None;
@@ -371,35 +372,40 @@ fn handle_pattern_match(
                         "Pattern matching is currently supported only for single pattern in constructor. i.e, {}(person), {}, {}(person_info) etc and not {}(age, birth_date)".to_string(),
                     ));
                 } else {
-                    let pattern_expr_variable = match &patterns[0] {
-                        ConstructorPattern::Literal(expr) => match *expr.clone() {
-                            Expr::Variable(variable) => variable,
+                    // Lazily evaluated. We need to look at the patterns only when it is required
+                    let pattern_expr_variable = || { match &patterns.get(0) {
+                        Some(ConstructorPattern::Literal(expr)) => match *expr.clone() {
+                            Expr::Variable(variable) => Ok(variable),
                             _ => {
-                                return Err(EvaluationError::Message(
+                                 Err(EvaluationError::Message(
                                         "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
-                                    ));
+                                    ))
                             }
                         },
+                        None => Err(EvaluationError::Message(
+                            "Zero patterns found".to_string(),
+                        )),
                         _ => {
-                            return Err(EvaluationError::Message(
+                            Err(EvaluationError::Message(
                                 "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
-                            ));
+                            ))
                         }
-                    };
+                    }};
                     match condition_key {
                         ConstructorTypeName::InBuiltConstructor(constructor_type) => {
                             match constructor_type {
                                 InBuiltConstructorInner::Some => match &match_evaluated {
                                     TypeAnnotatedValue::Option { value, .. } => match value {
                                         Some(v) => {
+                                            let pattern_expr_variable = pattern_expr_variable()?;
                                             let result = possible_resolution.evaluate(
                                                 &input.merge(&TypeAnnotatedValue::Record {
                                                     value: vec![(
-                                                        pattern_expr_variable.to_string(),
+                                                        pattern_expr_variable.clone(),
                                                         *v.clone(),
                                                     )],
                                                     typ: vec![(
-                                                        pattern_expr_variable.to_string(),
+                                                        pattern_expr_variable.clone(),
                                                         AnalysedType::from(v.as_ref()),
                                                     )],
                                                 }),
@@ -415,18 +421,21 @@ fn handle_pattern_match(
                                     // and we allow users to perform `match request.body.user-id { some(value) => value, none => 'not found'}`
                                     // even if request.body.user-id type is not Option
                                     other_type_annotated_value => {
-                                        possible_resolution.evaluate(
+                                        let pattern_expr_variable = pattern_expr_variable()?;
+                                        let result = possible_resolution.evaluate(
                                             &input.merge(&TypeAnnotatedValue::Record {
                                                 value: vec![(
-                                                    pattern_expr_variable.to_string(),
+                                                    pattern_expr_variable.clone(),
                                                     other_type_annotated_value.clone(),
                                                 )],
                                                 typ: vec![(
-                                                    pattern_expr_variable.to_string(),
+                                                    pattern_expr_variable.clone(),
                                                     AnalysedType::from(other_type_annotated_value),
                                                 )],
                                             }),
                                         )?;
+
+                                        resolved_result = Some(result);
                                     }
                                 },
                                 InBuiltConstructorInner::None => match &match_evaluated {
@@ -448,11 +457,11 @@ fn handle_pattern_match(
                                             let result = possible_resolution.evaluate(
                                                 &input.merge(&TypeAnnotatedValue::Record {
                                                     value: vec![(
-                                                        pattern_expr_variable.to_string(),
+                                                        pattern_expr_variable()?.to_string(),
                                                         *v.clone().unwrap(),
                                                     )],
                                                     typ: vec![(
-                                                        pattern_expr_variable.to_string(),
+                                                        pattern_expr_variable()?.to_string(),
                                                         AnalysedType::from(
                                                             v.as_ref().unwrap().deref(),
                                                         ),
@@ -475,11 +484,11 @@ fn handle_pattern_match(
                                             let result = &possible_resolution.evaluate(
                                                 &input.merge(&TypeAnnotatedValue::Record {
                                                     value: vec![(
-                                                        pattern_expr_variable.to_string(),
+                                                        pattern_expr_variable()?.to_string(),
                                                         *v.clone().unwrap(),
                                                     )],
                                                     typ: vec![(
-                                                        pattern_expr_variable.to_string(),
+                                                        pattern_expr_variable()?.to_string(),
                                                         AnalysedType::from(
                                                             v.as_ref().unwrap().deref(),
                                                         ),
@@ -826,13 +835,13 @@ mod tests {
                            "id": "pId"
                         }
                    "#,
-        ).result_with_worker_response_key();
+        );
 
         let expr = Expr::from_primitive_string(
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response);
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         assert_eq!(
             result,
             Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
