@@ -40,7 +40,7 @@ use crate::grpc::WorkerExecutorImpl;
 use crate::http_server::HttpServerImpl;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
-use crate::services::golem_config::GolemConfig;
+use crate::services::golem_config::{GolemConfig, WorkersServiceConfig};
 use crate::services::invocation_key::{InvocationKeyService, InvocationKeyServiceDefault};
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{OplogService, OplogServiceDefault};
@@ -49,8 +49,12 @@ use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
 use crate::services::shard_manager::ShardManagerService;
 use crate::services::template::TemplateService;
-use crate::services::worker::WorkerService;
+use crate::services::worker::{WorkerService, WorkerServiceInMemory, WorkerServiceRedis};
 use crate::services::worker_activator::{LazyWorkerActivator, WorkerActivator};
+use crate::services::worker_enumeration::{
+    RunningWorkerEnumerationService, RunningWorkerEnumerationServiceDefault,
+    WorkerEnumerationService, WorkerEnumerationServiceInMemory, WorkerEnumerationServiceRedis,
+};
 use crate::services::{blob_store, key_value, promise, shard_manager, template, All};
 use crate::workerctx::WorkerCtx;
 
@@ -74,6 +78,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         template_service: Arc<dyn TemplateService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
+        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         golem_config: Arc<GolemConfig>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
@@ -141,14 +147,47 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         let promise_service = promise::configured(&golem_config.promises, pool.clone());
         let shard_service = Arc::new(ShardServiceDefault::new());
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
+
         let oplog_service = Arc::new(OplogServiceDefault::new(pool.clone()).await);
-        let worker_service = services::worker::configured(
-            &golem_config.workers,
-            pool.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-        );
+
+        let (worker_service, worker_enumeration_service) = match &golem_config.workers {
+            WorkersServiceConfig::InMemory => {
+                let worker_service = Arc::new(WorkerServiceInMemory::new());
+                let enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync> = Arc::new(
+                    WorkerEnumerationServiceInMemory::new(worker_service.clone()),
+                );
+
+                (
+                    worker_service as Arc<dyn WorkerService + Send + Sync>,
+                    enumeration_service,
+                )
+            }
+            WorkersServiceConfig::Redis => {
+                let worker_service = Arc::new(WorkerServiceRedis::new(
+                    pool.clone(),
+                    shard_service.clone(),
+                    oplog_service.clone(),
+                ));
+                let enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync> =
+                    Arc::new(WorkerEnumerationServiceRedis::new(
+                        pool.clone(),
+                        worker_service.clone(),
+                        oplog_service.clone(),
+                        golem_config.clone(),
+                    ));
+
+                (
+                    worker_service as Arc<dyn WorkerService + Send + Sync>,
+                    enumeration_service,
+                )
+            }
+        };
+
         let active_workers = self.create_active_workers(&golem_config);
+
+        let running_worker_enumeration_service = Arc::new(
+            RunningWorkerEnumerationServiceDefault::new(active_workers.clone()),
+        );
 
         let shard_manager_service = shard_manager::configured(&golem_config.shard_manager_service);
 
@@ -194,6 +233,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 template_service,
                 shard_manager_service,
                 worker_service,
+                worker_enumeration_service,
+                running_worker_enumeration_service,
                 promise_service,
                 golem_config.clone(),
                 invocation_key_service,

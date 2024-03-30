@@ -22,10 +22,15 @@ use std::sync::Arc;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
+use golem_api_grpc::proto::golem::workerexecutor::{
+    GetRunningWorkerMetadatasRequest, GetRunningWorkerMetadatasResponse, GetWorkerMetadatasRequest,
+    GetWorkerMetadatasResponse,
+};
 use golem_common::cache::PendingOrFinal;
 use golem_common::model as common_model;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, ShardId, WorkerMetadata, WorkerStatus,
+    AccountId, CallingConvention, InvocationKey, ShardId, WorkerFilter, WorkerMetadata,
+    WorkerStatus,
 };
 use golem_wasm_rpc::protobuf::Val;
 use tokio::sync::mpsc;
@@ -44,7 +49,8 @@ use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActiva
 use crate::services::worker_event::LogLevel;
 use crate::services::{
     worker_event, All, HasActiveWorkers, HasAll, HasInvocationKeyService, HasPromiseService,
-    HasShardManagerService, HasShardService, HasWorkerService, UsesAllDeps,
+    HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::{invoke, invoke_and_await, Worker};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
@@ -668,6 +674,79 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             // TODO: add error details
         })
     }
+
+    async fn get_running_worker_metadatas_internal(
+        &self,
+        request: golem::workerexecutor::GetRunningWorkerMetadatasRequest,
+    ) -> Result<Vec<golem::worker::WorkerMetadata>, GolemError> {
+        let template_id: common_model::TemplateId = request
+            .template_id
+            .and_then(|t| t.try_into().ok())
+            .ok_or(GolemError::invalid_request("Invalid template id"))?;
+
+        let filter: Option<WorkerFilter> = match request.filter {
+            Some(f) => Some(f.try_into().map_err(GolemError::invalid_request)?),
+            _ => None,
+        };
+
+        let workers = self
+            .running_worker_enumeration_service()
+            .get(&template_id, filter)
+            .await?;
+
+        let result: Vec<golem::worker::WorkerMetadata> = workers
+            .iter()
+            .map(|worker| self.to_proto_metadata(worker.clone()))
+            .collect();
+
+        Ok(result)
+    }
+
+    async fn get_worker_metadatas_internal(
+        &self,
+        request: golem::workerexecutor::GetWorkerMetadatasRequest,
+    ) -> Result<(Option<u64>, Vec<golem::worker::WorkerMetadata>), GolemError> {
+        let template_id: common_model::TemplateId = request
+            .template_id
+            .and_then(|t| t.try_into().ok())
+            .ok_or(GolemError::invalid_request("Invalid template id"))?;
+
+        let filter: Option<WorkerFilter> = match request.filter {
+            Some(f) => Some(f.try_into().map_err(GolemError::invalid_request)?),
+            _ => None,
+        };
+
+        let (new_cursor, workers) = self
+            .worker_enumeration_service()
+            .get(
+                &template_id,
+                filter,
+                request.cursor,
+                request.count,
+                request.precise,
+            )
+            .await?;
+
+        let result: Vec<golem::worker::WorkerMetadata> = workers
+            .iter()
+            .map(|worker| self.to_proto_metadata(worker.clone()))
+            .collect();
+
+        Ok((new_cursor, result))
+    }
+
+    fn to_proto_metadata(&self, value: WorkerMetadata) -> golem::worker::WorkerMetadata {
+        golem::worker::WorkerMetadata {
+            worker_id: Some(value.worker_id.worker_id.into_proto()),
+            account_id: Some(value.account_id.into()),
+            args: value.args,
+            env: HashMap::from_iter(value.env.iter().cloned()),
+            template_version: value.worker_id.template_version,
+            status: Into::<golem::worker::WorkerStatus>::into(value.last_known_status.status)
+                .into(),
+            retry_count: 0,
+        }
+    }
 }
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static> UsesAllDeps
@@ -1204,6 +1283,81 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })),
+                &err,
+            ),
+        }
+    }
+
+    async fn get_running_worker_metadatas(
+        &self,
+        request: Request<GetRunningWorkerMetadatasRequest>,
+    ) -> Result<Response<GetRunningWorkerMetadatasResponse>, Status> {
+        let request = request.into_inner();
+        let record = RecordedGrpcRequest::new(
+            "get_running_worker_metadatas",
+            format!("template_id={:?}", request.template_id),
+        );
+        let result = self.get_running_worker_metadatas_internal(request).await;
+        match result {
+            Ok(workers) => record.succeed(Ok(Response::new(
+                golem::workerexecutor::GetRunningWorkerMetadatasResponse {
+                    result: Some(
+                        golem::workerexecutor::get_running_worker_metadatas_response::Result::Success(
+                            golem::workerexecutor::GetRunningWorkerMetadatasSuccessResponse {
+                                workers
+                            }
+                        ),
+                    ),
+                },
+            ))),
+            Err(err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::GetRunningWorkerMetadatasResponse {
+                        result: Some(
+                            golem::workerexecutor::get_running_worker_metadatas_response::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
+                &err,
+            ),
+        }
+    }
+
+    async fn get_worker_metadatas(
+        &self,
+        request: Request<GetWorkerMetadatasRequest>,
+    ) -> Result<Response<GetWorkerMetadatasResponse>, Status> {
+        let request = request.into_inner();
+        let record = RecordedGrpcRequest::new(
+            "get_worker_metadatas",
+            format!("template_id={:?}", request.template_id),
+        );
+        let result = self.get_worker_metadatas_internal(request).await;
+        match result {
+            Ok((cursor, workers)) => record.succeed(Ok(Response::new(
+                golem::workerexecutor::GetWorkerMetadatasResponse {
+                    result: Some(
+                        golem::workerexecutor::get_worker_metadatas_response::Result::Success(
+                            golem::workerexecutor::GetWorkerMetadatasSuccessResponse {
+                                workers,
+                                cursor: cursor.unwrap_or(0), // FIXME can we do option in proto?
+                            },
+                        ),
+                    ),
+                },
+            ))),
+            Err(err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::GetWorkerMetadatasResponse {
+                        result: Some(
+                            golem::workerexecutor::get_worker_metadatas_response::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
                 &err,
             ),
         }

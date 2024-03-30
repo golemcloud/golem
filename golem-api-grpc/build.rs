@@ -11,7 +11,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .file_descriptor_set_path(out_dir.join("services.bin"))
         .extern_path(".wasm.rpc", "::golem_wasm_rpc::protobuf")
         .type_attribute(
-            ".",
+            "golem.worker.LogEvent",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.LogEvent.event",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.StdOutLog",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.StdErrLog",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.Level",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.Log",
             "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
         )
         .include_file("mod.rs")
@@ -52,6 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/worker/worker_error.proto",
                 "proto/golem/worker/worker_id.proto",
                 "proto/golem/worker/worker_metadata.proto",
+                "proto/golem/worker/worker_filter.proto",
                 "proto/golem/worker/worker_status.proto",
                 "proto/golem/worker/worker_service.proto",
                 "proto/golem/workerexecutor/worker_executor.proto",
