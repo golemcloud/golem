@@ -990,6 +990,48 @@ impl Display for WorkerFilter {
     }
 }
 
+impl FromStr for WorkerFilter {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let elements = s.split(" ").collect::<Vec<&str>>();
+
+        if elements.len() == 3 {
+            let arg = elements[0];
+            let comparator = elements[1];
+            let value = elements[2];
+            match arg {
+                "name" => Ok(WorkerFilter::new_name(
+                    comparator.try_into()?,
+                    value.to_string(),
+                )),
+                "version" => Ok(WorkerFilter::new_version(
+                    comparator.try_into()?,
+                    value.try_into()?,
+                )),
+                "status" if comparator == "==" => {
+                    Ok(WorkerFilter::new_status(comparator.try_into()?))
+                }
+                "created_at" => Ok(WorkerFilter::new_created_at(
+                    comparator.try_into()?,
+                    value.try_into()?,
+                )),
+                _ if arg.starts_with("env.") => {
+                    let name = &arg[4..];
+                    Ok(WorkerFilter::new_env(
+                        name.to_string(),
+                        comparator.try_into()?,
+                        value.to_string(),
+                    ))
+                }
+                _ => Err(format!("Invalid filter: {}", s)),
+            }
+        } else {
+            Err(format!("Invalid filter: {}", s))
+        }
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilter {
     type Error = String;
 
@@ -1157,6 +1199,18 @@ impl From<StringFilterComparator> for golem_api_grpc::proto::golem::common::Stri
     }
 }
 
+impl FromStr for StringFilterComparator {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "==" => Ok(StringFilterComparator::Equal),
+            "like" => Ok(StringFilterComparator::Like),
+            _ => Err(format!("Unknown String Filter Comparator: {}", s)),
+        }
+    }
+}
+
 impl TryFrom<i32> for StringFilterComparator {
     type Error = String;
 
@@ -1221,6 +1275,21 @@ impl FilterComparator {
             FilterComparator::LessEqual => value1 <= value2,
             FilterComparator::Greater => value1 > value2,
             FilterComparator::GreaterEqual => value1 >= value2,
+        }
+    }
+}
+
+impl FromStr for FilterComparator {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "==" => Ok(FilterComparator::Equal),
+            "!=" => Ok(FilterComparator::NotEqual),
+            ">=" => Ok(FilterComparator::GreaterEqual),
+            ">" => Ok(FilterComparator::Greater),
+            "<=" => Ok(FilterComparator::LessEqual),
+            "<" => Ok(FilterComparator::Less),
+            _ => Err(format!("Unknown Filter Comparator: {}", s)),
         }
     }
 }
@@ -1428,7 +1497,7 @@ mod tests {
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).not(),
             WorkerFilter::new_not(WorkerFilter::new_name(
                 StringFilterComparator::Equal,
-                "worker-1".to_string()
+                "worker-1".to_string(),
             ))
         );
 
@@ -1437,7 +1506,7 @@ mod tests {
                 .and(WorkerFilter::new_status(WorkerStatus::Running)),
             WorkerFilter::new_and(vec![
                 WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-                WorkerFilter::new_status(WorkerStatus::Running)
+                WorkerFilter::new_status(WorkerStatus::Running),
             ])
         );
 
@@ -1448,7 +1517,7 @@ mod tests {
             WorkerFilter::new_and(vec![
                 WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
                 WorkerFilter::new_status(WorkerStatus::Running),
-                WorkerFilter::new_version(FilterComparator::Equal, 1)
+                WorkerFilter::new_version(FilterComparator::Equal, 1),
             ])
         );
 
@@ -1457,7 +1526,7 @@ mod tests {
                 .or(WorkerFilter::new_status(WorkerStatus::Running)),
             WorkerFilter::new_or(vec![
                 WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-                WorkerFilter::new_status(WorkerStatus::Running)
+                WorkerFilter::new_status(WorkerStatus::Running),
             ])
         );
 
@@ -1468,7 +1537,7 @@ mod tests {
             WorkerFilter::new_or(vec![
                 WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
                 WorkerFilter::new_status(WorkerStatus::Running),
-                WorkerFilter::new_version(FilterComparator::Equal, 1)
+                WorkerFilter::new_version(FilterComparator::Equal, 1),
             ])
         );
 
@@ -1479,9 +1548,9 @@ mod tests {
             WorkerFilter::new_or(vec![
                 WorkerFilter::new_and(vec![
                     WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-                    WorkerFilter::new_status(WorkerStatus::Running)
+                    WorkerFilter::new_status(WorkerStatus::Running),
                 ]),
-                WorkerFilter::new_version(FilterComparator::Equal, 1)
+                WorkerFilter::new_version(FilterComparator::Equal, 1),
             ])
         );
 
@@ -1492,9 +1561,9 @@ mod tests {
             WorkerFilter::new_and(vec![
                 WorkerFilter::new_or(vec![
                     WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-                    WorkerFilter::new_status(WorkerStatus::Running)
+                    WorkerFilter::new_status(WorkerStatus::Running),
                 ]),
-                WorkerFilter::new_version(FilterComparator::Equal, 1)
+                WorkerFilter::new_version(FilterComparator::Equal, 1),
             ])
         );
     }

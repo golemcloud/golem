@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use golem_common::model::{CallingConvention, InvocationKey, TemplateId};
+use golem_common::model::{CallingConvention, InvocationKey, TemplateId, WorkerFilter};
 use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use poem_openapi::param::{Path, Query};
@@ -261,13 +261,27 @@ impl WorkerApi {
         count: Query<Option<u64>>,
         precise: Query<Option<bool>>,
     ) -> Result<Json<WorkerMetadatasResponse>> {
-        // TODO filter
+        let filter = if let Some(filter) = filter.0 {
+            if filter.is_empty() {
+                None
+            } else {
+                let mut filters = Vec::new();
+                for f in filter {
+                    filters.push(WorkerFilter::from_str(&f).map_err(|e| {
+                        WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                    })?);
+                }
+                Some(WorkerFilter::new_and(filters))
+            }
+        } else {
+            None
+        };
 
         let (cursor, workers) = self
             .worker_service
             .get_metadatas(
                 &template_id.0,
-                None,
+                filter,
                 cursor.0.unwrap_or(0),
                 count.0.unwrap_or(50),
                 precise.0.unwrap_or(false),
