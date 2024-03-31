@@ -16,15 +16,6 @@ pub struct ValidationError<E> {
     pub errors: Vec<E>,
 }
 
-impl<E: Display> From<ValidationError<E>> for ValidationError<String> {
-    fn from(e: ValidationError<E>) -> Self {
-        ValidationError {
-            errors: e.errors.iter().map(|e| e.to_string()).collect(),
-        }
-    }
-
-}
-
 #[derive(Copy, Clone)]
 pub struct ApiDefinitionValidatorNoop<A, E> {}
 

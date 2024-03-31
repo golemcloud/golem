@@ -65,7 +65,7 @@ impl TryFrom<crate::http::http_api_definition::HttpApiDefinition> for HttpApiDef
     }
 }
 
-impl TryInto<HttpApiDefinition> for HttpApiDefinition {
+impl TryInto<crate::http::http_api_definition::HttpApiDefinition> for HttpApiDefinition {
     type Error = String;
 
     fn try_into(self) -> Result<crate::http::http_api_definition::HttpApiDefinition, Self::Error> {
