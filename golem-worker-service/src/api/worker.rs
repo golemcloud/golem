@@ -256,7 +256,7 @@ impl WorkerApi {
     async fn get_worker_metadatas(
         &self,
         template_id: Path<TemplateId>,
-        filter: Query<Option<Vec<String>>>,
+        filter: Query<Option<String>>, // FIXME array support - filter: Query<Option<Vec<String>>>,
         cursor: Query<Option<u64>>,
         count: Query<Option<u64>>,
         precise: Query<Option<bool>>,
@@ -265,13 +265,17 @@ impl WorkerApi {
             if filter.is_empty() {
                 None
             } else {
-                let mut filters = Vec::new();
-                for f in filter {
-                    filters.push(WorkerFilter::from_str(&f).map_err(|e| {
-                        WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
-                    })?);
-                }
-                Some(WorkerFilter::new_and(filters))
+                // let mut filters = Vec::new();
+                // for f in filter {
+                //     filters.push(WorkerFilter::from_str(&f).map_err(|e| {
+                //         WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                //     })?);
+                // }
+                // Some(WorkerFilter::new_and(filters))
+
+                Some(WorkerFilter::from_str(&filter).map_err(|e| {
+                    WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                })?)
             }
         } else {
             None

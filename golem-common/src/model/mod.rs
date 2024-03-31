@@ -63,6 +63,17 @@ impl Display for Timestamp {
     }
 }
 
+impl FromStr for Timestamp {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match iso8601_timestamp::Timestamp::parse(s) {
+            Some(ts) => Ok(Self(ts)),
+            None => Err("Invalid timestamp".to_string()),
+        }
+    }
+}
+
 impl serde::Serialize for Timestamp {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -586,6 +597,23 @@ pub enum WorkerStatus {
     Exited,
 }
 
+impl FromStr for WorkerStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Running" => Ok(WorkerStatus::Running),
+            "Idle" => Ok(WorkerStatus::Idle),
+            "Suspended" => Ok(WorkerStatus::Suspended),
+            "Interrupted" => Ok(WorkerStatus::Interrupted),
+            "Retrying" => Ok(WorkerStatus::Retrying),
+            "Failed" => Ok(WorkerStatus::Failed),
+            "Exited" => Ok(WorkerStatus::Exited),
+            _ => Err(format!("Unknown worker status: {}", s)),
+        }
+    }
+}
+
 impl From<WorkerStatus> for golem_api_grpc::proto::golem::worker::WorkerStatus {
     fn from(value: WorkerStatus) -> Self {
         match value {
@@ -1002,25 +1030,29 @@ impl FromStr for WorkerFilter {
             let value = elements[2];
             match arg {
                 "name" => Ok(WorkerFilter::new_name(
-                    comparator.try_into()?,
+                    comparator.parse()?,
                     value.to_string(),
                 )),
                 "version" => Ok(WorkerFilter::new_version(
-                    comparator.try_into()?,
-                    value.try_into()?,
+                    comparator.parse()?,
+                    value
+                        .parse()
+                        .map_err(|e| format!("Invalid filter value: {}", e))?,
                 )),
-                "status" if comparator == "==" => {
-                    Ok(WorkerFilter::new_status(comparator.try_into()?))
-                }
+                "status" if comparator == "==" => Ok(WorkerFilter::new_status(
+                    value
+                        .parse()
+                        .map_err(|e| format!("Invalid filter: {}", e))?,
+                )),
                 "created_at" => Ok(WorkerFilter::new_created_at(
-                    comparator.try_into()?,
-                    value.try_into()?,
+                    comparator.parse()?,
+                    value.parse()?,
                 )),
                 _ if arg.starts_with("env.") => {
                     let name = &arg[4..];
                     Ok(WorkerFilter::new_env(
                         name.to_string(),
-                        comparator.try_into()?,
+                        comparator.parse()?,
                         value.to_string(),
                     ))
                 }
