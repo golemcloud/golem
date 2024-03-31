@@ -11,6 +11,7 @@ use crate::http::http_request::{ApiInputPath, InputHttpRequest};
 use crate::service::http_request_definition_lookup::HttpRequestDefinitionLookup;
 use crate::worker_request::worker_request_to_response::WorkerRequestToResponse;
 use crate::worker_request::WorkerRequest;
+use crate::worker_binding::worker_binding_resolver::WorkerBindingResolver;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service

@@ -67,7 +67,7 @@ impl<Namespace, ApiDefinition> Default for InMemoryRegistry<Namespace, ApiDefini
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace, ApiDefinition> ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition> {
+impl<Namespace: ApiNamespace, ApiDefinition: Send + Clone> ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition> {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -146,7 +146,7 @@ impl RedisApiRegistry {
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace, ApiDefinition> ApiDefinitionRepo<Namespace, ApiDefinition> for RedisApiRegistry {
+impl<Namespace: ApiNamespace, ApiDefinition: bincode::Decode + bincode::Encode + Sync> ApiDefinitionRepo<Namespace, ApiDefinition> for RedisApiRegistry {
     async fn register(
         &self,
         definition: &ApiDefinition,
