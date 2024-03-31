@@ -17,10 +17,10 @@ pub struct ValidationError<E> {
 }
 
 #[derive(Copy, Clone)]
-pub struct ApiDefinitionValidatorNoop<A, E> {}
+pub struct ApiDefinitionValidatorNoop {}
 
 #[async_trait]
-impl<A, E> ApiDefinitionValidatorService<A, E> for ApiDefinitionValidatorNoop<A, E> {
+impl<A, E> ApiDefinitionValidatorService<A, E> for ApiDefinitionValidatorNoop {
     fn validate(
         &self,
         _api: &A,

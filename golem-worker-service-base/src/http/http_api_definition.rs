@@ -10,7 +10,7 @@ use poem_openapi::{Enum, NewType};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use Iterator;
-use crate::definition::api_definition::{ApiDefinitionId, Version};
+use crate::definition::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasVersion, Version};
 use crate::worker_binding::golem_worker_binding::{HasGolemWorkerBindings, GolemWorkerBinding};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
@@ -27,6 +27,18 @@ impl HasGolemWorkerBindings for HttpApiDefinition {
             .iter()
             .map(|route| route.binding.clone())
             .collect()
+    }
+}
+
+impl HasApiDefinitionId for HttpApiDefinition {
+    fn get_api_definition_id(&self) -> ApiDefinitionId {
+        self.id.clone()
+    }
+}
+
+impl HasVersion for HttpApiDefinition {
+    fn get_version(&self) -> Version {
+        self.version.clone()
     }
 }
 

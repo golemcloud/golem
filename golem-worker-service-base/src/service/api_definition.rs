@@ -4,9 +4,10 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use golem_common::model::TemplateId;
 use golem_service_base::model::Template;
 use crate::api::common::RouteValidationError;
-use crate::definition::api_definition::{ApiDefinitionId, Version};
+use crate::definition::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasVersion, Version};
 use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 use crate::worker_binding::golem_worker_binding::HasGolemWorkerBindings;
 
@@ -116,6 +117,8 @@ pub enum ApiRegistrationError {
     RepoError(#[from] ApiRegistrationRepoError),
     #[error(transparent)]
     ValidationError(#[from] ValidationError<String>),
+    #[error(transparent)]
+    TemplateNotFoundError(TemplateId)
 }
 
 pub struct RegisterApiDefinitionDefault<AuthCtx, Namespace, ApiDefinition, ValidationError> {
@@ -146,21 +149,16 @@ where
         auth_ctx: &Auth,
     ) -> Result<Vec<Template>, ApiRegistrationError> {
         let get_templates = definition
-            .routes
+            .get_golem_worker_bindings()
             .iter()
             .cloned()
-            .map(|route| (route.binding.template.clone(), route))
-            .collect::<HashMap<_, _>>()
-            .into_values()
-            .map(|route| {
+            .map(|binding| {
                 async move {
-                    let id = &route.binding.template;
+                    let id = &binding.template;
                     self.template_service.get_latest(id, auth_ctx).await.map_err(|e| {
                     tracing::error!("Error getting latest template: {:?}", e);
-                    // TODO: Better error message.
-                    RouteValidationError::from_route(
-                        route,
-                        "Error getting latest template".into(),
+                    ApiRegistrationError::TemplateNotFoundError(
+                        id.clone()
                     )
                 })
                 }
@@ -187,7 +185,7 @@ where
 }
 
 #[async_trait]
-impl<AuthCtx, Namespace, ApiDefinition, ValidationError> ApiDefinitionService<AuthCtx, Namespace, ApiDefinition>
+impl<AuthCtx, Namespace, ApiDefinition: HasApiDefinitionId + HasVersion, ValidationError> ApiDefinitionService<AuthCtx, Namespace, ApiDefinition>
     for RegisterApiDefinitionDefault<AuthCtx, Namespace, ApiDefinition, ValidationError>
 where
     AuthCtx: Send + Sync,
@@ -206,8 +204,8 @@ where
 
         let key = ApiDefinitionKey {
             namespace: namespace.clone(),
-            id: definition.id.clone(),
-            version: definition.version.clone(),
+            id: definition.get_api_definition_id().clone(),
+            version: definition.get_version().clone(),
         };
 
         self.register_repo.register(definition, &key).await?;

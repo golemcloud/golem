@@ -24,3 +24,11 @@ impl Display for Version {
         write!(f, "{}", self.0)
     }
 }
+
+pub trait HasApiDefinitionId {
+    fn get_api_definition_id(&self) -> ApiDefinitionId;
+}
+
+pub trait HasVersion {
+    fn get_version(&self) -> Version;
+}
