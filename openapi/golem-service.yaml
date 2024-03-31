@@ -79,7 +79,9 @@ paths:
         name: filter
         deprecated: false
         schema:
-          type: string
+          type: array
+          items:
+            type: string
         explode: true
         style: form
       - in: query

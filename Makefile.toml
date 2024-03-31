@@ -210,7 +210,7 @@ dependencies = ["build"]
 script = "./target/debug/golem-template-service --dump-openapi-yaml > ./target/golem-template-service.yaml"
 
 [tasks.merge-openapi]
-install_crate = { crate_name = "golem-openapi-client-generator", version = "0.0.4" }
+install_crate = { crate_name = "golem-openapi-client-generator", version = "0.0.5" }
 dependencies = ["generate-worker-service-openapi", "generate-template-service-openapi"]
 command = "golem-openapi-client-generator"
 args = ["merge", "--spec-yaml", "./target/golem-template-service.yaml", "./target/golem-worker-service.yaml", "--output-yaml", "./target/golem-service.yaml"]

@@ -1039,11 +1039,7 @@ impl FromStr for WorkerFilter {
                         .parse()
                         .map_err(|e| format!("Invalid filter value: {}", e))?,
                 )),
-                "status" if comparator == "==" => Ok(WorkerFilter::new_status(
-                    value
-                        .parse()
-                        .map_err(|e| format!("Invalid filter: {}", e))?,
-                )),
+                "status" if comparator == "==" => Ok(WorkerFilter::new_status(value.parse()?)),
                 "created_at" => Ok(WorkerFilter::new_created_at(
                     comparator.parse()?,
                     value.parse()?,
