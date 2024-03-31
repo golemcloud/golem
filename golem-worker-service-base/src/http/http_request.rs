@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use crate::merge::Merge;
-use crate::primitive::{Number, Primitive};
 use crate::tokeniser::tokenizer::Token;
 use derive_more::{Display, FromStr, Into};
 use golem_service_base::type_inference::infer_analysed_type;
@@ -10,13 +9,16 @@ use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
+use crate::evaluator::primitive::{Number, Primitive};
+use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern};
+use crate::worker_binding::worker_binding_resolver::{ResolvedWorkerBinding, WorkerBindingResolver};
 
 // An input request from external API gateways, that is then resolved to a worker request, using API definitions
 pub struct InputHttpRequest<'a> {
     pub input_path: ApiInputPath<'a>,
     pub headers: &'a HeaderMap,
     pub req_method: &'a Method,
-    pub req_body: serde_json::Value,
+    pub req_body: Value,
 }
 
 impl InputHttpRequest<'_> {
@@ -188,6 +190,83 @@ fn get_typed_value_from_primitive(value: &str) -> TypeAnnotatedValue {
     }
 }
 
+impl<'a> WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest<'a> {
+    fn resolve(&self, api_definition: &HttpApiDefinition) -> Option<ResolvedWorkerBinding> {
+        let api_request = self;
+        let routes = &api_definition.routes;
+
+        for route in routes {
+            let spec_method = &route.method;
+            let spec_path_variables = route.path.get_path_variables();
+            let spec_path_literals = route.path.get_path_literals();
+            let spec_query_variables = route.path.get_query_variables();
+
+            let request_method: &Method = api_request.req_method;
+            let request_path_components: HashMap<usize, String> =
+                api_request.input_path.path_components();
+
+            if match_method(request_method, spec_method)
+                && match_literals(&request_path_components, &spec_path_literals)
+            {
+                let request_details = api_request
+                    .get_type_annotated_value(spec_query_variables, &spec_path_variables);
+
+                let request_details = request_details.clone().ok()?;
+
+                let resolved_binding = ResolvedWorkerBinding {
+                    resolved_worker_binding_template: route.binding.clone(),
+                    typed_value_from_input: { request_details },
+                };
+                return Some(resolved_binding);
+            } else {
+                continue;
+            }
+        }
+
+        None
+    }
+}
+
+fn match_method(input_request_method: &Method, spec_method_pattern: &MethodPattern) -> bool {
+    match input_request_method.clone() {
+        Method::CONNECT => spec_method_pattern.is_connect(),
+        Method::GET => spec_method_pattern.is_get(),
+        Method::POST => spec_method_pattern.is_post(),
+        Method::HEAD => spec_method_pattern.is_head(),
+        Method::DELETE => spec_method_pattern.is_delete(),
+        Method::PUT => spec_method_pattern.is_put(),
+        Method::PATCH => spec_method_pattern.is_patch(),
+        Method::OPTIONS => spec_method_pattern.is_options(),
+        Method::TRACE => spec_method_pattern.is_trace(),
+        _ => false,
+    }
+}
+
+fn match_literals(
+    request_path_values: &HashMap<usize, String>,
+    spec_path_literals: &HashMap<usize, String>,
+) -> bool {
+    if spec_path_literals.is_empty() && !request_path_values.is_empty() {
+        false
+    } else {
+        let mut literals_match = true;
+
+        for (index, spec_literal) in spec_path_literals.iter() {
+            if let Some(request_literal) = request_path_values.get(index) {
+                if request_literal.trim() != spec_literal.trim() {
+                    literals_match = false;
+                    break;
+                }
+            } else {
+                literals_match = false;
+                break;
+            }
+        }
+
+        literals_match
+    }
+}
+
 #[derive(PartialEq, Debug, Display, FromStr, Into)]
 pub struct WorkerRequestResolutionError(pub String);
 
@@ -241,14 +320,14 @@ impl<'a> ApiInputPath<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::http_api_definition::HttpApiDefinition;
+    use super::*;
+    use std::collections::HashMap;
     use crate::worker_request::WorkerRequest;
 
-    use crate::worker_binding_resolver::WorkerBindingResolver;
     use golem_common::model::TemplateId;
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
-
-    use crate::http_request::{ApiInputPath, InputHttpRequest};
+    use crate::http::http_api_definition::HttpApiDefinition;
+    use crate::http::http_request::{ApiInputPath, InputHttpRequest};
 
     #[test]
     fn test_worker_request_resolution() {
@@ -1038,5 +1117,38 @@ mod tests {
         );
 
         serde_yaml::from_str(yaml_string.as_str()).unwrap()
+    }
+
+    #[test]
+    fn test_match_literals() {
+        let mut request_path_values = HashMap::new();
+        request_path_values.insert(0, "users".to_string());
+        request_path_values.insert(1, "1".to_string());
+
+        let mut spec_path_literals = HashMap::new();
+        spec_path_literals.insert(0, "users".to_string());
+        spec_path_literals.insert(1, "1".to_string());
+
+        assert!(match_literals(&request_path_values, &spec_path_literals));
+    }
+
+    #[test]
+    fn test_match_literals_empty_request_path() {
+        let request_path_values = HashMap::new();
+
+        let mut spec_path_literals = HashMap::new();
+        spec_path_literals.insert(0, "get-cart-contents".to_string());
+
+        assert!(!match_literals(&request_path_values, &spec_path_literals));
+    }
+
+    #[test]
+    fn test_match_literals_empty_spec_path() {
+        let mut request_path_values = HashMap::new();
+        request_path_values.insert(0, "get-cart-contents".to_string());
+
+        let spec_path_literals = HashMap::new();
+
+        assert!(!match_literals(&request_path_values, &spec_path_literals));
     }
 }

@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::result::Result;
 
-use crate::http_api_definition;
-use crate::http_api_definition::{ApiDefinitionId, MethodPattern, Version};
-use crate::expr::Expr;
 use golem_common::model::TemplateId;
 use poem_openapi::*;
 use serde::{Deserialize, Serialize};
+use crate::definition::api_definition::{ApiDefinitionId, Version};
+use crate::expression::expr::Expr;
+use crate::http::http_api_definition::MethodPattern;
 
 // Mostly this data structures that represents the actual incoming request
 // exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.
@@ -47,10 +47,10 @@ pub struct ResponseMapping {
     pub headers: HashMap<String, serde_json::value::Value>,
 }
 
-impl TryFrom<http_api_definition::HttpApiDefinition> for HttpApiDefinition {
+impl TryFrom<crate::http::http_api_definition::HttpApiDefinition> for HttpApiDefinition {
     type Error = String;
 
-    fn try_from(value: http_api_definition::HttpApiDefinition) -> Result<Self, Self::Error> {
+    fn try_from(value: crate::http::http_api_definition::HttpApiDefinition) -> Result<Self, Self::Error> {
         let mut routes = Vec::new();
         for route in value.routes {
             let v = Route::try_from(route)?;
@@ -65,10 +65,10 @@ impl TryFrom<http_api_definition::HttpApiDefinition> for HttpApiDefinition {
     }
 }
 
-impl TryInto<http_api_definition::HttpApiDefinition> for HttpApiDefinition {
+impl TryInto<HttpApiDefinition> for HttpApiDefinition {
     type Error = String;
 
-    fn try_into(self) -> Result<http_api_definition::HttpApiDefinition, Self::Error> {
+    fn try_into(self) -> Result<crate::http::http_api_definition::HttpApiDefinition, Self::Error> {
         let mut routes = Vec::new();
 
         for route in self.routes {
@@ -76,7 +76,7 @@ impl TryInto<http_api_definition::HttpApiDefinition> for HttpApiDefinition {
             routes.push(v);
         }
 
-        Ok(http_api_definition::HttpApiDefinition {
+        Ok(crate::http::http_api_definition::HttpApiDefinition {
             id: self.id,
             version: self.version,
             routes,
@@ -84,10 +84,10 @@ impl TryInto<http_api_definition::HttpApiDefinition> for HttpApiDefinition {
     }
 }
 
-impl TryFrom<http_api_definition::Route> for Route {
+impl TryFrom<crate::http::http_api_definition::Route> for Route {
     type Error = String;
 
-    fn try_from(value: http_api_definition::Route) -> Result<Self, Self::Error> {
+    fn try_from(value: crate::http::http_api_definition::Route) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
         let binding = GolemWorkerBinding::try_from(value.binding)?;
 
@@ -99,15 +99,15 @@ impl TryFrom<http_api_definition::Route> for Route {
     }
 }
 
-impl TryInto<http_api_definition::Route> for Route {
+impl TryInto<crate::http::http_api_definition::Route> for Route {
     type Error = String;
 
-    fn try_into(self) -> Result<http_api_definition::Route, Self::Error> {
+    fn try_into(self) -> Result<crate::http::http_api_definition::Route, Self::Error> {
         let path =
-            http_api_definition::PathPattern::from(self.path.as_str()).map_err(|e| e.to_string())?;
+            crate::http::http_api_definition::PathPattern::from(self.path.as_str()).map_err(|e| e.to_string())?;
         let binding = self.binding.try_into()?;
 
-        Ok(http_api_definition::Route {
+        Ok(crate::http::http_api_definition::Route {
             method: self.method,
             path,
             binding,
@@ -115,10 +115,10 @@ impl TryInto<http_api_definition::Route> for Route {
     }
 }
 
-impl TryFrom<http_api_definition::ResponseMapping> for ResponseMapping {
+impl TryFrom<crate::worker_binding::golem_worker_binding::ResponseMapping> for ResponseMapping {
     type Error = String;
 
-    fn try_from(value: http_api_definition::ResponseMapping) -> Result<Self, Self::Error> {
+    fn try_from(value: crate::worker_binding::golem_worker_binding::ResponseMapping) -> Result<Self, Self::Error> {
         let body = serde_json::to_value(value.body).map_err(|e| e.to_string())?;
         let status = serde_json::to_value(value.status).map_err(|e| e.to_string())?;
         let mut headers = HashMap::new();
@@ -134,10 +134,10 @@ impl TryFrom<http_api_definition::ResponseMapping> for ResponseMapping {
     }
 }
 
-impl TryInto<http_api_definition::ResponseMapping> for ResponseMapping {
+impl TryInto<crate::worker_binding::golem_worker_binding::ResponseMapping> for ResponseMapping {
     type Error = String;
 
-    fn try_into(self) -> Result<http_api_definition::ResponseMapping, Self::Error> {
+    fn try_into(self) -> Result<crate::worker_binding::golem_worker_binding::ResponseMapping, Self::Error> {
         let body: Expr = serde_json::from_value(self.body).map_err(|e| e.to_string())?;
         let status: Expr = serde_json::from_value(self.status).map_err(|e| e.to_string())?;
         let mut headers = HashMap::new();
@@ -146,7 +146,7 @@ impl TryInto<http_api_definition::ResponseMapping> for ResponseMapping {
             headers.insert(key.to_string(), v);
         }
 
-        Ok(http_api_definition::ResponseMapping {
+        Ok(crate::worker_binding::golem_worker_binding::ResponseMapping {
             body,
             status,
             headers,
@@ -154,10 +154,10 @@ impl TryInto<http_api_definition::ResponseMapping> for ResponseMapping {
     }
 }
 
-impl TryFrom<http_api_definition::GolemWorkerBinding> for GolemWorkerBinding {
+impl TryFrom<crate::worker_binding::golem_worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     type Error = String;
 
-    fn try_from(value: http_api_definition::GolemWorkerBinding) -> Result<Self, Self::Error> {
+    fn try_from(value: crate::worker_binding::golem_worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
         let response: Option<ResponseMapping> = match value.response {
             Some(v) => {
                 let r = ResponseMapping::try_from(v)?;
@@ -182,13 +182,13 @@ impl TryFrom<http_api_definition::GolemWorkerBinding> for GolemWorkerBinding {
     }
 }
 
-impl TryInto<http_api_definition::GolemWorkerBinding> for GolemWorkerBinding {
+impl TryInto<crate::worker_binding::golem_worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     type Error = String;
 
-    fn try_into(self) -> Result<http_api_definition::GolemWorkerBinding, Self::Error> {
-        let response: Option<http_api_definition::ResponseMapping> = match self.response {
+    fn try_into(self) -> Result<crate::worker_binding::golem_worker_binding::GolemWorkerBinding, Self::Error> {
+        let response: Option<crate::worker_binding::golem_worker_binding::ResponseMapping> = match self.response {
             Some(v) => {
-                let r: http_api_definition::ResponseMapping = v.try_into()?;
+                let r: crate::worker_binding::golem_worker_binding::ResponseMapping = v.try_into()?;
                 Some(r)
             }
             None => None,
@@ -202,7 +202,7 @@ impl TryInto<http_api_definition::GolemWorkerBinding> for GolemWorkerBinding {
             function_params.push(v);
         }
 
-        Ok(http_api_definition::GolemWorkerBinding {
+        Ok(crate::worker_binding::golem_worker_binding::GolemWorkerBinding {
             template: self.template,
             worker_id,
             function_name: self.function_name,

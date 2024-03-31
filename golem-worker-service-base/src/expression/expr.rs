@@ -4,10 +4,10 @@ use std::str::FromStr;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
+use crate::evaluator::primitive::Primitive;
 
 use crate::parser::expr_parser::ExprParser;
 use crate::parser::{GolemParser, ParseError};
-use crate::primitive::Primitive;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
@@ -634,6 +634,7 @@ mod tests {
     use golem_wasm_rpc::TypeAnnotatedValue;
     use serde_json::{json, Value};
     use crate::expression::expr::Expr;
+    use crate::worker_request::worker_response::WorkerResponse;
 
     #[test]
     fn test_expr_from_json_value() {

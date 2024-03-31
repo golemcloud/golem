@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use crate::evaluator::{EvaluationError, Evaluator};
 use crate::merge::Merge;
-use crate::primitive::{GetPrimitive, Primitive};
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_request::WorkerRequest;
 use async_trait::async_trait;
@@ -17,6 +16,7 @@ use tracing::info;
 use crate::expression::expr::Expr;
 use crate::worker_binding::golem_worker_binding::ResponseMapping;
 use crate::worker_request::worker_request_to_response::WorkerRequestToResponse;
+use crate::evaluator::primitive::{GetPrimitive, Primitive};
 
 pub struct WorkerResponse {
     pub result: TypeAnnotatedValue,

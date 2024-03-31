@@ -1,9 +1,9 @@
 use std::rc::Rc;
 
 use strum_macros::Display;
+use crate::expression::expr::{ConstructorPattern, ConstructorPatternExpr, Expr, InnerNumber};
 
 use super::*;
-use crate::expr::*;
 use crate::tokeniser::cursor::TokenCursor;
 use crate::tokeniser::tokenizer::{Token, TokeniserResult, Tokenizer};
 

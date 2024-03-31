@@ -3,11 +3,12 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 use async_trait::async_trait;
 use golem_service_base::model::Template;
-use crate::api_definition::{ApiDefinitionId, Version};
-use crate::golem_worker_binding::HasGolemWorkerBindings;
+use crate::api::common::RouteValidationError;
+use crate::definition::api_definition::{ApiDefinitionId, Version};
+use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
+use crate::worker_binding::golem_worker_binding::HasGolemWorkerBindings;
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationError};
 use super::template::TemplateService;
@@ -157,7 +158,7 @@ where
                     self.template_service.get_latest(id, auth_ctx).await.map_err(|e| {
                     tracing::error!("Error getting latest template: {:?}", e);
                     // TODO: Better error message.
-                    crate::service::api_definition_validator::RouteValidationError::from_route(
+                    RouteValidationError::from_route(
                         route,
                         "Error getting latest template".into(),
                     )

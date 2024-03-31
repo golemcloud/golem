@@ -4,8 +4,7 @@ use golem_common::model::TemplateId;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Union};
 use serde::{Deserialize, Serialize};
-
-use crate::http_api_definition::MethodPattern;
+use crate::http::http_api_definition::MethodPattern;
 
 #[derive(Union)]
 #[oai(discriminator_name = "type", one_of = true)]
@@ -104,7 +103,7 @@ mod conversion {
     use super::{
         ApiEndpointError, RouteValidationError, ValidationErrorsBody, WorkerServiceErrorsBody,
     };
-    use crate::api_definition_repo::ApiRegistrationRepoError;
+    use crate::repo::api_definition_repo::ApiRegistrationRepoError;
     use crate::service::api_definition::ApiRegistrationError;
     use crate::service::api_definition_validator::ValidationError;
 
@@ -122,8 +121,8 @@ mod conversion {
         }
     }
 
-    impl From<ValidationError> for ApiEndpointError {
-        fn from(error: ValidationError) -> Self {
+    impl From<ValidationError<RouteValidationError>> for ApiEndpointError {
+        fn from(error: ValidationError<RouteValidationError>) -> Self {
             let error = WorkerServiceErrorsBody::Validation(ValidationErrorsBody {
                 errors: error
                     .errors
