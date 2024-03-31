@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 use crate::http::http_request::InputHttpRequest;
-use crate::worker_binding_resolver::{ResolvedWorkerBinding, WorkerBindingResolver};
-use golem_wasm_rpc::TypeAnnotatedValue;
-use std::collections::HashMap;
 
 use hyper::http::Method;
-use crate::golem_worker_binding::GolemWorkerBinding;
 use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern};
+use crate::worker_binding::worker_binding_resolver::{ResolvedWorkerBinding, WorkerBindingResolver};
 
 
 impl<'a> WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest<'a> {

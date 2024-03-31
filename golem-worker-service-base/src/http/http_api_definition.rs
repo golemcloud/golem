@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 
-use crate::expr::*;
 use crate::parser::path_pattern_parser::PathPatternParser;
 use crate::parser::{GolemParser, ParseError};
 use bincode::{Decode, Encode};
@@ -11,8 +10,8 @@ use poem_openapi::{Enum, NewType};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use Iterator;
-use crate::api_definition::{ApiDefinitionId, Version};
-use crate::golem_worker_binding::{GolemWorkerBinding, HasGolemWorkerBindings};
+use crate::definition::api_definition::{ApiDefinitionId, Version};
+use crate::worker_binding::golem_worker_binding::{HasGolemWorkerBindings, GolemWorkerBinding};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]
@@ -284,6 +283,7 @@ pub struct Route {
 #[cfg(test)]
 mod tests {
     use golem_common::serialization;
+    use crate::expression::expr::Expr;
 
     use super::*;
 

@@ -8,7 +8,7 @@ use bytes::Bytes;
 use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
 use tracing::{debug, info};
-use crate::api_definition::ApiDefinitionId;
+use crate::definition::api_definition::ApiDefinitionId;
 
 #[async_trait]
 pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {
@@ -372,15 +372,12 @@ mod redis_keys {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http_api_definition::{HttpApiDefinition, Version};
     use bincode::{Decode, Encode};
     use golem_common::config::RedisConfig;
     use serde::Deserialize;
     use std::fmt::Formatter;
-
-    use crate::api_definition_repo::{
-        ApiDefinitionKey, ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry,
-    };
+    use crate::definition::api_definition::{ApiDefinitionId, Version};
+    use crate::http::http_api_definition::HttpApiDefinition;
 
     #[derive(Clone, Eq, PartialEq, Debug, Hash, Decode, Encode, Deserialize)]
     struct CommonNamespace(String);

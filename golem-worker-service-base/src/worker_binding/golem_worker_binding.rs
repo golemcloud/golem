@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use bincode::{Decode, Encode};
-use golem_wasm_ast::core::Expr;
 use serde::{Deserialize, Serialize};
 use golem_common::model::TemplateId;
-use crate::expr::Expr;
+use crate::expression::expr::Expr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]

@@ -5,18 +5,18 @@ use crate::merge::Merge;
 use crate::primitive::{GetPrimitive, Primitive};
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_request::WorkerRequest;
-use crate::worker_request_to_response::WorkerRequestToResponse;
 use async_trait::async_trait;
 use golem_service_base::type_inference::*;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_ast::core::Expr;
 use golem_wasm_rpc::json::{get_json_from_typed_value, get_typed_value_from_json};
 use golem_wasm_rpc::TypeAnnotatedValue;
 use http::{HeaderMap, StatusCode};
 use poem::{Body, ResponseParts};
 use serde_json::json;
 use tracing::info;
+use crate::expression::expr::Expr;
 use crate::worker_binding::golem_worker_binding::ResponseMapping;
+use crate::worker_request::worker_request_to_response::WorkerRequestToResponse;
 
 pub struct WorkerResponse {
     pub result: TypeAnnotatedValue,
