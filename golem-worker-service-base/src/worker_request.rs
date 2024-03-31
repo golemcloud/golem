@@ -2,9 +2,8 @@ use golem_common::model::TemplateId;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
-
-use crate::worker_binding_resolver::ResolvedWorkerBinding;
 use crate::evaluator::{Evaluator, RawString};
+use crate::worker_binding::worker_binding_resolver::ResolvedWorkerBinding;
 
 // Every input request can be resolved to a worker request,
 // along with the value of any variables that's associated with it.
