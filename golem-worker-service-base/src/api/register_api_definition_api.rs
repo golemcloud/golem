@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::result::Result;
 
-use crate::api_definition;
-use crate::api_definition::{ApiDefinitionId, MethodPattern, Version};
+use crate::http_api_definition;
+use crate::http_api_definition::{ApiDefinitionId, MethodPattern, Version};
 use crate::expr::Expr;
 use golem_common::model::TemplateId;
 use poem_openapi::*;
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct ApiDefinition {
+pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
     pub version: Version,
     pub routes: Vec<Route>,
@@ -47,10 +47,10 @@ pub struct ResponseMapping {
     pub headers: HashMap<String, serde_json::value::Value>,
 }
 
-impl TryFrom<api_definition::ApiDefinition> for ApiDefinition {
+impl TryFrom<http_api_definition::HttpApiDefinition> for HttpApiDefinition {
     type Error = String;
 
-    fn try_from(value: api_definition::ApiDefinition) -> Result<Self, Self::Error> {
+    fn try_from(value: http_api_definition::HttpApiDefinition) -> Result<Self, Self::Error> {
         let mut routes = Vec::new();
         for route in value.routes {
             let v = Route::try_from(route)?;
@@ -65,10 +65,10 @@ impl TryFrom<api_definition::ApiDefinition> for ApiDefinition {
     }
 }
 
-impl TryInto<api_definition::ApiDefinition> for ApiDefinition {
+impl TryInto<http_api_definition::HttpApiDefinition> for HttpApiDefinition {
     type Error = String;
 
-    fn try_into(self) -> Result<api_definition::ApiDefinition, Self::Error> {
+    fn try_into(self) -> Result<http_api_definition::HttpApiDefinition, Self::Error> {
         let mut routes = Vec::new();
 
         for route in self.routes {
@@ -76,7 +76,7 @@ impl TryInto<api_definition::ApiDefinition> for ApiDefinition {
             routes.push(v);
         }
 
-        Ok(api_definition::ApiDefinition {
+        Ok(http_api_definition::HttpApiDefinition {
             id: self.id,
             version: self.version,
             routes,
@@ -84,10 +84,10 @@ impl TryInto<api_definition::ApiDefinition> for ApiDefinition {
     }
 }
 
-impl TryFrom<api_definition::Route> for Route {
+impl TryFrom<http_api_definition::Route> for Route {
     type Error = String;
 
-    fn try_from(value: api_definition::Route) -> Result<Self, Self::Error> {
+    fn try_from(value: http_api_definition::Route) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
         let binding = GolemWorkerBinding::try_from(value.binding)?;
 
@@ -99,15 +99,15 @@ impl TryFrom<api_definition::Route> for Route {
     }
 }
 
-impl TryInto<api_definition::Route> for Route {
+impl TryInto<http_api_definition::Route> for Route {
     type Error = String;
 
-    fn try_into(self) -> Result<api_definition::Route, Self::Error> {
+    fn try_into(self) -> Result<http_api_definition::Route, Self::Error> {
         let path =
-            api_definition::PathPattern::from(self.path.as_str()).map_err(|e| e.to_string())?;
+            http_api_definition::PathPattern::from(self.path.as_str()).map_err(|e| e.to_string())?;
         let binding = self.binding.try_into()?;
 
-        Ok(api_definition::Route {
+        Ok(http_api_definition::Route {
             method: self.method,
             path,
             binding,
@@ -115,10 +115,10 @@ impl TryInto<api_definition::Route> for Route {
     }
 }
 
-impl TryFrom<api_definition::ResponseMapping> for ResponseMapping {
+impl TryFrom<http_api_definition::ResponseMapping> for ResponseMapping {
     type Error = String;
 
-    fn try_from(value: api_definition::ResponseMapping) -> Result<Self, Self::Error> {
+    fn try_from(value: http_api_definition::ResponseMapping) -> Result<Self, Self::Error> {
         let body = serde_json::to_value(value.body).map_err(|e| e.to_string())?;
         let status = serde_json::to_value(value.status).map_err(|e| e.to_string())?;
         let mut headers = HashMap::new();
@@ -134,10 +134,10 @@ impl TryFrom<api_definition::ResponseMapping> for ResponseMapping {
     }
 }
 
-impl TryInto<api_definition::ResponseMapping> for ResponseMapping {
+impl TryInto<http_api_definition::ResponseMapping> for ResponseMapping {
     type Error = String;
 
-    fn try_into(self) -> Result<api_definition::ResponseMapping, Self::Error> {
+    fn try_into(self) -> Result<http_api_definition::ResponseMapping, Self::Error> {
         let body: Expr = serde_json::from_value(self.body).map_err(|e| e.to_string())?;
         let status: Expr = serde_json::from_value(self.status).map_err(|e| e.to_string())?;
         let mut headers = HashMap::new();
@@ -146,7 +146,7 @@ impl TryInto<api_definition::ResponseMapping> for ResponseMapping {
             headers.insert(key.to_string(), v);
         }
 
-        Ok(api_definition::ResponseMapping {
+        Ok(http_api_definition::ResponseMapping {
             body,
             status,
             headers,
@@ -154,10 +154,10 @@ impl TryInto<api_definition::ResponseMapping> for ResponseMapping {
     }
 }
 
-impl TryFrom<api_definition::GolemWorkerBinding> for GolemWorkerBinding {
+impl TryFrom<http_api_definition::GolemWorkerBinding> for GolemWorkerBinding {
     type Error = String;
 
-    fn try_from(value: api_definition::GolemWorkerBinding) -> Result<Self, Self::Error> {
+    fn try_from(value: http_api_definition::GolemWorkerBinding) -> Result<Self, Self::Error> {
         let response: Option<ResponseMapping> = match value.response {
             Some(v) => {
                 let r = ResponseMapping::try_from(v)?;
@@ -182,13 +182,13 @@ impl TryFrom<api_definition::GolemWorkerBinding> for GolemWorkerBinding {
     }
 }
 
-impl TryInto<api_definition::GolemWorkerBinding> for GolemWorkerBinding {
+impl TryInto<http_api_definition::GolemWorkerBinding> for GolemWorkerBinding {
     type Error = String;
 
-    fn try_into(self) -> Result<api_definition::GolemWorkerBinding, Self::Error> {
-        let response: Option<api_definition::ResponseMapping> = match self.response {
+    fn try_into(self) -> Result<http_api_definition::GolemWorkerBinding, Self::Error> {
+        let response: Option<http_api_definition::ResponseMapping> = match self.response {
             Some(v) => {
-                let r: api_definition::ResponseMapping = v.try_into()?;
+                let r: http_api_definition::ResponseMapping = v.try_into()?;
                 Some(r)
             }
             None => None,
@@ -202,7 +202,7 @@ impl TryInto<api_definition::GolemWorkerBinding> for GolemWorkerBinding {
             function_params.push(v);
         }
 
-        Ok(api_definition::GolemWorkerBinding {
+        Ok(http_api_definition::GolemWorkerBinding {
             template: self.template,
             worker_id,
             function_name: self.function_name,

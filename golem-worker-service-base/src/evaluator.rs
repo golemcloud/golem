@@ -490,7 +490,7 @@ fn handle_pattern_match(
 
 #[cfg(test)]
 mod tests {
-    use crate::api_definition::PathPattern;
+    use crate::http_api_definition::PathPattern;
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expr::Expr;
     use crate::getter::GetError;

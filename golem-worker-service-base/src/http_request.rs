@@ -241,7 +241,7 @@ impl<'a> ApiInputPath<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::api_definition::ApiDefinition;
+    use crate::http_api_definition::HttpApiDefinition;
     use crate::worker_request::WorkerRequest;
 
     use crate::api_request_route_resolver::WorkerBindingResolver;
@@ -256,7 +256,7 @@ mod tests {
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
         let function_params = "[\"a\", \"b\"]";
 
-        let api_specification: ApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${request.path.user-id}",
             function_params,
@@ -288,7 +288,7 @@ mod tests {
 
         let function_params = "[{\"x\" : \"y\"}]";
 
-        let api_specification: ApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${request.path.user-id}",
             function_params,
@@ -323,7 +323,7 @@ mod tests {
 
         let function_params = "[{\"x\" : \"${request.path.user-id}\"}]";
 
-        let api_specification: ApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${request.path.user-id}",
             function_params,
@@ -366,7 +366,7 @@ mod tests {
 
         let function_params = "[\"${request.path.user-id}\", \"${request.path.token-id}\"]";
 
-        let api_specification: ApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}?{token-id}",
             "shopping-cart-${request.path.user-id}",
             function_params,
@@ -418,7 +418,7 @@ mod tests {
         let function_params =
             "[\"${request.path.user-id}\", \"${request.path.token-id}\",  \"age-${request.body.age}\"]";
 
-        let api_specification: ApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}?{token-id}",
             "shopping-cart-${request.path.user-id}",
             function_params,
@@ -470,7 +470,7 @@ mod tests {
         let function_params =
             "[{ \"user-id\" : \"${request.path.user-id}\" }, \"${request.path.token-id}\",  \"age-${request.body.age}\", \"user-name\" : \"${request.header.username}\"]";
 
-        let api_specification: ApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}?{token-id}",
             "shopping-cart-${request.path.user-id}",
             function_params,
@@ -517,7 +517,7 @@ mod tests {
         let api_request = get_api_request("foo/2", None, &empty_headers, serde_json::Value::Null);
         let function_params = "[\"a\", \"b\"]";
 
-        let api_specification: ApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
             function_params,
@@ -555,7 +555,7 @@ mod tests {
 
         let function_params = "[\"${request.body}\"]";
 
-        let api_specification: ApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
             function_params,
@@ -592,7 +592,7 @@ mod tests {
 
         let function_params = "[\"${1 == 1}\"]";
 
-        let api_specification: ApiDefinition =
+        let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
@@ -624,7 +624,7 @@ mod tests {
 
         let function_params = "[\"${2 > 1}\"]";
 
-        let api_specification: ApiDefinition =
+        let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
@@ -656,7 +656,7 @@ mod tests {
 
         let function_params = "[\"${if (2 < 1) then 0 else 1}\"]";
 
-        let api_specification: ApiDefinition =
+        let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
@@ -693,7 +693,7 @@ mod tests {
 
         let function_params = "[\"${if (request.body.number < 11) then 0 else 1}\"]";
 
-        let api_specification: ApiDefinition =
+        let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
@@ -727,7 +727,7 @@ mod tests {
 
         let function_params = "[\"${if (request.body < 11) then request.path.user-id else 1}\", \"${if (request.body < 5) then ${request.path.user-id} else 1}\"]";
 
-        let api_specification: ApiDefinition =
+        let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
@@ -777,7 +777,7 @@ mod tests {
 
         let function_params = format!("[\"{}\", \"{}\"]", foo_key, bar_key);
 
-        let api_specification: ApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
             function_params.as_str(),
@@ -830,7 +830,7 @@ mod tests {
 
         let function_params = format!("[\"{}\", \"{}\"]", foo_key, bar_key);
 
-        let api_specification: ApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
             function_params.as_str(),
@@ -882,7 +882,7 @@ mod tests {
 
         let function_params = format!("[\"{}\"]", foo_key);
 
-        let api_specification: ApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
             function_params.as_str(),
@@ -940,7 +940,7 @@ mod tests {
 
         let function_params = format!("[\"{}\", \"{}\", \"{}\"]", foo_key, bar_key, token_key);
 
-        let api_specification: ApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "/foo/{user-id}",
             "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
             function_params.as_str(),
@@ -975,7 +975,7 @@ mod tests {
 
             let function_params = "[]";
 
-            let api_specification: ApiDefinition = get_api_spec(
+            let api_specification: HttpApiDefinition = get_api_spec(
                 definition_path,
                 "shopping-cart-${request.path.cart-id}",
                 function_params,
@@ -1019,7 +1019,7 @@ mod tests {
         }
     }
 
-    fn get_api_spec(path_pattern: &str, worker_id: &str, function_params: &str) -> ApiDefinition {
+    fn get_api_spec(path_pattern: &str, worker_id: &str, function_params: &str) -> HttpApiDefinition {
         let yaml_string = format!(
             r#"
           id: users-api

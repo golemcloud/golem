@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::api_definition::{ApiDefinition, ApiDefinitionId, Version};
+use crate::http_api_definition::{HttpApiDefinition, ApiDefinitionId, Version};
 use crate::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 use async_trait::async_trait;
 use golem_service_base::model::Template;
@@ -20,7 +20,7 @@ pub type ApiResult<T> = Result<T, ApiRegistrationError>;
 pub trait ApiDefinitionService<AuthCtx, Namespace> {
     async fn register(
         &self,
-        definition: &ApiDefinition,
+        definition: &HttpApiDefinition,
         namespace: Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId>;
@@ -31,7 +31,7 @@ pub trait ApiDefinitionService<AuthCtx, Namespace> {
         version: &Version,
         namespace: Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<ApiDefinition>>;
+    ) -> ApiResult<Option<HttpApiDefinition>>;
 
     async fn delete(
         &self,
@@ -45,14 +45,14 @@ pub trait ApiDefinitionService<AuthCtx, Namespace> {
         &self,
         namespace: Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<ApiDefinition>>;
+    ) -> ApiResult<Vec<HttpApiDefinition>>;
 
     async fn get_all_versions(
         &self,
         api_id: &ApiDefinitionId,
         namespace: Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<ApiDefinition>>;
+    ) -> ApiResult<Vec<HttpApiDefinition>>;
 }
 
 pub trait ApiNamespace:
@@ -140,7 +140,7 @@ where
 
     async fn get_all_templates(
         &self,
-        definition: &ApiDefinition,
+        definition: &HttpApiDefinition,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<Template>, ApiRegistrationError> {
         let get_templates = definition
@@ -193,7 +193,7 @@ where
 {
     async fn register(
         &self,
-        definition: &ApiDefinition,
+        definition: &HttpApiDefinition,
         namespace: Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId> {
@@ -219,7 +219,7 @@ where
         version: &Version,
         namespace: Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<ApiDefinition>> {
+    ) -> ApiResult<Option<HttpApiDefinition>> {
         let key = ApiDefinitionKey {
             namespace: namespace.clone(),
             id: api_definition_id.clone(),
@@ -255,7 +255,7 @@ where
         &self,
         namespace: Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<ApiDefinition>> {
+    ) -> ApiResult<Vec<HttpApiDefinition>> {
         let value = self.register_repo.get_all(&namespace).await?;
         Ok(value)
     }
@@ -265,7 +265,7 @@ where
         api_id: &ApiDefinitionId,
         namespace: Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<ApiDefinition>> {
+    ) -> ApiResult<Vec<HttpApiDefinition>> {
         let value = self
             .register_repo
             .get_all_versions(api_id, &namespace)
@@ -284,7 +284,7 @@ where
 {
     async fn register(
         &self,
-        _definition: &ApiDefinition,
+        _definition: &HttpApiDefinition,
         _namespace: Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId> {
@@ -297,7 +297,7 @@ where
         _version: &Version,
         _namespace: Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<ApiDefinition>> {
+    ) -> ApiResult<Option<HttpApiDefinition>> {
         Ok(None)
     }
 
@@ -315,7 +315,7 @@ where
         &self,
         _namespace: Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<ApiDefinition>> {
+    ) -> ApiResult<Vec<HttpApiDefinition>> {
         Ok(vec![])
     }
 
@@ -324,7 +324,7 @@ where
         _api_id: &ApiDefinitionId,
         _namespace: Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<ApiDefinition>> {
+    ) -> ApiResult<Vec<HttpApiDefinition>> {
         Ok(vec![])
     }
 }

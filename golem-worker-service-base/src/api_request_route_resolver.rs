@@ -3,13 +3,13 @@ use std::collections::HashMap;
 
 use hyper::http::Method;
 
-use crate::api_definition::{ApiDefinition, GolemWorkerBinding, MethodPattern};
+use crate::http_api_definition::{HttpApiDefinition, GolemWorkerBinding, MethodPattern};
 use crate::http_request::InputHttpRequest;
 
 // For any input request type, there should be a way to resolve the
 // worker binding template, which is then used to form the worker request
 pub trait WorkerBindingResolver {
-    fn resolve(&self, api_specification: &ApiDefinition) -> Option<ResolvedWorkerBinding>;
+    fn resolve(&self, api_specification: &HttpApiDefinition) -> Option<ResolvedWorkerBinding>;
 }
 
 #[derive(Debug, Clone)]
@@ -19,7 +19,7 @@ pub struct ResolvedWorkerBinding {
 }
 
 impl<'a> WorkerBindingResolver for InputHttpRequest<'a> {
-    fn resolve(&self, api_definition: &ApiDefinition) -> Option<ResolvedWorkerBinding> {
+    fn resolve(&self, api_definition: &HttpApiDefinition) -> Option<ResolvedWorkerBinding> {
         let api_request = self;
         let routes = &api_definition.routes;
 

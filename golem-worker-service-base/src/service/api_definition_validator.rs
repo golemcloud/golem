@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::api_definition::{ApiDefinition, MethodPattern, PathPattern, Route};
+use crate::http_api_definition::{HttpApiDefinition, MethodPattern, PathPattern, Route};
 use async_trait::async_trait;
 use golem_common::model::TemplateId;
 use golem_service_base::model::{
@@ -9,7 +9,7 @@ use golem_service_base::model::{
 use serde::{Deserialize, Serialize};
 
 pub trait ApiDefinitionValidatorService {
-    fn validate(&self, api: &ApiDefinition, templates: &[Template]) -> Result<(), ValidationError>;
+    fn validate(&self, api: &HttpApiDefinition, templates: &[Template]) -> Result<(), ValidationError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, thiserror::Error)]
@@ -42,7 +42,7 @@ impl RouteValidationError {
 pub struct ApiDefinitionValidatorDefault {}
 
 impl ApiDefinitionValidatorService for ApiDefinitionValidatorDefault {
-    fn validate(&self, api: &ApiDefinition, templates: &[Template]) -> Result<(), ValidationError> {
+    fn validate(&self, api: &HttpApiDefinition, templates: &[Template]) -> Result<(), ValidationError> {
         let templates: HashMap<&TemplateId, &TemplateMetadata> = templates
             .iter()
             .map(|template| {
@@ -156,7 +156,7 @@ pub struct ApiDefinitionValidatorNoop {}
 impl ApiDefinitionValidatorService for ApiDefinitionValidatorNoop {
     fn validate(
         &self,
-        _api: &ApiDefinition,
+        _api: &HttpApiDefinition,
         _templates: &[Template],
     ) -> Result<(), ValidationError> {
         Ok(())

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::api_definition::ResponseMapping;
+use crate::http_api_definition::ResponseMapping;
 use async_trait::async_trait;
 use hyper::header::HOST;
 use poem::http::StatusCode;

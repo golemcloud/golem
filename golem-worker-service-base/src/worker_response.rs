@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::api_definition::ResponseMapping;
+use crate::http_api_definition::ResponseMapping;
 use crate::evaluator::{EvaluationError, Evaluator};
 use crate::expr::Expr;
 use crate::merge::Merge;

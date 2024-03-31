@@ -3,8 +3,8 @@ pub mod worker;
 
 use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
 use async_trait::async_trait;
-use golem_worker_service_base::api_definition::{
-    ApiDefinition, ApiDefinitionId, ResponseMapping, Version,
+use golem_worker_service_base::http_api_definition::{
+    HttpApiDefinition, ApiDefinitionId, ResponseMapping, Version,
 };
 use golem_worker_service_base::api_definition_repo::{
     ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry,
@@ -175,7 +175,7 @@ impl HttpRequestDefinitionLookup for CustomRequestDefinitionLookupDefault {
     async fn get(
         &self,
         input_http_request: &InputHttpRequest<'_>,
-    ) -> Result<ApiDefinition, ApiDefinitionLookupError> {
+    ) -> Result<HttpApiDefinition, ApiDefinitionLookupError> {
         let api_definition_id = match get_header_value(
             input_http_request.headers,
             GOLEM_API_DEFINITION_ID_EXTENSION,

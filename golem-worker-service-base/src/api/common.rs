@@ -5,7 +5,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Union};
 use serde::{Deserialize, Serialize};
 
-use crate::api_definition::MethodPattern;
+use crate::http_api_definition::MethodPattern;
 
 #[derive(Union)]
 #[oai(discriminator_name = "type", one_of = true)]

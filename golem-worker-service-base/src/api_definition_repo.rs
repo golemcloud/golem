@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Mutex;
 
-use crate::api_definition::{ApiDefinition, ApiDefinitionId};
+use crate::http_api_definition::{ApiDefinitionId};
 use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -11,7 +11,7 @@ use golem_common::redis::RedisPool;
 use tracing::{debug, info};
 
 #[async_trait]
-pub trait ApiDefinitionRepo<Namespace: ApiNamespace> {
+pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -54,11 +54,11 @@ impl ApiRegistrationRepoError {
     }
 }
 
-pub struct InMemoryRegistry<Namespace> {
+pub struct InMemoryRegistry<Namespace, ApiDefinition> {
     registry: Mutex<HashMap<ApiDefinitionKey<Namespace>, ApiDefinition>>,
 }
 
-impl<Namespace> Default for InMemoryRegistry<Namespace> {
+impl<Namespace, ApiDefinition> Default for InMemoryRegistry<Namespace, ApiDefinition> {
     fn default() -> Self {
         InMemoryRegistry {
             registry: Mutex::new(HashMap::new()),
@@ -67,7 +67,7 @@ impl<Namespace> Default for InMemoryRegistry<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace> {
+impl<Namespace: ApiNamespace, ApiDefinition> ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition> {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -146,7 +146,7 @@ impl RedisApiRegistry {
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for RedisApiRegistry {
+impl<Namespace: ApiNamespace, ApiDefinition> ApiDefinitionRepo<Namespace, ApiDefinition> for RedisApiRegistry {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -299,7 +299,7 @@ impl RedisApiRegistry {
     }
 
     /// Retrieve all api definitions for a given set of keys.
-    async fn get_all_api_definitions<Namespace: ApiNamespace>(
+    async fn get_all_api_definitions<Namespace: ApiNamespace, ApiDefinition>(
         &self,
         keys: Vec<ApiDefinitionKey<Namespace>>,
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError> {
@@ -372,7 +372,7 @@ mod redis_keys {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api_definition::Version;
+    use crate::http_api_definition::{HttpApiDefinition, Version};
     use bincode::{Decode, Encode};
     use golem_common::config::RedisConfig;
     use serde::Deserialize;
@@ -401,7 +401,7 @@ mod tests {
         id: &ApiDefinitionKey<CommonNamespace>,
         path_pattern: &str,
         worker_id: &str,
-    ) -> ApiDefinition {
+    ) -> HttpApiDefinition {
         let yaml_string = format!(
             r#"
           id: '{}'

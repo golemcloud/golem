@@ -2,7 +2,7 @@ use nom::branch::alt;
 use nom::IResult;
 
 use super::*;
-use crate::api_definition::{PathPattern, QueryInfo, VarInfo};
+use crate::http_api_definition::{PathPattern, QueryInfo, VarInfo};
 use crate::parser::{literal_parser, place_holder_parser, ParseError};
 
 pub struct PathPatternParser;

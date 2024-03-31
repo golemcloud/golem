@@ -1,5 +1,5 @@
 pub mod api;
-pub mod api_definition;
+pub mod http_api_definition;
 pub mod api_definition_repo;
 pub mod api_request_route_resolver;
 pub mod app_config;
@@ -20,6 +20,7 @@ pub mod worker_request;
 pub mod worker_request_to_response;
 pub mod worker_response;
 
+pub mod golem_worker_binding;
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;
 }

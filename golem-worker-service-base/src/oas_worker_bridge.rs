@@ -1,5 +1,5 @@
-use crate::api_definition::{
-    ApiDefinition, ApiDefinitionId, GolemWorkerBinding, MethodPattern, PathPattern,
+use crate::http_api_definition::{
+    HttpApiDefinition, ApiDefinitionId, GolemWorkerBinding, MethodPattern, PathPattern,
     ResponseMapping, Route, Version,
 };
 use crate::expr::Expr;
@@ -14,7 +14,7 @@ pub const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
 pub const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
 pub const GOLEM_WORKER_BRIDGE_EXTENSION: &str = "x-golem-worker-bridge";
 
-pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
+pub fn get_api_definition(open_api: &str) -> Result<HttpApiDefinition, String> {
     let openapi: OpenAPI = serde_json::from_str(open_api).map_err(|e| e.to_string())?;
 
     let api_definition_id = ApiDefinitionId(get_root_extension(
@@ -27,7 +27,7 @@ pub fn get_api_definition(open_api: &str) -> Result<ApiDefinition, String> {
 
     let routes = get_routes(openapi.paths)?;
 
-    Ok(ApiDefinition {
+    Ok(HttpApiDefinition {
         id: api_definition_id,
         version: api_definition_version,
         routes,

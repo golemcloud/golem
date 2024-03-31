@@ -12,30 +12,14 @@ use poem_openapi::{Enum, NewType};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use Iterator;
+use crate::golem_worker_binding::GolemWorkerBinding;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]
-pub struct ApiDefinition {
+pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
     pub version: Version,
     pub routes: Vec<Route>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-#[serde(rename_all = "camelCase")]
-pub struct GolemWorkerBinding {
-    pub template: TemplateId,
-    pub worker_id: Expr,
-    pub function_name: String,
-    pub function_params: Vec<Expr>,
-    pub response: Option<ResponseMapping>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-pub struct ResponseMapping {
-    pub body: Expr,   // ${function.return}
-    pub status: Expr, // "200" or if ${response.body.id == 1} "200" else "400"
-    pub headers: HashMap<String, Expr>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
@@ -573,11 +557,11 @@ mod tests {
         fn test_serde(path_pattern: &str, worker_id: &str, function_params: &str) {
             let yaml = get_api_spec(path_pattern, worker_id, function_params);
 
-            let result: ApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
+            let result: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
 
             let yaml2 = serde_yaml::to_value(result.clone()).unwrap();
 
-            let result2: ApiDefinition = serde_yaml::from_value(yaml2.clone()).unwrap();
+            let result2: HttpApiDefinition = serde_yaml::from_value(yaml2.clone()).unwrap();
 
             assert_eq!(result, result2);
         }
@@ -611,9 +595,9 @@ mod tests {
     fn test_api_spec_encode_decode() {
         fn test_encode_decode(path_pattern: &str, worker_id: &str, function_params: &str) {
             let yaml = get_api_spec(path_pattern, worker_id, function_params);
-            let original: ApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
+            let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
             let encoded = serialization::serialize(&original).unwrap();
-            let decoded: ApiDefinition = serialization::deserialize(&encoded).unwrap();
+            let decoded: HttpApiDefinition = serialization::deserialize(&encoded).unwrap();
 
             assert_eq!(original, decoded);
         }

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use golem_common::model::CallingConvention;
 use golem_service_base::model::WorkerId;
 use golem_wasm_rpc::TypeAnnotatedValue;
-use golem_worker_service_base::api_definition::ResponseMapping;
+use golem_worker_service_base::http_api_definition::ResponseMapping;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::WorkerService;
 use golem_worker_service_base::worker_request::WorkerRequest;
