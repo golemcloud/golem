@@ -5,10 +5,10 @@ use hyper::header::HOST;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
-use crate::api::register_api_definition_api::ResponseMapping;
 use crate::http::http_request::{ApiInputPath, InputHttpRequest};
 
 use crate::service::http_request_definition_lookup::HttpRequestDefinitionLookup;
+use crate::worker_binding::golem_worker_binding::ResponseMapping;
 use crate::worker_request::worker_request_to_response::WorkerRequestToResponse;
 use crate::worker_request::WorkerRequest;
 use crate::worker_binding::worker_binding_resolver::WorkerBindingResolver;

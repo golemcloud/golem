@@ -67,7 +67,7 @@ impl<Namespace, ApiDefinition> Default for InMemoryRegistry<Namespace, ApiDefini
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace, ApiDefinition: Send + Clone> ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition> {
+impl<Namespace: ApiNamespace, ApiDefinition: Send + Clone + Sync> ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition> {
     async fn register(
         &self,
         definition: &ApiDefinition,
