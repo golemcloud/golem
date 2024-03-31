@@ -1378,8 +1378,8 @@ impl From<FilterComparator> for i32 {
 mod tests {
     use bincode::{Decode, Encode};
     use serde::{Deserialize, Serialize};
-    use std::vec;
     use std::str::FromStr;
+    use std::vec;
 
     use crate::model::{
         parse_function_name, AccountId, FilterComparator, StringFilterComparator, TemplateId,
