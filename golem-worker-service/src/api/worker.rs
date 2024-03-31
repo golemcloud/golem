@@ -249,6 +249,36 @@ impl WorkerApi {
     }
 
     #[oai(
+        path = "/:template_id/workers",
+        method = "get",
+        operation_id = "get_worker_metadatas"
+    )]
+    async fn get_worker_metadatas(
+        &self,
+        template_id: Path<TemplateId>,
+        filter: Query<Option<Vec<String>>>,
+        cursor: Query<Option<u64>>,
+        count: Query<Option<u64>>,
+        precise: Query<Option<bool>>,
+    ) -> Result<Json<WorkerMetadatasResponse>> {
+        // TODO filter
+
+        let (cursor, workers) = self
+            .worker_service
+            .get_metadatas(
+                &template_id.0,
+                None,
+                cursor.0.unwrap_or(0),
+                count.0.unwrap_or(50),
+                precise.0.unwrap_or(false),
+                &EmptyAuthCtx {},
+            )
+            .await?;
+
+        Ok(Json(WorkerMetadatasResponse { workers, cursor }))
+    }
+
+    #[oai(
         path = "/:template_id/workers/:worker_name/resume",
         method = "post",
         operation_id = "resume_worker"

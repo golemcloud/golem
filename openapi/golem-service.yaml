@@ -61,6 +61,95 @@ paths:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
   /v2/templates/{template_id}/workers:
+    get:
+      tags:
+      - Worker
+      operationId: get_worker_metadatas
+      parameters:
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: query
+        name: filter
+        deprecated: false
+        schema:
+          type: array
+          items:
+            type: string
+        explode: true
+        style: form
+      - in: query
+        name: cursor
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      - in: query
+        name: count
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      - in: query
+        name: precise
+        deprecated: false
+        schema:
+          type: boolean
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerMetadatasResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
     post:
       tags:
       - Worker
@@ -2161,6 +2250,18 @@ components:
       - status
       - templateVersion
       - retryCount
+    WorkerMetadatasResponse:
+      type: object
+      properties:
+        workers:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerMetadata'
+        cursor:
+          type: integer
+          format: uint64
+      required:
+      - workers
     WorkerServiceErrorBody:
       type: object
       properties:

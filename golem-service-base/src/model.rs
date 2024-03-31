@@ -2630,6 +2630,12 @@ pub struct InterruptResponse {}
 pub struct ResumeResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct WorkerMetadatasResponse {
+    pub workers: Vec<WorkerMetadata>,
+    pub cursor: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerMetadata {

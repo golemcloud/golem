@@ -939,6 +939,57 @@ impl WorkerFilter {
     }
 }
 
+impl Display for WorkerFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerFilter::Name { comparator, value } => {
+                write!(f, "name {} {}", comparator, value)
+            }
+            WorkerFilter::Version { comparator, value } => {
+                write!(f, "version {} {}", comparator, value)
+            }
+            WorkerFilter::Status { value } => {
+                write!(f, "status == {:?}", value)
+            }
+            WorkerFilter::CreatedAt { comparator, value } => {
+                write!(f, "created_at {} {}", comparator, value)
+            }
+            WorkerFilter::Env {
+                name,
+                comparator,
+                value,
+            } => {
+                write!(f, "env.{} {} {}", name, comparator, value)
+            }
+            WorkerFilter::Not(filter) => {
+                write!(f, "NOT ({})", filter)
+            }
+            WorkerFilter::And(filters) => {
+                write!(
+                    f,
+                    "({})",
+                    filters
+                        .iter()
+                        .map(|f| f.clone().to_string())
+                        .collect::<Vec<String>>()
+                        .join(" AND ")
+                )
+            }
+            WorkerFilter::Or(filters) => {
+                write!(
+                    f,
+                    "({})",
+                    filters
+                        .iter()
+                        .map(|f| f.clone().to_string())
+                        .collect::<Vec<String>>()
+                        .join(" OR ")
+                )
+            }
+        }
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilter {
     type Error = String;
 
@@ -1127,6 +1178,16 @@ impl From<StringFilterComparator> for i32 {
     }
 }
 
+impl Display for StringFilterComparator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            StringFilterComparator::Equal => "==",
+            StringFilterComparator::Like => "like",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Enum)]
 pub enum FilterComparator {
     Equal,
@@ -1135,6 +1196,20 @@ pub enum FilterComparator {
     Greater,
     LessEqual,
     Less,
+}
+
+impl Display for FilterComparator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            FilterComparator::Equal => "==",
+            FilterComparator::NotEqual => "!=",
+            FilterComparator::GreaterEqual => ">=",
+            FilterComparator::Greater => ">",
+            FilterComparator::LessEqual => "<=",
+            FilterComparator::Less => "<",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 impl FilterComparator {
