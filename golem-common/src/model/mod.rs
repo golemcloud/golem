@@ -1379,6 +1379,7 @@ mod tests {
     use bincode::{Decode, Encode};
     use serde::{Deserialize, Serialize};
     use std::vec;
+    use std::str::FromStr;
 
     use crate::model::{
         parse_function_name, AccountId, FilterComparator, StringFilterComparator, TemplateId,
@@ -1517,6 +1518,33 @@ mod tests {
         };
         let json = serde_json::to_string(&example).unwrap();
         assert_eq!(json, "{\"account_id\":\"account-1\"}");
+    }
+
+    #[test]
+    fn worker_filter_parse() {
+        assert_eq!(
+            WorkerFilter::from_str("name == worker-1").unwrap(),
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string(),)
+        );
+
+        assert_eq!(
+            WorkerFilter::from_str("status == Running").unwrap(),
+            WorkerFilter::new_status(WorkerStatus::Running)
+        );
+
+        assert_eq!(
+            WorkerFilter::from_str("version >= 10").unwrap(),
+            WorkerFilter::new_version(FilterComparator::GreaterEqual, 10)
+        );
+
+        assert_eq!(
+            WorkerFilter::from_str("env.tag1 == abc").unwrap(),
+            WorkerFilter::new_env(
+                "tag1".to_string(),
+                StringFilterComparator::Equal,
+                "abc".to_string()
+            )
+        );
     }
 
     #[test]
