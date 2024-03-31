@@ -11,7 +11,7 @@ use golem_service_base::model::Template;
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationError};
 use super::template::TemplateService;
 
-pub type ApiResult<T> = Result<T, ApiRegistrationError>;
+pub type ApiResult<T, E> = Result<T, ApiRegistrationError<E>>;
 
 // A namespace here can be example: (account, project) etc.
 // Ideally a repo service and its implementation with a different service impl that takes care of
@@ -109,11 +109,11 @@ impl<Namespace: Display> ApiDefinitionKey<Namespace> {
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum ApiRegistrationError {
+pub enum ApiRegistrationError<E> {
     #[error(transparent)]
     RepoError(#[from] ApiRegistrationRepoError),
     #[error(transparent)]
-    ValidationError(#[from] ValidationError),
+    ValidationError(#[from] ValidationError<String>),
 }
 
 pub struct RegisterApiDefinitionDefault<AuthCtx, Namespace> {

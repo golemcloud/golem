@@ -4,6 +4,7 @@ pub mod http_request_definition_lookup;
 pub mod template;
 pub mod worker;
 
+pub mod http;
 pub fn with_metadata<T, I, K, V>(request: T, metadata: I) -> tonic::Request<T>
 where
     I: IntoIterator<Item = (K, V)>,

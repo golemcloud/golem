@@ -19,7 +19,7 @@ use golem_worker_service_base::service::api_definition::{
     ApiDefinitionKey, ApiDefinitionService, RegisterApiDefinitionDefault,
 };
 use golem_worker_service_base::service::api_definition_validator::{
-    ApiDefinitionValidatorDefault, ApiDefinitionValidatorNoop, ApiDefinitionValidatorService,
+    HttpApiDefinitionValidator, ApiDefinitionValidatorNoop, ApiDefinitionValidatorService,
 };
 use golem_worker_service_base::service::http_request_definition_lookup::{
     ApiDefinitionLookupError, HttpRequestDefinitionLookup,
@@ -94,7 +94,7 @@ impl Services {
         ));
 
         let api_definition_validator_service: Arc<dyn ApiDefinitionValidatorService + Sync + Send> =
-            Arc::new(ApiDefinitionValidatorDefault {});
+            Arc::new(HttpApiDefinitionValidator {});
 
         let definition_service: Arc<
             dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send,
