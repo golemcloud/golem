@@ -5,7 +5,7 @@ pub mod worker_binding_resolver;
 pub mod app_config;
 pub mod auth;
 pub mod evaluator;
-pub mod expr;
+pub mod expression;
 pub mod getter;
 pub mod merge;
 pub mod metrics;
