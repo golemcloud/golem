@@ -23,3 +23,8 @@ pub struct ResponseMapping {
     pub status: Expr, // "200" or if ${response.body.id == 1} "200" else "400"
     pub headers: HashMap<String, Expr>,
 }
+
+pub trait HasGolemWorkerBindings {
+    fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding>;
+}
+

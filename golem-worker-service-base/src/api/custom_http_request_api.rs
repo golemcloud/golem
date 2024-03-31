@@ -7,7 +7,7 @@ use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
-use crate::api_request_route_resolver::WorkerBindingResolver;
+use crate::worker_binding_resolver::WorkerBindingResolver;
 use crate::http_request::{ApiInputPath, InputHttpRequest};
 use crate::service::http_request_definition_lookup::HttpRequestDefinitionLookup;
 use crate::worker_request::WorkerRequest;

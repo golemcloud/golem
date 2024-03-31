@@ -3,7 +3,7 @@ use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
 
-use crate::api_request_route_resolver::ResolvedWorkerBinding;
+use crate::worker_binding_resolver::ResolvedWorkerBinding;
 use crate::evaluator::{Evaluator, RawString};
 
 // Every input request can be resolved to a worker request,

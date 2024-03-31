@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use crate::http_api_definition::ResponseMapping;
 use crate::evaluator::{EvaluationError, Evaluator};
 use crate::expr::Expr;
 use crate::merge::Merge;
@@ -17,6 +16,7 @@ use http::{HeaderMap, StatusCode};
 use poem::{Body, ResponseParts};
 use serde_json::json;
 use tracing::info;
+use crate::golem_worker_binding::ResponseMapping;
 
 pub struct WorkerResponse {
     pub result: TypeAnnotatedValue,

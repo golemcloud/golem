@@ -7,12 +7,12 @@ use crate::parser::path_pattern_parser::PathPatternParser;
 use crate::parser::{GolemParser, ParseError};
 use bincode::{Decode, Encode};
 use derive_more::Display;
-use golem_common::model::TemplateId;
 use poem_openapi::{Enum, NewType};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use Iterator;
-use crate::golem_worker_binding::GolemWorkerBinding;
+use crate::api_definition::{ApiDefinitionId, Version};
+use crate::golem_worker_binding::{GolemWorkerBinding, HasGolemWorkerBindings};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]
@@ -22,21 +22,12 @@ pub struct HttpApiDefinition {
     pub routes: Vec<Route>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
-pub struct ApiDefinitionId(pub String);
-
-impl Display for ApiDefinitionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
-pub struct Version(pub String);
-
-impl Display for Version {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+impl HasGolemWorkerBindings for HttpApiDefinition {
+    fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding> {
+        self.routes
+            .iter()
+            .map(|route| route.binding.clone())
+            .collect()
     }
 }
 

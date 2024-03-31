@@ -244,7 +244,7 @@ mod tests {
     use crate::http_api_definition::HttpApiDefinition;
     use crate::worker_request::WorkerRequest;
 
-    use crate::api_request_route_resolver::WorkerBindingResolver;
+    use crate::worker_binding_resolver::WorkerBindingResolver;
     use golem_common::model::TemplateId;
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
 

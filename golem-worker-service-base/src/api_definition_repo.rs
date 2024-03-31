@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Mutex;
 
-use crate::http_api_definition::{ApiDefinitionId};
 use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
 use tracing::{debug, info};
+use crate::api_definition::ApiDefinitionId;
 
 #[async_trait]
 pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {
