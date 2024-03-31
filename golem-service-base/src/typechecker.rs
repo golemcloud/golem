@@ -172,7 +172,7 @@ mod tests {
                 }],
                 CallingConvention::Stdio,
             )
-            .map(json::get_json_from_typed_value);
+            .map(|typed_value| json::get_json_from_typed_value(&typed_value));
 
         assert_eq!(res, Ok(Value::String("str".to_string())));
 
@@ -188,7 +188,7 @@ mod tests {
                 }],
                 CallingConvention::Stdio,
             )
-            .map(json::get_json_from_typed_value);
+            .map(|typed_value| json::get_json_from_typed_value(&typed_value));
 
         assert_eq!(
             res,
@@ -207,7 +207,7 @@ mod tests {
                 }],
                 CallingConvention::Stdio,
             )
-            .map(json::get_json_from_typed_value);
+            .map(|typed_value| json::get_json_from_typed_value(&typed_value));
 
         assert_eq!(res, Ok(Value::Bool(true)));
     }

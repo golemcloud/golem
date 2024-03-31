@@ -2735,7 +2735,7 @@ dependencies = [
  "bytes 1.5.0",
  "cargo_metadata",
  "futures-core",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.16",
  "prost 0.12.3",
  "serde",
  "tokio",
@@ -2824,7 +2824,7 @@ dependencies = [
  "fred",
  "futures-core",
  "golem-api-grpc",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.16",
  "humantime-serde",
  "iso8601-timestamp",
  "lazy_static",
@@ -2888,7 +2888,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.16",
  "http 0.2.11",
  "http 1.0.0",
  "hyper 1.1.0",
@@ -2977,7 +2977,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.16",
  "http 0.2.11",
  "humantime-serde",
  "lazy_static",
@@ -3018,7 +3018,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.0"
+version = "0.0.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c003f6c9b2d632caf4ada88eea0773b09ce863f54d86b66239b81613b4e8bd98"
 dependencies = [
  "arbitrary",
  "bigdecimal",
@@ -3035,9 +3037,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.13"
+version = "0.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c003f6c9b2d632caf4ada88eea0773b09ce863f54d86b66239b81613b4e8bd98"
+checksum = "10aeff938ec4d1df272ba60e01b38a552f4a9d020ac52a7243af35ebf4cfe562"
 dependencies = [
  "arbitrary",
  "bigdecimal",
@@ -3101,7 +3103,7 @@ dependencies = [
  "figment",
  "golem-api-grpc",
  "golem-common",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.16",
  "golem-worker-executor-base",
  "humantime-serde",
  "prometheus",
@@ -3154,7 +3156,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.16",
  "golem-wit",
  "http 0.2.11",
  "http 1.0.0",
@@ -3210,7 +3212,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.16",
  "golem-worker-service-base",
  "http 0.2.11",
  "http 1.0.0",
@@ -3260,7 +3262,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.16",
  "http 0.2.11",
  "http 1.0.0",
  "humantime-serde",

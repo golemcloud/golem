@@ -20,17 +20,17 @@ pub fn infer_analysed_type(value: &Value) -> AnalysedType {
             }
         }
         Value::String(value) => {
-                if value.parse::<u64>().is_ok() {
-                    AnalysedType::U64
-                } else if value.parse::<i64>().is_ok() {
-                    AnalysedType::S64
-                } else if value.parse::<f64>().is_ok() {
-                    AnalysedType::F64
-                } else if value.parse::<bool>().is_ok() {
-                    AnalysedType::Bool
-                } else {
-                    AnalysedType::Str
-                }
+            if value.parse::<u64>().is_ok() {
+                AnalysedType::U64
+            } else if value.parse::<i64>().is_ok() {
+                AnalysedType::S64
+            } else if value.parse::<f64>().is_ok() {
+                AnalysedType::F64
+            } else if value.parse::<bool>().is_ok() {
+                AnalysedType::Bool
+            } else {
+                AnalysedType::Str
+            }
         }
         Value::Array(arr) => {
             if arr.is_empty() {
@@ -50,12 +50,12 @@ pub fn infer_analysed_type(value: &Value) -> AnalysedType {
                     return AnalysedType::Result {
                         ok: Some(Box::new(field_type0)),
                         error: None,
-                    }
+                    };
                 } else if key == "err" {
                     return AnalysedType::Result {
                         ok: None,
                         error: Some(Box::new(field_type0)),
-                    }
+                    };
                 } else {
                     fields.push((key.clone(), field_type0));
                 }
@@ -77,9 +77,12 @@ mod tests {
         assert_eq!(infer_analysed_type(&value), AnalysedType::Bool);
 
         let value = Value::Number(serde_json::Number::from(1));
+        assert_eq!(infer_analysed_type(&value), AnalysedType::U64);
+
+        let value = Value::Number(serde_json::Number::from(-1));
         assert_eq!(infer_analysed_type(&value), AnalysedType::S64);
 
-        let value = Value::Number(serde_json::Number::from(1.0));
+        let value = Value::Number(serde_json::Number::from_f64(1.0).unwrap());
         assert_eq!(infer_analysed_type(&value), AnalysedType::F64);
 
         let value = Value::String("foo".to_string());
@@ -101,31 +104,46 @@ mod tests {
         assert_eq!(infer_analysed_type(&value), AnalysedType::Bool);
 
         let value = Value::Array(vec![]);
-        assert_eq!(infer_analysed_type(&value), AnalysedType::List(Box::new(AnalysedType::Str)));
+        assert_eq!(
+            infer_analysed_type(&value),
+            AnalysedType::List(Box::new(AnalysedType::Str))
+        );
 
         let value = Value::Array(vec![Value::String("hello".to_string())]);
-        assert_eq!(infer_analysed_type(&value), AnalysedType::List(Box::new(AnalysedType::Str)));
+        assert_eq!(
+            infer_analysed_type(&value),
+            AnalysedType::List(Box::new(AnalysedType::Str))
+        );
 
         let value = Value::Object(serde_json::map::Map::new());
         assert_eq!(infer_analysed_type(&value), AnalysedType::Record(vec![]));
 
         let value = Value::Object(serde_json::map::Map::new());
         assert_eq!(infer_analysed_type(&value), AnalysedType::Record(vec![]));
+
+        let value = Value::Null;
+        assert_eq!(infer_analysed_type(&value), AnalysedType::Option(Box::new(AnalysedType::Str)));
 
         let mut map = serde_json::map::Map::new();
         map.insert("ok".to_string(), Value::String("hello".to_string()));
         let value = Value::Object(map);
-        assert_eq!(infer_analysed_type(&value), AnalysedType::Result {
-            ok: Some(Box::new(AnalysedType::Str)),
-            error: None,
-        });
+        assert_eq!(
+            infer_analysed_type(&value),
+            AnalysedType::Result {
+                ok: Some(Box::new(AnalysedType::Str)),
+                error: None,
+            }
+        );
 
         let mut map = serde_json::map::Map::new();
         map.insert("err".to_string(), Value::String("hello".to_string()));
         let value = Value::Object(map);
-        assert_eq!(infer_analysed_type(&value), AnalysedType::Result {
-            ok: None,
-            error: Some(Box::new(AnalysedType::Str)),
-        });
+        assert_eq!(
+            infer_analysed_type(&value),
+            AnalysedType::Result {
+                ok: None,
+                error: Some(Box::new(AnalysedType::Str)),
+            }
+        );
     }
 }
