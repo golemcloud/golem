@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
-use crate::http_api_definition::{HttpApiDefinition, MethodPattern, PathPattern, Route};
-use async_trait::async_trait;
 use golem_common::model::TemplateId;
 use golem_service_base::model::{
     Export, ExportFunction, ExportInstance, Template, TemplateMetadata,
 };
 use serde::{Deserialize, Serialize};
+use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern, PathPattern, Route};
 use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationError};
 
 
