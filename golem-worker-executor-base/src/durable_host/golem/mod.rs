@@ -37,7 +37,10 @@ use golem_common::model::{PromiseId, TemplateId, WorkerId};
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     async fn golem_create_promise(&mut self) -> Result<golem::api::host::PromiseId, anyhow::Error> {
         record_host_function_call("golem::api", "golem_create_promise");
-        Ok(DurableWorkerCtx::create_promise(self, self.state.oplog_idx)
+        Ok(self
+            .public_state
+            .promise_service
+            .create(&self.worker_id.worker_id, self.state.oplog_idx)
             .await
             .into())
     }
@@ -48,7 +51,12 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     ) -> Result<Vec<u8>, anyhow::Error> {
         record_host_function_call("golem::api", "golem_await_promise");
         let promise_id: PromiseId = promise_id.into();
-        match DurableWorkerCtx::poll_promise(self, promise_id.clone()).await? {
+        match self
+            .public_state
+            .promise_service
+            .poll(promise_id.clone())
+            .await?
+        {
             Some(result) => Ok(result),
             None => {
                 debug!("Suspending worker until {} gets completed", promise_id);
@@ -63,7 +71,21 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         data: Vec<u8>,
     ) -> Result<bool, anyhow::Error> {
         record_host_function_call("golem::api", "golem_complete_promise");
-        Ok(DurableWorkerCtx::complete_promise(self, promise_id.into(), data).await?)
+        Durability::<Ctx, bool, SerializableError>::wrap(
+            self,
+            WrappedFunctionType::WriteLocal,
+            "golem_complete_promise",
+            |ctx| {
+                Box::pin(async move {
+                    Ok(ctx
+                        .public_state
+                        .promise_service
+                        .complete(promise_id.into(), data)
+                        .await?)
+                })
+            },
+        )
+        .await
     }
 
     async fn golem_delete_promise(
@@ -71,11 +93,21 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         promise_id: golem::api::host::PromiseId,
     ) -> Result<(), anyhow::Error> {
         record_host_function_call("golem::api", "golem_delete_promise");
-        self.public_state
-            .promise_service
-            .delete(promise_id.into())
-            .await;
-        Ok(())
+        Durability::<Ctx, (), SerializableError>::wrap(
+            self,
+            WrappedFunctionType::WriteLocal,
+            "golem_delete_promise",
+            |ctx| {
+                Box::pin(async move {
+                    ctx.public_state
+                        .promise_service
+                        .delete(promise_id.into())
+                        .await;
+                    Ok(())
+                })
+            },
+        )
+        .await
     }
 
     async fn get_self_uri(

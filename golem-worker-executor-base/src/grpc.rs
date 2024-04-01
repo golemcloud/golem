@@ -305,8 +305,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
 
         if should_activate {
-            // By making sure the worker is in memory, if it is waiting for the promise it is going to
-            // be notified when we complete it below.
+            // By making sure the worker is in memory. If it was suspended because of waiting
+            // for a promise, replaying that call will now not suspend as the promise has been
+            // completed, and the worker will continue running.
             Worker::activate(
                 &self.services,
                 &metadata.worker_id.worker_id,
