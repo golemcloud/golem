@@ -17,7 +17,7 @@ use crate::merge::Merge;
 
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
-pub(crate) mod getter;
+mod getter;
 mod path;
 
 pub trait Evaluator {
