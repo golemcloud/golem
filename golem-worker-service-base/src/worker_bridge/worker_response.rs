@@ -26,6 +26,28 @@ pub struct WorkerResponse {
 }
 
 impl WorkerResponse {
+    pub(crate) fn to_http_response(
+        &self,
+        response_mapping: &Option<ResponseMapping>,
+        input_request: &TypeAnnotatedValue,
+    ) -> poem::Response {
+        if let Some(mapping) = response_mapping {
+            match internal::IntermediateHttpResponse::from(self, mapping, input_request) {
+                Ok(intermediate_response) => intermediate_response.to_http_response(),
+                Err(e) => poem::Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from_string(format!(
+                        "Error when  converting worker response to http response. Error: {}",
+                        e
+                    ))),
+            }
+        } else {
+            let json = get_json_from_typed_value(&self.result);
+            let body: Body = Body::from_json(json).unwrap();
+            poem::Response::builder().body(body)
+        }
+    }
+
     // This makes sure that the result is injected into the worker.response field
     // So that clients can refer to the worker response using worker.response keyword
     pub(crate) fn result_with_worker_response_key(&self) -> TypeAnnotatedValue {
@@ -47,28 +69,6 @@ impl WorkerResponse {
                     value: vec![(response_key.clone(), worker_response_value.clone())],
                 },
             )],
-        }
-    }
-
-    pub(crate) fn to_http_response(
-        &self,
-        response_mapping: &Option<ResponseMapping>,
-        input_request: &TypeAnnotatedValue,
-    ) -> poem::Response {
-        if let Some(mapping) = response_mapping {
-            match &self.to_intermediate_http_response(mapping, input_request) {
-                Ok(intermediate_response) => intermediate_response.to_http_response(),
-                Err(e) => poem::Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from_string(format!(
-                        "Error when  converting worker response to http response. Error: {}",
-                        e
-                    ))),
-            }
-        } else {
-            let json = get_json_from_typed_value(&self.result);
-            let body: Body = Body::from_json(json).unwrap();
-            poem::Response::builder().body(body)
         }
     }
 }
