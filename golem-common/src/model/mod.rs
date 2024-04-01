@@ -518,15 +518,14 @@ impl From<CallingConvention> for i32 {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug)]
 pub struct WorkerMetadata {
-    #[serde(rename = "instance_id")]
     pub worker_id: VersionedWorkerId,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub account_id: AccountId,
-    #[serde(skip)]
-    pub last_known_status: WorkerStatusRecord, // serialized separately
+    pub created_at: Timestamp,
+    pub last_known_status: WorkerStatusRecord,
 }
 
 impl WorkerMetadata {
@@ -536,6 +535,7 @@ impl WorkerMetadata {
             args: vec![],
             env: vec![],
             account_id,
+            created_at: Timestamp::now_utc(),
             last_known_status: WorkerStatusRecord::default(),
         }
     }
@@ -1443,6 +1443,7 @@ mod tests {
             account_id: AccountId {
                 value: "account-1".to_string(),
             },
+            created_at: Timestamp::now_utc(),
             last_known_status: WorkerStatusRecord::default(),
         };
 

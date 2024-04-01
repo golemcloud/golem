@@ -250,14 +250,14 @@ impl WorkerEnumerationService
 }
 
 fn get_template_worker_redis_key(template_id: &TemplateId) -> String {
-    format!("instance:instance:{}*", template_id.0)
+    format!("instance:oplog:{}*", template_id.0)
 }
 
 fn get_worker_id_from_redis_key(
     worker_redis_key: &str,
     template_id: &TemplateId,
 ) -> Result<WorkerId, GolemError> {
-    let template_prefix = format!("instance:instance:{}:", template_id.0);
+    let template_prefix = format!("instance:oplog:{}:", template_id.0);
     if worker_redis_key.starts_with(&template_prefix) {
         let worker_name = &worker_redis_key[template_prefix.len()..];
         Ok(WorkerId {

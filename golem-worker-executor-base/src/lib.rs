@@ -163,8 +163,11 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 )
             }
             WorkersServiceConfig::Redis => {
-                let worker_service =
-                    Arc::new(WorkerServiceRedis::new(pool.clone(), shard_service.clone()));
+                let worker_service = Arc::new(WorkerServiceRedis::new(
+                    pool.clone(),
+                    shard_service.clone(),
+                    oplog_service.clone(),
+                ));
                 let enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync> =
                     Arc::new(WorkerEnumerationServiceRedis::new(
                         pool.clone(),

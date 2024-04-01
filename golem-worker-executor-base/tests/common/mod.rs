@@ -33,7 +33,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     InterruptWorkerResponse, InvokeAndAwaitWorkerRequest, InvokeWorkerRequest, ResumeWorkerRequest,
 };
 use golem_common::model::{
-    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerFilter, WorkerId,
+    AccountId, InvocationKey, TemplateId, Timestamp, VersionedWorkerId, WorkerFilter, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
@@ -807,6 +807,7 @@ fn to_worker_metadata(
             .expect("no account_id")
             .clone()
             .into(),
+        created_at: Timestamp::now_utc(), // TODO: set once it's exposed via gRPC
         last_known_status: WorkerStatusRecord {
             oplog_idx: 0,
             status: metadata.status.try_into().expect("invalid status"),

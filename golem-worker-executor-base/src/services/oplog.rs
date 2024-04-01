@@ -29,6 +29,8 @@ use crate::metrics::oplog::record_oplog_call;
 
 #[async_trait]
 pub trait OplogService {
+    async fn create(&self, worker_id: &WorkerId, initial_entry: OplogEntry);
+
     async fn append(&self, worker_id: &WorkerId, arrays: &[OplogEntry]);
 
     async fn get_size(&self, worker_id: &WorkerId) -> u64;
@@ -63,35 +65,59 @@ impl OplogServiceDefault {
 
 #[async_trait]
 impl OplogService for OplogServiceDefault {
+    async fn create(&self, worker_id: &WorkerId, initial_entry: OplogEntry) {
+        record_oplog_call("create");
+
+        let key = get_oplog_redis_key(worker_id);
+        let already_exists: bool = self
+            .redis
+            .with("oplog", "create")
+            .exists(&key)
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to check if oplog exists for worker {worker_id} in Redis: {err}")
+            });
+
+        if already_exists {
+            panic!("oplog for worker {worker_id} already exists in Redis")
+        }
+
+        let value = self.redis.serialize(&initial_entry).unwrap_or_else(|err| {
+            panic!(
+                "failed to serialize initial oplog entry for worker {worker_id}: {:?}: {err}",
+                initial_entry
+            )
+        });
+
+        record_redis_serialized_size("oplog", "entry", value.len());
+
+        let field: RedisKey = "key".into();
+        let _: String = self
+            .redis
+            .with("oplog", "create")
+            .xadd(key, false, None, "1", (field, RedisValue::Bytes(value)))
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to append initial oplog entry for worker {worker_id} in Redis: {err}"
+                )
+            });
+    }
+
     async fn append(&self, worker_id: &WorkerId, arrays: &[OplogEntry]) {
         record_oplog_call("append");
 
         let key = get_oplog_redis_key(worker_id);
 
-        let last: Vec<HashMap<String, HashMap<String, Bytes>>> = self
+        let len: usize = self
             .redis
             .with("oplog", "append")
-            .xrevrange(key, "+", "-", Some(1))
+            .xlen(key)
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to get last oplog entry for instance {worker_id} from Redis: {err}")
+                panic!("failed to get oplog size for worker {worker_id} from Redis: {err}")
             });
-
-        let mut idx = if last.is_empty() {
-            1
-        } else {
-            last[0]
-                .keys()
-                .next()
-                .unwrap_or_else(|| panic!("No keys in last oplog entry for {worker_id}"))
-                .split('-')
-                .collect::<Vec<&str>>()[0]
-                .parse::<i64>()
-                .unwrap_or_else(|err| {
-                    panic!("Failed to parse the index in the key of oplog entry for {worker_id}: {err}")
-                })
-                + 1
-        };
+        let mut id = len + 1;
 
         for entry in arrays {
             let key = get_oplog_redis_key(worker_id);
@@ -110,16 +136,16 @@ impl OplogService for OplogServiceDefault {
                 .with("oplog", "append")
                 .xadd(
                     key,
-                    false,
+                    true,
                     None,
-                    idx.to_string(),
+                    id.to_string(),
                     (field, RedisValue::Bytes(value)),
                 )
                 .await
                 .unwrap_or_else(|err| {
                     panic!("failed to append oplog entry for worker {worker_id} in Redis: {err}")
                 });
-            idx += 1;
+            id += 1;
         }
     }
 
@@ -226,6 +252,10 @@ impl OplogServiceMock {
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl OplogService for OplogServiceMock {
+    async fn create(&self, _worker_id: &WorkerId, _initial_entry: OplogEntry) {
+        unimplemented!()
+    }
+
     async fn append(&self, _worker_id: &WorkerId, _arrays: &[OplogEntry]) {
         unimplemented!()
     }
