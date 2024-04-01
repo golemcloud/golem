@@ -389,7 +389,7 @@ mod tests {
 
     use golem_common::config::RedisConfig;
 
-    use crate::definition::api_definition::{ApiDefinitionId, Version};
+    use crate::definition::api_definition::{ApiDefinitionId, ApiVersion};
     use crate::http::http_api_definition::HttpApiDefinition;
 
     use super::*;
@@ -439,7 +439,7 @@ mod tests {
         let registry = InMemoryRegistry::default();
 
         let id = ApiDefinitionId("api1".to_string());
-        let version = Version("0.0.1".to_string());
+        let version = ApiVersion("0.0.1".to_string());
         let namespace = CommonNamespace::new("default");
 
         let api_id1 = ApiDefinitionKey {
@@ -455,7 +455,7 @@ mod tests {
         );
 
         let id2 = ApiDefinitionId("api2".to_string());
-        let version = Version("0.0.1".to_string());
+        let version = ApiVersion("0.0.1".to_string());
         let namespace = CommonNamespace::new("default");
 
         let api_id2 = ApiDefinitionKey {
@@ -523,7 +523,7 @@ mod tests {
         let api_id1 = ApiDefinitionKey {
             namespace: namespace.clone(),
             id: api_id.clone(),
-            version: Version("0.0.1".to_string()),
+            version: ApiVersion("0.0.1".to_string()),
         };
 
         let api_definition1 = get_simple_api_definition_example(
@@ -563,7 +563,7 @@ mod tests {
         let api_id2 = ApiDefinitionKey {
             namespace: namespace.clone(),
             id: api_id.clone(),
-            version: Version("0.0.2".to_string()),
+            version: ApiVersion("0.0.2".to_string()),
         };
 
         let api_definition2 = get_simple_api_definition_example(
@@ -589,7 +589,7 @@ mod tests {
         let api_id3 = ApiDefinitionKey {
             namespace: namespace.clone(),
             id: api_id2.clone(),
-            version: Version("0.0.1".to_string()),
+            version: ApiVersion("0.0.1".to_string()),
         };
 
         let api_definition3 = get_simple_api_definition_example(
@@ -647,7 +647,7 @@ mod tests {
         let api_id5 = ApiDefinitionKey {
             namespace: namespace2.clone(),
             id: api_id4.clone(),
-            version: Version("0.0.1".to_string()),
+            version: ApiVersion("0.0.1".to_string()),
         };
 
         let api_definition4 = get_simple_api_definition_example(

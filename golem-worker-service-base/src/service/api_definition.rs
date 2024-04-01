@@ -9,7 +9,7 @@ use golem_common::model::TemplateId;
 use golem_service_base::model::Template;
 
 use crate::api::common::RouteValidationError;
-use crate::definition::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, Version};
+use crate::definition::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, ApiVersion};
 use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
@@ -32,7 +32,7 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ApiDefinition, ValidationErro
     async fn get(
         &self,
         api_definition_id: &ApiDefinitionId,
-        version: &Version,
+        version: &ApiVersion,
         namespace: Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinition>, ValidationError>;
@@ -40,7 +40,7 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ApiDefinition, ValidationErro
     async fn delete(
         &self,
         api_definition_id: &ApiDefinitionId,
-        version: &Version,
+        version: &ApiVersion,
         namespace: Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinitionId>, ValidationError>;
@@ -99,7 +99,7 @@ impl<
 pub struct ApiDefinitionKey<Namespace> {
     pub namespace: Namespace,
     pub id: ApiDefinitionId,
-    pub version: Version,
+    pub version: ApiVersion,
 }
 
 impl<Namespace: Display> ApiDefinitionKey<Namespace> {
@@ -220,7 +220,7 @@ where
     async fn get(
         &self,
         api_definition_id: &ApiDefinitionId,
-        version: &Version,
+        version: &ApiVersion,
         namespace: Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinition>, ValidationError> {
@@ -238,7 +238,7 @@ where
     async fn delete(
         &self,
         api_definition_id: &ApiDefinitionId,
-        version: &Version,
+        version: &ApiVersion,
         namespace: Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinitionId>, ValidationError> {
@@ -300,7 +300,7 @@ where
     async fn get(
         &self,
         _api_definition_id: &ApiDefinitionId,
-        _version: &Version,
+        _version: &ApiVersion,
         _namespace: Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinition>, ValidationError> {
@@ -310,7 +310,7 @@ where
     async fn delete(
         &self,
         _api_definition_id: &ApiDefinitionId,
-        _version: &Version,
+        _version: &ApiVersion,
         _namespace: Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinitionId>, ValidationError> {

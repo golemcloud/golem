@@ -9,7 +9,7 @@ use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::definition::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, Version};
+use crate::definition::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, ApiVersion};
 use crate::parser::{GolemParser, ParseError};
 use crate::parser::path_pattern_parser::PathPatternParser;
 use crate::worker_binding::golem_worker_binding::GolemWorkerBinding;
@@ -18,7 +18,7 @@ use crate::worker_binding::golem_worker_binding::GolemWorkerBinding;
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
-    pub version: Version,
+    pub version: ApiVersion,
     pub routes: Vec<Route>,
 }
 
@@ -38,7 +38,7 @@ impl HasApiDefinitionId for HttpApiDefinition {
 }
 
 impl HasVersion for HttpApiDefinition {
-    fn get_version(&self) -> Version {
+    fn get_version(&self) -> ApiVersion {
         self.version.clone()
     }
 }

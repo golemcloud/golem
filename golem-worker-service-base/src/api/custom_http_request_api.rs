@@ -12,8 +12,6 @@ use crate::worker_binding::golem_worker_binding::ResponseMapping;
 use crate::worker_binding::worker_binding_resolver::WorkerBindingResolver;
 use crate::worker_bridge::WorkerRequest;
 use crate::worker_bridge::workr_request_executor::WorkerRequestExecutor;
-use crate::worker_request::worker_request_to_response::WorkerRequestToResponse;
-use crate::worker_request::WorkerRequest;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service

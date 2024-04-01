@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use golem_common::model::TemplateId;
 
-use crate::definition::api_definition::{ApiDefinitionId, Version};
+use crate::definition::api_definition::{ApiDefinitionId, ApiVersion};
 use crate::expression::expr::Expr;
 use crate::http::http_api_definition::MethodPattern;
 
@@ -18,7 +18,7 @@ use crate::http::http_api_definition::MethodPattern;
 #[oai(rename_all = "camelCase")]
 pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
-    pub version: Version,
+    pub version: ApiVersion,
     pub routes: Vec<Route>,
 }
 

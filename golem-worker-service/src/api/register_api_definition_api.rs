@@ -7,19 +7,19 @@ use poem_openapi::*;
 use tracing::{error, info};
 
 use golem_service_base::api_tags::ApiTags;
-use golem_worker_service_base::api::common::ApiEndpointError;
+use golem_worker_service_base::api::common::{ApiEndpointError, RouteValidationError};
 use golem_worker_service_base::api::register_api_definition_api::HttpApiDefinition;
-use golem_worker_service_base::http_api_definition;
-use golem_worker_service_base::http_api_definition::{ApiDefinitionId, Version};
+use golem_worker_service_base::HttpApiDefinition as CoreHttpApiDefinition;
+use golem_worker_service_base::definition::api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
-use golem_worker_service_base::oas_worker_bridge::*;
+use golem_worker_service_base::get_api_definition_from_oas;
 use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 
 pub struct RegisterApiDefinitionApi {
     pub definition_service: DefinitionService,
 }
 
-type DefinitionService = Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send>;
+type DefinitionService = Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace, HttpApiDefinition, RouteValidationError> + Sync + Send>;
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
@@ -32,7 +32,7 @@ impl RegisterApiDefinitionApi {
         &self,
         payload: String,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
-        let definition = get_api_definition(payload.as_str()).map_err(|e| {
+        let definition = get_api_definition_from_oas(payload.as_str()).map_err(|e| {
             error!("Invalid Spec {}", e);
             ApiEndpointError::bad_request(e)
         })?;
@@ -52,7 +52,7 @@ impl RegisterApiDefinitionApi {
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
         info!("Save API definition - id: {}", &payload.id);
 
-        let definition: http_api_definition::HttpApiDefinition = payload
+        let definition: CoreHttpApiDefinition = payload
             .0
             .try_into()
             .map_err(ApiEndpointError::bad_request)?;
@@ -69,7 +69,7 @@ impl RegisterApiDefinitionApi {
     async fn get(
         &self,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
-        #[oai(name = "version")] api_definition_id_version: Query<Version>,
+        #[oai(name = "version")] api_definition_id_version: Query<ApiVersion>,
     ) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
         let api_definition_id = api_definition_id_query.0;
 
@@ -105,7 +105,7 @@ impl RegisterApiDefinitionApi {
     async fn delete(
         &self,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
-        #[oai(name = "version")] api_definition_version_query: Query<Version>,
+        #[oai(name = "version")] api_definition_version_query: Query<ApiVersion>,
     ) -> Result<Json<String>, ApiEndpointError> {
         let api_definition_id = api_definition_id_query.0;
         let api_definition_version = api_definition_version_query.0;
@@ -196,7 +196,7 @@ mod test {
 
         let definition = http_api_definition::HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
-            version: Version("1.0".to_string()),
+            version: ApiVersion("1.0".to_string()),
             routes: vec![],
         };
 
@@ -224,7 +224,7 @@ mod test {
 
         let definition = http_api_definition::HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
-            version: Version("1.0".to_string()),
+            version: ApiVersion("1.0".to_string()),
             routes: vec![],
         };
         let response = client
@@ -236,7 +236,7 @@ mod test {
 
         let definition = http_api_definition::HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
-            version: Version("2.0".to_string()),
+            version: ApiVersion("2.0".to_string()),
             routes: vec![],
         };
         let response = client

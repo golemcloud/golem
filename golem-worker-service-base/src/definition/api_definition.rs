@@ -20,9 +20,9 @@ impl Display for ApiDefinitionId {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
-pub struct Version(pub String);
+pub struct ApiVersion(pub String);
 
-impl Display for Version {
+impl Display for ApiVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -34,7 +34,7 @@ pub(crate) trait HasApiDefinitionId {
 }
 
 pub(crate) trait HasVersion {
-    fn get_version(&self) -> Version;
+    fn get_version(&self) -> ApiVersion;
 }
 
 pub(crate) trait HasGolemWorkerBindings {
