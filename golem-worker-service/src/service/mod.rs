@@ -3,43 +3,54 @@ pub mod worker;
 
 use crate::worker_bridge_request_executor::WorkerRequestToHttpResponse;
 use async_trait::async_trait;
+use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
+use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::definition::api_definition::{ApiDefinitionId, ApiVersion};
+use golem_worker_service_base::http::http_api_definition::HttpApiDefinition;
+use golem_worker_service_base::http::http_request::InputHttpRequest;
 use golem_worker_service_base::repo::api_definition_repo::{
     ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry,
 };
-use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::service::api_definition::{
     ApiDefinitionKey, ApiDefinitionService, ApiDefinitionServiceDefault,
 };
-use  golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
-use golem_worker_service_base::service::http::http_api_definition_validator::{HttpApiDefinitionValidator, RouteValidationError};
+use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
+use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
+use golem_worker_service_base::service::http::http_api_definition_validator::{
+    HttpApiDefinitionValidator, RouteValidationError,
+};
 use golem_worker_service_base::service::http_request_definition_lookup::{
-    ApiDefinitionLookupError, ApiDefinitionLookup,
+    ApiDefinitionLookup, ApiDefinitionLookupError,
 };
 use golem_worker_service_base::service::template::{RemoteTemplateService, TemplateServiceNoop};
 use golem_worker_service_base::service::worker::{
     WorkerRequestMetadata, WorkerServiceDefault, WorkerServiceNoOp,
 };
+use golem_worker_service_base::worker_bridge::workr_request_executor::WorkerRequestExecutor;
 use http::HeaderMap;
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
-use golem_worker_service_base::http::http_api_definition::HttpApiDefinition;
-use golem_worker_service_base::http::http_request::InputHttpRequest;
-use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
-use golem_worker_service_base::worker_bridge::workr_request_executor::WorkerRequestExecutor;
 
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: worker::WorkerService,
     pub template_service: template::TemplateService,
-    pub definition_service:
-        Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace, HttpApiDefinition, RouteValidationError> + Sync + Send>,
-    pub http_definition_lookup_service: Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
-    pub worker_to_http_service:
-        Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
-    pub api_definition_validator_service: Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send>,
+    pub definition_service: Arc<
+        dyn ApiDefinitionService<
+                EmptyAuthCtx,
+                CommonNamespace,
+                HttpApiDefinition,
+                RouteValidationError,
+            > + Sync
+            + Send,
+    >,
+    pub http_definition_lookup_service:
+        Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
+    pub worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
+    pub api_definition_validator_service: Arc<
+        dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
+    >,
 }
 
 impl Services {
@@ -75,25 +86,30 @@ impl Services {
             routing_table_service.clone(),
         ));
 
-        let worker_to_http_service: Arc<
-            dyn WorkerRequestExecutor<Response> + Sync + Send,
-        > = Arc::new(WorkerRequestToHttpResponse::new(worker_service.clone()));
+        let worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send> =
+            Arc::new(WorkerRequestToHttpResponse::new(worker_service.clone()));
 
-        let definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send> =
-            Arc::new(RedisApiRegistry::new(&config.redis).await.map_err(|e| {
-                error!("RedisApiRegistry - init error: {}", e);
-                format!("RedisApiRegistry - init error: {}", e)
-            })?);
+        let definition_repo: Arc<
+            dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
+        > = Arc::new(RedisApiRegistry::new(&config.redis).await.map_err(|e| {
+            error!("RedisApiRegistry - init error: {}", e);
+            format!("RedisApiRegistry - init error: {}", e)
+        })?);
 
         let definition_lookup_service = Arc::new(CustomRequestDefinitionLookupDefault::new(
             definition_repo.clone(),
         ));
 
-        let api_definition_validator_service =
-            Arc::new(HttpApiDefinitionValidator {});
+        let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
         let definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace, HttpApiDefinition, RouteValidationError> + Sync + Send,
+            dyn ApiDefinitionService<
+                    EmptyAuthCtx,
+                    CommonNamespace,
+                    HttpApiDefinition,
+                    RouteValidationError,
+                > + Sync
+                + Send,
         > = Arc::new(ApiDefinitionServiceDefault::new(
             template_service.clone(),
             definition_repo.clone(),
@@ -120,16 +136,21 @@ impl Services {
             },
         });
 
-        let definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send> =
-            Arc::new(InMemoryRegistry::default());
+        let definition_repo: Arc<
+            dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
+        > = Arc::new(InMemoryRegistry::default());
 
-        let definition_lookup_service: Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send> =
-            Arc::new(CustomRequestDefinitionLookupDefault::new(
-                definition_repo.clone(),
-            ));
+        let definition_lookup_service: Arc<
+            dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
+        > = Arc::new(CustomRequestDefinitionLookupDefault::new(
+            definition_repo.clone(),
+        ));
 
-        let api_definition_validator_service: Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send> =
-            Arc::new(ApiDefinitionValidatorNoop {});
+        let api_definition_validator_service: Arc<
+            dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
+                + Sync
+                + Send,
+        > = Arc::new(ApiDefinitionValidatorNoop {});
 
         let definition_service = Arc::new(ApiDefinitionServiceDefault::new(
             template_service.clone(),
@@ -137,9 +158,8 @@ impl Services {
             api_definition_validator_service.clone(),
         ));
 
-        let worker_to_http_service: Arc<
-            dyn WorkerRequestExecutor<Response> + Sync + Send,
-        > = Arc::new(WorkerRequestToHttpResponse::new(worker_service.clone()));
+        let worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send> =
+            Arc::new(WorkerRequestToHttpResponse::new(worker_service.clone()));
 
         Services {
             worker_service,
@@ -153,12 +173,15 @@ impl Services {
 }
 
 pub struct CustomRequestDefinitionLookupDefault {
-    register_api_definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send>,
+    register_api_definition_repo:
+        Arc<dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send>,
 }
 
 impl CustomRequestDefinitionLookupDefault {
     pub fn new(
-        register_api_definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send>,
+        register_api_definition_repo: Arc<
+            dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
+        >,
     ) -> Self {
         Self {
             register_api_definition_repo,
@@ -167,31 +190,35 @@ impl CustomRequestDefinitionLookupDefault {
 }
 
 #[async_trait]
-impl ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> for CustomRequestDefinitionLookupDefault {
+impl ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition>
+    for CustomRequestDefinitionLookupDefault
+{
     async fn get(
         &self,
         input_http_request: InputHttpRequest,
     ) -> Result<HttpApiDefinition, ApiDefinitionLookupError> {
         let api_definition_id = match get_header_value(
             &input_http_request.headers,
-            "x-golem-api-definition-id" // TODO; This will be removed, and will depend on domain
+            "x-golem-api-definition-id", // TODO; This will be removed, and will depend on domain
         ) {
             Ok(api_definition_id) => Ok(ApiDefinitionId(api_definition_id.to_string())),
             Err(err) => Err(ApiDefinitionLookupError(format!(
                 "{} not found in the request headers. Error: {}",
-                "x-golem-api-definition-id" , err
+                "x-golem-api-definition-id", err
             ))),
         }?;
 
         // This will be removed and will be depending on the latest version
-        let version =
-            match get_header_value(&input_http_request.headers, "x-golem-api-definition-version") {
-                Ok(version) => Ok(ApiVersion(version)),
-                Err(err) => Err(ApiDefinitionLookupError(format!(
-                    "{} not found in the request headers. Error: {}",
-                    "x-golem-api-definition-version", err
-                ))),
-            }?;
+        let version = match get_header_value(
+            &input_http_request.headers,
+            "x-golem-api-definition-version",
+        ) {
+            Ok(version) => Ok(ApiVersion(version)),
+            Err(err) => Err(ApiDefinitionLookupError(format!(
+                "{} not found in the request headers. Error: {}",
+                "x-golem-api-definition-version", err
+            ))),
+        }?;
 
         let api_key = ApiDefinitionKey {
             namespace: CommonNamespace::default(),

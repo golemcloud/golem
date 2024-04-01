@@ -1,12 +1,13 @@
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::WorkerService;
 use golem_worker_service_base::worker_bridge::worker_response::WorkerResponse;
+use golem_worker_service_base::worker_bridge::workr_request_executor::{
+    WorkerRequestExecutor, WorkerRequestExecutorError,
+};
 use golem_worker_service_base::worker_bridge::WorkerRequest;
-use golem_worker_service_base::worker_bridge::workr_request_executor::{WorkerRequestExecutor, WorkerRequestExecutorError};
 
 pub struct WorkerRequestToHttpResponse {
     pub worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
@@ -23,21 +24,21 @@ impl WorkerRequestExecutor<poem::Response> for WorkerRequestToHttpResponse {
     async fn execute(
         &self,
         worker_request_params: WorkerRequest,
-    ) -> Result<WorkerResponse, WorkerRequestExecutorError>{
+    ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
         internal::execute(self, worker_request_params.clone()).await
     }
 }
 
 mod internal {
-    use tracing::info;
+    use crate::empty_worker_metadata;
+    use crate::worker_bridge_request_executor::WorkerRequestToHttpResponse;
     use golem_common::model::CallingConvention;
     use golem_service_base::model::WorkerId;
     use golem_worker_service_base::auth::EmptyAuthCtx;
     use golem_worker_service_base::worker_bridge::worker_response::WorkerResponse;
-    use golem_worker_service_base::worker_bridge::WorkerRequest;
     use golem_worker_service_base::worker_bridge::workr_request_executor::WorkerRequestExecutorError;
-    use crate::empty_worker_metadata;
-    use crate::worker_bridge_request_executor::WorkerRequestToHttpResponse;
+    use golem_worker_service_base::worker_bridge::WorkerRequest;
+    use tracing::info;
 
     pub(crate) async fn execute(
         default_executor: &WorkerRequestToHttpResponse,
@@ -50,11 +51,11 @@ mod internal {
         let worker_id = WorkerId::new(template_id.clone(), worker_name.clone())?;
 
         info!(
-        "Executing request for template: {}, worker: {}, function: {}",
-        template_id,
-        worker_name.clone(),
-        worker_request_params.function
-    );
+            "Executing request for template: {}, worker: {}, function: {}",
+            template_id,
+            worker_name.clone(),
+            worker_request_params.function
+        );
 
         let invocation_key = default_executor
             .worker_service

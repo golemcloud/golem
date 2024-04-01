@@ -7,12 +7,12 @@ use poem_openapi::*;
 use tracing::{error, info};
 
 use golem_service_base::api_tags::ApiTags;
-use golem_worker_service_base::api::common::{ApiEndpointError};
+use golem_worker_service_base::api::common::ApiEndpointError;
 use golem_worker_service_base::api::register_api_definition_api::HttpApiDefinition;
-use golem_worker_service_base::http::http_api_definition::HttpApiDefinition as CoreHttpApiDefinition;
-use golem_worker_service_base::definition::api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
+use golem_worker_service_base::definition::api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::get_api_definition_from_oas;
+use golem_worker_service_base::http::http_api_definition::HttpApiDefinition as CoreHttpApiDefinition;
 use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 use golem_worker_service_base::service::http::http_api_definition_validator::RouteValidationError;
 
@@ -20,7 +20,15 @@ pub struct RegisterApiDefinitionApi {
     pub definition_service: DefinitionService,
 }
 
-type DefinitionService = Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace, CoreHttpApiDefinition, RouteValidationError> + Sync + Send>;
+type DefinitionService = Arc<
+    dyn ApiDefinitionService<
+            EmptyAuthCtx,
+            CommonNamespace,
+            CoreHttpApiDefinition,
+            RouteValidationError,
+        > + Sync
+        + Send,
+>;
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
@@ -93,7 +101,8 @@ impl RegisterApiDefinitionApi {
 
         let values: Vec<HttpApiDefinition> = match data {
             Some(d) => {
-                let definition: HttpApiDefinition = d.try_into().map_err(ApiEndpointError::internal)?;
+                let definition: HttpApiDefinition =
+                    d.try_into().map_err(ApiEndpointError::internal)?;
                 vec![definition]
             }
             None => vec![],
@@ -150,7 +159,7 @@ impl RegisterApiDefinitionApi {
 impl RegisterApiDefinitionApi {
     async fn register_api(
         &self,
-        definition: &CoreHttpApiDefinition
+        definition: &CoreHttpApiDefinition,
     ) -> Result<(), ApiEndpointError> {
         self.definition_service
             .register(definition, CommonNamespace::default(), &EmptyAuthCtx {})

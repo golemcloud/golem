@@ -138,9 +138,9 @@ mod internal {
     use crate::worker_bridge::worker_response::{WorkerResponse};
 
     pub(crate) struct IntermediateHttpResponse {
-        pub body: TypeAnnotatedValue,
-        pub status: StatusCode,
-        pub headers: ResolvedResponseHeaders,
+        body: TypeAnnotatedValue,
+        status: StatusCode,
+        headers: ResolvedResponseHeaders,
     }
 
     impl IntermediateHttpResponse {
