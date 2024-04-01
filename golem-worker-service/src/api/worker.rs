@@ -293,6 +293,31 @@ impl WorkerApi {
     }
 
     #[oai(
+        path = "/:template_id/workers/get",
+        method = "post",
+        operation_id = "worker_metadatas"
+    )]
+    async fn worker_metadatas(
+        &self,
+        template_id: Path<TemplateId>,
+        params: Json<WorkerMetadatasRequest>,
+    ) -> Result<Json<WorkerMetadatasResponse>> {
+        let (cursor, workers) = self
+            .worker_service
+            .get_metadatas(
+                &template_id.0,
+                params.filter.clone(),
+                params.cursor.unwrap_or(0),
+                params.count.unwrap_or(50),
+                params.precise.unwrap_or(false),
+                &EmptyAuthCtx {},
+            )
+            .await?;
+
+        Ok(Json(WorkerMetadatasResponse { workers, cursor }))
+    }
+
+    #[oai(
         path = "/:template_id/workers/:worker_name/resume",
         method = "post",
         operation_id = "resume_worker"

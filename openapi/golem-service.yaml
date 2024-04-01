@@ -730,6 +730,70 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v2/templates/{template_id}/workers/get:
+    post:
+      tags:
+      - Worker
+      operationId: worker_metadatas
+      parameters:
+      - in: path
+        name: template_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/WorkerMetadatasRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerMetadatasResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v2/templates/{template_id}/workers/{worker_name}/resume:
     post:
       tags:
@@ -1573,6 +1637,15 @@ components:
             type: string
       required:
       - errors
+    FilterComparator:
+      type: string
+      enum:
+      - Equal
+      - NotEqual
+      - GreaterEqual
+      - Greater
+      - LessEqual
+      - Less
     GolemError:
       discriminator:
         propertyName: type
@@ -2155,6 +2228,11 @@ components:
           format: int64
       required:
       - value
+    StringFilterComparator:
+      type: string
+      enum:
+      - Equal
+      - Like
     ValidationErrorsBody:
       type: object
       properties:
@@ -2194,6 +2272,17 @@ components:
       required:
       - workerId
       - templateVersionUsed
+    WorkerCreatedAtFilter:
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          type: string
+          format: date-time
+      required:
+      - comparator
+      - value
     WorkerCreationRequest:
       type: object
       properties:
@@ -2211,6 +2300,113 @@ components:
       - name
       - args
       - env
+    WorkerEnvFilter:
+      type: object
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - name
+      - comparator
+      - value
+    WorkerFilter:
+      discriminator:
+        propertyName: type
+        mapping:
+          Name: '#/components/schemas/WorkerFilter_WorkerNameFilter'
+          Status: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
+          Version: '#/components/schemas/WorkerFilter_WorkerVersionFilter'
+          CreatedAt: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
+          Env: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
+          And: '#/components/schemas/WorkerFilter_[WorkerFilter]'
+          Or: '#/components/schemas/WorkerFilter_[WorkerFilter]'
+          Not: '#/components/schemas/WorkerFilter_WorkerFilter'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerVersionFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
+      - $ref: '#/components/schemas/WorkerFilter_[WorkerFilter]'
+      - $ref: '#/components/schemas/WorkerFilter_[WorkerFilter]'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerFilter'
+    WorkerFilter_WorkerCreatedAtFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CreatedAt
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerCreatedAtFilter'
+    WorkerFilter_WorkerEnvFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Env
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerEnvFilter'
+    WorkerFilter_WorkerFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Not
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerFilter'
+    WorkerFilter_WorkerNameFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Name
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerNameFilter'
+    WorkerFilter_WorkerStatusFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Status
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerStatusFilter'
+    WorkerFilter_WorkerVersionFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Version
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerVersionFilter'
+    WorkerFilter_[WorkerFilter]:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Or
+            type: string
+        required:
+        - type
+      - type: array
+        items:
+          $ref: '#/components/schemas/WorkerFilter'
     WorkerId:
       type: object
       properties:
@@ -2250,6 +2446,19 @@ components:
       - status
       - templateVersion
       - retryCount
+    WorkerMetadatasRequest:
+      type: object
+      properties:
+        filter:
+          $ref: '#/components/schemas/WorkerFilter'
+        cursor:
+          type: integer
+          format: uint64
+        count:
+          type: integer
+          format: uint64
+        precise:
+          type: boolean
     WorkerMetadatasResponse:
       type: object
       properties:
@@ -2262,6 +2471,16 @@ components:
           format: uint64
       required:
       - workers
+    WorkerNameFilter:
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - comparator
+      - value
     WorkerServiceErrorBody:
       type: object
       properties:
@@ -2314,6 +2533,24 @@ components:
       - Retrying
       - Failed
       - Exited
+    WorkerStatusFilter:
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/WorkerStatus'
+      required:
+      - value
+    WorkerVersionFilter:
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          type: integer
+          format: int32
+      required:
+      - comparator
+      - value
     Export:
       discriminator:
         propertyName: type

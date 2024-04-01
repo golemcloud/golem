@@ -15,7 +15,7 @@
 use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
-use golem_common::model::{parse_function_name, ShardId, TemplateId, WorkerStatus};
+use golem_common::model::{parse_function_name, ShardId, TemplateId, WorkerFilter, WorkerStatus};
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use http::Uri;
 use poem_openapi::{Enum, NewType, Object, Union};
@@ -2628,6 +2628,14 @@ pub struct InterruptResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct ResumeResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct WorkerMetadatasRequest {
+    pub filter: Option<WorkerFilter>,
+    pub cursor: Option<u64>,
+    pub count: Option<u64>,
+    pub precise: Option<bool>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct WorkerMetadatasResponse {

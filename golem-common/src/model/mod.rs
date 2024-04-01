@@ -29,7 +29,7 @@ use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
-use poem_openapi::{Enum, Object};
+use poem_openapi::{Enum, Object, Union};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
@@ -60,6 +60,57 @@ impl Timestamp {
 impl Display for Timestamp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl ToJSON for Timestamp {
+    fn to_json(&self) -> Option<Value> {
+        Some(Value::String(self.0.to_string()))
+    }
+}
+
+impl poem_openapi::types::Type for Timestamp {
+    const IS_REQUIRED: bool = true;
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> Cow<'static, str> {
+        Cow::from("string(timestamp)")
+    }
+
+    fn schema_ref() -> MetaSchemaRef {
+        MetaSchemaRef::Inline(Box::new(MetaSchema::new_with_format("string", "date-time")))
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+impl ParseFromParameter for Timestamp {
+    fn parse_from_parameter(value: &str) -> ParseResult<Self> {
+        Ok(value.parse().map_err(|_| {
+            poem_openapi::types::ParseError::<Timestamp>::custom(
+                "Unexpected representation of timestamp".to_string(),
+            )
+        })?)
+    }
+}
+
+impl ParseFromJSON for Timestamp {
+    fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
+        match value {
+            Some(Value::String(s)) => Ok(Timestamp::parse_from_parameter(&s)?),
+            _ => Err(poem_openapi::types::ParseError::<Timestamp>::custom(
+                "Unexpected representation of timestamp".to_string(),
+            )),
+        }
     }
 }
 
@@ -826,28 +877,107 @@ pub fn parse_function_name(name: &str) -> ParsedFunctionName {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
+pub struct WorkerNameFilter {
+    pub comparator: StringFilterComparator,
+    pub value: String,
+}
+
+impl WorkerNameFilter {
+    pub fn new(comparator: StringFilterComparator, value: String) -> Self {
+        Self { comparator, value }
+    }
+}
+
+impl Display for WorkerNameFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "name {} {}", self.comparator, self.value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
+pub struct WorkerStatusFilter {
+    pub value: WorkerStatus,
+}
+
+impl WorkerStatusFilter {
+    pub fn new(value: WorkerStatus) -> Self {
+        Self { value }
+    }
+}
+impl Display for WorkerStatusFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "status == {:?}", self.value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
+pub struct WorkerVersionFilter {
+    pub comparator: FilterComparator,
+    pub value: i32,
+}
+
+impl WorkerVersionFilter {
+    pub fn new(comparator: FilterComparator, value: i32) -> Self {
+        Self { comparator, value }
+    }
+}
+
+impl Display for WorkerVersionFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "version {} {}", self.comparator, self.value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
+pub struct WorkerCreatedAtFilter {
+    pub comparator: FilterComparator,
+    pub value: Timestamp,
+}
+
+impl WorkerCreatedAtFilter {
+    pub fn new(comparator: FilterComparator, value: Timestamp) -> Self {
+        Self { comparator, value }
+    }
+}
+
+impl Display for WorkerCreatedAtFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "created_at {} {}", self.comparator, self.value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
+pub struct WorkerEnvFilter {
+    pub name: String,
+    pub comparator: StringFilterComparator,
+    pub value: String,
+}
+
+impl WorkerEnvFilter {
+    pub fn new(name: String, comparator: StringFilterComparator, value: String) -> Self {
+        Self {
+            name,
+            comparator,
+            value,
+        }
+    }
+}
+
+impl Display for WorkerEnvFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "env.{} {} {}", self.name, self.comparator, self.value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Union)]
+#[oai(discriminator_name = "type", one_of = true)]
 pub enum WorkerFilter {
-    Name {
-        comparator: StringFilterComparator,
-        value: String,
-    },
-    Status {
-        value: WorkerStatus,
-    },
-    Version {
-        comparator: FilterComparator,
-        value: i32,
-    },
-    CreatedAt {
-        comparator: FilterComparator,
-        value: Timestamp,
-    },
-    Env {
-        name: String,
-        comparator: StringFilterComparator,
-        value: String,
-    },
+    Name(WorkerNameFilter),
+    Status(WorkerStatusFilter),
+    Version(WorkerVersionFilter),
+    CreatedAt(WorkerCreatedAtFilter),
+    Env(WorkerEnvFilter),
     And(Vec<WorkerFilter>),
     Or(Vec<WorkerFilter>),
     Not(Box<WorkerFilter>),
@@ -874,17 +1004,17 @@ impl WorkerFilter {
 
     pub fn matches(&self, metadata: &WorkerMetadata) -> bool {
         match self.clone() {
-            WorkerFilter::Name { comparator, value } => {
+            WorkerFilter::Name(WorkerNameFilter { comparator, value }) => {
                 comparator.matches(&metadata.worker_id.worker_id.worker_name, &value)
             }
-            WorkerFilter::Version { comparator, value } => {
+            WorkerFilter::Version(WorkerVersionFilter { comparator, value }) => {
                 comparator.matches(&metadata.worker_id.template_version, &value)
             }
-            WorkerFilter::Env {
+            WorkerFilter::Env(WorkerEnvFilter {
                 name,
                 comparator,
                 value,
-            } => {
+            }) => {
                 let mut result = false;
                 let name = name.to_lowercase();
                 for env_value in metadata.env.clone() {
@@ -896,13 +1026,12 @@ impl WorkerFilter {
                 }
                 result
             }
-            WorkerFilter::CreatedAt {
-                comparator: _,
-                value: _,
-            } => {
-                true // TODO implement when we will have timestamp in metadata
+            WorkerFilter::CreatedAt(WorkerCreatedAtFilter { comparator, value }) => {
+                comparator.matches(&metadata.created_at, &value)
             }
-            WorkerFilter::Status { value } => metadata.last_known_status.status == value,
+            WorkerFilter::Status(WorkerStatusFilter { value }) => {
+                metadata.last_known_status.status == value
+            }
             WorkerFilter::Not(filter) => !filter.matches(metadata),
             WorkerFilter::And(filters) => {
                 let mut result = true;
@@ -943,51 +1072,43 @@ impl WorkerFilter {
     }
 
     pub fn new_name(comparator: StringFilterComparator, value: String) -> Self {
-        WorkerFilter::Name { comparator, value }
+        WorkerFilter::Name(WorkerNameFilter::new(comparator, value))
     }
 
     pub fn new_env(name: String, comparator: StringFilterComparator, value: String) -> Self {
-        WorkerFilter::Env {
-            name,
-            comparator,
-            value,
-        }
+        WorkerFilter::Env(WorkerEnvFilter::new(name, comparator, value))
     }
 
     pub fn new_version(comparator: FilterComparator, value: i32) -> Self {
-        WorkerFilter::Version { comparator, value }
+        WorkerFilter::Version(WorkerVersionFilter::new(comparator, value))
     }
 
     pub fn new_status(value: WorkerStatus) -> Self {
-        WorkerFilter::Status { value }
+        WorkerFilter::Status(WorkerStatusFilter::new(value))
     }
 
     pub fn new_created_at(comparator: FilterComparator, value: Timestamp) -> Self {
-        WorkerFilter::CreatedAt { comparator, value }
+        WorkerFilter::CreatedAt(WorkerCreatedAtFilter::new(comparator, value))
     }
 }
 
 impl Display for WorkerFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            WorkerFilter::Name { comparator, value } => {
-                write!(f, "name {} {}", comparator, value)
+            WorkerFilter::Name(filter) => {
+                write!(f, "{}", filter)
             }
-            WorkerFilter::Version { comparator, value } => {
-                write!(f, "version {} {}", comparator, value)
+            WorkerFilter::Version(filter) => {
+                write!(f, "{}", filter)
             }
-            WorkerFilter::Status { value } => {
-                write!(f, "status == {:?}", value)
+            WorkerFilter::Status(filter) => {
+                write!(f, "{}", filter)
             }
-            WorkerFilter::CreatedAt { comparator, value } => {
-                write!(f, "created_at {} {}", comparator, value)
+            WorkerFilter::CreatedAt(filter) => {
+                write!(f, "{}", filter)
             }
-            WorkerFilter::Env {
-                name,
-                comparator,
-                value,
-            } => {
-                write!(f, "env.{} {} {}", name, comparator, value)
+            WorkerFilter::Env(filter) => {
+                write!(f, "{}", filter)
             }
             WorkerFilter::Not(filter) => {
                 write!(f, "NOT ({})", filter)
@@ -1125,7 +1246,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilte
 impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
     fn from(value: WorkerFilter) -> Self {
         let filter = match value {
-            WorkerFilter::Name { comparator, value } => {
+            WorkerFilter::Name(WorkerNameFilter { comparator, value }) => {
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Name(
                     golem_api_grpc::proto::golem::worker::WorkerNameFilter {
                         comparator: comparator.into(),
@@ -1133,7 +1254,7 @@ impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
                     },
                 )
             }
-            WorkerFilter::Version { comparator, value } => {
+            WorkerFilter::Version(WorkerVersionFilter { comparator, value }) => {
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(
                     golem_api_grpc::proto::golem::worker::WorkerVersionFilter {
                         comparator: comparator.into(),
@@ -1141,25 +1262,25 @@ impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
                     },
                 )
             }
-            WorkerFilter::Env {
+            WorkerFilter::Env(WorkerEnvFilter {
                 name,
                 comparator,
                 value,
-            } => golem_api_grpc::proto::golem::worker::worker_filter::Filter::Env(
+            }) => golem_api_grpc::proto::golem::worker::worker_filter::Filter::Env(
                 golem_api_grpc::proto::golem::worker::WorkerEnvFilter {
                     name,
                     comparator: comparator.into(),
                     value,
                 },
             ),
-            WorkerFilter::Status { value } => {
+            WorkerFilter::Status(WorkerStatusFilter { value }) => {
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Status(
                     golem_api_grpc::proto::golem::worker::WorkerStatusFilter {
                         value: value.into(),
                     },
                 )
             }
-            WorkerFilter::CreatedAt { comparator, value } => {
+            WorkerFilter::CreatedAt(WorkerCreatedAtFilter { comparator, value }) => {
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::CreatedAt(
                     golem_api_grpc::proto::golem::worker::WorkerCreatedAtFilter {
                         value: Some(value.into()),
