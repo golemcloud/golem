@@ -16,6 +16,7 @@
   },
   "promises": "Promises",
   "rpc": "Worker to Worker communication",
+  "transaction-api": "Transactions",
   "template-interface": "Template Interface",
   "faq": "FAQ",
   "technical-details": "Technical details",
