@@ -4,9 +4,7 @@ use poem_openapi::{ApiResponse, Object, Union};
 use poem_openapi::payload::Json;
 use serde::{Deserialize, Serialize};
 
-use golem_common::model::TemplateId;
-
-use crate::http::http_api_definition::MethodPattern;
+use crate::service::http::http_api_definition_validator::RouteValidationError;
 
 #[derive(Union)]
 #[oai(discriminator_name = "type", one_of = true)]
@@ -37,13 +35,13 @@ pub struct MessageBody {
     message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-pub struct RouteValidationError {
-    pub method: MethodPattern,
-    pub path: String,
-    pub template: TemplateId,
-    pub detail: String,
-}
+// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+// pub struct RouteValidationError {
+//     pub method: MethodPattern,
+//     pub path: String,
+//     pub template: TemplateId,
+//     pub detail: String,
+// }
 
 #[derive(ApiResponse)]
 pub enum ApiEndpointError {
@@ -105,9 +103,10 @@ mod conversion {
     use crate::repo::api_definition_repo::ApiRegistrationRepoError;
     use crate::service::api_definition::ApiRegistrationError;
     use crate::service::api_definition_validator::ValidationErrors;
+    use crate::service::http::http_api_definition_validator::RouteValidationError;
 
     use super::{
-        ApiEndpointError, RouteValidationError, ValidationErrorsBody, WorkerServiceErrorsBody,
+        ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody,
     };
 
     impl From<ApiRegistrationError<RouteValidationError>> for ApiEndpointError {

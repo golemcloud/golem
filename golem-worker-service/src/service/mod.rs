@@ -13,9 +13,7 @@ use golem_worker_service_base::service::api_definition::{
     ApiDefinitionKey, ApiDefinitionService, ApiDefinitionServiceDefault,
 };
 use  golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
-use golem_worker_service_base::service::http::http_api_definition_validator::{
-    HttpApiDefinitionValidator,
-};
+use golem_worker_service_base::service::http::http_api_definition_validator::{HttpApiDefinitionValidator, RouteValidationError};
 use golem_worker_service_base::service::http_request_definition_lookup::{
     ApiDefinitionLookupError, HttpRequestDefinitionLookup,
 };
@@ -27,7 +25,6 @@ use http::HeaderMap;
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
-use golem_worker_service_base::api::common::RouteValidationError;
 use golem_worker_service_base::http::http_api_definition::HttpApiDefinition;
 use golem_worker_service_base::http::http_request::InputHttpRequest;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
@@ -92,7 +89,7 @@ impl Services {
             definition_repo.clone(),
         ));
 
-        let api_definition_validator_service: Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send> =
+        let api_definition_validator_service =
             Arc::new(HttpApiDefinitionValidator {});
 
         let definition_service: Arc<

@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use golem_common::model::TemplateId;
 use golem_service_base::model::Template;
 
-use crate::api::common::RouteValidationError;
 use crate::definition::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, ApiVersion};
 use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 
@@ -129,14 +128,15 @@ pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace, ApiDefinition, Valida
         Arc<dyn ApiDefinitionValidatorService<ApiDefinition, ValidationError> + Sync + Send>,
 }
 
-impl<Auth, N, A: HasGolemWorkerBindings, VE> ApiDefinitionServiceDefault<Auth, N, A, VE>
+impl<AuthCtx, Namespace, ApiDefinition, ValidationError> ApiDefinitionServiceDefault<AuthCtx, Namespace, ApiDefinition, ValidationError>
 where
-    N: ApiNamespace + Send + Sync,
+    Namespace: ApiNamespace + Send + Sync,
+    ApiDefinition: GolemApiDefinition + Sync,
 {
     pub fn new(
-        template_service: Arc<dyn TemplateService<Auth> + Send + Sync>,
-        register_repo: Arc<dyn ApiDefinitionRepo<N, A> + Sync + Send>,
-        api_definition_validator: Arc<dyn ApiDefinitionValidatorService<A, VE> + Sync + Send>,
+        template_service: Arc<dyn TemplateService<AuthCtx> + Send + Sync>,
+        register_repo: Arc<dyn ApiDefinitionRepo<Namespace, ApiDefinition> + Sync + Send>,
+        api_definition_validator: Arc<dyn ApiDefinitionValidatorService<ApiDefinition, ValidationError> + Sync + Send>,
     ) -> Self {
         Self {
             template_service,
@@ -147,9 +147,9 @@ where
 
     async fn get_all_templates(
         &self,
-        definition: &A,
-        auth_ctx: &Auth,
-    ) -> Result<Vec<Template>, ApiRegistrationError<VE>> {
+        definition: &ApiDefinition,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Vec<Template>, ApiRegistrationError<ValidationError>> {
         let get_templates = definition
             .get_golem_worker_bindings()
             .iter()

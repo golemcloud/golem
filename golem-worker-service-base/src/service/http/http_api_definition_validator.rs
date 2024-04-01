@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use poem_openapi::Object;
 
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +12,7 @@ use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern, PathPat
 use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 
 // Http Api Definition Validator
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct RouteValidationError {
     pub method: MethodPattern,
     pub path: String,
