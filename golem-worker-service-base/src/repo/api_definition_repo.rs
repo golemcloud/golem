@@ -2,13 +2,14 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Mutex;
 
+use crate::definition::api_definition::ApiDefinitionId;
 use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
+use serde::de::DeserializeOwned;
 use tracing::{debug, info};
-use crate::definition::api_definition::ApiDefinitionId;
 
 #[async_trait]
 pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {
@@ -67,7 +68,9 @@ impl<Namespace, ApiDefinition> Default for InMemoryRegistry<Namespace, ApiDefini
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace, ApiDefinition: Send + Clone + Sync> ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition> {
+impl<Namespace: ApiNamespace, ApiDefinition: Send + Clone + Sync>
+    ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition>
+{
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -146,7 +149,11 @@ impl RedisApiRegistry {
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace, ApiDefinition: bincode::Decode + bincode::Encode + Sync> ApiDefinitionRepo<Namespace, ApiDefinition> for RedisApiRegistry {
+impl<
+        Namespace: ApiNamespace,
+        ApiDefinition: bincode::Decode + bincode::Encode + DeserializeOwned + Sync,
+    > ApiDefinitionRepo<Namespace, ApiDefinition> for RedisApiRegistry
+{
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -299,7 +306,10 @@ impl RedisApiRegistry {
     }
 
     /// Retrieve all api definitions for a given set of keys.
-    async fn get_all_api_definitions<Namespace: ApiNamespace, ApiDefinition>(
+    async fn get_all_api_definitions<
+        Namespace: ApiNamespace,
+        ApiDefinition: bincode::Decode + DeserializeOwned,
+    >(
         &self,
         keys: Vec<ApiDefinitionKey<Namespace>>,
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError> {
@@ -372,12 +382,12 @@ mod redis_keys {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::definition::api_definition::{ApiDefinitionId, Version};
+    use crate::http::http_api_definition::HttpApiDefinition;
     use bincode::{Decode, Encode};
     use golem_common::config::RedisConfig;
     use serde::Deserialize;
     use std::fmt::Formatter;
-    use crate::definition::api_definition::{ApiDefinitionId, Version};
-    use crate::http::http_api_definition::HttpApiDefinition;
 
     #[derive(Clone, Eq, PartialEq, Debug, Hash, Decode, Encode, Deserialize)]
     struct CommonNamespace(String);

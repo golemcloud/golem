@@ -1,10 +1,10 @@
 use std::fmt::Display;
 
+use crate::http::http_api_definition::MethodPattern;
 use golem_common::model::TemplateId;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Union};
 use serde::{Deserialize, Serialize};
-use crate::http::http_api_definition::MethodPattern;
 
 #[derive(Union)]
 #[oai(discriminator_name = "type", one_of = true)]
@@ -105,10 +105,10 @@ mod conversion {
     };
     use crate::repo::api_definition_repo::ApiRegistrationRepoError;
     use crate::service::api_definition::ApiRegistrationError;
-    use crate::service::api_definition_validator::ValidationError;
+    use crate::service::api_definition_validator::ValidationErrors;
 
-    impl From<ApiRegistrationError> for ApiEndpointError {
-        fn from(error: ApiRegistrationError) -> Self {
+    impl From<ApiRegistrationError<RouteValidationError>> for ApiEndpointError {
+        fn from(error: ApiRegistrationError<RouteValidationError>) -> Self {
             match error {
                 ApiRegistrationError::RepoError(error) => match error {
                     ApiRegistrationRepoError::AlreadyExists(_) => {
@@ -117,12 +117,20 @@ mod conversion {
                     ApiRegistrationRepoError::InternalError(_) => ApiEndpointError::internal(error),
                 },
                 ApiRegistrationError::ValidationError(e) => e.into(),
+                ApiRegistrationError::TemplateNotFoundError(template_id) => {
+                    let templates = template_id
+                        .iter()
+                        .map(|t| t.to_string())
+                        .collect::<Vec<String>>()
+                        .join(", ");
+                    ApiEndpointError::bad_request(format!("Templates not found, {}", templates))
+                }
             }
         }
     }
 
-    impl From<ValidationError<RouteValidationError>> for ApiEndpointError {
-        fn from(error: ValidationError<RouteValidationError>) -> Self {
+    impl From<ValidationErrors<RouteValidationError>> for ApiEndpointError {
+        fn from(error: ValidationErrors<RouteValidationError>) -> Self {
             let error = WorkerServiceErrorsBody::Validation(ValidationErrorsBody {
                 errors: error
                     .errors

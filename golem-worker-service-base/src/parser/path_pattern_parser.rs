@@ -1,6 +1,6 @@
+use crate::http::http_api_definition::{PathPattern, QueryInfo, VarInfo};
 use nom::branch::alt;
 use nom::IResult;
-use crate::http::http_api_definition::{PathPattern, QueryInfo, VarInfo};
 
 use super::*;
 use crate::parser::{literal_parser, place_holder_parser, ParseError};

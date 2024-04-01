@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::result::Result;
 
-use golem_common::model::TemplateId;
-use poem_openapi::*;
-use serde::{Deserialize, Serialize};
 use crate::definition::api_definition::{ApiDefinitionId, Version};
 use crate::expression::expr::Expr;
 use crate::http::http_api_definition::MethodPattern;
+use golem_common::model::TemplateId;
+use poem_openapi::*;
+use serde::{Deserialize, Serialize};
 
 // Mostly this data structures that represents the actual incoming request
 // exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.
@@ -50,7 +50,9 @@ pub struct ResponseMapping {
 impl TryFrom<crate::http::http_api_definition::HttpApiDefinition> for HttpApiDefinition {
     type Error = String;
 
-    fn try_from(value: crate::http::http_api_definition::HttpApiDefinition) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: crate::http::http_api_definition::HttpApiDefinition,
+    ) -> Result<Self, Self::Error> {
         let mut routes = Vec::new();
         for route in value.routes {
             let v = Route::try_from(route)?;
@@ -103,8 +105,8 @@ impl TryInto<crate::http::http_api_definition::Route> for Route {
     type Error = String;
 
     fn try_into(self) -> Result<crate::http::http_api_definition::Route, Self::Error> {
-        let path =
-            crate::http::http_api_definition::PathPattern::from(self.path.as_str()).map_err(|e| e.to_string())?;
+        let path = crate::http::http_api_definition::PathPattern::from(self.path.as_str())
+            .map_err(|e| e.to_string())?;
         let binding = self.binding.try_into()?;
 
         Ok(crate::http::http_api_definition::Route {
@@ -118,7 +120,9 @@ impl TryInto<crate::http::http_api_definition::Route> for Route {
 impl TryFrom<crate::worker_binding::golem_worker_binding::ResponseMapping> for ResponseMapping {
     type Error = String;
 
-    fn try_from(value: crate::worker_binding::golem_worker_binding::ResponseMapping) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: crate::worker_binding::golem_worker_binding::ResponseMapping,
+    ) -> Result<Self, Self::Error> {
         let body = serde_json::to_value(value.body).map_err(|e| e.to_string())?;
         let status = serde_json::to_value(value.status).map_err(|e| e.to_string())?;
         let mut headers = HashMap::new();
@@ -137,7 +141,9 @@ impl TryFrom<crate::worker_binding::golem_worker_binding::ResponseMapping> for R
 impl TryInto<crate::worker_binding::golem_worker_binding::ResponseMapping> for ResponseMapping {
     type Error = String;
 
-    fn try_into(self) -> Result<crate::worker_binding::golem_worker_binding::ResponseMapping, Self::Error> {
+    fn try_into(
+        self,
+    ) -> Result<crate::worker_binding::golem_worker_binding::ResponseMapping, Self::Error> {
         let body: Expr = serde_json::from_value(self.body).map_err(|e| e.to_string())?;
         let status: Expr = serde_json::from_value(self.status).map_err(|e| e.to_string())?;
         let mut headers = HashMap::new();
@@ -146,18 +152,24 @@ impl TryInto<crate::worker_binding::golem_worker_binding::ResponseMapping> for R
             headers.insert(key.to_string(), v);
         }
 
-        Ok(crate::worker_binding::golem_worker_binding::ResponseMapping {
-            body,
-            status,
-            headers,
-        })
+        Ok(
+            crate::worker_binding::golem_worker_binding::ResponseMapping {
+                body,
+                status,
+                headers,
+            },
+        )
     }
 }
 
-impl TryFrom<crate::worker_binding::golem_worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
+impl TryFrom<crate::worker_binding::golem_worker_binding::GolemWorkerBinding>
+    for GolemWorkerBinding
+{
     type Error = String;
 
-    fn try_from(value: crate::worker_binding::golem_worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: crate::worker_binding::golem_worker_binding::GolemWorkerBinding,
+    ) -> Result<Self, Self::Error> {
         let response: Option<ResponseMapping> = match value.response {
             Some(v) => {
                 let r = ResponseMapping::try_from(v)?;
@@ -182,17 +194,23 @@ impl TryFrom<crate::worker_binding::golem_worker_binding::GolemWorkerBinding> fo
     }
 }
 
-impl TryInto<crate::worker_binding::golem_worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
+impl TryInto<crate::worker_binding::golem_worker_binding::GolemWorkerBinding>
+    for GolemWorkerBinding
+{
     type Error = String;
 
-    fn try_into(self) -> Result<crate::worker_binding::golem_worker_binding::GolemWorkerBinding, Self::Error> {
-        let response: Option<crate::worker_binding::golem_worker_binding::ResponseMapping> = match self.response {
-            Some(v) => {
-                let r: crate::worker_binding::golem_worker_binding::ResponseMapping = v.try_into()?;
-                Some(r)
-            }
-            None => None,
-        };
+    fn try_into(
+        self,
+    ) -> Result<crate::worker_binding::golem_worker_binding::GolemWorkerBinding, Self::Error> {
+        let response: Option<crate::worker_binding::golem_worker_binding::ResponseMapping> =
+            match self.response {
+                Some(v) => {
+                    let r: crate::worker_binding::golem_worker_binding::ResponseMapping =
+                        v.try_into()?;
+                    Some(r)
+                }
+                None => None,
+            };
 
         let worker_id: Expr = serde_json::from_value(self.worker_id).map_err(|e| e.to_string())?;
         let mut function_params = Vec::new();
@@ -202,12 +220,14 @@ impl TryInto<crate::worker_binding::golem_worker_binding::GolemWorkerBinding> fo
             function_params.push(v);
         }
 
-        Ok(crate::worker_binding::golem_worker_binding::GolemWorkerBinding {
-            template: self.template,
-            worker_id,
-            function_name: self.function_name,
-            function_params,
-            response,
-        })
+        Ok(
+            crate::worker_binding::golem_worker_binding::GolemWorkerBinding {
+                template: self.template,
+                worker_id,
+                function_name: self.function_name,
+                function_params,
+                response,
+            },
+        )
     }
 }

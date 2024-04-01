@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 
+use crate::evaluator::primitive::{Number, Primitive};
+use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern};
 use crate::merge::Merge;
 use crate::tokeniser::tokenizer::Token;
+use crate::worker_binding::worker_binding_resolver::{
+    ResolvedWorkerBinding, WorkerBindingResolver,
+};
 use derive_more::{Display, FromStr, Into};
 use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
@@ -9,9 +14,6 @@ use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
-use crate::evaluator::primitive::{Number, Primitive};
-use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern};
-use crate::worker_binding::worker_binding_resolver::{ResolvedWorkerBinding, WorkerBindingResolver};
 
 // An input request from external API gateways, that is then resolved to a worker request, using API definitions
 pub struct InputHttpRequest<'a> {
@@ -321,13 +323,13 @@ impl<'a> ApiInputPath<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::worker_request::WorkerRequest;
+    use std::collections::HashMap;
 
-    use golem_common::model::TemplateId;
-    use http::{HeaderMap, HeaderName, HeaderValue, Method};
     use crate::http::http_api_definition::HttpApiDefinition;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
+    use golem_common::model::TemplateId;
+    use http::{HeaderMap, HeaderName, HeaderValue, Method};
 
     #[test]
     fn test_worker_request_resolution() {
@@ -1098,7 +1100,11 @@ mod tests {
         }
     }
 
-    fn get_api_spec(path_pattern: &str, worker_id: &str, function_params: &str) -> HttpApiDefinition {
+    fn get_api_spec(
+        path_pattern: &str,
+        worker_id: &str,
+        function_params: &str,
+    ) -> HttpApiDefinition {
         let yaml_string = format!(
             r#"
           id: users-api

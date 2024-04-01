@@ -1,7 +1,7 @@
+use crate::evaluator::path::{Path, PathComponent};
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
-use crate::evaluator::path::{Path, PathComponent};
 
 pub trait Getter<T> {
     fn get(&self, key: &Path) -> Result<T, GetError>;

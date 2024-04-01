@@ -1,5 +1,5 @@
+use std::fmt::Debug;
 use std::fmt::Display;
-use std::fmt::{Debug};
 use std::str::FromStr;
 
 use bincode::{Decode, Encode};

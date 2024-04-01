@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
-use strum_macros::Display;
 use crate::expression::expr::{ConstructorPattern, ConstructorPatternExpr, Expr, InnerNumber};
+use strum_macros::Display;
 
 use super::*;
 use crate::tokeniser::cursor::TokenCursor;

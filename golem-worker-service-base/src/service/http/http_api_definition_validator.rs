@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 
+use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern, PathPattern, Route};
+use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 use golem_common::model::TemplateId;
 use golem_service_base::model::{
     Export, ExportFunction, ExportInstance, Template, TemplateMetadata,
 };
 use serde::{Deserialize, Serialize};
-use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern, PathPattern, Route};
-use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationError};
-
 
 // Http Api Definition Validator
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,12 +28,17 @@ impl RouteValidationError {
     }
 }
 
-
 #[derive(Clone)]
 pub struct HttpApiDefinitionValidator {}
 
-impl ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> for HttpApiDefinitionValidator {
-    fn validate(&self, api: &HttpApiDefinition, templates: &[Template]) -> Result<(), ValidationError<RouteValidationError>> {
+impl ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
+    for HttpApiDefinitionValidator
+{
+    fn validate(
+        &self,
+        api: &HttpApiDefinition,
+        templates: &[Template],
+    ) -> Result<(), ValidationErrors<RouteValidationError>> {
         let templates: HashMap<&TemplateId, &TemplateMetadata> = templates
             .iter()
             .map(|template| {
@@ -64,7 +68,7 @@ impl ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> for 
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(ValidationError { errors })
+            Err(ValidationErrors { errors })
         }
     }
 }
@@ -121,9 +125,9 @@ fn validate_route(
 fn find_function(name: &str, template: &TemplateMetadata) -> Option<ExportFunction> {
     template.exports.iter().find_map(|exp| match exp {
         Export::Instance(ExportInstance {
-                             name: instance_name,
-                             functions,
-                         }) => functions.iter().find_map(|f| {
+            name: instance_name,
+            functions,
+        }) => functions.iter().find_map(|f| {
             let full_name = format!("{}/{}", instance_name, f.name);
             if full_name == name {
                 Some(f.clone())

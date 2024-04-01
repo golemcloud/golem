@@ -16,7 +16,7 @@ use golem_worker_service_base::oas_worker_bridge::{
     GOLEM_API_DEFINITION_ID_EXTENSION, GOLEM_API_DEFINITION_VERSION,
 };
 use golem_worker_service_base::service::api_definition::{
-    ApiDefinitionKey, ApiDefinitionService, RegisterApiDefinitionDefault,
+    ApiDefinitionKey, ApiDefinitionService, ApiDefinitionServiceDefault,
 };
 use golem_worker_service_base::service::api_definition_validator::{
     HttpApiDefinitionValidator, ApiDefinitionValidatorNoop, ApiDefinitionValidatorService,
@@ -98,7 +98,7 @@ impl Services {
 
         let definition_service: Arc<
             dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send,
-        > = Arc::new(RegisterApiDefinitionDefault::new(
+        > = Arc::new(ApiDefinitionServiceDefault::new(
             template_service.clone(),
             definition_repo.clone(),
             api_definition_validator_service.clone(),
@@ -135,7 +135,7 @@ impl Services {
         let api_definition_validator_service: Arc<dyn ApiDefinitionValidatorService + Sync + Send> =
             Arc::new(ApiDefinitionValidatorNoop {});
 
-        let definition_service = Arc::new(RegisterApiDefinitionDefault::new(
+        let definition_service = Arc::new(ApiDefinitionServiceDefault::new(
             template_service.clone(),
             Arc::new(InMemoryRegistry::default()),
             api_definition_validator_service.clone(),

@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 
+use crate::evaluator::primitive::{GetPrimitive, Primitive};
 use crate::evaluator::{EvaluationError, Evaluator};
+use crate::expression::expr::Expr;
 use crate::merge::Merge;
 use crate::tokeniser::tokenizer::Token;
+use crate::worker_binding::golem_worker_binding::ResponseMapping;
+use crate::worker_request::worker_request_to_response::WorkerRequestToResponse;
 use crate::worker_request::WorkerRequest;
 use async_trait::async_trait;
 use golem_service_base::type_inference::*;
@@ -13,10 +17,6 @@ use http::{HeaderMap, StatusCode};
 use poem::{Body, ResponseParts};
 use serde_json::json;
 use tracing::info;
-use crate::expression::expr::Expr;
-use crate::worker_binding::golem_worker_binding::ResponseMapping;
-use crate::worker_request::worker_request_to_response::WorkerRequestToResponse;
-use crate::evaluator::primitive::{GetPrimitive, Primitive};
 
 pub struct WorkerResponse {
     pub result: TypeAnnotatedValue,

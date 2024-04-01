@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use bincode::{Decode, Encode};
-use serde::{Deserialize, Serialize};
-use golem_common::model::TemplateId;
 use crate::expression::expr::Expr;
+use bincode::{Decode, Encode};
+use golem_common::model::TemplateId;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]
@@ -13,7 +13,6 @@ pub struct GolemWorkerBinding {
     pub function_params: Vec<Expr>,
     pub response: Option<ResponseMapping>,
 }
-
 
 // TODO; https://github.com/golemcloud/golem/issues/318
 // This will make GolemWorkerBidning generic for all protocols
@@ -27,4 +26,3 @@ pub struct ResponseMapping {
 pub trait HasGolemWorkerBindings {
     fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding>;
 }
-

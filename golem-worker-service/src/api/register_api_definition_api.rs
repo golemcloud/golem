@@ -170,7 +170,7 @@ mod test {
     use poem::test::TestClient;
 
     use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
-    use golem_worker_service_base::service::api_definition::RegisterApiDefinitionDefault;
+    use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
 
     use crate::service::template::TemplateService;
 
@@ -178,7 +178,7 @@ mod test {
 
     fn make_route() -> poem::Route {
         let template_service: TemplateService = Arc::new(TemplateServiceNoop {});
-        let definition_service = RegisterApiDefinitionDefault::new(
+        let definition_service = ApiDefinitionServiceDefault::new(
             template_service,
             Arc::new(InMemoryRegistry::default()),
             Arc::new(ApiDefinitionValidatorNoop {}),

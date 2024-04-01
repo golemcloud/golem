@@ -1,19 +1,21 @@
 use super::tokeniser::tokenizer::{Token, Tokenizer};
+use crate::expression::expr::{
+    ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber,
+};
 use crate::merge::Merge;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
 use std::ops::Deref;
-use crate::expression::expr::{ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber};
-pub mod primitive;
 pub mod getter;
 pub mod path;
+pub mod primitive;
 
-use primitive::GetPrimitive;
-use getter::Getter;
 use getter::GetError;
+use getter::Getter;
 use path::Path;
+use primitive::GetPrimitive;
 
 pub trait Evaluator {
     fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
@@ -92,7 +94,6 @@ impl<'t> Evaluator for RawString<'t> {
         Ok(TypeAnnotatedValue::Str(combined_string))
     }
 }
-
 
 impl Evaluator for Expr {
     fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError> {
@@ -494,8 +495,13 @@ fn handle_pattern_match(
 
 #[cfg(test)]
 mod tests {
+    use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, Evaluator};
+    use crate::expression::expr::Expr;
+    use crate::http::http_api_definition::PathPattern;
+    use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
+    use crate::worker_request::worker_response::WorkerResponse;
     use golem_service_base::type_inference::infer_analysed_type;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;
@@ -504,11 +510,6 @@ mod tests {
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::str::FromStr;
-    use crate::evaluator::getter::GetError;
-    use crate::expression::expr::Expr;
-    use crate::http::http_api_definition::PathPattern;
-    use crate::http::http_request::{ApiInputPath, InputHttpRequest};
-    use crate::worker_request::worker_response::WorkerResponse;
 
     fn get_worker_response(input: &str) -> WorkerResponse {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");
@@ -644,7 +645,7 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${request.body.address.street} ${request.body.address.city}",
         )
-            .unwrap();
+        .unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("bStreet bCity".to_string());
         let result = expr.evaluate(&resolved_request);
         assert_eq!(result, Ok(expected_evaluated_result));
@@ -666,7 +667,7 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${if (request.header.authorisation == 'admin') then 200 else 401}",
         )
-            .unwrap();
+        .unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::U64("200".parse().unwrap());
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
@@ -751,7 +752,7 @@ mod tests {
                         "city": "bCity"
                     }
                 )
-                    .to_string(),
+                .to_string(),
             },
         };
 
@@ -856,7 +857,7 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
         )
-            .unwrap();
+        .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         assert_eq!(
             result,
@@ -872,7 +873,7 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
         )
-            .unwrap();
+        .unwrap();
         let result = expr.evaluate(&worker_response);
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("not found".to_string())));
     }
@@ -897,7 +898,7 @@ mod tests {
                         }
                     }"#,
             )
-                .result_with_worker_response_key(),
+            .result_with_worker_response_key(),
         );
 
         let expr1 = Expr::from_primitive_string(
@@ -958,7 +959,7 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${match worker.response { ok(value) => 'personal-id', err(msg) => 'not found' }}",
         )
-            .unwrap();
+        .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         assert_eq!(
             result,
@@ -980,7 +981,7 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${match worker.response { ok(value) => value, err(msg) => 'not found' }}",
         )
-            .unwrap();
+        .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
 
         let expected_result = TypeAnnotatedValue::Record {
@@ -1005,7 +1006,7 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${match worker.response { ok(value) => value.id, err(msg) => 'not found' }}",
         )
-            .unwrap();
+        .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("pId".to_string())));
     }
@@ -1024,7 +1025,7 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${match worker.response { ok(value) => value.ids[0], none => 'not found' }}",
         )
-            .unwrap();
+        .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("id1".to_string())));
     }

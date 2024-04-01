@@ -1,9 +1,9 @@
+use crate::evaluator::{Evaluator, RawString};
+use crate::worker_binding::worker_binding_resolver::ResolvedWorkerBinding;
 use golem_common::model::TemplateId;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
-use crate::evaluator::{Evaluator, RawString};
-use crate::worker_binding::worker_binding_resolver::ResolvedWorkerBinding;
 
 pub mod worker_request_to_response;
 pub mod worker_response;
@@ -44,8 +44,8 @@ impl WorkerRequest {
                 .resolved_worker_binding_template
                 .function_name,
         )
-            .evaluate(&resolved_route.typed_value_from_input)
-            .map_err(|err| err.to_string())?;
+        .evaluate(&resolved_route.typed_value_from_input)
+        .map_err(|err| err.to_string())?;
 
         let function_name = match function_name_value {
             TypeAnnotatedValue::Str(value) => value,
