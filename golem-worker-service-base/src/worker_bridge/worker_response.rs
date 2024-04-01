@@ -1,24 +1,24 @@
-use std::collections::HashMap;
+
 
 use async_trait::async_trait;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::{get_json_from_typed_value, get_typed_value_from_json};
 use golem_wasm_rpc::TypeAnnotatedValue;
-use http::{HeaderMap, StatusCode};
-use poem::{Body, ResponseParts};
+use http::{StatusCode};
+use poem::{Body};
 use serde_json::json;
 use tracing::info;
 
 use golem_service_base::type_inference::*;
 
-use crate::evaluator::{EvaluationError, Evaluator};
-use crate::primitive::{GetPrimitive, Primitive};
-use crate::expression::expr::Expr;
-use crate::merge::Merge;
+
+
+
+
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_binding::golem_worker_binding::ResponseMapping;
 use crate::worker_bridge::workr_request_executor::{WorkerRequestExecutor, WorkerRequestExecutorError};
-use crate::worker_bridge;
+
 use crate::worker_bridge::WorkerRequest;
 
 pub struct WorkerResponse {
@@ -229,7 +229,7 @@ mod internal {
 
     #[derive(Default)]
     struct ResolvedResponseHeaders {
-        pub headers: HashMap<String, String>,
+        headers: HashMap<String, String>,
     }
 
     impl ResolvedResponseHeaders {

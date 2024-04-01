@@ -1,11 +1,11 @@
-use Iterator;
+
 use std::fmt::Debug;
 use std::fmt::Display;
-use std::str::FromStr;
+
 
 use bincode::{Decode, Encode};
 use poem_openapi::NewType;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use crate::worker_binding::golem_worker_binding::GolemWorkerBinding;
 

@@ -8,7 +8,7 @@ use tracing::{error, info};
 
 use crate::http::http_request::{ApiInputPath, InputHttpRequest};
 use crate::service::http_request_definition_lookup::HttpRequestDefinitionLookup;
-use crate::worker_binding::golem_worker_binding::ResponseMapping;
+
 use crate::worker_binding::worker_binding_resolver::WorkerBindingResolver;
 use crate::worker_bridge::WorkerRequest;
 use crate::worker_bridge::workr_request_executor::WorkerRequestExecutor;
