@@ -24,8 +24,8 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder};
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, InvocationKey, Timestamp, VersionedWorkerId, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::Receiver;
@@ -115,21 +115,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 template_version,
             };
 
-            let previous_metadata = this.worker_service().get(&worker_id).await;
-            let worker_metadata = WorkerMetadata {
-                worker_id: versioned_worker_id.clone(),
-                args: worker_args.clone(),
-                env: worker_env.clone(),
-                account_id,
-                last_known_status: calculate_last_known_status(
-                    this,
-                    &versioned_worker_id.worker_id,
-                    &previous_metadata,
-                )
-                .await?,
+            let worker_metadata = match this.worker_service().get(&worker_id).await {
+                None => {
+                    let worker_metadata = WorkerMetadata {
+                        worker_id: versioned_worker_id.clone(),
+                        args: worker_args.clone(),
+                        env: worker_env.clone(),
+                        account_id,
+                        created_at: Timestamp::now_utc(),
+                        last_known_status: calculate_last_known_status(
+                            this,
+                            &versioned_worker_id.worker_id,
+                            &None,
+                        )
+                        .await?,
+                    };
+                    this.worker_service().add(&worker_metadata).await?;
+                    worker_metadata
+                }
+                Some(previous_metadata) => WorkerMetadata {
+                    last_known_status: calculate_last_known_status(
+                        this,
+                        &versioned_worker_id.worker_id,
+                        &Some(previous_metadata.clone()),
+                    )
+                    .await?,
+                    ..previous_metadata
+                },
             };
-
-            this.worker_service().add(&worker_metadata).await?;
 
             let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
                 last_known_status: worker_metadata.last_known_status.clone(),
@@ -738,6 +751,9 @@ fn calculate_latest_worker_status(
         }
 
         match entry {
+            OplogEntry::Create { .. } => {
+                result = WorkerStatus::Idle;
+            }
             OplogEntry::ImportedFunctionInvoked { .. } => {
                 result = WorkerStatus::Running;
             }

@@ -293,7 +293,7 @@ async fn promise() {
             promise_id: Some(
                 PromiseId {
                     worker_id: worker_id.clone(),
-                    oplog_idx: 1,
+                    oplog_idx: 2,
                 }
                 .into(),
             ),

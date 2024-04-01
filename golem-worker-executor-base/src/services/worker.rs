@@ -17,9 +17,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
-use fred::prelude::*;
 use golem_common::config::RetryConfig;
 use golem_common::metrics::redis::record_redis_serialized_size;
+use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord};
 use golem_common::redis::RedisPool;
@@ -27,6 +27,8 @@ use tracing::debug;
 
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
+
+use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
 
 /// Service for persisting the current set of Golem workers represented by their metadata
@@ -56,13 +58,19 @@ pub trait WorkerService {
 pub struct WorkerServiceRedis {
     redis: RedisPool,
     shard_service: Arc<dyn ShardService + Send + Sync>,
+    oplog_service: Arc<dyn OplogService + Send + Sync>,
 }
 
 impl WorkerServiceRedis {
-    pub fn new(redis: RedisPool, shard_service: Arc<dyn ShardService + Send + Sync>) -> Self {
+    pub fn new(
+        redis: RedisPool,
+        shard_service: Arc<dyn ShardService + Send + Sync>,
+        oplog_service: Arc<dyn OplogService + Send + Sync>,
+    ) -> Self {
         Self {
             redis,
             shard_service,
+            oplog_service,
         }
     }
 
@@ -101,31 +109,15 @@ impl WorkerService for WorkerServiceRedis {
 
         let worker_id = &worker_metadata.worker_id.worker_id;
 
-        let details_key = get_worker_details_redis_key(worker_id);
-        let details_value = self.redis.serialize(worker_metadata).unwrap_or_else(|_| {
-            panic!("failed to serialize worker metadata {:?}", worker_metadata)
-        });
-
-        record_redis_serialized_size("instance", "details", details_value.len());
-
-        let _ = self
-            .redis
-            .with("instance", "add")
-            .set(
-                details_key.clone(),
-                details_value.clone(),
-                None,
-                Some(SetOptions::NX),
-                true,
-            )
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to set worker metadata for {details_key} in Redis: {err}")
-            });
-        // NOTE: we used to check here if the old and new metadata values are equivalent but this no longer works
-        // because of the worker status record which may be recalculated from latest oplog entries. This
-        // is not a problem though because soon by https://github.com/golemcloud/golem/issues/238 the static
-        // part will no longer be stored in Redis.
+        let initial_oplog_entry = OplogEntry::create(
+            worker_metadata.worker_id.clone(),
+            worker_metadata.args.clone(),
+            worker_metadata.env.clone(),
+            worker_metadata.account_id.clone(),
+        );
+        self.oplog_service
+            .create(worker_id, initial_oplog_entry)
+            .await;
 
         let status_key = get_worker_status_redis_key(worker_id);
         let status_value = self
@@ -192,25 +184,32 @@ impl WorkerService for WorkerServiceRedis {
     async fn get(&self, worker_id: &WorkerId) -> Option<WorkerMetadata> {
         record_worker_call("get");
 
-        let details_key = get_worker_details_redis_key(worker_id);
+        let initial_oplog_entry = self
+            .oplog_service
+            .read(worker_id, 0, 1)
+            .await
+            .into_iter()
+            .next();
+
         let status_key = get_worker_status_redis_key(worker_id);
 
-        let value: Option<Bytes> = self
-            .redis
-            .with("instance", "get")
-            .get(details_key.clone())
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to get worker metadata for {details_key} on Redis: {err}")
-            });
-
-        match value {
+        match initial_oplog_entry {
             None => None,
-            Some(value) => {
-                let mut details: WorkerMetadata =
-                    self.redis.deserialize(&value).unwrap_or_else(|err| {
-                        panic!("failed to deserialize worker metadata for {details_key} on Redis: {err}")
-                    });
+            Some(OplogEntry::Create {
+                worker_id,
+                args,
+                env,
+                account_id,
+                timestamp,
+            }) => {
+                let mut details = WorkerMetadata {
+                    worker_id,
+                    args,
+                    env,
+                    account_id,
+                    created_at: timestamp,
+                    last_known_status: WorkerStatusRecord::default(),
+                };
 
                 let status_value: Option<Bytes> = self
                     .redis
@@ -232,6 +231,9 @@ impl WorkerService for WorkerServiceRedis {
                 }
 
                 Some(details)
+            }
+            Some(entry) => {
+                panic!("Unexpected initial oplog entry for worker {worker_id}: {entry:?}")
             }
         }
     }
@@ -265,16 +267,7 @@ impl WorkerService for WorkerServiceRedis {
                 panic!("failed to remove worker id {worker_id} from the set of worker ids on Redis: {err}")
             });
 
-        let details_key = get_worker_details_redis_key(worker_id);
-
-        let _: u32 = self
-            .redis
-            .with("instance", "remove")
-            .del(details_key.clone())
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to remove worker metadata for {details_key} on Redis: {err}")
-            });
+        self.oplog_service.delete(worker_id).await;
 
         let status_key = get_worker_status_redis_key(worker_id);
         let _: u32 = self
@@ -385,10 +378,6 @@ impl WorkerService for WorkerServiceRedis {
                 });
         }
     }
-}
-
-fn get_worker_details_redis_key(worker_id: &WorkerId) -> String {
-    format!("instance:instance:{}", worker_id.to_redis_key())
 }
 
 fn get_worker_status_redis_key(worker_id: &WorkerId) -> String {
