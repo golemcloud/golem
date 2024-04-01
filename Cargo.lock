@@ -2969,6 +2969,7 @@ dependencies = [
 name = "golem-template-service"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "console-subscriber",
  "figment",
@@ -2976,6 +2977,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
+ "golem-template-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 0.2.11",
@@ -2992,6 +2994,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tap",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -3013,6 +3016,7 @@ dependencies = [
  "golem-service-base",
  "golem-wasm-ast",
  "http 0.2.11",
+ "serde",
  "thiserror",
  "tracing",
 ]

@@ -50,3 +50,6 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 humantime-serde = { workspace = true }
 http_02 = { workspace = true }
+golem-template-service-base = { version = "0.1.0", path = "../golem-template-service-base" }
+thiserror.workspace = true
+anyhow.workspace = true
