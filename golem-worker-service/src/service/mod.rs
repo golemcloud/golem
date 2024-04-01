@@ -29,6 +29,7 @@ use std::sync::Arc;
 use tracing::error;
 use golem_worker_service_base::api::common::RouteValidationError;
 use golem_worker_service_base::http::http_api_definition::HttpApiDefinition;
+use golem_worker_service_base::http::http_request::InputHttpRequest;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
 use golem_worker_service_base::worker_bridge::workr_request_executor::WorkerRequestExecutor;
 

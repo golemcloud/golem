@@ -187,6 +187,14 @@ where
 
 pub trait GolemApiDefinition: HasGolemWorkerBindings + HasApiDefinitionId + HasVersion {}
 
+impl<
+    T: HasGolemWorkerBindings
+    + HasApiDefinitionId
+    + HasVersion
+> GolemApiDefinition for T
+{
+}
+
 #[async_trait]
 impl<AuthCtx, Namespace, ApiDefinition, ValidationError>
     ApiDefinitionService<AuthCtx, Namespace, ApiDefinition, ValidationError>
