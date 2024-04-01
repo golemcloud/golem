@@ -95,18 +95,18 @@ impl poem_openapi::types::Type for Timestamp {
 
 impl ParseFromParameter for Timestamp {
     fn parse_from_parameter(value: &str) -> ParseResult<Self> {
-        Ok(value.parse().map_err(|_| {
+        value.parse().map_err(|_| {
             poem_openapi::types::ParseError::<Timestamp>::custom(
                 "Unexpected representation of timestamp".to_string(),
             )
-        })?)
+        })
     }
 }
 
 impl ParseFromJSON for Timestamp {
     fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
         match value {
-            Some(Value::String(s)) => Ok(Timestamp::parse_from_parameter(&s)?),
+            Some(Value::String(s)) => Timestamp::parse_from_parameter(&s),
             _ => Err(poem_openapi::types::ParseError::<Timestamp>::custom(
                 "Unexpected representation of timestamp".to_string(),
             )),
@@ -905,6 +905,7 @@ impl WorkerStatusFilter {
         Self { value }
     }
 }
+
 impl Display for WorkerStatusFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "status == {:?}", self.value)
@@ -1352,8 +1353,8 @@ impl FromStr for StringFilterComparator {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "==" => Ok(StringFilterComparator::Equal),
+        match s.to_lowercase().as_str() {
+            "==" | "=" | "equal" | "eq" => Ok(StringFilterComparator::Equal),
             "like" => Ok(StringFilterComparator::Like),
             _ => Err(format!("Unknown String Filter Comparator: {}", s)),
         }
@@ -1431,13 +1432,13 @@ impl FilterComparator {
 impl FromStr for FilterComparator {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "==" => Ok(FilterComparator::Equal),
-            "!=" => Ok(FilterComparator::NotEqual),
-            ">=" => Ok(FilterComparator::GreaterEqual),
-            ">" => Ok(FilterComparator::Greater),
-            "<=" => Ok(FilterComparator::LessEqual),
-            "<" => Ok(FilterComparator::Less),
+        match s.to_lowercase().as_str() {
+            "==" | "=" | "equal" | "eq" => Ok(FilterComparator::Equal),
+            "!=" | "notequal" | "ne" => Ok(FilterComparator::NotEqual),
+            ">=" | "greaterequal" | "ge" => Ok(FilterComparator::GreaterEqual),
+            ">" | "greater" | "gt" => Ok(FilterComparator::Greater),
+            "<=" | "lessequal" | "le" => Ok(FilterComparator::LessEqual),
+            "<" | "less" | "lt" => Ok(FilterComparator::Less),
             _ => Err(format!("Unknown Filter Comparator: {}", s)),
         }
     }
@@ -1645,7 +1646,7 @@ mod tests {
     fn worker_filter_parse() {
         assert_eq!(
             WorkerFilter::from_str("name == worker-1").unwrap(),
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string(),)
+            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
         );
 
         assert_eq!(
@@ -1663,7 +1664,7 @@ mod tests {
             WorkerFilter::new_env(
                 "tag1".to_string(),
                 StringFilterComparator::Equal,
-                "abc".to_string()
+                "abc".to_string(),
             )
         );
     }
