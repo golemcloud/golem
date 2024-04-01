@@ -9,7 +9,7 @@ use golem_wasm_ast::{
 
 pub fn process_template(data: &[u8]) -> Result<TemplateMetadata, TemplateProcessingError> {
     let component = Component::<IgnoreAllButMetadata>::from_bytes(data)
-        .map_err(|e| TemplateProcessingError::Parsing(e))?;
+        .map_err(TemplateProcessingError::Parsing)?;
 
     let producers = component
         .get_all_producers()
@@ -44,9 +44,7 @@ impl Display for TemplateProcessingError {
         match self {
             TemplateProcessingError::Parsing(e) => write!(f, "Parsing error: {}", e),
             TemplateProcessingError::Analysis(source) => {
-                let error = match source {
-                    AnalysisFailure::Failed(error) => error,
-                };
+                let AnalysisFailure::Failed(error) = source;
                 write!(f, "Analysis error: {}", error)
             }
         }
