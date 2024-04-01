@@ -1,1 +1,1 @@
-mod http_api_definition_validator;
+pub mod http_api_definition_validator;

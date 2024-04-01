@@ -51,6 +51,7 @@ pub enum ApiRegistrationRepoError {
     InternalError(String),
 }
 
+
 impl ApiRegistrationRepoError {
     fn internal(err: impl std::fmt::Display) -> Self {
         ApiRegistrationRepoError::InternalError(err.to_string())

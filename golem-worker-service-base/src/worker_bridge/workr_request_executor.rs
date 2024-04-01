@@ -11,11 +11,18 @@ pub trait WorkerRequestExecutor<Response> {
     ) -> Result<WorkerResponse, WorkerRequestExecutorError>;
 }
 
+#[derive(Clone, Debug)]
 pub struct WorkerRequestExecutorError(String);
 
 impl Display for WorkerRequestExecutorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl From<&str> for WorkerRequestExecutorError {
+    fn from(err: &str) -> Self {
+        WorkerRequestExecutorError(err.to_string())
     }
 }
 

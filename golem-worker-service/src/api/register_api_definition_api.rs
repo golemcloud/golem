@@ -9,7 +9,7 @@ use tracing::{error, info};
 use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::api::common::{ApiEndpointError, RouteValidationError};
 use golem_worker_service_base::api::register_api_definition_api::HttpApiDefinition;
-use golem_worker_service_base::HttpApiDefinition as CoreHttpApiDefinition;
+use golem_worker_service_base::http::http_api_definition::HttpApiDefinition as CoreHttpApiDefinition;
 use golem_worker_service_base::definition::api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::get_api_definition_from_oas;
@@ -19,7 +19,7 @@ pub struct RegisterApiDefinitionApi {
     pub definition_service: DefinitionService,
 }
 
-type DefinitionService = Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace, HttpApiDefinition, RouteValidationError> + Sync + Send>;
+type DefinitionService = Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace, CoreHttpApiDefinition, RouteValidationError> + Sync + Send>;
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
@@ -149,7 +149,7 @@ impl RegisterApiDefinitionApi {
 impl RegisterApiDefinitionApi {
     async fn register_api(
         &self,
-        definition: &http_api_definition::HttpApiDefinition,
+        definition: &CoreHttpApiDefinition
     ) -> Result<(), ApiEndpointError> {
         self.definition_service
             .register(definition, CommonNamespace::default(), &EmptyAuthCtx {})
@@ -169,7 +169,7 @@ mod test {
     use golem_worker_service_base::service::template::TemplateServiceNoop;
     use poem::test::TestClient;
 
-    use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
+    use golem_worker_service_base::repo::api_definition_repo::InMemoryRegistry;
     use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
 
     use crate::service::template::TemplateService;

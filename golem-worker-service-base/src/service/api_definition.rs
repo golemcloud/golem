@@ -118,6 +118,7 @@ pub enum ApiRegistrationError<E> {
     RepoError(#[from] ApiRegistrationRepoError),
     #[error(transparent)]
     ValidationError(#[from] ValidationErrors<E>),
+    #[error("Unable to fetch templates not found: {0:?}")]
     TemplateNotFoundError(Vec<TemplateId>),
 }
 

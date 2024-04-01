@@ -7,10 +7,8 @@ pub mod auth;
 pub mod worker_bridge;
 pub mod metrics;
 pub mod app_config;
-
 pub mod http;
-
-mod definition;
+pub mod definition;
 mod expression;
 mod merge;
 mod parser;
