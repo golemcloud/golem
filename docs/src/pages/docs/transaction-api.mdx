@@ -1,0 +1,86 @@
+# Transaction API
+
+The _transaction API_ is an optional, Golem specific API that allows you to control the transactional and persistent behavior of a program.
+
+The low-level API is language independent and provides direct control over Golem's transactional features.
+We also provide higher level, language specific libraries to some of the supported languages. Using these libraries is more safe and convenient than using the low-level API directly.
+
+## Low-level API
+
+The low-level API is exposed as part of the `golem:api@0.2.0` WIT package.
+The following table lists all the functions available:
+
+| Function                      | Description                                     |
+| ----------------------------- | ----------------------------------------------- |
+| `get-oplog-index`             | Returns the current oplog index.                |
+| `set-oplog-index`             | Restarts execution from a previous oplog index. |
+| `oplog-commit`                | Explicitly waits until the oplog is committed.  |
+| `mark-begin-operation`        | Marks the beginning of an atomic operation.     |
+| `mark-end-operation`          | Commits an atomic operation.                    |
+| `get-retry-policy`            | Returns the current retry policy.               |
+| `set-retry-policy`            | Sets the retry policy.                          |
+| `get-oplog-persistence-level` | Returns the current oplog persistence level.    |
+| `set-oplog-persistence-level` | Sets the oplog persistence level.               |
+| `get-idempotence-mode`        | Returns the current idempotence mode.           |
+| `set-idempotence-mode`        | Sets the idempotence mode.                      |
+| `generate-idempotency-key`    | Generates an idempotency key.                   |
+
+### Get/set oplog index
+
+The `get-oplog-index` function returns a value of `oplog-index` which can be passed to the `set-oplog-index` function later. When `set-oplog-index` is called, the execution of the program stops immediately, followed by recovering its state up to the provided index (pointing to where `get-oplog-index` was called).
+Each external operation followed by `get-oplog-index` will be executed again.
+
+This is true for `set-oplog-index` as well, so it always should be called only _conditionally_ based on some side-effecting call performed between `get-oplog-index` and `set-oplog-index`. Otherwise the program will be stuck in an infinite loop.
+
+### Commit oplog
+
+The `oplog-commit` function waits until the oplog is committed to its persistent storage. The function takes a single argument, `replicas`, with the desired number of storage replicas the worker's journal is replicated to. The function will block until the oplog is committed to the specified number of replicas, or, if this number is larger than the available number of replicas, until it is written to all the replicas.
+
+### Atomic operations
+
+The `mark-begin-operation` and `mark-end-operation` functions allow you to mark the beginning and end of an atomic operation. If any failure occurs before `mark-end-operation` is called, all the external operations such as HTTP calls will be repeated when the operation is retried. Once `mark-end-operation` is called, the result of all these operations gets persisted and will not be repeated in the future when the worker gets recovered.
+
+### Retry policies
+
+The `get-retry-policy` function returns the worker's current retry policy, which can be overridden using `set-retry-policy`.
+
+The retry policy itself is used for any failure that occurs during the execution of the program, including fatal user errors (for example a Rust `panic!`) and external service failures (for example a network error). The policy defines an exponential backoff, and is defined by the following parameters:
+
+```
+/// Configures how the executor retries failures
+record retry-policy {
+    /// The maximum number of retries before the worker becomes permanently failed
+    max-attempts: u32,
+    /// The minimum delay between retries (applied to the first retry)
+    min-delay: duration,
+    /// The maximum delay between retries
+    max-delay: duration,
+    /// Multiplier applied to the delay on each retry to implement exponential backoff
+    multiplier: u32
+}
+```
+
+### Persistence level
+
+The `get-oplog-persistence-level` function returns the worker's current oplog persistence level, which can be overridden using `set-oplog-persistence-level`.
+
+There are three persistence levels:
+
+| Level | Description |
+| `persist-nothing` | Nothing is persisted; all operations will be repeated during the worker's recovery |
+| `persist-remote-side-effects` | All operations that affects remote entities such as HTTP requests, RPC calls etc. are persisted |
+| `smart` | Let Golem decide |
+
+Disabling persistence for a region of the program can be used to make sure some operations are always repeated no matter how many times the worker gets loaded. An example could be registering or logging that the worker is loaded in memory to an external service.
+
+The default setting is `smart`.
+
+### Idempotence
+
+The `get-idempotence-mode` function returns the worker's current idempotence mode, which can be overridden using `set-idempotence-mode`. The default setting is `true`.
+
+When idempotence is _enabled_, the worker will assume that the external operations are idempotent, and apply **at-least-once** semantics when recovering from a failure. This means that Golem only stores results of external calls that already either succeeded or failed - if there was no such result when the worker crashes, the operation will be repeated.
+
+When idempotence is _disabled_, the worker implements **at-most-once** semantics. In case a failure occurs after the external request was sent, but before receiving a result, the worker becomes permanently failed as there is no way to know if the non-idempontent external call was performed.
+
+The `generate-idempotency-key` function generates an idempotency key (a UUID) that can be used to deduplicate external operations. The function is guaranteed to always return the same value at a given point in the program, so it can be passed to external services in order to ensure that the operation is idempotent.
