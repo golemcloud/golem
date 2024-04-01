@@ -15,7 +15,7 @@ use golem_worker_service_base::service::api_definition::{
 use  golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::http::http_api_definition_validator::{HttpApiDefinitionValidator, RouteValidationError};
 use golem_worker_service_base::service::http_request_definition_lookup::{
-    ApiDefinitionLookupError, HttpRequestDefinitionLookup,
+    ApiDefinitionLookupError, ApiDefinitionLookup,
 };
 use golem_worker_service_base::service::template::{RemoteTemplateService, TemplateServiceNoop};
 use golem_worker_service_base::service::worker::{
@@ -36,7 +36,7 @@ pub struct Services {
     pub template_service: template::TemplateService,
     pub definition_service:
         Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace, HttpApiDefinition, RouteValidationError> + Sync + Send>,
-    pub definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
+    pub http_definition_lookup_service: Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
     pub worker_to_http_service:
         Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
     pub api_definition_validator_service: Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send>,
@@ -103,7 +103,7 @@ impl Services {
         Ok(Services {
             worker_service,
             definition_service,
-            definition_lookup_service,
+            http_definition_lookup_service: definition_lookup_service,
             worker_to_http_service,
             template_service,
             api_definition_validator_service,
@@ -123,7 +123,7 @@ impl Services {
         let definition_repo: Arc<dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send> =
             Arc::new(InMemoryRegistry::default());
 
-        let definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send> =
+        let definition_lookup_service: Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send> =
             Arc::new(CustomRequestDefinitionLookupDefault::new(
                 definition_repo.clone(),
             ));
@@ -144,7 +144,7 @@ impl Services {
         Services {
             worker_service,
             definition_service,
-            definition_lookup_service,
+            http_definition_lookup_service: definition_lookup_service,
             worker_to_http_service,
             template_service,
             api_definition_validator_service,
@@ -167,13 +167,13 @@ impl CustomRequestDefinitionLookupDefault {
 }
 
 #[async_trait]
-impl HttpRequestDefinitionLookup for CustomRequestDefinitionLookupDefault {
+impl ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> for CustomRequestDefinitionLookupDefault {
     async fn get(
         &self,
-        input_http_request: &InputHttpRequest<'_>,
+        input_http_request: InputHttpRequest,
     ) -> Result<HttpApiDefinition, ApiDefinitionLookupError> {
         let api_definition_id = match get_header_value(
-            input_http_request.headers,
+            &input_http_request.headers,
             "x-golem-api-definition-id" // TODO; This will be removed, and will depend on domain
         ) {
             Ok(api_definition_id) => Ok(ApiDefinitionId(api_definition_id.to_string())),
@@ -185,7 +185,7 @@ impl HttpRequestDefinitionLookup for CustomRequestDefinitionLookupDefault {
 
         // This will be removed and will be depending on the latest version
         let version =
-            match get_header_value(input_http_request.headers, "x-golem-api-definition-version") {
+            match get_header_value(&input_http_request.headers, "x-golem-api-definition-version") {
                 Ok(version) => Ok(ApiVersion(version)),
                 Err(err) => Err(ApiDefinitionLookupError(format!(
                     "{} not found in the request headers. Error: {}",

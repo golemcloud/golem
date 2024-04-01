@@ -5,9 +5,10 @@ use hyper::header::HOST;
 use poem::{Body, Endpoint, Request, Response};
 use poem::http::StatusCode;
 use tracing::{error, info};
+use crate::http::http_api_definition::HttpApiDefinition;
 
 use crate::http::http_request::{ApiInputPath, InputHttpRequest};
-use crate::service::http_request_definition_lookup::HttpRequestDefinitionLookup;
+use crate::service::http_request_definition_lookup::ApiDefinitionLookup;
 
 use crate::worker_binding::worker_binding_resolver::WorkerBindingResolver;
 use crate::worker_bridge::WorkerRequest;
@@ -19,7 +20,7 @@ use crate::worker_bridge::workr_request_executor::WorkerRequestExecutor;
 pub struct CustomHttpRequestApi {
     pub worker_to_http_response_service:
         Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
-    pub api_definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
+    pub api_definition_lookup_service: Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
@@ -27,7 +28,7 @@ impl CustomHttpRequestApi {
         worker_to_http_response_service: Arc<
             dyn WorkerRequestExecutor<Response> + Sync + Send,
         >,
-        api_definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
+        api_definition_lookup_service: Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
     ) -> Self {
         Self {
             worker_to_http_response_service,
@@ -67,15 +68,15 @@ impl CustomHttpRequestApi {
 
         let api_request = InputHttpRequest {
             input_path: ApiInputPath {
-                base_path: uri.path(),
-                query_path: uri.query(),
+                base_path: uri.path().to_string(),
+                query_path: uri.query().map(|x| x.to_string())
             },
-            headers: &headers,
-            req_method: &req_parts.method,
+            headers: headers,
+            req_method: req_parts.method,
             req_body: json_request_body,
         };
 
-        let api_definition = match self.api_definition_lookup_service.get(&api_request).await {
+        let api_definition = match self.api_definition_lookup_service.get(api_request.clone()).await {
             Ok(api_definition) => api_definition,
             Err(err) => {
                 error!("API request host: {} - error: {}", host, err);

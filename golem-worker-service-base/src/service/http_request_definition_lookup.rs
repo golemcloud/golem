@@ -6,11 +6,11 @@ use crate::http::http_api_definition::HttpApiDefinition;
 use crate::http::http_request::InputHttpRequest;
 
 #[async_trait]
-pub trait HttpRequestDefinitionLookup {
+pub trait ApiDefinitionLookup<Input, ApiDefinition> {
     async fn get(
         &self,
-        input_http_request: &InputHttpRequest<'_>,
-    ) -> Result<HttpApiDefinition, ApiDefinitionLookupError>;
+        input_http_request: Input,
+    ) -> Result<ApiDefinition, ApiDefinitionLookupError>;
 }
 
 pub struct ApiDefinitionLookupError(pub String);

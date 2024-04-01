@@ -515,7 +515,7 @@ mod tests {
     use crate::http::http_api_definition::PathPattern;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
-    use crate::worker_request::worker_response::WorkerResponse;
+    use crate::worker_bridge::worker_response::WorkerResponse;
 
     fn get_worker_response(input: &str) -> WorkerResponse {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");
@@ -536,10 +536,10 @@ mod tests {
 
         let input_http_request = InputHttpRequest {
             req_body: request_body.clone(),
-            headers: &header_map,
-            req_method: &Method::GET,
+            headers: header_map.clone(),
+            req_method: Method::GET,
             input_path: ApiInputPath {
-                base_path: "/api",
+                base_path: "/api".to_string(),
                 query_path: None,
             },
         };
@@ -556,11 +556,11 @@ mod tests {
     ) -> TypeAnnotatedValue {
         let input_http_request = InputHttpRequest {
             req_body: serde_json::Value::Null,
-            headers: &HeaderMap::new(),
-            req_method: &Method::GET,
+            headers: HeaderMap::new(),
+            req_method: Method::GET,
             input_path: ApiInputPath {
-                base_path: uri.path(),
-                query_path: uri.query(),
+                base_path: uri.path().to_string(),
+                query_path: uri.query().map(|x| x.to_string())
             },
         };
 

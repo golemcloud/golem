@@ -13,14 +13,15 @@ use crate::worker_binding::worker_binding_resolver::{
 };
 
 // An input request from external API gateways, that is then resolved to a worker request, using API definitions
-pub struct InputHttpRequest<'a> {
-    pub input_path: ApiInputPath<'a>,
-    pub headers: &'a HeaderMap,
-    pub req_method: &'a Method,
+#[derive(Clone)]
+pub struct InputHttpRequest {
+    pub input_path: ApiInputPath,
+    pub headers: HeaderMap,
+    pub req_method: Method,
     pub req_body: Value,
 }
 
-impl InputHttpRequest<'_> {
+impl InputHttpRequest {
     // Converts all request details to type-annotated-value
     // and place them under the key `request`
     pub fn get_type_annotated_value(
@@ -29,12 +30,12 @@ impl InputHttpRequest<'_> {
         spec_path_variables: &HashMap<usize, String>,
     ) -> Result<TypeAnnotatedValue, Vec<String>> {
         let request_body = &self.req_body;
-        let request_header = self.headers;
+        let request_header = self.headers.clone();
         let request_path_values: HashMap<usize, String> = self.input_path.path_components();
 
         let request_query_variables: HashMap<String, String> = self.input_path.query_components();
 
-        let request_header_values = internal::get_headers(request_header)?;
+        let request_header_values = internal::get_headers(&request_header)?;
         let body_value = internal::get_request_body(request_body)?;
         let path_value = internal::get_request_path_query_values(
             request_query_variables,
@@ -55,7 +56,7 @@ impl InputHttpRequest<'_> {
 
 }
 
-impl<'a> WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest<'a> {
+impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
     fn resolve(&self, api_definition: &HttpApiDefinition) -> Option<ResolvedWorkerBinding> {
         let api_request = self;
         let routes = &api_definition.routes;
@@ -66,11 +67,11 @@ impl<'a> WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest<'a> {
             let spec_path_literals = route.path.get_path_literals();
             let spec_query_variables = route.path.get_query_variables();
 
-            let request_method: &Method = api_request.req_method;
+            let request_method: &Method = &api_request.req_method;
             let request_path_components: HashMap<usize, String> =
                 api_request.input_path.path_components();
 
-            if internal::match_method(request_method, spec_method)
+            if internal::match_method(&request_method, spec_method)
                 && internal::match_literals(&request_path_components, &spec_path_literals)
             {
                 let request_details = api_request
@@ -92,12 +93,13 @@ impl<'a> WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest<'a> {
     }
 }
 
-pub struct ApiInputPath<'a> {
-    pub base_path: &'a str,
-    pub query_path: Option<&'a str>,
+#[derive(Clone)]
+pub struct ApiInputPath {
+    pub base_path: String,
+    pub query_path: Option<String>,
 }
 
-impl<'a> ApiInputPath<'a> {
+impl ApiInputPath {
     // Return the each component of the path which can either be a literal or the value of a path_var, along with it's index
      fn path_components(&self) -> HashMap<usize, String> {
         let mut path_components: HashMap<usize, String> = HashMap::new();
@@ -106,7 +108,7 @@ impl<'a> ApiInputPath<'a> {
         let path = if self.base_path.starts_with('/') {
             &self.base_path[1..self.base_path.len()]
         } else {
-            self.base_path
+            self.base_path.as_str()
         };
 
         let base_path_parts = path.split('/').map(|x| x.trim());
@@ -124,7 +126,7 @@ impl<'a> ApiInputPath<'a> {
     fn query_components(&self) -> HashMap<String, String> {
         let mut query_components: HashMap<String, String> = HashMap::new();
 
-        if let Some(query_path) = self.query_path {
+        if let Some(query_path) = self.query_path.clone() {
             let query_parts = query_path.split('&').map(|x| x.trim());
 
             for part in query_parts {
@@ -341,7 +343,7 @@ mod tests {
 
     use crate::http::http_api_definition::HttpApiDefinition;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
-    use crate::worker_request::WorkerRequest;
+    use crate::worker_bridge::WorkerRequest;
 
     use super::*;
 
@@ -1097,19 +1099,19 @@ mod tests {
         test_paths("/getcartcontent/{cart-id}", "/getcartcontent/1", true);
     }
 
-    fn get_api_request<'a>(
-        base_path: &'a str,
-        query_path: Option<&'a str>,
-        headers: &'a HeaderMap,
+    fn get_api_request(
+        base_path: &str,
+        query_path: Option<&str>,
+        headers: &HeaderMap,
         req_body: serde_json::Value,
-    ) -> InputHttpRequest<'a> {
+    ) -> InputHttpRequest {
         InputHttpRequest {
             input_path: ApiInputPath {
-                base_path,
-                query_path,
+                base_path: base_path.to_string(),
+                query_path: query_path.map(|x| x.to_string()),
             },
-            headers,
-            req_method: &Method::GET,
+            headers: headers.clone(),
+            req_method: Method::GET,
             req_body,
         }
     }

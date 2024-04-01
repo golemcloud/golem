@@ -43,7 +43,7 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
 pub fn custom_request_route(services: Services) -> Route {
     let custom_request_executor = CustomHttpRequestApi::new(
         services.worker_to_http_service,
-        services.definition_lookup_service,
+        services.http_definition_lookup_service,
     );
 
     Route::new().nest("/", custom_request_executor)
