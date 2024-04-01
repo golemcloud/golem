@@ -763,12 +763,6 @@ fn calculate_latest_worker_status(
             OplogEntry::ExportedFunctionCompleted { .. } => {
                 result = WorkerStatus::Idle;
             }
-            OplogEntry::CreatePromise { .. } => {
-                result = WorkerStatus::Running;
-            }
-            OplogEntry::CompletePromise { .. } => {
-                result = WorkerStatus::Running;
-            }
             OplogEntry::Suspend { .. } => {
                 result = WorkerStatus::Suspended;
             }

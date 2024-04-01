@@ -50,8 +50,8 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, PromiseId, VersionedWorkerId, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -228,21 +228,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn as_wasi_http_view(&mut self) -> DurableWorkerCtxWasiHttpView<Ctx> {
         DurableWorkerCtxWasiHttpView(self)
-    }
-
-    pub async fn create_promise(&self, oplog_idx: u64) -> PromiseId {
-        self.public_state
-            .promise_service
-            .create(&self.worker_id.worker_id, oplog_idx)
-            .await
-    }
-
-    pub async fn poll_promise(&self, id: PromiseId) -> Result<Option<Vec<u8>>, GolemError> {
-        self.public_state.promise_service.poll(id).await
-    }
-
-    pub async fn complete_promise(&self, id: PromiseId, data: Vec<u8>) -> Result<bool, GolemError> {
-        self.public_state.promise_service.complete(id, data).await
     }
 
     pub fn check_interrupt(&self) -> Option<InterruptKind> {

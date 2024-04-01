@@ -1,8 +1,6 @@
 use crate::config::RetryConfig;
 use crate::model::regions::OplogRegion;
-use crate::model::{
-    AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId,
-};
+use crate::model::{AccountId, CallingConvention, InvocationKey, Timestamp, VersionedWorkerId};
 use crate::serialization::{
     deserialize_with_version, serialize, try_deserialize, SERIALIZATION_VERSION_V1,
 };
@@ -41,17 +39,6 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         response: Vec<u8>,
         consumed_fuel: i64,
-    },
-    /// Promise created
-    CreatePromise {
-        timestamp: Timestamp,
-        promise_id: PromiseId,
-    },
-    /// Promise completed
-    CompletePromise {
-        timestamp: Timestamp,
-        promise_id: PromiseId,
-        data: Vec<u8>,
     },
     /// Worker suspended
     Suspend { timestamp: Timestamp },
@@ -196,21 +183,6 @@ impl OplogEntry {
     pub fn exited() -> OplogEntry {
         OplogEntry::Exited {
             timestamp: Timestamp::now_utc(),
-        }
-    }
-
-    pub fn create_promise(promise_id: PromiseId) -> OplogEntry {
-        OplogEntry::CreatePromise {
-            timestamp: Timestamp::now_utc(),
-            promise_id,
-        }
-    }
-
-    pub fn complete_promise(promise_id: PromiseId, data: Vec<u8>) -> OplogEntry {
-        OplogEntry::CompletePromise {
-            timestamp: Timestamp::now_utc(),
-            promise_id,
-            data,
         }
     }
 
