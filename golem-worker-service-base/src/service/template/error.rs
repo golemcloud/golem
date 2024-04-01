@@ -1,7 +1,8 @@
-use golem_api_grpc::proto::golem::worker::{
-    self, worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
-};
 use tonic::Status;
+
+use golem_api_grpc::proto::golem::worker::{
+    self, UnknownError, worker_error, worker_execution_error, WorkerError as GrpcWorkerError,
+};
 
 // The dependents of golem-worker-service-base is expected
 // to have a template service internally that can depend on this base error

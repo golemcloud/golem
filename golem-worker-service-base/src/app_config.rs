@@ -1,12 +1,14 @@
-use figment::providers::{Env, Format, Toml};
+use std::time::Duration;
+
 use figment::Figment;
-use golem_common::config::{RedisConfig, RetryConfig};
-use golem_service_base::routing_table::RoutingTableConfig;
+use figment::providers::{Env, Format, Toml};
 use http::Uri;
 use serde::Deserialize;
-use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
+
+use golem_common::config::{RedisConfig, RetryConfig};
+use golem_service_base::routing_table::RoutingTableConfig;
 
 // The base configuration for the worker service
 // If there are extra cofigurations for custom services,

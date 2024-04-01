@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 
-use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern, PathPattern, Route};
-use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
+use serde::{Deserialize, Serialize};
+
 use golem_common::model::TemplateId;
 use golem_service_base::model::{
     Export, ExportFunction, ExportInstance, Template, TemplateMetadata,
 };
-use serde::{Deserialize, Serialize};
+
+use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern, PathPattern, Route};
+use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 
 // Http Api Definition Validator
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1,7 +1,8 @@
-use crate::http::http_api_definition::LiteralInfo;
 use nom::character::complete::not_line_ending;
 use nom::combinator::all_consuming;
 use nom::IResult;
+
+use crate::http::http_api_definition::LiteralInfo;
 
 use super::*;
 

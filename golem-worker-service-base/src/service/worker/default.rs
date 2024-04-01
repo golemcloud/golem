@@ -1,27 +1,8 @@
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use std::future::Future;
 use std::pin::Pin;
-use std::{collections::HashMap, sync::Arc, time::Duration};
-
-use crate::service::template::TemplateService;
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
-use golem_api_grpc::proto::golem::workerexecutor::{
-    self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
-    GetInvocationKeyRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest,
-    ResumeWorkerRequest,
-};
 
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::worker::InvokeResult as ProtoInvokeResult;
-use golem_common::model::{AccountId, CallingConvention, InvocationKey, TemplateId};
-use golem_service_base::model::{
-    GolemErrorUnknown, PromiseId, ResourceLimits, VersionedWorkerId, WorkerId, WorkerMetadata,
-};
-use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
-use golem_service_base::{
-    model::{GolemError, GolemErrorInvalidShardId, GolemErrorRuntimeError, Template},
-    routing_table::{RoutingTableError, RoutingTableService},
-    worker_executor_clients::WorkerExecutorClients,
-};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
@@ -30,6 +11,26 @@ use serde_json::Value;
 use tokio::time::sleep;
 use tonic::transport::Channel;
 use tracing::{debug, info};
+
+use golem_api_grpc::proto::golem::worker::InvokeResult as ProtoInvokeResult;
+use golem_api_grpc::proto::golem::workerexecutor::{
+    self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
+    GetInvocationKeyRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest,
+    ResumeWorkerRequest,
+};
+use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_common::model::{AccountId, CallingConvention, InvocationKey, TemplateId};
+use golem_service_base::{
+    model::{GolemError, GolemErrorInvalidShardId, GolemErrorRuntimeError, Template},
+    routing_table::{RoutingTableError, RoutingTableService},
+    worker_executor_clients::WorkerExecutorClients,
+};
+use golem_service_base::model::{
+    GolemErrorUnknown, PromiseId, ResourceLimits, VersionedWorkerId, WorkerId, WorkerMetadata,
+};
+use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
+
+use crate::service::template::TemplateService;
 
 use super::{ConnectWorkerStream, WorkerServiceError};
 

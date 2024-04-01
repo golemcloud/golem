@@ -1,6 +1,7 @@
-use crate::worker_request::WorkerRequest;
 use async_trait::async_trait;
 use golem_wasm_rpc::TypeAnnotatedValue;
+
+use crate::worker_request::WorkerRequest;
 
 // A generic interface that can convert a worker request to any type of response
 // given some variable values and a mapping spec mainly consisting of expressions. Example: If the response is Http, we can have a mapping

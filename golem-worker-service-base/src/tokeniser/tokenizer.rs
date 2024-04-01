@@ -446,10 +446,11 @@ impl Iterator for Tokenizer {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
 
     use super::{Token, Tokenizer};
+
     extern crate alloc;
-    use alloc::vec::Vec;
 
     #[test]
     fn test_raw() {

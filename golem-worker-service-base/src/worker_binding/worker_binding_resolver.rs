@@ -1,5 +1,6 @@
-use crate::worker_binding::golem_worker_binding::GolemWorkerBinding;
 use golem_wasm_rpc::TypeAnnotatedValue;
+
+use crate::worker_binding::golem_worker_binding::GolemWorkerBinding;
 
 // For any input request type, there should be a way to resolve the
 // worker binding template, which is then used to form the worker request

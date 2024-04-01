@@ -1,10 +1,12 @@
 use std::fmt::Display;
 
-use crate::http::http_api_definition::MethodPattern;
-use golem_common::model::TemplateId;
-use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Union};
+use poem_openapi::payload::Json;
 use serde::{Deserialize, Serialize};
+
+use golem_common::model::TemplateId;
+
+use crate::http::http_api_definition::MethodPattern;
 
 #[derive(Union)]
 #[oai(discriminator_name = "type", one_of = true)]
@@ -100,12 +102,13 @@ impl ApiEndpointError {
 mod conversion {
     use poem_openapi::payload::Json;
 
-    use super::{
-        ApiEndpointError, RouteValidationError, ValidationErrorsBody, WorkerServiceErrorsBody,
-    };
     use crate::repo::api_definition_repo::ApiRegistrationRepoError;
     use crate::service::api_definition::ApiRegistrationError;
     use crate::service::api_definition_validator::ValidationErrors;
+
+    use super::{
+        ApiEndpointError, RouteValidationError, ValidationErrorsBody, WorkerServiceErrorsBody,
+    };
 
     impl From<ApiRegistrationError<RouteValidationError>> for ApiEndpointError {
         fn from(error: ApiRegistrationError<RouteValidationError>) -> Self {

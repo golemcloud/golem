@@ -1,5 +1,6 @@
-use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
+
+use golem_wasm_rpc::TypeAnnotatedValue;
 
 pub trait GetPrimitive {
     fn get_primitive(&self) -> Option<Primitive>;

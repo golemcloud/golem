@@ -1,13 +1,13 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
-use crate::evaluator::primitive::Primitive;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::parser::expr_parser::ExprParser;
+use crate::evaluator::primitive::Primitive;
 use crate::parser::{GolemParser, ParseError};
+use crate::parser::expr_parser::ExprParser;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
@@ -627,13 +627,14 @@ impl Display for InternalValue {
 //TODO: GOL-249 Add more round trip tests
 #[cfg(test)]
 mod tests {
-    use crate::evaluator::Evaluator;
-    use crate::expression::expr::Expr;
-    use crate::worker_request::worker_response::WorkerResponse;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use serde_json::{json, Value};
+
+    use crate::evaluator::Evaluator;
+    use crate::expression::expr::Expr;
+    use crate::worker_request::worker_response::WorkerResponse;
 
     #[test]
     fn test_expr_from_json_value() {

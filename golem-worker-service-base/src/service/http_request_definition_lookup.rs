@@ -1,7 +1,9 @@
+use std::fmt::Display;
+
+use async_trait::async_trait;
+
 use crate::http::http_api_definition::HttpApiDefinition;
 use crate::http::http_request::InputHttpRequest;
-use async_trait::async_trait;
-use std::fmt::Display;
 
 #[async_trait]
 pub trait HttpRequestDefinitionLookup {

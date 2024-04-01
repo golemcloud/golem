@@ -1,21 +1,25 @@
-use super::tokeniser::tokenizer::{Token, Tokenizer};
-use crate::expression::expr::{
-    ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber,
-};
-use crate::merge::Merge;
+use std::fmt::Display;
+use std::ops::Deref;
+
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
-use std::fmt::Display;
-use std::ops::Deref;
-pub mod getter;
-pub mod path;
-pub mod primitive;
 
 use getter::GetError;
 use getter::Getter;
 use path::Path;
 use primitive::GetPrimitive;
+
+use crate::expression::expr::{
+    ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber,
+};
+use crate::merge::Merge;
+
+use super::tokeniser::tokenizer::{Token, Tokenizer};
+
+pub mod getter;
+pub mod path;
+pub mod primitive;
 
 pub trait Evaluator {
     fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
@@ -495,21 +499,24 @@ fn handle_pattern_match(
 
 #[cfg(test)]
 mod tests {
-    use crate::evaluator::getter::GetError;
-    use crate::evaluator::{EvaluationError, Evaluator};
-    use crate::expression::expr::Expr;
-    use crate::http::http_api_definition::PathPattern;
-    use crate::http::http_request::{ApiInputPath, InputHttpRequest};
-    use crate::merge::Merge;
-    use crate::worker_request::worker_response::WorkerResponse;
-    use golem_service_base::type_inference::infer_analysed_type;
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, Method, Uri};
     use serde_json::{json, Value};
-    use std::collections::HashMap;
-    use std::str::FromStr;
+
+    use golem_service_base::type_inference::infer_analysed_type;
+
+    use crate::evaluator::{EvaluationError, Evaluator};
+    use crate::evaluator::getter::GetError;
+    use crate::expression::expr::Expr;
+    use crate::http::http_api_definition::PathPattern;
+    use crate::http::http_request::{ApiInputPath, InputHttpRequest};
+    use crate::merge::Merge;
+    use crate::worker_request::worker_response::WorkerResponse;
 
     fn get_worker_response(input: &str) -> WorkerResponse {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");

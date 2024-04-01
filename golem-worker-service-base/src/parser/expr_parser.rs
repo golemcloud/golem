@@ -1,11 +1,12 @@
 use std::rc::Rc;
 
-use crate::expression::expr::{ConstructorPattern, ConstructorPatternExpr, Expr, InnerNumber};
 use strum_macros::Display;
 
-use super::*;
+use crate::expression::expr::{ConstructorPattern, ConstructorPatternExpr, Expr, InnerNumber};
 use crate::tokeniser::cursor::TokenCursor;
 use crate::tokeniser::tokenizer::{Token, TokeniserResult, Tokenizer};
+
+use super::*;
 
 #[derive(Clone, Debug)]
 pub struct ExprParser {}
@@ -770,7 +771,6 @@ where
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]

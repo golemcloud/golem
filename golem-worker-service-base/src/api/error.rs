@@ -1,9 +1,11 @@
+use poem_openapi::*;
+use poem_openapi::payload::Json;
+use tonic::Status;
+
+use golem_service_base::model::*;
+
 use crate::service::template::TemplateServiceError;
 use crate::service::worker::WorkerServiceError;
-use golem_service_base::model::*;
-use poem_openapi::payload::Json;
-use poem_openapi::*;
-use tonic::Status;
 
 // The dependents og golem-worker-service-base
 // is expected to exposer worker api endpoints

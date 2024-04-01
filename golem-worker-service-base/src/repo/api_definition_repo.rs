@@ -2,14 +2,16 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Mutex;
 
-use crate::definition::api_definition::ApiDefinitionId;
-use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::config::RedisConfig;
-use golem_common::redis::RedisPool;
 use serde::de::DeserializeOwned;
 use tracing::{debug, info};
+
+use golem_common::config::RedisConfig;
+use golem_common::redis::RedisPool;
+
+use crate::definition::api_definition::ApiDefinitionId;
+use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
 
 #[async_trait]
 pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {
@@ -344,7 +346,6 @@ impl RedisApiRegistry {
 }
 
 mod redis_keys {
-
     use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
 
     use super::ApiRegistrationRepoError;
@@ -381,13 +382,17 @@ mod redis_keys {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fmt::Formatter;
+
+    use bincode::{Decode, Encode};
+    use serde::Deserialize;
+
+    use golem_common::config::RedisConfig;
+
     use crate::definition::api_definition::{ApiDefinitionId, Version};
     use crate::http::http_api_definition::HttpApiDefinition;
-    use bincode::{Decode, Encode};
-    use golem_common::config::RedisConfig;
-    use serde::Deserialize;
-    use std::fmt::Formatter;
+
+    use super::*;
 
     #[derive(Clone, Eq, PartialEq, Debug, Hash, Decode, Encode, Deserialize)]
     struct CommonNamespace(String);

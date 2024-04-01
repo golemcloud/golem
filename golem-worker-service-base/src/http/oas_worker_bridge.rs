@@ -1,13 +1,16 @@
+use std::collections::HashMap;
+
+use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
+use serde_json;
+use serde_json::Value;
+use uuid::Uuid;
+
+use golem_common::model::TemplateId;
+
 use crate::definition::api_definition::{ApiDefinitionId, Version};
 use crate::expression::expr::Expr;
 use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern, PathPattern, Route};
 use crate::worker_binding::golem_worker_binding::{GolemWorkerBinding, ResponseMapping};
-use golem_common::model::TemplateId;
-use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
-use serde_json;
-use serde_json::Value;
-use std::collections::HashMap;
-use uuid::Uuid;
 
 pub const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
 pub const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";

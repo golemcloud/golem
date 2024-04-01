@@ -3,13 +3,14 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::api::common::RouteValidationError;
-use crate::definition::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasVersion, Version};
-use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
-use crate::worker_binding::golem_worker_binding::HasGolemWorkerBindings;
 use async_trait::async_trait;
+
 use golem_common::model::TemplateId;
 use golem_service_base::model::Template;
+
+use crate::api::common::RouteValidationError;
+use crate::definition::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, Version};
+use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 use super::template::TemplateService;

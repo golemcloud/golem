@@ -1,8 +1,11 @@
-use crate::expression::expr::Expr;
-use bincode::{Decode, Encode};
-use golem_common::model::TemplateId;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+use bincode::{Decode, Encode};
+use serde::{Deserialize, Serialize};
+
+use golem_common::model::TemplateId;
+
+use crate::expression::expr::Expr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]
@@ -21,8 +24,4 @@ pub struct ResponseMapping {
     pub body: Expr,   // ${function.return}
     pub status: Expr, // "200" or if ${response.body.id == 1} "200" else "400"
     pub headers: HashMap<String, Expr>,
-}
-
-pub trait HasGolemWorkerBindings {
-    fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding>;
 }
