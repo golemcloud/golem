@@ -12,7 +12,7 @@ use tracing::info;
 use golem_service_base::type_inference::*;
 
 use crate::evaluator::{EvaluationError, Evaluator};
-use crate::evaluator::primitive::{GetPrimitive, Primitive};
+use crate::primitive::{GetPrimitive, Primitive};
 use crate::expression::expr::Expr;
 use crate::merge::Merge;
 use crate::tokeniser::tokenizer::Token;

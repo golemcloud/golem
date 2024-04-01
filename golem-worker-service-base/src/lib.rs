@@ -15,6 +15,7 @@ mod parser;
 mod tokeniser;
 mod worker_binding;
 mod evaluator;
+mod primitive;
 
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;

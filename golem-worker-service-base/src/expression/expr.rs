@@ -5,7 +5,7 @@ use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::evaluator::primitive::Primitive;
+use crate::primitive::Primitive;
 use crate::parser::{GolemParser, ParseError};
 use crate::parser::expr_parser::ExprParser;
 

@@ -1,16 +1,11 @@
 use std::collections::HashMap;
 
-use derive_more::{Display, FromStr, Into};
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
 
-use golem_service_base::type_inference::infer_analysed_type;
-
-use crate::evaluator::primitive::{Number, Primitive};
-use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern};
+use crate::http::http_api_definition::{HttpApiDefinition};
 use crate::merge::Merge;
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_binding::worker_binding_resolver::{
@@ -39,9 +34,9 @@ impl InputHttpRequest<'_> {
 
         let request_query_variables: HashMap<String, String> = self.input_path.query_components();
 
-        let request_header_values = Self::get_headers(request_header)?;
-        let body_value = Self::get_request_body(request_body)?;
-        let path_value = Self::get_request_path_query_values(
+        let request_header_values = internal::get_headers(request_header)?;
+        let body_value = internal::get_request_body(request_body)?;
+        let path_value = internal::get_request_path_query_values(
             request_query_variables,
             spec_query_variables,
             &request_path_values,
@@ -58,7 +53,161 @@ impl InputHttpRequest<'_> {
         Ok(request_type_annotated_value)
     }
 
-    pub fn get_request_body(request_body: &Value) -> Result<TypeAnnotatedValue, Vec<String>> {
+}
+
+impl<'a> WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest<'a> {
+    fn resolve(&self, api_definition: &HttpApiDefinition) -> Option<ResolvedWorkerBinding> {
+        let api_request = self;
+        let routes = &api_definition.routes;
+
+        for route in routes {
+            let spec_method = &route.method;
+            let spec_path_variables = route.path.get_path_variables();
+            let spec_path_literals = route.path.get_path_literals();
+            let spec_query_variables = route.path.get_query_variables();
+
+            let request_method: &Method = api_request.req_method;
+            let request_path_components: HashMap<usize, String> =
+                api_request.input_path.path_components();
+
+            if internal::match_method(request_method, spec_method)
+                && internal::match_literals(&request_path_components, &spec_path_literals)
+            {
+                let request_details = api_request
+                    .get_type_annotated_value(spec_query_variables, &spec_path_variables);
+
+                let request_details = request_details.clone().ok()?;
+
+                let resolved_binding = ResolvedWorkerBinding {
+                    resolved_worker_binding_template: route.binding.clone(),
+                    typed_value_from_input: { request_details },
+                };
+                return Some(resolved_binding);
+            } else {
+                continue;
+            }
+        }
+
+        None
+    }
+}
+
+pub struct ApiInputPath<'a> {
+    pub base_path: &'a str,
+    pub query_path: Option<&'a str>,
+}
+
+impl<'a> ApiInputPath<'a> {
+    // Return the each component of the path which can either be a literal or the value of a path_var, along with it's index
+     fn path_components(&self) -> HashMap<usize, String> {
+        let mut path_components: HashMap<usize, String> = HashMap::new();
+
+        // initial `/` is excluded to not break indexes
+        let path = if self.base_path.starts_with('/') {
+            &self.base_path[1..self.base_path.len()]
+        } else {
+            self.base_path
+        };
+
+        let base_path_parts = path.split('/').map(|x| x.trim());
+
+        for (index, part) in base_path_parts.enumerate() {
+            if !part.is_empty() {
+                path_components.insert(index, part.to_string());
+            }
+        }
+
+        path_components
+    }
+
+    // Return the value of each query variable in a HashMap
+    fn query_components(&self) -> HashMap<String, String> {
+        let mut query_components: HashMap<String, String> = HashMap::new();
+
+        if let Some(query_path) = self.query_path {
+            let query_parts = query_path.split('&').map(|x| x.trim());
+
+            for part in query_parts {
+                let key_value: Vec<&str> = part.split('=').map(|x| x.trim()).collect();
+
+                if let (Some(key), Some(value)) = (key_value.first(), key_value.get(1)) {
+                    query_components.insert(key.to_string(), value.to_string());
+                }
+            }
+        }
+
+        query_components
+    }
+}
+
+mod internal {
+    use std::collections::HashMap;
+    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc::json::get_typed_value_from_json;
+    use golem_wasm_rpc::TypeAnnotatedValue;
+    use http::{HeaderMap, Method};
+    use serde_json::Value;
+    use golem_service_base::type_inference::infer_analysed_type;
+    use crate::http::http_api_definition::MethodPattern;
+    use crate::http::http_request::internal;
+    use crate::primitive::{Number, Primitive};
+    use crate::merge::Merge;
+
+    pub(crate) fn match_method(input_request_method: &Method, spec_method_pattern: &MethodPattern) -> bool {
+        match input_request_method.clone() {
+            Method::CONNECT => spec_method_pattern.is_connect(),
+            Method::GET => spec_method_pattern.is_get(),
+            Method::POST => spec_method_pattern.is_post(),
+            Method::HEAD => spec_method_pattern.is_head(),
+            Method::DELETE => spec_method_pattern.is_delete(),
+            Method::PUT => spec_method_pattern.is_put(),
+            Method::PATCH => spec_method_pattern.is_patch(),
+            Method::OPTIONS => spec_method_pattern.is_options(),
+            Method::TRACE => spec_method_pattern.is_trace(),
+            _ => false,
+        }
+    }
+
+
+    pub(crate) fn match_literals(
+        request_path_values: &HashMap<usize, String>,
+        spec_path_literals: &HashMap<usize, String>,
+    ) -> bool {
+        if spec_path_literals.is_empty() && !request_path_values.is_empty() {
+            false
+        } else {
+            let mut literals_match = true;
+
+            for (index, spec_literal) in spec_path_literals.iter() {
+                if let Some(request_literal) = request_path_values.get(index) {
+                    if request_literal.trim() != spec_literal.trim() {
+                        literals_match = false;
+                        break;
+                    }
+                } else {
+                    literals_match = false;
+                    break;
+                }
+            }
+
+            literals_match
+        }
+    }
+
+    pub(crate) fn get_typed_value_from_primitive(value: &str) -> TypeAnnotatedValue {
+        let query_value = Primitive::from(value.to_string());
+        match query_value {
+            Primitive::Num(number) => match number {
+                Number::PosInt(value) => TypeAnnotatedValue::U64(value),
+                Number::NegInt(value) => TypeAnnotatedValue::S64(value),
+                Number::Float(value) => TypeAnnotatedValue::F64(value),
+            },
+            Primitive::String(value) => TypeAnnotatedValue::Str(value),
+            Primitive::Bool(value) => TypeAnnotatedValue::Bool(value),
+        }
+    }
+
+    pub(crate) fn get_request_body(request_body: &Value) -> Result<TypeAnnotatedValue, Vec<String>> {
         let inferred_type = infer_analysed_type(request_body);
         let typed_value = get_typed_value_from_json(request_body, &inferred_type)?;
 
@@ -68,13 +217,13 @@ impl InputHttpRequest<'_> {
         })
     }
 
-    pub fn get_headers(headers: &HeaderMap) -> Result<TypeAnnotatedValue, Vec<String>> {
+    pub(crate) fn get_headers(headers: &HeaderMap) -> Result<TypeAnnotatedValue, Vec<String>> {
         let mut headers_map: Vec<(String, TypeAnnotatedValue)> = vec![];
 
         for (header_name, header_value) in headers {
             let header_value_str = header_value.to_str().map_err(|err| vec![err.to_string()])?;
 
-            let typed_header_value = get_typed_value_from_primitive(header_value_str);
+            let typed_header_value = internal::get_typed_value_from_primitive(header_value_str);
 
             headers_map.push((header_name.to_string(), typed_header_value));
         }
@@ -97,17 +246,17 @@ impl InputHttpRequest<'_> {
         })
     }
 
-    pub fn get_request_path_query_values(
+    pub(crate) fn get_request_path_query_values(
         request_query_variables: HashMap<String, String>,
         spec_query_variables: Vec<String>,
         request_path_values: &HashMap<usize, String>,
         spec_path_variables: &HashMap<usize, String>,
     ) -> Result<TypeAnnotatedValue, Vec<String>> {
         let request_query_values =
-            Self::get_request_query_values(request_query_variables, spec_query_variables)?;
+            get_request_query_values(request_query_variables, spec_query_variables)?;
 
         let request_path_values =
-            Self::get_request_path_values(request_path_values, spec_path_variables)?;
+            get_request_path_values(request_path_values, spec_path_variables)?;
 
         let path_values = request_query_values.merge(&request_path_values);
 
@@ -117,7 +266,7 @@ impl InputHttpRequest<'_> {
         })
     }
 
-    pub fn get_request_path_values(
+    fn get_request_path_values(
         request_path_values: &HashMap<usize, String>,
         spec_path_variables: &HashMap<usize, String>,
     ) -> Result<TypeAnnotatedValue, Vec<String>> {
@@ -126,7 +275,7 @@ impl InputHttpRequest<'_> {
 
         for (index, spec_path_variable) in spec_path_variables.iter() {
             if let Some(path_value) = request_path_values.get(index) {
-                let typed_value = get_typed_value_from_primitive(path_value);
+                let typed_value = internal::get_typed_value_from_primitive(path_value);
 
                 path_variables_map.push((spec_path_variable.clone(), typed_value));
             } else {
@@ -158,7 +307,7 @@ impl InputHttpRequest<'_> {
 
         for spec_query_variable in spec_query_variables.iter() {
             if let Some(query_value) = request_query_variables.get(spec_query_variable) {
-                let typed_value = get_typed_value_from_primitive(query_value);
+                let typed_value = internal::get_typed_value_from_primitive(query_value);
                 query_variable_map.push((spec_query_variable.clone(), typed_value));
             } else {
                 unavailable_query_variables.push(spec_query_variable.to_string());
@@ -179,147 +328,7 @@ impl InputHttpRequest<'_> {
             Err(unavailable_query_variables)
         }
     }
-}
 
-fn get_typed_value_from_primitive(value: &str) -> TypeAnnotatedValue {
-    let query_value = Primitive::from(value.to_string());
-    match query_value {
-        Primitive::Num(number) => match number {
-            Number::PosInt(value) => TypeAnnotatedValue::U64(value),
-            Number::NegInt(value) => TypeAnnotatedValue::S64(value),
-            Number::Float(value) => TypeAnnotatedValue::F64(value),
-        },
-        Primitive::String(value) => TypeAnnotatedValue::Str(value),
-        Primitive::Bool(value) => TypeAnnotatedValue::Bool(value),
-    }
-}
-
-impl<'a> WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest<'a> {
-    fn resolve(&self, api_definition: &HttpApiDefinition) -> Option<ResolvedWorkerBinding> {
-        let api_request = self;
-        let routes = &api_definition.routes;
-
-        for route in routes {
-            let spec_method = &route.method;
-            let spec_path_variables = route.path.get_path_variables();
-            let spec_path_literals = route.path.get_path_literals();
-            let spec_query_variables = route.path.get_query_variables();
-
-            let request_method: &Method = api_request.req_method;
-            let request_path_components: HashMap<usize, String> =
-                api_request.input_path.path_components();
-
-            if match_method(request_method, spec_method)
-                && match_literals(&request_path_components, &spec_path_literals)
-            {
-                let request_details = api_request
-                    .get_type_annotated_value(spec_query_variables, &spec_path_variables);
-
-                let request_details = request_details.clone().ok()?;
-
-                let resolved_binding = ResolvedWorkerBinding {
-                    resolved_worker_binding_template: route.binding.clone(),
-                    typed_value_from_input: { request_details },
-                };
-                return Some(resolved_binding);
-            } else {
-                continue;
-            }
-        }
-
-        None
-    }
-}
-
-fn match_method(input_request_method: &Method, spec_method_pattern: &MethodPattern) -> bool {
-    match input_request_method.clone() {
-        Method::CONNECT => spec_method_pattern.is_connect(),
-        Method::GET => spec_method_pattern.is_get(),
-        Method::POST => spec_method_pattern.is_post(),
-        Method::HEAD => spec_method_pattern.is_head(),
-        Method::DELETE => spec_method_pattern.is_delete(),
-        Method::PUT => spec_method_pattern.is_put(),
-        Method::PATCH => spec_method_pattern.is_patch(),
-        Method::OPTIONS => spec_method_pattern.is_options(),
-        Method::TRACE => spec_method_pattern.is_trace(),
-        _ => false,
-    }
-}
-
-fn match_literals(
-    request_path_values: &HashMap<usize, String>,
-    spec_path_literals: &HashMap<usize, String>,
-) -> bool {
-    if spec_path_literals.is_empty() && !request_path_values.is_empty() {
-        false
-    } else {
-        let mut literals_match = true;
-
-        for (index, spec_literal) in spec_path_literals.iter() {
-            if let Some(request_literal) = request_path_values.get(index) {
-                if request_literal.trim() != spec_literal.trim() {
-                    literals_match = false;
-                    break;
-                }
-            } else {
-                literals_match = false;
-                break;
-            }
-        }
-
-        literals_match
-    }
-}
-
-#[derive(PartialEq, Debug, Display, FromStr, Into)]
-pub struct WorkerRequestResolutionError(pub String);
-
-pub struct ApiInputPath<'a> {
-    pub base_path: &'a str,
-    pub query_path: Option<&'a str>,
-}
-
-impl<'a> ApiInputPath<'a> {
-    // Return the each component of the path which can either be a literal or the value of a path_var, along with it's index
-    pub fn path_components(&self) -> HashMap<usize, String> {
-        let mut path_components: HashMap<usize, String> = HashMap::new();
-
-        // initial `/` is excluded to not break indexes
-        let path = if self.base_path.starts_with('/') {
-            &self.base_path[1..self.base_path.len()]
-        } else {
-            self.base_path
-        };
-
-        let base_path_parts = path.split('/').map(|x| x.trim());
-
-        for (index, part) in base_path_parts.enumerate() {
-            if !part.is_empty() {
-                path_components.insert(index, part.to_string());
-            }
-        }
-
-        path_components
-    }
-
-    // Return the value of each query variable in a HashMap
-    pub fn query_components(&self) -> HashMap<String, String> {
-        let mut query_components: HashMap<String, String> = HashMap::new();
-
-        if let Some(query_path) = self.query_path {
-            let query_parts = query_path.split('&').map(|x| x.trim());
-
-            for part in query_parts {
-                let key_value: Vec<&str> = part.split('=').map(|x| x.trim()).collect();
-
-                if let (Some(key), Some(value)) = (key_value.first(), key_value.get(1)) {
-                    query_components.insert(key.to_string(), value.to_string());
-                }
-            }
-        }
-
-        query_components
-    }
 }
 
 #[cfg(test)]
@@ -1140,7 +1149,7 @@ mod tests {
         spec_path_literals.insert(0, "users".to_string());
         spec_path_literals.insert(1, "1".to_string());
 
-        assert!(match_literals(&request_path_values, &spec_path_literals));
+        assert!(internal::match_literals(&request_path_values, &spec_path_literals));
     }
 
     #[test]
@@ -1150,7 +1159,7 @@ mod tests {
         let mut spec_path_literals = HashMap::new();
         spec_path_literals.insert(0, "get-cart-contents".to_string());
 
-        assert!(!match_literals(&request_path_values, &spec_path_literals));
+        assert!(!internal::match_literals(&request_path_values, &spec_path_literals));
     }
 
     #[test]
@@ -1160,6 +1169,6 @@ mod tests {
 
         let spec_path_literals = HashMap::new();
 
-        assert!(!match_literals(&request_path_values, &spec_path_literals));
+        assert!(!internal::match_literals(&request_path_values, &spec_path_literals));
     }
 }

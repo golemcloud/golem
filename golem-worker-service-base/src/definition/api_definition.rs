@@ -29,14 +29,14 @@ impl Display for Version {
 }
 
 // Constraints applicable to any type of API Definition
-pub trait HasApiDefinitionId {
+pub(crate) trait HasApiDefinitionId {
     fn get_api_definition_id(&self) -> ApiDefinitionId;
 }
 
-pub trait HasVersion {
+pub(crate) trait HasVersion {
     fn get_version(&self) -> Version;
 }
 
-pub trait HasGolemWorkerBindings {
+pub(crate) trait HasGolemWorkerBindings {
     fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding>;
 }

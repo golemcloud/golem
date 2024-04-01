@@ -8,7 +8,7 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use getter::GetError;
 use getter::Getter;
 use path::Path;
-use primitive::GetPrimitive;
+use crate::primitive::GetPrimitive;
 
 use crate::expression::expr::{
     ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber,
@@ -18,8 +18,7 @@ use crate::merge::Merge;
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
 pub(crate) mod getter;
-pub(crate) mod path;
-pub(crate) mod primitive;
+mod path;
 
 pub trait Evaluator {
     fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
