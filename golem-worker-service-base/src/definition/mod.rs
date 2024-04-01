@@ -1,1 +1,1 @@
-pub mod api_definition;
+pub(crate) mod api_definition;

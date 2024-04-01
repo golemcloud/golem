@@ -1,22 +1,20 @@
 use ::http::Uri;
 
 pub mod api;
-pub mod app_config;
-pub mod auth;
-pub mod definition;
-pub mod expression;
-pub mod http;
-pub mod merge;
-pub mod metrics;
-pub mod parser;
-pub mod service;
-pub mod tokeniser;
-pub mod worker_binding;
-pub mod worker_request;
-
 pub mod repo;
-
-pub mod evaluator;
+pub mod service;
+pub mod auth;
+pub mod worker_request;
+pub mod metrics;
+pub mod app_config;
+mod definition;
+mod expression;
+mod http;
+mod merge;
+mod parser;
+mod tokeniser;
+mod worker_binding;
+mod evaluator;
 
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;

@@ -15,11 +15,11 @@ use crate::expression::expr::{
 };
 use crate::merge::Merge;
 
-use super::tokeniser::tokenizer::{Token, Tokenizer};
+use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
-pub mod getter;
-pub mod path;
-pub mod primitive;
+pub(crate) mod getter;
+pub(crate) mod path;
+pub(crate) mod primitive;
 
 pub trait Evaluator {
     fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
@@ -111,10 +111,10 @@ impl Evaluator for Expr {
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
             match expr.clone() {
                 Expr::Request() => input
-                    .get(&Path::from_raw_string(Token::Request.to_string().as_str()))
+                    .get(&Path::from_key(Token::Request.to_string().as_str()))
                     .map_err(|err| err.into()),
                 Expr::Worker() => input
-                    .get(&Path::from_raw_string(Token::Worker.to_string().as_str()))
+                    .get(&Path::from_key(Token::Worker.to_string().as_str()))
                     .map_err(|err| err.into()),
 
                 Expr::SelectIndex(expr, index) => {
@@ -313,7 +313,7 @@ impl Evaluator for Expr {
                     .map_err(|err| err.into()),
 
                 Expr::Variable(variable) => input
-                    .get(&Path::from_raw_string(variable.as_str()))
+                    .get(&Path::from_key(variable.as_str()))
                     .map_err(|err| err.into()),
 
                 Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(bool)),
