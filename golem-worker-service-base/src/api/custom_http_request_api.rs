@@ -10,6 +10,8 @@ use crate::http::http_request::{ApiInputPath, InputHttpRequest};
 use crate::service::http_request_definition_lookup::HttpRequestDefinitionLookup;
 use crate::worker_binding::golem_worker_binding::ResponseMapping;
 use crate::worker_binding::worker_binding_resolver::WorkerBindingResolver;
+use crate::worker_bridge::WorkerRequest;
+use crate::worker_bridge::workr_request_executor::WorkerRequestExecutor;
 use crate::worker_request::worker_request_to_response::WorkerRequestToResponse;
 use crate::worker_request::WorkerRequest;
 
@@ -18,14 +20,14 @@ use crate::worker_request::WorkerRequest;
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
     pub worker_to_http_response_service:
-        Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
+        Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
     pub api_definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
     pub fn new(
         worker_to_http_response_service: Arc<
-            dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send,
+            dyn WorkerRequestExecutor<Response> + Sync + Send,
         >,
         api_definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
     ) -> Self {
@@ -104,13 +106,28 @@ impl CustomHttpRequestApi {
                     };
 
                 // Execute the request using a executor
-                self.worker_to_http_response_service
+                match self.worker_to_http_response_service
                     .execute(
                         resolved_worker_request.clone(),
-                        &resolved_route.resolved_worker_binding_template.response,
-                        &resolved_route.typed_value_from_input,
                     )
-                    .await
+                    .await {
+                    Ok(worker_response) => {
+                        worker_response.to_http_response(&resolved_route.resolved_worker_binding_template.response,  &resolved_route.typed_value_from_input)
+                    }
+
+                    Err(e) => {
+                        error!(
+                            "API request id: {} - request error: {}",
+                            &api_definition.id, e
+                        );
+                        Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::from_string(
+                                format!("API request error {}", e).to_string(),
+                            ))
+                    }
+
+                }
             }
 
             None => {

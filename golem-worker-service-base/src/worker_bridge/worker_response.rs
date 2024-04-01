@@ -17,8 +17,9 @@ use crate::expression::expr::Expr;
 use crate::merge::Merge;
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_binding::golem_worker_binding::ResponseMapping;
-use crate::worker_request::worker_request_to_response::WorkerRequestToResponse;
-use crate::worker_request::WorkerRequest;
+use crate::worker_bridge::workr_request_executor::{WorkerRequestExecutor};
+use crate::worker_bridge;
+use crate::worker_bridge::WorkerRequest;
 
 pub struct WorkerResponse {
     pub result: TypeAnnotatedValue,
@@ -27,7 +28,7 @@ pub struct WorkerResponse {
 impl WorkerResponse {
     // This makes sure that the result is injected into the worker.response field
     // So that clients can refer to the worker response using worker.response keyword
-    pub fn result_with_worker_response_key(&self) -> TypeAnnotatedValue {
+    pub(crate) fn result_with_worker_response_key(&self) -> TypeAnnotatedValue {
         let worker_response_value = &self.result;
         let worker_response_typ = AnalysedType::from(worker_response_value);
         let response_key = "response".to_string();
@@ -49,7 +50,7 @@ impl WorkerResponse {
         }
     }
 
-    pub fn to_http_response(
+    pub(crate) fn to_http_response(
         &self,
         response_mapping: &Option<ResponseMapping>,
         input_request: &TypeAnnotatedValue,
@@ -175,7 +176,7 @@ impl ResolvedResponseHeaders {
 pub struct NoOpWorkerRequestExecutor {}
 
 #[async_trait]
-impl WorkerRequestToResponse<ResponseMapping, poem::Response> for NoOpWorkerRequestExecutor {
+impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
     async fn execute(
         &self,
         worker_request_params: WorkerRequest,

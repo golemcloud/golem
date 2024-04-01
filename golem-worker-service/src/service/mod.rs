@@ -1,7 +1,7 @@
 pub mod template;
 pub mod worker;
 
-use crate::worker_request_to_http_response::WorkerRequestToHttpResponse;
+use crate::worker_bridge_request_executor::WorkerRequestToHttpResponse;
 use async_trait::async_trait;
 use golem_worker_service_base::http_api_definition::{
     HttpApiDefinition, ApiDefinitionId, ResponseMapping, Version,
