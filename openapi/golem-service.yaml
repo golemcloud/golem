@@ -2272,6 +2272,15 @@ components:
       required:
       - workerId
       - templateVersionUsed
+    WorkerAndFilter:
+      type: object
+      properties:
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerFilter'
+      required:
+      - filters
     WorkerCreatedAtFilter:
       type: object
       properties:
@@ -2322,9 +2331,9 @@ components:
           Version: '#/components/schemas/WorkerFilter_WorkerVersionFilter'
           CreatedAt: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
           Env: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
-          And: '#/components/schemas/WorkerFilter_[WorkerFilter]'
-          Or: '#/components/schemas/WorkerFilter_[WorkerFilter]'
-          Not: '#/components/schemas/WorkerFilter_WorkerFilter'
+          And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
+          Or: '#/components/schemas/WorkerFilter_WorkerOrFilter'
+          Not: '#/components/schemas/WorkerFilter_WorkerNotFilter'
       type: object
       oneOf:
       - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
@@ -2332,9 +2341,19 @@ components:
       - $ref: '#/components/schemas/WorkerFilter_WorkerVersionFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
-      - $ref: '#/components/schemas/WorkerFilter_[WorkerFilter]'
-      - $ref: '#/components/schemas/WorkerFilter_[WorkerFilter]'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+    WorkerFilter_WorkerAndFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: And
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerAndFilter'
     WorkerFilter_WorkerCreatedAtFilter:
       allOf:
       - type: object
@@ -2355,16 +2374,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WorkerEnvFilter'
-    WorkerFilter_WorkerFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Not
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerFilter'
     WorkerFilter_WorkerNameFilter:
       allOf:
       - type: object
@@ -2375,6 +2384,26 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WorkerNameFilter'
+    WorkerFilter_WorkerNotFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Not
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerNotFilter'
+    WorkerFilter_WorkerOrFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Or
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerOrFilter'
     WorkerFilter_WorkerStatusFilter:
       allOf:
       - type: object
@@ -2395,18 +2424,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WorkerVersionFilter'
-    WorkerFilter_[WorkerFilter]:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Or
-            type: string
-        required:
-        - type
-      - type: array
-        items:
-          $ref: '#/components/schemas/WorkerFilter'
     WorkerId:
       type: object
       properties:
@@ -2481,6 +2498,22 @@ components:
       required:
       - comparator
       - value
+    WorkerNotFilter:
+      type: object
+      properties:
+        filter:
+          $ref: '#/components/schemas/WorkerFilter'
+      required:
+      - filter
+    WorkerOrFilter:
+      type: object
+      properties:
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerFilter'
+      required:
+      - filters
     WorkerServiceErrorBody:
       type: object
       properties:

@@ -971,6 +971,75 @@ impl Display for WorkerEnvFilter {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
+pub struct WorkerAndFilter {
+    pub filters: Vec<WorkerFilter>,
+}
+
+impl WorkerAndFilter {
+    pub fn new(filters: Vec<WorkerFilter>) -> Self {
+        Self { filters }
+    }
+}
+
+impl Display for WorkerAndFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "({})",
+            self.filters
+                .iter()
+                .map(|f| f.clone().to_string())
+                .collect::<Vec<String>>()
+                .join(" AND ")
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
+pub struct WorkerOrFilter {
+    pub filters: Vec<WorkerFilter>,
+}
+
+impl WorkerOrFilter {
+    pub fn new(filters: Vec<WorkerFilter>) -> Self {
+        Self { filters }
+    }
+}
+
+impl Display for WorkerOrFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "({})",
+            self.filters
+                .iter()
+                .map(|f| f.clone().to_string())
+                .collect::<Vec<String>>()
+                .join(" OR ")
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
+pub struct WorkerNotFilter {
+    filter: Box<WorkerFilter>,
+}
+
+impl WorkerNotFilter {
+    pub fn new(filter: WorkerFilter) -> Self {
+        Self {
+            filter: Box::new(filter),
+        }
+    }
+}
+
+impl Display for WorkerNotFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NOT ({})", self.filter)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 pub enum WorkerFilter {
@@ -979,22 +1048,26 @@ pub enum WorkerFilter {
     Version(WorkerVersionFilter),
     CreatedAt(WorkerCreatedAtFilter),
     Env(WorkerEnvFilter),
-    And(Vec<WorkerFilter>),
-    Or(Vec<WorkerFilter>),
-    Not(Box<WorkerFilter>),
+    And(WorkerAndFilter),
+    Or(WorkerOrFilter),
+    Not(WorkerNotFilter),
 }
 
 impl WorkerFilter {
     pub fn and(&self, filter: WorkerFilter) -> Self {
         match self.clone() {
-            WorkerFilter::And(filters) => Self::new_and([filters, vec![filter]].concat()),
+            WorkerFilter::And(WorkerAndFilter { filters }) => {
+                Self::new_and([filters, vec![filter]].concat())
+            }
             f => Self::new_and(vec![f, filter]),
         }
     }
 
     pub fn or(&self, filter: WorkerFilter) -> Self {
         match self.clone() {
-            WorkerFilter::Or(filters) => Self::new_or([filters, vec![filter]].concat()),
+            WorkerFilter::Or(WorkerOrFilter { filters }) => {
+                Self::new_or([filters, vec![filter]].concat())
+            }
             f => Self::new_or(vec![f, filter]),
         }
     }
@@ -1033,8 +1106,8 @@ impl WorkerFilter {
             WorkerFilter::Status(WorkerStatusFilter { value }) => {
                 metadata.last_known_status.status == value
             }
-            WorkerFilter::Not(filter) => !filter.matches(metadata),
-            WorkerFilter::And(filters) => {
+            WorkerFilter::Not(WorkerNotFilter { filter }) => !filter.matches(metadata),
+            WorkerFilter::And(WorkerAndFilter { filters }) => {
                 let mut result = true;
                 for filter in filters {
                     if !filter.matches(metadata) {
@@ -1044,7 +1117,7 @@ impl WorkerFilter {
                 }
                 result
             }
-            WorkerFilter::Or(filters) => {
+            WorkerFilter::Or(WorkerOrFilter { filters }) => {
                 let mut result = true;
                 if !filters.is_empty() {
                     result = false;
@@ -1061,15 +1134,15 @@ impl WorkerFilter {
     }
 
     pub fn new_and(filters: Vec<WorkerFilter>) -> Self {
-        WorkerFilter::And(filters)
+        WorkerFilter::And(WorkerAndFilter::new(filters))
     }
 
     pub fn new_or(filters: Vec<WorkerFilter>) -> Self {
-        WorkerFilter::Or(filters)
+        WorkerFilter::Or(WorkerOrFilter::new(filters))
     }
 
     pub fn new_not(filter: WorkerFilter) -> Self {
-        WorkerFilter::Not(Box::new(filter))
+        WorkerFilter::Not(WorkerNotFilter::new(filter))
     }
 
     pub fn new_name(comparator: StringFilterComparator, value: String) -> Self {
@@ -1112,29 +1185,13 @@ impl Display for WorkerFilter {
                 write!(f, "{}", filter)
             }
             WorkerFilter::Not(filter) => {
-                write!(f, "NOT ({})", filter)
+                write!(f, "{}", filter)
             }
-            WorkerFilter::And(filters) => {
-                write!(
-                    f,
-                    "({})",
-                    filters
-                        .iter()
-                        .map(|f| f.clone().to_string())
-                        .collect::<Vec<String>>()
-                        .join(" AND ")
-                )
+            WorkerFilter::And(filter) => {
+                write!(f, "{}", filter)
             }
-            WorkerFilter::Or(filters) => {
-                write!(
-                    f,
-                    "({})",
-                    filters
-                        .iter()
-                        .map(|f| f.clone().to_string())
-                        .collect::<Vec<String>>()
-                        .join(" OR ")
-                )
+            WorkerFilter::Or(filter) => {
+                write!(f, "{}", filter)
             }
         }
     }
@@ -1289,7 +1346,7 @@ impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
                     },
                 )
             }
-            WorkerFilter::Not(filter) => {
+            WorkerFilter::Not(WorkerNotFilter { filter }) => {
                 let f: golem_api_grpc::proto::golem::worker::WorkerFilter = (*filter).into();
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Not(Box::new(
                     golem_api_grpc::proto::golem::worker::WorkerNotFilter {
@@ -1297,17 +1354,17 @@ impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
                     },
                 ))
             }
-            WorkerFilter::And(filters) => {
+            WorkerFilter::And(filter) => {
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::And(
                     golem_api_grpc::proto::golem::worker::WorkerAndFilter {
-                        filters: filters.into_iter().map(|f| f.into()).collect(),
+                        filters: filter.filters.into_iter().map(|f| f.into()).collect(),
                     },
                 )
             }
-            WorkerFilter::Or(filters) => {
+            WorkerFilter::Or(filter) => {
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Or(
                     golem_api_grpc::proto::golem::worker::WorkerOrFilter {
-                        filters: filters.into_iter().map(|f| f.into()).collect(),
+                        filters: filter.filters.into_iter().map(|f| f.into()).collect(),
                     },
                 )
             }
