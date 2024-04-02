@@ -1,9 +1,9 @@
 use std::fmt;
 
-pub mod expr_parser;
-pub mod literal_parser;
-pub mod path_pattern_parser;
-pub mod place_holder_parser;
+pub(crate) mod expr_parser;
+pub(crate) mod literal_parser;
+pub(crate) mod path_pattern_parser;
+pub(crate) mod place_holder_parser;
 
 pub trait GolemParser<T> {
     fn parse(&self, str: &str) -> Result<T, ParseError>;

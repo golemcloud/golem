@@ -2,16 +2,23 @@ use std::future::Future;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use crate::service::template::TemplateService;
+use async_trait::async_trait;
+use golem_wasm_ast::analysis::AnalysedFunctionResult;
+use golem_wasm_rpc::json::get_json_from_typed_value;
+use golem_wasm_rpc::protobuf::Val as ProtoVal;
+use golem_wasm_rpc::TypeAnnotatedValue;
+use serde_json::Value;
+use tokio::time::sleep;
+use tonic::transport::Channel;
+use tracing::{debug, info};
+
+use golem_api_grpc::proto::golem::worker::InvokeResult as ProtoInvokeResult;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
     self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
     GetInvocationKeyRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest,
     ResumeWorkerRequest,
 };
-
-use async_trait::async_trait;
-use golem_api_grpc::proto::golem::worker::InvokeResult as ProtoInvokeResult;
 use golem_common::model::{AccountId, CallingConvention, InvocationKey, TemplateId};
 use golem_service_base::model::{
     GolemErrorUnknown, PromiseId, ResourceLimits, VersionedWorkerId, WorkerId, WorkerMetadata,
@@ -22,12 +29,8 @@ use golem_service_base::{
     routing_table::{RoutingTableError, RoutingTableService},
     worker_executor_clients::WorkerExecutorClients,
 };
-use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::protobuf::Val as ProtoVal;
-use serde_json::Value;
-use tokio::time::sleep;
-use tonic::transport::Channel;
-use tracing::{debug, info};
+
+use crate::service::template::TemplateService;
 
 use super::{ConnectWorkerStream, WorkerServiceError};
 
@@ -76,6 +79,17 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value>;
+
+    async fn invoke_and_await_function_typed_value(
+        &self,
+        worker_id: &WorkerId,
+        function_name: String,
+        invocation_key: &InvocationKey,
+        params: Value,
+        calling_convention: &CallingConvention,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<TypeAnnotatedValue>;
 
     async fn invoke_and_await_function_proto(
         &self,
@@ -365,6 +379,31 @@ where
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value> {
+        let typed_value = self
+            .invoke_and_await_function_typed_value(
+                worker_id,
+                function_name,
+                invocation_key,
+                params,
+                calling_convention,
+                metadata,
+                auth_ctx,
+            )
+            .await?;
+
+        Ok(get_json_from_typed_value(&typed_value))
+    }
+
+    async fn invoke_and_await_function_typed_value(
+        &self,
+        worker_id: &WorkerId,
+        function_name: String,
+        invocation_key: &InvocationKey,
+        params: Value,
+        calling_convention: &CallingConvention,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<TypeAnnotatedValue> {
         let template_details = self
             .try_get_template_for_worker(worker_id, auth_ctx)
             .await?;
@@ -375,6 +414,7 @@ where
             .ok_or_else(|| {
                 WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
+
         let params_val = params
             .validate_function_parameters(
                 function_type
@@ -403,12 +443,10 @@ where
             .map(|x| x.clone().into())
             .collect();
 
-        let invoke_response_json = results_val
+        results_val
             .result
             .validate_function_result(function_results, calling_convention.clone())
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
-
-        Ok(invoke_response_json)
+            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
     }
 
     async fn invoke_and_await_function_proto(
@@ -982,6 +1020,22 @@ where
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value> {
         Ok(Value::default())
+    }
+
+    async fn invoke_and_await_function_typed_value(
+        &self,
+        _worker_id: &WorkerId,
+        _function_name: String,
+        _invocation_key: &InvocationKey,
+        _params: Value,
+        _calling_convention: &CallingConvention,
+        _metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<TypeAnnotatedValue> {
+        Ok(TypeAnnotatedValue::Tuple {
+            value: vec![],
+            typ: vec![],
+        })
     }
 
     async fn invoke_and_await_function_proto(

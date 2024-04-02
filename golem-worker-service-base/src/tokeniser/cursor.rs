@@ -32,23 +32,6 @@ impl TokenCursor {
         self.next_token()
     }
 
-    // State of cursor doesn't change similar to peek
-    pub fn next_non_empty_char_is(&mut self, token: Token) -> bool {
-        let mut index: usize = self.index;
-        let mut matches: bool = false;
-
-        while let Some(s) = self.tokens.get(index).map(|x| x.to_string()) {
-            if s.chars().all(char::is_whitespace) {
-                index += 1;
-            } else {
-                matches = s == token.to_string();
-                break;
-            }
-        }
-
-        matches
-    }
-
     // Captures the string upto the end token, and advance the cursor further skipping the end token
     pub fn capture_string_until_and_skip_end(
         &mut self,
@@ -241,19 +224,6 @@ mod tests {
         let result = cursor.capture_string_until(vec![&Token::OpenParen], &Token::CloseParen);
 
         assert_eq!(result, None)
-    }
-
-    #[test]
-    fn test_next_non_empty_char() {
-        let tokens = vec![
-            Token::RawString(" ".to_string()),
-            Token::RawString(" ".to_string()),
-            Token::CloseParen,
-        ];
-
-        let mut cursor = TokenCursor::new(tokens.clone());
-        let result = cursor.next_non_empty_char_is(Token::CloseParen);
-        assert!(result)
     }
 
     #[test]

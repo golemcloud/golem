@@ -1,12 +1,14 @@
-use futures::{Sink, SinkExt, Stream, StreamExt};
-use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_service_base::model::WorkerId;
-use poem::web::websocket::Message;
 use std::{
     io::{Error as IoError, Result as IoResult},
     time::Duration,
 };
+
+use futures::{Sink, SinkExt, Stream, StreamExt};
+use poem::web::websocket::Message;
 use tonic::Status;
+
+use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_service_base::model::WorkerId;
 
 /// Proxies a worker connection, listening for either connection to close. Websocket sink will be closed at the end.
 ///
@@ -119,13 +121,14 @@ where
 }
 
 mod keep_alive {
-    use futures::{Future, Sink, SinkExt, Stream, StreamExt};
-    use poem::web::websocket::Message;
     use std::{
         pin::Pin,
         task::{Context, Poll},
         time::Duration,
     };
+
+    use futures::{Future, Sink, SinkExt, Stream, StreamExt};
+    use poem::web::websocket::Message;
     use tokio::time::Instant;
 
     pub struct WebSocketKeepAlive<A, B> {
@@ -287,9 +290,10 @@ mod keep_alive {
 
     #[cfg(test)]
     mod test {
-        use poem::web::websocket::Message;
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Once;
+
+        use poem::web::websocket::Message;
         use tokio::sync::mpsc;
         use tokio::time::{timeout, Duration};
         use tokio_stream::wrappers::ReceiverStream;

@@ -1,11 +1,9 @@
 use std::fmt::Display;
 
-use golem_common::model::TemplateId;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Union};
-use serde::{Deserialize, Serialize};
 
-use crate::api_definition::MethodPattern;
+use crate::service::http::http_api_definition_validator::RouteValidationError;
 
 #[derive(Union)]
 #[oai(discriminator_name = "type", one_of = true)]
@@ -34,14 +32,6 @@ pub struct WorkerServiceErrorBody {
 #[derive(Object)]
 pub struct MessageBody {
     message: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-pub struct RouteValidationError {
-    pub method: MethodPattern,
-    pub path: String,
-    pub template: TemplateId,
-    pub detail: String,
 }
 
 #[derive(ApiResponse)]
@@ -101,15 +91,15 @@ impl ApiEndpointError {
 mod conversion {
     use poem_openapi::payload::Json;
 
-    use super::{
-        ApiEndpointError, RouteValidationError, ValidationErrorsBody, WorkerServiceErrorsBody,
-    };
-    use crate::api_definition_repo::ApiRegistrationRepoError;
+    use crate::repo::api_definition_repo::ApiRegistrationRepoError;
     use crate::service::api_definition::ApiRegistrationError;
-    use crate::service::api_definition_validator::ValidationError;
+    use crate::service::api_definition_validator::ValidationErrors;
+    use crate::service::http::http_api_definition_validator::RouteValidationError;
 
-    impl From<ApiRegistrationError> for ApiEndpointError {
-        fn from(error: ApiRegistrationError) -> Self {
+    use super::{ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody};
+
+    impl From<ApiRegistrationError<RouteValidationError>> for ApiEndpointError {
+        fn from(error: ApiRegistrationError<RouteValidationError>) -> Self {
             match error {
                 ApiRegistrationError::RepoError(error) => match error {
                     ApiRegistrationRepoError::AlreadyExists(_) => {
@@ -118,12 +108,20 @@ mod conversion {
                     ApiRegistrationRepoError::InternalError(_) => ApiEndpointError::internal(error),
                 },
                 ApiRegistrationError::ValidationError(e) => e.into(),
+                ApiRegistrationError::TemplateNotFoundError(template_id) => {
+                    let templates = template_id
+                        .iter()
+                        .map(|t| t.to_string())
+                        .collect::<Vec<String>>()
+                        .join(", ");
+                    ApiEndpointError::bad_request(format!("Templates not found, {}", templates))
+                }
             }
         }
     }
 
-    impl From<ValidationError> for ApiEndpointError {
-        fn from(error: ValidationError) -> Self {
+    impl From<ValidationErrors<RouteValidationError>> for ApiEndpointError {
+        fn from(error: ValidationErrors<RouteValidationError>) -> Self {
             let error = WorkerServiceErrorsBody::Validation(ValidationErrorsBody {
                 errors: error
                     .errors

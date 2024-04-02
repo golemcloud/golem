@@ -1,8 +1,17 @@
-use golem_common::model::TemplateId;
+use golem_wasm_rpc::json::get_json_from_typed_value;
+use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
 
-use crate::api_request_route_resolver::ResolvedWorkerBinding;
-use crate::evaluator::{Evaluator, Primitive};
+use golem_common::model::TemplateId;
+
+use crate::evaluator::{Evaluator, RawString};
+use crate::worker_binding::ResolvedWorkerBinding;
+
+mod worker_request_executor;
+mod worker_response;
+
+pub use worker_request_executor::*;
+pub use worker_response::*;
 
 // Every input request can be resolved to a worker request,
 // along with the value of any variables that's associated with it.
@@ -19,19 +28,39 @@ impl WorkerRequest {
     pub fn from_resolved_route(
         resolved_route: ResolvedWorkerBinding,
     ) -> Result<WorkerRequest, String> {
-        let worker_id: Value = resolved_route
+        let worker_id_value: TypeAnnotatedValue = resolved_route
             .resolved_worker_binding_template
             .worker_id
-            .evaluate(&resolved_route.resolved_variables)
+            .evaluate(&resolved_route.typed_value_from_input)
             .map_err(|err| err.to_string())?;
 
-        let function_name = Primitive::new(
+        let worker_id = match worker_id_value {
+            TypeAnnotatedValue::Str(value) => value,
+            _ => {
+                return Err(format!(
+                    "Worker id is not a string. {}",
+                    get_json_from_typed_value(&worker_id_value)
+                ))
+            }
+        };
+
+        let function_name_value = RawString::new(
             &resolved_route
                 .resolved_worker_binding_template
                 .function_name,
         )
-        .evaluate(&resolved_route.resolved_variables)
+        .evaluate(&resolved_route.typed_value_from_input)
         .map_err(|err| err.to_string())?;
+
+        let function_name = match function_name_value {
+            TypeAnnotatedValue::Str(value) => value,
+            _ => {
+                return Err(format!(
+                    "Function name is not a string. {}",
+                    get_json_from_typed_value(&function_name_value)
+                ))
+            }
+        };
 
         let mut function_params: Vec<Value> = vec![];
 
@@ -39,20 +68,17 @@ impl WorkerRequest {
             .resolved_worker_binding_template
             .function_params
         {
-            let json = expr
-                .evaluate(&resolved_route.resolved_variables)
+            let type_annotated_value = expr
+                .evaluate(&resolved_route.typed_value_from_input)
                 .map_err(|err| err.to_string())?;
+
+            let json = get_json_from_typed_value(&type_annotated_value);
 
             function_params.push(json);
         }
 
-        let worker_id_str = worker_id.as_str().ok_or(format!(
-            "Worker id is not evaluated to a valid string. {}",
-            worker_id
-        ))?;
-
         Ok(WorkerRequest {
-            worker_id: worker_id_str.to_string(),
+            worker_id,
             template: resolved_route
                 .resolved_worker_binding_template
                 .template

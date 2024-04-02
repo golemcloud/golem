@@ -2,16 +2,19 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Mutex;
 
-use crate::api_definition::{ApiDefinition, ApiDefinitionId};
-use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::config::RedisConfig;
-use golem_common::redis::RedisPool;
+use serde::de::DeserializeOwned;
 use tracing::{debug, info};
 
+use golem_common::config::RedisConfig;
+use golem_common::redis::RedisPool;
+
+use crate::api_definition::ApiDefinitionId;
+use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
+
 #[async_trait]
-pub trait ApiDefinitionRepo<Namespace: ApiNamespace> {
+pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -54,11 +57,11 @@ impl ApiRegistrationRepoError {
     }
 }
 
-pub struct InMemoryRegistry<Namespace> {
+pub struct InMemoryRegistry<Namespace, ApiDefinition> {
     registry: Mutex<HashMap<ApiDefinitionKey<Namespace>, ApiDefinition>>,
 }
 
-impl<Namespace> Default for InMemoryRegistry<Namespace> {
+impl<Namespace, ApiDefinition> Default for InMemoryRegistry<Namespace, ApiDefinition> {
     fn default() -> Self {
         InMemoryRegistry {
             registry: Mutex::new(HashMap::new()),
@@ -67,7 +70,9 @@ impl<Namespace> Default for InMemoryRegistry<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for InMemoryRegistry<Namespace> {
+impl<Namespace: ApiNamespace, ApiDefinition: Send + Clone + Sync>
+    ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition>
+{
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -146,7 +151,11 @@ impl RedisApiRegistry {
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace> ApiDefinitionRepo<Namespace> for RedisApiRegistry {
+impl<
+        Namespace: ApiNamespace,
+        ApiDefinition: bincode::Decode + bincode::Encode + DeserializeOwned + Sync,
+    > ApiDefinitionRepo<Namespace, ApiDefinition> for RedisApiRegistry
+{
     async fn register(
         &self,
         definition: &ApiDefinition,
@@ -299,7 +308,10 @@ impl RedisApiRegistry {
     }
 
     /// Retrieve all api definitions for a given set of keys.
-    async fn get_all_api_definitions<Namespace: ApiNamespace>(
+    async fn get_all_api_definitions<
+        Namespace: ApiNamespace,
+        ApiDefinition: bincode::Decode + DeserializeOwned,
+    >(
         &self,
         keys: Vec<ApiDefinitionKey<Namespace>>,
     ) -> Result<Vec<ApiDefinition>, ApiRegistrationRepoError> {
@@ -334,7 +346,6 @@ impl RedisApiRegistry {
 }
 
 mod redis_keys {
-
     use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
 
     use super::ApiRegistrationRepoError;
@@ -371,16 +382,18 @@ mod redis_keys {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::api_definition::Version;
-    use bincode::{Decode, Encode};
-    use golem_common::config::RedisConfig;
-    use serde::Deserialize;
     use std::fmt::Formatter;
+    use std::sync::Arc;
 
-    use crate::api_definition_repo::{
-        ApiDefinitionKey, ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry,
-    };
+    use bincode::{Decode, Encode};
+    use serde::Deserialize;
+
+    use golem_common::config::RedisConfig;
+
+    use crate::api_definition::http::HttpApiDefinition;
+    use crate::api_definition::{ApiDefinitionId, ApiVersion};
+
+    use super::*;
 
     #[derive(Clone, Eq, PartialEq, Debug, Hash, Decode, Encode, Deserialize)]
     struct CommonNamespace(String);
@@ -401,7 +414,7 @@ mod tests {
         id: &ApiDefinitionKey<CommonNamespace>,
         path_pattern: &str,
         worker_id: &str,
-    ) -> ApiDefinition {
+    ) -> HttpApiDefinition {
         let yaml_string = format!(
             r#"
           id: '{}'
@@ -427,7 +440,7 @@ mod tests {
         let registry = InMemoryRegistry::default();
 
         let id = ApiDefinitionId("api1".to_string());
-        let version = Version("0.0.1".to_string());
+        let version = ApiVersion("0.0.1".to_string());
         let namespace = CommonNamespace::new("default");
 
         let api_id1 = ApiDefinitionKey {
@@ -443,7 +456,7 @@ mod tests {
         );
 
         let id2 = ApiDefinitionId("api2".to_string());
-        let version = Version("0.0.1".to_string());
+        let version = ApiVersion("0.0.1".to_string());
         let namespace = CommonNamespace::new("default");
 
         let api_id2 = ApiDefinitionKey {
@@ -502,7 +515,8 @@ mod tests {
             ..Default::default()
         };
 
-        let registry = RedisApiRegistry::new(&config).await.unwrap();
+        let registry: Arc<dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition>> =
+            Arc::new(RedisApiRegistry::new(&config).await.unwrap());
 
         let namespace = CommonNamespace::new("test");
 
@@ -511,7 +525,7 @@ mod tests {
         let api_id1 = ApiDefinitionKey {
             namespace: namespace.clone(),
             id: api_id.clone(),
-            version: Version("0.0.1".to_string()),
+            version: ApiVersion("0.0.1".to_string()),
         };
 
         let api_definition1 = get_simple_api_definition_example(
@@ -551,7 +565,7 @@ mod tests {
         let api_id2 = ApiDefinitionKey {
             namespace: namespace.clone(),
             id: api_id.clone(),
-            version: Version("0.0.2".to_string()),
+            version: ApiVersion("0.0.2".to_string()),
         };
 
         let api_definition2 = get_simple_api_definition_example(
@@ -577,7 +591,7 @@ mod tests {
         let api_id3 = ApiDefinitionKey {
             namespace: namespace.clone(),
             id: api_id2.clone(),
-            version: Version("0.0.1".to_string()),
+            version: ApiVersion("0.0.1".to_string()),
         };
 
         let api_definition3 = get_simple_api_definition_example(
@@ -635,7 +649,7 @@ mod tests {
         let api_id5 = ApiDefinitionKey {
             namespace: namespace2.clone(),
             id: api_id4.clone(),
-            version: Version("0.0.1".to_string()),
+            version: ApiVersion("0.0.1".to_string()),
         };
 
         let api_definition4 = get_simple_api_definition_example(
