@@ -14,13 +14,13 @@ use golem_worker_service_base::repo::api_definition_repo::{
 use golem_worker_service_base::service::api_definition::{
     ApiDefinitionKey, ApiDefinitionService, ApiDefinitionServiceDefault,
 };
+use golem_worker_service_base::service::api_definition_lookup::{
+    ApiDefinitionLookup, ApiDefinitionLookupError,
+};
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::http::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
-};
-use golem_worker_service_base::service::api_definition_lookup::{
-    ApiDefinitionLookup, ApiDefinitionLookupError,
 };
 use golem_worker_service_base::service::template::{RemoteTemplateService, TemplateServiceNoop};
 use golem_worker_service_base::service::worker::{
