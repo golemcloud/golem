@@ -819,7 +819,7 @@ where
                                 workers, cursor })),
                         } => {
                             let cursor: Option<u64> = if cursor == 0 { None } else { Some(cursor) };
-                            let workers = workers.iter().map(| w| w.clone().try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::Unknown(GolemErrorUnknown {
+                            let workers = workers.into_iter().map(| w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::Unknown(GolemErrorUnknown {
                                 details: "Convert response error".to_string(),
                             }))?;
                             Ok((cursor, workers))

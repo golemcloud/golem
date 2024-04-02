@@ -383,8 +383,7 @@ impl WorkerGrpcApi {
             )
             .await?;
 
-        let result: Vec<WorkerMetadata> =
-            workers.iter().map(|worker| worker.clone().into()).collect();
+        let result: Vec<WorkerMetadata> = workers.into_iter().map(|worker| worker.into()).collect();
 
         Ok((new_cursor, result))
     }

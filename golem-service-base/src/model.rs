@@ -19,6 +19,7 @@ use golem_common::model::{parse_function_name, ShardId, TemplateId, WorkerFilter
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use http::Uri;
 use poem_openapi::{Enum, NewType, Object, Union};
+use rand::seq::IteratorRandom;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
@@ -3100,7 +3101,6 @@ impl RoutingTable {
     }
 
     pub fn random(&self) -> Option<&Pod> {
-        use rand::seq::IteratorRandom;
         self.shard_assignments
             .values()
             .choose(&mut rand::thread_rng())
