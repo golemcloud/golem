@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::WorkerService;
 use golem_worker_service_base::worker_bridge::worker_response::WorkerResponse;
-use golem_worker_service_base::worker_bridge::workr_request_executor::{
+use golem_worker_service_base::worker_bridge::worker_request_executor::{
     WorkerRequestExecutor, WorkerRequestExecutorError,
 };
 use golem_worker_service_base::worker_bridge::WorkerRequest;
@@ -36,7 +36,7 @@ mod internal {
     use golem_service_base::model::WorkerId;
     use golem_worker_service_base::auth::EmptyAuthCtx;
     use golem_worker_service_base::worker_bridge::worker_response::WorkerResponse;
-    use golem_worker_service_base::worker_bridge::workr_request_executor::WorkerRequestExecutorError;
+    use golem_worker_service_base::worker_bridge::worker_request_executor::WorkerRequestExecutorError;
     use golem_worker_service_base::worker_bridge::WorkerRequest;
     use tracing::info;
 

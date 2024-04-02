@@ -26,7 +26,7 @@ use golem_worker_service_base::service::template::{RemoteTemplateService, Templa
 use golem_worker_service_base::service::worker::{
     WorkerRequestMetadata, WorkerServiceDefault, WorkerServiceNoOp,
 };
-use golem_worker_service_base::worker_bridge::workr_request_executor::WorkerRequestExecutor;
+use golem_worker_service_base::worker_bridge::worker_request_executor::WorkerRequestExecutor;
 use http::HeaderMap;
 use poem::Response;
 use std::sync::Arc;

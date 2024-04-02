@@ -17,7 +17,7 @@ use golem_service_base::type_inference::*;
 
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_binding::golem_worker_binding::ResponseMapping;
-use crate::worker_bridge::workr_request_executor::{WorkerRequestExecutor, WorkerRequestExecutorError};
+use crate::worker_bridge::worker_request_executor::{WorkerRequestExecutor, WorkerRequestExecutorError};
 
 use crate::worker_bridge::WorkerRequest;
 
