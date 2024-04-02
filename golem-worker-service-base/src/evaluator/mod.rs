@@ -360,7 +360,7 @@ fn handle_constructor(
                     let result = handle_constructor(one_constructor, input)?;
                     let analysed_type = AnalysedType::from(&result);
                     Ok(TypeAnnotatedValue::Result {
-                        value: Ok(Some(Box::new(result))),
+                        value: Err(Some(Box::new(result))),
                         error: Some(Box::new(analysed_type)),
                         ok: None,
                     })
