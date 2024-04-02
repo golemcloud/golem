@@ -18,8 +18,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
-use std::future::Future;
-use std::pin::Pin;
 use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -27,7 +25,8 @@ use std::time::{Duration, Instant};
 use crate::error::GolemError;
 use crate::invocation::invoke_worker;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, PersistenceLevel, TrapType,
+    WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
@@ -45,19 +44,17 @@ use crate::workerctx::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 use bytes::Bytes;
 use cap_std::ambient_authority;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, PromiseId, Timestamp, VersionedWorkerId, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
-use serde::de::DeserializeOwned;
 use tempfile::TempDir;
 use tracing::{debug, info};
 use wasmtime::component::{Instance, Resource, ResourceAny};
@@ -93,6 +90,9 @@ pub mod serialized;
 mod sockets;
 pub mod wasm_rpc;
 
+mod durability;
+pub use durability::*;
+
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: ResourceTable,
@@ -100,111 +100,13 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     wasi_http: WasiHttpCtx,
     pub worker_id: VersionedWorkerId,
     pub public_state: PublicDurableWorkerState,
-    private_state: PrivateDurableWorkerState<Ctx>,
-    #[allow(unused)]
+    state: PrivateDurableWorkerState<Ctx>,
+    #[allow(unused)] // note: need to keep reference to it to keep the temp dir alive
     temp_dir: Arc<TempDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    /// Returns whether we are in live mode where we are executing new calls.
-    pub fn is_live(&self) -> bool {
-        self.private_state.is_live()
-    }
-
-    pub fn is_replay(&self) -> bool {
-        self.private_state.is_replay()
-    }
-
-    pub async fn set_oplog_entry(&mut self, oplog_entry: OplogEntry) {
-        self.private_state.set_oplog_entry(oplog_entry).await
-    }
-
-    pub async fn commit_oplog(&mut self) {
-        self.private_state.commit_oplog().await
-    }
-
-    pub async fn commit_oplog_to_replicas(&mut self, replicas: u8, timeout: Duration) -> bool {
-        self.private_state
-            .commit_oplog_to_replicas(replicas, timeout)
-            .await
-    }
-
-    async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {
-        self.private_state.get_oplog_entry_marker().await
-    }
-
-    async fn get_oplog_entry_change_retry_policy(&mut self) -> Result<(), GolemError> {
-        self.private_state
-            .get_oplog_entry_change_retry_policy()
-            .await
-    }
-
-    async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
-    where
-        R: Decode + DeserializeOwned,
-    {
-        self.private_state
-            .get_oplog_entry_imported_function_invoked()
-            .await
-    }
-
-    pub async fn get_oplog_entry_exported_function_invoked(
-        &mut self,
-    ) -> Result<
-        Option<(
-            String,
-            Vec<Value>,
-            Option<InvocationKey>,
-            Option<CallingConvention>,
-        )>,
-        GolemError,
-    > {
-        self.private_state
-            .get_oplog_entry_exported_function_invoked()
-            .await
-    }
-
-    pub async fn get_oplog_entry_exported_function_completed(
-        &mut self,
-    ) -> Result<Option<Vec<Value>>, GolemError> {
-        self.private_state
-            .get_oplog_entry_exported_function_completed()
-            .await
-    }
-
-    pub async fn consume_hint_entries(&mut self) {
-        self.private_state.consume_hint_entries().await
-    }
-
-    #[allow(unused)]
-    pub async fn dump_remaining_oplog(&self) {
-        let current = self.private_state.oplog_idx as usize;
-        let entries = self
-            .private_state
-            .oplog_service
-            .read(
-                &self.private_state.worker_id,
-                0,
-                self.private_state.oplog_size,
-            )
-            .await;
-        let mut dump = String::new();
-        dump.push_str(&format!(
-            "\nOplog dump for {}\n",
-            self.private_state.worker_id
-        ));
-        for (idx, entry) in entries.iter().enumerate() {
-            let mark = if idx == current { "*" } else { " " };
-            dump.push_str(&format!("{} {}: {:?}\n", mark, idx, entry));
-        }
-        dump.push_str(&format!(
-            "End of oplog dump for {}\n",
-            self.private_state.worker_id
-        ));
-        debug!("{}", dump);
-    }
-
     pub async fn create(
         worker_id: VersionedWorkerId,
         account_id: AccountId,
@@ -268,9 +170,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         event_service: event_service.clone(),
                         managed_stdio: stdio,
                     },
-                    private_state: PrivateDurableWorkerState {
+                    state: PrivateDurableWorkerState {
                         buffer: VecDeque::new(),
-                        oplog_idx: 0,
+                        oplog_idx: 1,
                         oplog_size,
                         oplog_service,
                         promise_service: promise_service.clone(),
@@ -293,6 +195,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .deleted_regions
                             .find_next_deleted_region(0),
                         overridden_retry_policy: None,
+                        persistence_level: PersistenceLevel::Smart,
+                        assume_idempotence: true,
+                        open_function_table: HashMap::new(),
                     },
                     temp_dir,
                     execution_status,
@@ -325,26 +230,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         DurableWorkerCtxWasiHttpView(self)
     }
 
-    pub async fn create_promise(&self, oplog_idx: u64) -> PromiseId {
-        self.public_state
-            .promise_service
-            .create(&self.worker_id.worker_id, oplog_idx)
-            .await
-    }
-
-    pub async fn poll_promise(&self, id: PromiseId) -> Result<Option<Vec<u8>>, GolemError> {
-        self.public_state.promise_service.poll(id).await
-    }
-
-    pub async fn complete_promise(&self, id: PromiseId, data: Vec<u8>) -> Result<bool, GolemError> {
-        self.public_state.promise_service.complete(id, data).await
-    }
-
     pub fn check_interrupt(&self) -> Option<InterruptKind> {
         let execution_status = self.execution_status.read().unwrap().clone();
         match execution_status {
             ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(interrupt_kind),
-            ExecutionStatus::Interrupted { interrupt_kind } => Some(interrupt_kind),
+            ExecutionStatus::Interrupted { interrupt_kind, .. } => Some(interrupt_kind),
             _ => None,
         }
     }
@@ -353,15 +243,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running => {
-                *execution_status = ExecutionStatus::Suspended;
+            ExecutionStatus::Running { last_known_status } => {
+                *execution_status = ExecutionStatus::Suspended { last_known_status };
             }
-            ExecutionStatus::Suspended => {}
+            ExecutionStatus::Suspended { .. } => {}
             ExecutionStatus::Interrupting {
                 interrupt_kind,
                 await_interruption,
+                last_known_status,
             } => {
-                *execution_status = ExecutionStatus::Interrupted { interrupt_kind };
+                *execution_status = ExecutionStatus::Interrupted {
+                    interrupt_kind,
+                    last_known_status,
+                };
                 await_interruption.send(()).ok();
             }
             ExecutionStatus::Interrupted { .. } => {}
@@ -372,9 +266,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running => {}
-            ExecutionStatus::Suspended => {
-                *execution_status = ExecutionStatus::Running;
+            ExecutionStatus::Running { .. } => {}
+            ExecutionStatus::Suspended { last_known_status } => {
+                *execution_status = ExecutionStatus::Running { last_known_status };
             }
             ExecutionStatus::Interrupting { .. } => {}
             ExecutionStatus::Interrupted { .. } => {}
@@ -383,13 +277,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub async fn get_worker_status(&self) -> WorkerStatus {
         match self
-            .private_state
+            .state
             .worker_service
             .get(&self.worker_id.worker_id)
             .await
         {
             Some(metadata) => {
-                if metadata.last_known_status.oplog_idx == self.private_state.oplog_idx {
+                if metadata.last_known_status.oplog_idx == self.state.oplog_idx {
                     metadata.last_known_status.status
                 } else {
                     WorkerStatus::Running
@@ -400,17 +294,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub async fn store_worker_status(&self, status: WorkerStatus) {
-        let oplog_idx = self.private_state.oplog_idx;
-        self.private_state
+        let oplog_idx = self.state.oplog_idx;
+        self.state
             .worker_service
             .update_status(
                 &self.worker_id.worker_id,
-                status,
-                self.private_state.deleted_regions.clone(),
-                self.private_state.overridden_retry_policy.clone(),
+                status.clone(),
+                self.state.deleted_regions.clone(),
+                self.state.overridden_retry_policy.clone(),
                 oplog_idx,
             )
-            .await
+            .await;
+
+        let mut execution_status = self.execution_status.write().unwrap();
+        execution_status.set_last_known_status(WorkerStatusRecord {
+            status,
+            deleted_regions: self.state.deleted_regions.clone(),
+            overridden_retry_config: self.state.overridden_retry_policy.clone(),
+            oplog_idx,
+        });
     }
 
     pub fn get_stdio(&self) -> ManagedStandardIo {
@@ -421,232 +323,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.get_stdio()
             .get_current_invocation_key()
             .await
-            .or(self.private_state.get_current_invocation_key())
+            .or(self.state.get_current_invocation_key())
     }
 
     pub fn get_current_invocation_result(&self) -> LookupResult {
-        match &self.private_state.current_invocation_key {
+        match &self.state.current_invocation_key {
             Some(key) => self
-                .private_state
+                .state
                 .invocation_key_service
-                .lookup_key(&self.private_state.worker_id, key),
+                .lookup_key(&self.state.worker_id, key),
             None => LookupResult::Invalid,
         }
     }
 
     pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
-        self.private_state.rpc.clone()
-    }
-}
-
-pub(crate) trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
-    /// Wrap a WASI call with durability handling
-    ///
-    /// The function checks if the execution is live, and if so performs the function and then
-    /// saves its results into the oplog. If the execution is not live, it reads the previously
-    /// saved results from the oplog and returns them.
-    ///
-    /// Type parameters:
-    /// - `AsyncFn`: the async WASI function to perform, expected to return with a Result of `Success` or `Err`
-    /// - `Success`: The type of the success value returned by the WASI function
-    /// - `Err`: The type of the error value returned by the WASI function. There need to be a conversion from `GolemError`
-    ///    to `Err` to be able to return internal failures.
-    /// - `SerializedSuccess`: The type of the success value serialized into the oplog. It has to be encodeable/decodeable
-    ///   and convertable from/to `Success`
-    /// - `SerializedErr`: The type of the error value serialized into the oplog. It has to be encodeable/decodeable and
-    ///    convertable from/to `Err`
-    ///
-    /// Parameters:
-    /// - `wrapped_function_type`: The type of the wrapped function, it is a combination of being local or remote, and
-    ///   being read or write
-    /// - `function_name`: The name of the function, used for logging
-    /// - `function`: The async WASI function to perform
-    async fn wrap<Success, Err, AsyncFn>(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        function: AsyncFn,
-    ) -> Result<Success, Err>
-    where
-        Success: Clone,
-        AsyncFn: for<'b> FnOnce(
-            &'b mut DurableWorkerCtx<Ctx>,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
-        SerializedSuccess:
-            Encode + Decode + DeserializeOwned + From<Success> + Into<Success> + Debug,
-        SerializedErr: Encode
-            + Decode
-            + DeserializeOwned
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug;
-
-    /// A version of `wrap` allowing conversion between the success value and the serialized value within the mutable worker context.
-    ///
-    /// This can be used to fetch/register resources.
-    async fn custom_wrap<Success, Err, AsyncFn, GetFn, PutFn>(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        function: AsyncFn,
-        get_serializable: GetFn,
-        put_serializable: PutFn,
-    ) -> Result<Success, Err>
-    where
-        AsyncFn: for<'b> FnOnce(
-            &'b mut DurableWorkerCtx<Ctx>,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
-        GetFn: FnOnce(&mut DurableWorkerCtx<Ctx>, &Success) -> Result<SerializedSuccess, Err>,
-        PutFn: for<'b> FnOnce(
-            &'b mut DurableWorkerCtx<Ctx>,
-            SerializedSuccess,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
-        SerializedSuccess: Encode + Decode + DeserializeOwned + Debug,
-        SerializedErr: Encode
-            + Decode
-            + DeserializeOwned
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug;
-}
-
-impl<Ctx: WorkerCtx, SerializedSuccess, SerializedErr>
-    Durability<Ctx, SerializedSuccess, SerializedErr> for DurableWorkerCtx<Ctx>
-{
-    async fn wrap<Success, Err, AsyncFn>(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        function: AsyncFn,
-    ) -> Result<Success, Err>
-    where
-        Success: Clone,
-        AsyncFn: for<'b> FnOnce(
-            &'b mut DurableWorkerCtx<Ctx>,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
-        SerializedSuccess:
-            Encode + Decode + DeserializeOwned + From<Success> + Into<Success> + Debug,
-        SerializedErr: Encode
-            + Decode
-            + DeserializeOwned
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug,
-    {
-        self.consume_hint_entries().await;
-        if self.is_live() {
-            let result = function(self).await;
-            let serializable_result: Result<SerializedSuccess, SerializedErr> = result
-                .as_ref()
-                .map(|result| result.clone().into())
-                .map_err(|err| err.into());
-            let oplog_entry = OplogEntry::imported_function_invoked(
-                Timestamp::now_utc(),
-                function_name.to_string(),
-                &serializable_result,
-                wrapped_function_type.clone(),
-            )
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to serialize function response: {:?}: {err}",
-                    serializable_result
-                )
-            });
-            self.set_oplog_entry(oplog_entry).await;
-            if matches!(wrapped_function_type, WrappedFunctionType::WriteRemote) {
-                self.commit_oplog().await;
-            }
-            result
-        } else {
-            let response = self
-                .get_oplog_entry_imported_function_invoked::<Result<SerializedSuccess, SerializedErr>>()
-                .await.map_err(|err| Into::<SerializedErr>::into(err).into())?;
-            response
-                .map(|serialized_success| serialized_success.into())
-                .map_err(|serialized_err| serialized_err.into())
-        }
-    }
-
-    async fn custom_wrap<Success, Err, AsyncFn, GetFn, PutFn>(
-        &mut self,
-        wrapped_function_type: WrappedFunctionType,
-        function_name: &str,
-        function: AsyncFn,
-        get_serializable: GetFn,
-        put_serializable: PutFn,
-    ) -> Result<Success, Err>
-    where
-        AsyncFn: for<'b> FnOnce(
-            &'b mut DurableWorkerCtx<Ctx>,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
-        GetFn: FnOnce(&mut DurableWorkerCtx<Ctx>, &Success) -> Result<SerializedSuccess, Err>,
-        PutFn: for<'b> FnOnce(
-            &'b mut DurableWorkerCtx<Ctx>,
-            SerializedSuccess,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>,
-        SerializedSuccess: Encode + Decode + DeserializeOwned + Debug,
-        SerializedErr: Encode
-            + Decode
-            + DeserializeOwned
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug,
-    {
-        self.consume_hint_entries().await;
-        if self.is_live() {
-            let result = function(self).await;
-            let serializable_result: Result<SerializedSuccess, SerializedErr> = result
-                .as_ref()
-                .map_err(|err| err.into())
-                .and_then(|result| get_serializable(self, result).map_err(|err| (&err).into()));
-
-            let oplog_entry = OplogEntry::imported_function_invoked(
-                Timestamp::now_utc(),
-                function_name.to_string(),
-                &serializable_result,
-                wrapped_function_type.clone(),
-            )
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to serialize function response: {:?}: {err}",
-                    serializable_result
-                )
-            });
-            self.set_oplog_entry(oplog_entry).await;
-            if matches!(wrapped_function_type, WrappedFunctionType::WriteRemote) {
-                self.commit_oplog().await;
-            }
-            result
-        } else {
-            let response = self
-                .get_oplog_entry_imported_function_invoked::<Result<SerializedSuccess, SerializedErr>>()
-                .await.map_err(|err| Into::<SerializedErr>::into(err).into())?;
-            match response {
-                Ok(serialized_success) => {
-                    let success = put_serializable(self, serialized_success).await?;
-                    Ok(success)
-                }
-                Err(serialized_err) => Err(serialized_err.into()),
-            }
-        }
+        self.state.rpc.clone()
     }
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
     async fn set_current_invocation_key(&mut self, invocation_key: Option<InvocationKey>) {
-        self.private_state
-            .set_current_invocation_key(invocation_key)
+        self.state.set_current_invocation_key(invocation_key)
     }
 
     async fn get_current_invocation_key(&self) -> Option<InvocationKey> {
@@ -654,11 +352,11 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn interrupt_invocation_key(&mut self, key: &InvocationKey) {
-        self.private_state.interrupt_invocation_key(key).await
+        self.state.interrupt_invocation_key(key).await
     }
 
     async fn resume_invocation_key(&mut self, key: &InvocationKey) {
-        self.private_state.resume_invocation_key(key).await
+        self.state.resume_invocation_key(key).await
     }
 
     async fn confirm_invocation_key(
@@ -666,7 +364,7 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
         key: &InvocationKey,
         vals: Result<Vec<Value>, GolemError>,
     ) {
-        self.private_state.confirm_invocation_key(key, vals).await
+        self.state.confirm_invocation_key(key, vals).await
     }
 }
 
@@ -711,9 +409,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 
     async fn deactivate(&self) {
         debug!("deactivating worker {}", self.worker_id);
-        self.private_state
-            .active_workers
-            .remove(&self.worker_id.worker_id);
+        self.state.active_workers.remove(&self.worker_id.worker_id);
     }
 }
 
@@ -730,7 +426,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .map(|value| value.clone().into())
             .collect();
         let oplog_entry = OplogEntry::exported_function_invoked(
-            Timestamp::now_utc(),
             full_function_name.to_string(),
             &proto_function_input,
             self.get_current_invocation_key().await,
@@ -743,43 +438,26 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )
         });
 
-        self.set_oplog_entry(oplog_entry).await;
-        self.commit_oplog().await;
+        self.state.set_oplog_entry(oplog_entry).await;
+        self.state.commit_oplog().await;
         Ok(())
     }
 
     async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> Result<(), anyhow::Error> {
-        self.consume_hint_entries().await;
+        self.state.consume_hint_entries().await;
 
-        if self.is_live() {
+        if self.state.is_live() {
             let needs_commit = match trap_type {
-                TrapType::Error(error) => {
-                    self.set_oplog_entry(OplogEntry::Error {
-                        timestamp: Timestamp::now_utc(),
-                        error: error.clone(),
-                    })
-                    .await;
-                    true
-                }
-                TrapType::Interrupt(InterruptKind::Interrupt) => {
-                    self.set_oplog_entry(OplogEntry::Interrupted {
-                        timestamp: Timestamp::now_utc(),
-                    })
-                    .await;
-                    true
-                }
-                TrapType::Exit => {
-                    self.set_oplog_entry(OplogEntry::Exited {
-                        timestamp: Timestamp::now_utc(),
-                    })
-                    .await;
-                    true
-                }
-                _ => false,
+                TrapType::Error(error) => Some(OplogEntry::error(error.clone())),
+                TrapType::Interrupt(InterruptKind::Interrupt) => Some(OplogEntry::interrupted()),
+                TrapType::Interrupt(InterruptKind::Suspend) => Some(OplogEntry::suspend()),
+                TrapType::Exit => Some(OplogEntry::exited()),
+                _ => None,
             };
 
-            if needs_commit {
-                self.commit_oplog().await;
+            if let Some(entry) = needs_commit {
+                self.state.set_oplog_entry(entry).await;
+                self.state.commit_oplog().await;
             }
         }
 
@@ -790,28 +468,27 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         error: &TrapType,
     ) -> Result<WorkerStatus, anyhow::Error> {
-        let previous_tries = self.private_state.trailing_error_count().await;
-        let default_retry_config = &self.private_state.config.retry;
+        let previous_tries = self.state.trailing_error_count().await;
+        let default_retry_config = &self.state.config.retry;
         let retry_config = self
-            .private_state
+            .state
             .overridden_retry_policy
             .as_ref()
             .unwrap_or(default_retry_config)
             .clone();
         let decision = self
-            .private_state
+            .state
             .recovery_management
             .schedule_recovery_on_trap(&self.worker_id, &retry_config, previous_tries, error)
             .await;
 
-        let oplog_idx = self.private_state.get_oplog_size().await;
+        let oplog_idx = self.state.get_oplog_size().await;
         debug!(
             "Recovery decision for {}#{} because of error {:?} after {} tries: {:?}",
             self.worker_id, oplog_idx, error, previous_tries, decision
         );
 
         Ok(calculate_worker_status(
-            self.private_state.recovery_management.clone(),
             &retry_config,
             error,
             previous_tries,
@@ -825,25 +502,24 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         consumed_fuel: i64,
         output: Vec<Value>,
     ) -> Result<Option<Vec<Value>>, anyhow::Error> {
-        self.consume_hint_entries().await;
-        let is_live_after = self.is_live();
+        self.state.consume_hint_entries().await;
+        let is_live_after = self.state.is_live();
 
         if is_live_after {
             let proto_output: Vec<golem_wasm_rpc::protobuf::Val> =
                 output.iter().map(|value| value.clone().into()).collect();
-            let oplog_entry = OplogEntry::exported_function_completed(
-                Timestamp::now_utc(),
-                &proto_output,
-                consumed_fuel,
-            )
-            .unwrap_or_else(|err| {
-                panic!("could not encode function result for {full_function_name}: {err}")
-            });
+            let oplog_entry = OplogEntry::exported_function_completed(&proto_output, consumed_fuel)
+                .unwrap_or_else(|err| {
+                    panic!("could not encode function result for {full_function_name}: {err}")
+                });
 
-            self.set_oplog_entry(oplog_entry).await;
-            self.commit_oplog().await;
+            self.state.set_oplog_entry(oplog_entry).await;
+            self.state.commit_oplog().await;
         } else {
-            let response = self.get_oplog_entry_exported_function_completed().await?;
+            let response = self
+                .state
+                .get_oplog_entry_exported_function_completed()
+                .await?;
 
             if let Some(function_output) = response {
                 let is_diverged = function_output != output;
@@ -866,19 +542,19 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
     fn self_uri(&self) -> Uri {
-        self.private_state.self_uri()
+        self.state.self_uri()
     }
 
     fn add(&mut self, resource: ResourceAny) -> u64 {
-        self.private_state.add(resource)
+        self.state.add(resource)
     }
 
     fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
-        self.private_state.borrow(resource_id)
+        self.state.borrow(resource_id)
     }
 
     fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
-        self.private_state.borrow(resource_id)
+        self.state.borrow(resource_id)
     }
 }
 
@@ -934,13 +610,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let start = Instant::now();
         let mut count = 0;
         let result = loop {
-            let cont = store.as_context().data().durable_ctx().is_replay();
+            let cont = store.as_context().data().durable_ctx().state.is_replay();
 
             if cont {
                 let oplog_entry = store
                     .as_context_mut()
                     .data_mut()
                     .durable_ctx_mut()
+                    .state
                     .get_oplog_entry_exported_function_invoked()
                     .await?;
                 match oplog_entry {
@@ -1003,10 +680,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     }
 
     async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        worker_id: &WorkerId,
+        _this: &T,
+        _worker_id: &WorkerId,
     ) -> Result<(), GolemError> {
-        this.oplog_service().delete(worker_id).await;
         Ok(())
     }
 
@@ -1100,17 +776,20 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
     config: Arc<GolemConfig>,
-    pub worker_id: WorkerId,
-    pub account_id: AccountId,
+    worker_id: WorkerId,
+    account_id: AccountId,
     current_invocation_key: Option<InvocationKey>,
-    pub active_workers: Arc<ActiveWorkers<Ctx>>,
-    pub recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
-    pub rpc: Arc<dyn Rpc + Send + Sync>,
+    active_workers: Arc<ActiveWorkers<Ctx>>,
+    recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+    rpc: Arc<dyn Rpc + Send + Sync>,
     resources: HashMap<u64, ResourceAny>,
     last_resource_id: u64,
     deleted_regions: DeletedRegions,
     next_deleted_region: Option<OplogRegion>,
     overridden_retry_policy: Option<RetryConfig>,
+    persistence_level: PersistenceLevel,
+    assume_idempotence: bool,
+    open_function_table: HashMap<u32, u64>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -1129,6 +808,62 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         self.oplog_service
             .wait_for_replicas(replicas, timeout)
             .await
+    }
+
+    pub async fn begin_function(
+        &mut self,
+        wrapped_function_type: &WrappedFunctionType,
+    ) -> Result<u64, GolemError> {
+        let begin_index = self.oplog_idx;
+        if !self.assume_idempotence
+            && *wrapped_function_type == WrappedFunctionType::WriteRemote
+            && self.persistence_level != PersistenceLevel::PersistNothing
+        {
+            if self.is_live() {
+                self.set_oplog_entry(OplogEntry::begin_remote_write()).await;
+                self.commit_oplog().await;
+                Ok(begin_index)
+            } else {
+                let begin_index = self.oplog_idx;
+                let _ = crate::get_oplog_entry!(self, OplogEntry::BeginRemoteWrite)?;
+                let end_index = self
+                    .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
+                    .await;
+                if end_index.is_none() {
+                    // Must switch to live mode before failing to be able to commit an Error entry
+                    self.oplog_idx = self.oplog_size;
+                    Err(GolemError::runtime(
+                        "Non-idempotent remote write operation was not completed, cannot retry",
+                    ))
+                } else {
+                    Ok(begin_index)
+                }
+            }
+        } else {
+            Ok(begin_index)
+        }
+    }
+
+    pub async fn end_function(
+        &mut self,
+        wrapped_function_type: &WrappedFunctionType,
+        begin_index: u64,
+    ) -> Result<(), GolemError> {
+        if !self.assume_idempotence
+            && *wrapped_function_type == WrappedFunctionType::WriteRemote
+            && self.persistence_level != PersistenceLevel::PersistNothing
+        {
+            if self.is_live() {
+                self.set_oplog_entry(OplogEntry::end_remote_write(begin_index))
+                    .await;
+                Ok(())
+            } else {
+                let _ = crate::get_oplog_entry!(self, OplogEntry::EndRemoteWrite)?;
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn get_oplog_size(&mut self) -> u64 {
@@ -1159,7 +894,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         self.oplog_size += 1;
     }
 
-    pub async fn get_oplog_entry(&mut self) -> OplogEntry {
+    async fn get_oplog_entry(&mut self) -> OplogEntry {
         assert!(self.is_replay());
 
         let oplog_entries = self.read_oplog(self.oplog_idx, 1).await;
@@ -1190,69 +925,27 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         oplog_entry
     }
 
-    async fn get_oplog_entry_marker(&mut self) -> Result<(), GolemError> {
-        loop {
-            let oplog_entry = self.get_oplog_entry().await;
-            match oplog_entry {
-                OplogEntry::NoOp { .. } => {
-                    break Ok(());
-                }
-                entry if entry.is_hint() => {}
-                _ => {
-                    break Err(GolemError::unexpected_oplog_entry(
-                        "NoOp",
-                        format!("{:?}", oplog_entry),
-                    ));
+    async fn lookup_oplog_entry(
+        &mut self,
+        begin_idx: u64,
+        check: impl Fn(&OplogEntry, u64) -> bool,
+    ) -> Option<u64> {
+        let mut start = self.oplog_idx;
+        const CHUNK_SIZE: u64 = 1024;
+        while start < self.oplog_size {
+            let entries = self
+                .oplog_service
+                .read(&self.worker_id, start, CHUNK_SIZE)
+                .await;
+            for (n, entry) in entries.iter().enumerate() {
+                if check(entry, begin_idx) {
+                    return Some(start + n as u64);
                 }
             }
+            start += entries.len() as u64;
         }
-    }
 
-    async fn get_oplog_entry_change_retry_policy(&mut self) -> Result<(), GolemError> {
-        loop {
-            let oplog_entry = self.get_oplog_entry().await;
-            match oplog_entry {
-                OplogEntry::ChangeRetryPolicy { .. } => {
-                    break Ok(());
-                }
-                entry if entry.is_hint() => {}
-                _ => {
-                    break Err(GolemError::unexpected_oplog_entry(
-                        "ChangeRetryPolicy",
-                        format!("{:?}", oplog_entry),
-                    ));
-                }
-            }
-        }
-    }
-
-    async fn get_oplog_entry_imported_function_invoked<'de, R>(&mut self) -> Result<R, GolemError>
-    where
-        R: Decode + DeserializeOwned,
-    {
-        loop {
-            let oplog_entry = self.get_oplog_entry().await;
-            match oplog_entry {
-                OplogEntry::ImportedFunctionInvoked { .. } => {
-                    break Ok(oplog_entry
-                        .response()
-                        .unwrap_or_else(|err| {
-                            panic!(
-                                "failed to deserialize function response: {:?}: {err}",
-                                oplog_entry
-                            )
-                        })
-                        .unwrap());
-                }
-                entry if entry.is_hint() => {}
-                _ => {
-                    break Err(GolemError::unexpected_oplog_entry(
-                        "ImportedFunctionInvoked",
-                        format!("{:?}", oplog_entry),
-                    ));
-                }
-            }
-        }
+        None
     }
 
     async fn get_oplog_entry_exported_function_invoked(
@@ -1511,7 +1204,7 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
     where
         Self: Sized,
     {
-        if self.0.is_replay() {
+        if self.0.state.is_replay() {
             // If this is a replay, we must not actually send the request, but we have to store it in the
             // FutureIncomingResponse because it is possible that there wasn't any response recorded in the oplog.
             // If that is the case, the request has to be sent as soon as we get into live mode and trying to await
@@ -1531,4 +1224,29 @@ struct Ready {}
 #[async_trait]
 impl Subscribe for Ready {
     async fn ready(&mut self) {}
+}
+
+/// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
+/// replay, while skipping hint entries.
+/// The macro expression's type is `Result<OplogEntry, GolemError>` and it fails if the next non-hint
+/// entry was not the expected one.
+#[macro_export]
+macro_rules! get_oplog_entry {
+    ($private_state:expr, $case:path) => {
+        loop {
+            let oplog_entry = $private_state.get_oplog_entry().await;
+            match oplog_entry {
+                $case { .. } => {
+                    break Ok(oplog_entry);
+                }
+                entry if entry.is_hint() => {}
+                _ => {
+                    break Err($crate::error::GolemError::unexpected_oplog_entry(
+                        stringify!($case),
+                        format!("{:?}", oplog_entry),
+                    ));
+                }
+            }
+        }
+    };
 }

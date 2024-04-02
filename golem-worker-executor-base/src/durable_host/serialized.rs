@@ -308,6 +308,14 @@ impl From<GolemError> for SerializableError {
     }
 }
 
+impl From<&GolemError> for SerializableError {
+    fn from(value: &GolemError) -> Self {
+        Self::Golem {
+            error: value.clone(),
+        }
+    }
+}
+
 impl From<SerializableError> for GolemError {
     fn from(value: SerializableError) -> Self {
         match value {

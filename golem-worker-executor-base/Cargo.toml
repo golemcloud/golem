@@ -4,6 +4,7 @@ version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
 description = "Golem Worker Executor base implementation"
 
 autotests = false
@@ -42,7 +43,7 @@ fs-set-times = "0.20.1"
 futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "0.4.3"
-golem-wit = { version = "0.2.1" }
+golem-wit = { version = "0.2.3" }
 http = { workspace = true }
 http_02 = { workspace = true }
 http-body = "1.0.0" # keep in sync with wasmtime

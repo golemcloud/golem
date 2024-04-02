@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{ShardAssignment, ShardId, VersionedWorkerId, WorkerId};
+use golem_common::model::{
+    ShardAssignment, ShardId, VersionedWorkerId, WorkerId, WorkerStatusRecord,
+};
 use serde::{Deserialize, Serialize};
 use wasmtime::Trap;
 
@@ -117,20 +119,52 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResou
 
 #[derive(Clone, Debug)]
 pub enum ExecutionStatus {
-    Running,
-    Suspended,
+    Running {
+        last_known_status: WorkerStatusRecord,
+    },
+    Suspended {
+        last_known_status: WorkerStatusRecord,
+    },
     Interrupting {
         interrupt_kind: InterruptKind,
         await_interruption: Arc<tokio::sync::broadcast::Sender<()>>,
+        last_known_status: WorkerStatusRecord,
     },
     Interrupted {
         interrupt_kind: InterruptKind,
+        last_known_status: WorkerStatusRecord,
     },
 }
 
 impl ExecutionStatus {
     pub fn is_running(&self) -> bool {
-        matches!(self, ExecutionStatus::Running)
+        matches!(self, ExecutionStatus::Running { .. })
+    }
+
+    pub fn last_known_status(&self) -> &WorkerStatusRecord {
+        match self {
+            ExecutionStatus::Running { last_known_status } => last_known_status,
+            ExecutionStatus::Suspended { last_known_status } => last_known_status,
+            ExecutionStatus::Interrupting {
+                last_known_status, ..
+            } => last_known_status,
+            ExecutionStatus::Interrupted {
+                last_known_status, ..
+            } => last_known_status,
+        }
+    }
+
+    pub fn set_last_known_status(&mut self, status: WorkerStatusRecord) {
+        match self {
+            ExecutionStatus::Running { last_known_status } => *last_known_status = status,
+            ExecutionStatus::Suspended { last_known_status } => *last_known_status = status,
+            ExecutionStatus::Interrupting {
+                last_known_status, ..
+            } => *last_known_status = status,
+            ExecutionStatus::Interrupted {
+                last_known_status, ..
+            } => *last_known_status = status,
+        }
     }
 }
 
@@ -173,6 +207,41 @@ pub struct LastError {
 impl Display for LastError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}, retried {} times", self.error, self.retry_count)
+    }
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq)]
+pub enum PersistenceLevel {
+    PersistNothing,
+    PersistRemoteSideEffects,
+    Smart,
+}
+
+impl From<crate::preview2::golem::api::host::PersistenceLevel> for PersistenceLevel {
+    fn from(value: crate::preview2::golem::api::host::PersistenceLevel) -> Self {
+        match value {
+            crate::preview2::golem::api::host::PersistenceLevel::PersistNothing => {
+                PersistenceLevel::PersistNothing
+            }
+            crate::preview2::golem::api::host::PersistenceLevel::PersistRemoteSideEffects => {
+                PersistenceLevel::PersistRemoteSideEffects
+            }
+            crate::preview2::golem::api::host::PersistenceLevel::Smart => PersistenceLevel::Smart,
+        }
+    }
+}
+
+impl From<PersistenceLevel> for crate::preview2::golem::api::host::PersistenceLevel {
+    fn from(value: PersistenceLevel) -> Self {
+        match value {
+            PersistenceLevel::PersistNothing => {
+                crate::preview2::golem::api::host::PersistenceLevel::PersistNothing
+            }
+            PersistenceLevel::PersistRemoteSideEffects => {
+                crate::preview2::golem::api::host::PersistenceLevel::PersistRemoteSideEffects
+            }
+            PersistenceLevel::Smart => crate::preview2::golem::api::host::PersistenceLevel::Smart,
+        }
     }
 }
 

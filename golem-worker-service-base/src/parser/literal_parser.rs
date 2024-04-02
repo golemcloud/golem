@@ -2,8 +2,9 @@ use nom::character::complete::not_line_ending;
 use nom::combinator::all_consuming;
 use nom::IResult;
 
+use crate::api_definition::http::LiteralInfo;
+
 use super::*;
-use crate::api_definition::LiteralInfo;
 
 pub struct LiteralParser;
 
