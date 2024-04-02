@@ -383,6 +383,7 @@ mod redis_keys {
 #[cfg(test)]
 mod tests {
     use std::fmt::Formatter;
+    use std::sync::Arc;
 
     use bincode::{Decode, Encode};
     use serde::Deserialize;
@@ -390,7 +391,7 @@ mod tests {
     use golem_common::config::RedisConfig;
 
     use crate::api_definition::http::HttpApiDefinition;
-    use crate::definition::api_definition::{ApiDefinitionId, ApiVersion};
+    use crate::api_definition::{ApiDefinitionId, ApiVersion};
 
     use super::*;
 
@@ -514,7 +515,8 @@ mod tests {
             ..Default::default()
         };
 
-        let registry = RedisApiRegistry::new(&config).await.unwrap();
+        let registry: Arc<dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition>> =
+            Arc::new(RedisApiRegistry::new(&config).await.unwrap());
 
         let namespace = CommonNamespace::new("test");
 

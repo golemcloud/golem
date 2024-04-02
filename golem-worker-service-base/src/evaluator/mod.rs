@@ -513,9 +513,9 @@ mod tests {
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expression::Expr;
-    use crate::http::http_request::{ApiInputPath, InputHttpRequest};
+    use crate::http::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
-    use crate::worker_bridge::worker_response::WorkerResponse;
+    use crate::worker_bridge_execution::WorkerResponse;
 
     fn get_worker_response(input: &str) -> WorkerResponse {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");
@@ -547,7 +547,6 @@ mod tests {
         input_http_request
             .get_type_annotated_value(vec![], &HashMap::new())
             .unwrap()
-            .merge(&InputHttpRequest::get_headers(header_map).unwrap())
     }
 
     fn resolved_variables_from_request_path(

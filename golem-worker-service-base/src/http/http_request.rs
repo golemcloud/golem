@@ -343,7 +343,7 @@ mod tests {
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
-    use crate::worker_bridge::WorkerRequest;
+    use crate::worker_bridge_execution::WorkerRequest;
 
     use super::*;
 

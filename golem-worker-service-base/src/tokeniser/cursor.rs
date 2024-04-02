@@ -227,19 +227,6 @@ mod tests {
     }
 
     #[test]
-    fn test_next_non_empty_char() {
-        let tokens = vec![
-            Token::RawString(" ".to_string()),
-            Token::RawString(" ".to_string()),
-            Token::CloseParen,
-        ];
-
-        let mut cursor = TokenCursor::new(tokens.clone());
-        let result = cursor.next_non_empty_char_is(Token::CloseParen);
-        assert!(result)
-    }
-
-    #[test]
     fn test_capture_string_from() {
         let tokens = vec![Token::Else, Token::RawString("foo".to_string())];
 

@@ -634,7 +634,7 @@ mod tests {
 
     use crate::evaluator::Evaluator;
     use crate::expression::Expr;
-    use crate::worker_request::worker_response::WorkerResponse;
+    use crate::worker_bridge_execution::WorkerResponse;
 
     #[test]
     fn test_expr_from_json_value() {

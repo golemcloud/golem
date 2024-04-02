@@ -794,6 +794,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expression::ConstructorPatternExpr;
 
     #[test]
     fn expr_parser_without_vars() {
