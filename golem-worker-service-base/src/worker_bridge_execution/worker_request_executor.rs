@@ -1,7 +1,7 @@
-use std::fmt::Display;
-use async_trait::async_trait;
 use crate::worker_bridge_execution::worker_response::WorkerResponse;
 use crate::worker_bridge_execution::WorkerRequest;
+use async_trait::async_trait;
+use std::fmt::Display;
 
 #[async_trait]
 pub trait WorkerRequestExecutor<Response> {

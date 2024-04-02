@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use figment::Figment;
 use figment::providers::{Env, Format, Toml};
+use figment::Figment;
 use http::Uri;
 use serde::Deserialize;
 use url::Url;

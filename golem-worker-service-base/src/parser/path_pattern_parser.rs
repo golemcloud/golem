@@ -2,7 +2,7 @@ use nom::branch::alt;
 use nom::IResult;
 
 use crate::api_definition::http::{PathPattern, QueryInfo, VarInfo};
-use crate::parser::{literal_parser, ParseError, place_holder_parser};
+use crate::parser::{literal_parser, place_holder_parser, ParseError};
 
 use super::*;
 

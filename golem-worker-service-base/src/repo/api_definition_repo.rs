@@ -51,7 +51,6 @@ pub enum ApiRegistrationRepoError {
     InternalError(String),
 }
 
-
 impl ApiRegistrationRepoError {
     fn internal(err: impl std::fmt::Display) -> Self {
         ApiRegistrationRepoError::InternalError(err.to_string())
@@ -390,8 +389,8 @@ mod tests {
 
     use golem_common::config::RedisConfig;
 
-    use crate::definition::api_definition::{ApiDefinitionId, ApiVersion};
     use crate::api_definition::http::HttpApiDefinition;
+    use crate::definition::api_definition::{ApiDefinitionId, ApiVersion};
 
     use super::*;
 

@@ -19,7 +19,6 @@ impl Path {
         path
     }
 
-
     pub fn update_key(&mut self, input: &str) {
         self.0.push(PathComponent::key_name(input));
     }

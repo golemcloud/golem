@@ -1,8 +1,7 @@
 use std::fmt::Display;
 
-use poem_openapi::{ApiResponse, Object, Union};
 use poem_openapi::payload::Json;
-
+use poem_openapi::{ApiResponse, Object, Union};
 
 use crate::service::http::http_api_definition_validator::RouteValidationError;
 
@@ -105,9 +104,7 @@ mod conversion {
     use crate::service::api_definition_validator::ValidationErrors;
     use crate::service::http::http_api_definition_validator::RouteValidationError;
 
-    use super::{
-        ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody,
-    };
+    use super::{ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody};
 
     impl From<ApiRegistrationError<RouteValidationError>> for ApiEndpointError {
         fn from(error: ApiRegistrationError<RouteValidationError>) -> Self {

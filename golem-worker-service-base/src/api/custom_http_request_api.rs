@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
+use crate::api_definition::http::HttpApiDefinition;
 use async_trait::async_trait;
 use hyper::header::HOST;
-use poem::{Body, Endpoint, Request, Response};
 use poem::http::StatusCode;
+use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
-use crate::api_definition::http::HttpApiDefinition;
 
 use crate::http::{ApiInputPath, InputHttpRequest};
-use crate::service::http_request_definition_lookup::ApiDefinitionLookup;
+use crate::service::api_definition_lookup::ApiDefinitionLookup;
 
 use crate::worker_binding::WorkerBindingResolver;
 use crate::worker_bridge_execution::WorkerRequest;
@@ -18,17 +18,17 @@ use crate::worker_bridge_execution::WorkerRequestExecutor;
 // This is a common API projects can make use of, similar to healthcheck service
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
-    pub worker_to_http_response_service:
-        Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
-    pub api_definition_lookup_service: Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
+    pub worker_to_http_response_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
+    pub api_definition_lookup_service:
+        Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
     pub fn new(
-        worker_to_http_response_service: Arc<
-            dyn WorkerRequestExecutor<Response> + Sync + Send,
+        worker_to_http_response_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
+        api_definition_lookup_service: Arc<
+            dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
         >,
-        api_definition_lookup_service: Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
     ) -> Self {
         Self {
             worker_to_http_response_service,
@@ -69,14 +69,18 @@ impl CustomHttpRequestApi {
         let api_request = InputHttpRequest {
             input_path: ApiInputPath {
                 base_path: uri.path().to_string(),
-                query_path: uri.query().map(|x| x.to_string())
+                query_path: uri.query().map(|x| x.to_string()),
             },
             headers,
             req_method: req_parts.method,
             req_body: json_request_body,
         };
 
-        let api_definition = match self.api_definition_lookup_service.get(api_request.clone()).await {
+        let api_definition = match self
+            .api_definition_lookup_service
+            .get(api_request.clone())
+            .await
+        {
             Ok(api_definition) => api_definition,
             Err(err) => {
                 error!("API request host: {} - error: {}", host, err);
@@ -105,14 +109,15 @@ impl CustomHttpRequestApi {
                     };
 
                 // Execute the request using a executor
-                match self.worker_to_http_response_service
-                    .execute(
-                        resolved_worker_request.clone(),
-                    )
-                    .await {
-                    Ok(worker_response) => {
-                        worker_response.to_http_response(&resolved_route.resolved_worker_binding_template.response,  &resolved_route.typed_value_from_input)
-                    }
+                match self
+                    .worker_to_http_response_service
+                    .execute(resolved_worker_request.clone())
+                    .await
+                {
+                    Ok(worker_response) => worker_response.to_http_response(
+                        &resolved_route.resolved_worker_binding_template.response,
+                        &resolved_route.typed_value_from_input,
+                    ),
 
                     Err(e) => {
                         error!(
@@ -125,7 +130,6 @@ impl CustomHttpRequestApi {
                                 format!("API request error {}", e).to_string(),
                             ))
                     }
-
                 }
             }
 

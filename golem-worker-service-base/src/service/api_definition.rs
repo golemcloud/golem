@@ -1,4 +1,3 @@
-
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -8,7 +7,9 @@ use async_trait::async_trait;
 use golem_common::model::TemplateId;
 use golem_service_base::model::Template;
 
-use crate::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, ApiVersion};
+use crate::api_definition::{
+    ApiDefinitionId, ApiVersion, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion,
+};
 use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
@@ -128,7 +129,8 @@ pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace, ApiDefinition, Valida
         Arc<dyn ApiDefinitionValidatorService<ApiDefinition, ValidationError> + Sync + Send>,
 }
 
-impl<AuthCtx, Namespace, ApiDefinition, ValidationError> ApiDefinitionServiceDefault<AuthCtx, Namespace, ApiDefinition, ValidationError>
+impl<AuthCtx, Namespace, ApiDefinition, ValidationError>
+    ApiDefinitionServiceDefault<AuthCtx, Namespace, ApiDefinition, ValidationError>
 where
     Namespace: ApiNamespace + Send + Sync,
     ApiDefinition: GolemApiDefinition + Sync,
@@ -136,7 +138,9 @@ where
     pub fn new(
         template_service: Arc<dyn TemplateService<AuthCtx> + Send + Sync>,
         register_repo: Arc<dyn ApiDefinitionRepo<Namespace, ApiDefinition> + Sync + Send>,
-        api_definition_validator: Arc<dyn ApiDefinitionValidatorService<ApiDefinition, ValidationError> + Sync + Send>,
+        api_definition_validator: Arc<
+            dyn ApiDefinitionValidatorService<ApiDefinition, ValidationError> + Sync + Send,
+        >,
     ) -> Self {
         Self {
             template_service,
@@ -187,13 +191,7 @@ where
 
 pub trait GolemApiDefinition: HasGolemWorkerBindings + HasApiDefinitionId + HasVersion {}
 
-impl<
-    T: HasGolemWorkerBindings
-    + HasApiDefinitionId
-    + HasVersion
-> GolemApiDefinition for T
-{
-}
+impl<T: HasGolemWorkerBindings + HasApiDefinitionId + HasVersion> GolemApiDefinition for T {}
 
 #[async_trait]
 impl<AuthCtx, Namespace, ApiDefinition, ValidationError>

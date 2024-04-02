@@ -2,9 +2,6 @@ use std::fmt::Display;
 
 use async_trait::async_trait;
 
-
-
-
 #[async_trait]
 pub trait ApiDefinitionLookup<Input, ApiDefinition> {
     async fn get(

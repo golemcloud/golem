@@ -2,10 +2,10 @@ use async_trait::async_trait;
 use http::Uri;
 use tracing::info;
 
+use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
 use golem_api_grpc::proto::golem::template::{
     get_template_metadata_response, GetLatestTemplateRequest, GetVersionedTemplateRequest,
 };
-use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
 use golem_common::config::RetryConfig;
 use golem_common::model::TemplateId;
 use golem_common::retries::with_retries;

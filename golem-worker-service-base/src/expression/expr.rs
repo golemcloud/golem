@@ -5,9 +5,9 @@ use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::primitive::Primitive;
-use crate::parser::{GolemParser, ParseError};
 use crate::parser::expr_parser::ExprParser;
+use crate::parser::{GolemParser, ParseError};
+use crate::primitive::Primitive;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {

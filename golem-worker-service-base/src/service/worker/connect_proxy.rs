@@ -295,7 +295,7 @@ mod keep_alive {
 
         use poem::web::websocket::Message;
         use tokio::sync::mpsc;
-        use tokio::time::{Duration, timeout};
+        use tokio::time::{timeout, Duration};
         use tokio_stream::wrappers::ReceiverStream;
         use tokio_util::sync::PollSender;
 

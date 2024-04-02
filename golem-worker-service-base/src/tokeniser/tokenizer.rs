@@ -86,7 +86,6 @@ impl Token {
             token => Token::RawString(token.to_string()),
         }
     }
-
 }
 
 impl Display for Token {

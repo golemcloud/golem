@@ -1,8 +1,8 @@
-use openapiv3::{OpenAPI};
+use openapiv3::OpenAPI;
 use serde_json;
 
+use crate::api_definition::http::HttpApiDefinition;
 use crate::api_definition::{ApiDefinitionId, ApiVersion};
-use crate::api_definition::http::{HttpApiDefinition};
 use internal::*;
 
 pub fn get_api_definition_from_oas(open_api: &str) -> Result<HttpApiDefinition, String> {
@@ -26,14 +26,14 @@ pub fn get_api_definition_from_oas(open_api: &str) -> Result<HttpApiDefinition, 
 }
 
 mod internal {
-    use std::collections::HashMap;
+    use crate::api_definition::http::{MethodPattern, PathPattern, Route};
+    use crate::expression::Expr;
+    use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
+    use golem_common::model::TemplateId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use serde_json::Value;
+    use std::collections::HashMap;
     use uuid::Uuid;
-    use golem_common::model::TemplateId;
-    use crate::expression::Expr;
-    use crate::api_definition::http::{MethodPattern, PathPattern, Route};
-    use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
@@ -129,7 +129,9 @@ mod internal {
         ))
     }
 
-    pub(crate) fn get_response_mapping(worker_bridge_info: &Value) -> Result<Option<ResponseMapping>, String> {
+    pub(crate) fn get_response_mapping(
+        worker_bridge_info: &Value,
+    ) -> Result<Option<ResponseMapping>, String> {
         let response = worker_bridge_info.get("response");
         match response {
             Some(response) => Ok(Some(ResponseMapping {
@@ -149,7 +151,8 @@ mod internal {
                         let value_str = value.as_str().ok_or("Header value is not a string")?;
                         header_map.insert(
                             header_name.clone(),
-                            Expr::from_primitive_string(value_str).map_err(|err| err.to_string())?,
+                            Expr::from_primitive_string(value_str)
+                                .map_err(|err| err.to_string())?,
                         );
                     }
 
@@ -162,7 +165,9 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_function_params_expr(worker_bridge_info: &Value) -> Result<Vec<Expr>, String> {
+    pub(crate) fn get_function_params_expr(
+        worker_bridge_info: &Value,
+    ) -> Result<Vec<Expr>, String> {
         let function_params = worker_bridge_info
             .get("function-params")
             .ok_or("No function-params found")?
@@ -194,6 +199,4 @@ mod internal {
     pub(crate) fn get_path_pattern(path: &str) -> Result<PathPattern, String> {
         PathPattern::from(path).map_err(|err| err.to_string())
     }
-
 }
-

@@ -19,7 +19,7 @@ use golem_worker_service_base::service::api_definition_validator::ApiDefinitionV
 use golem_worker_service_base::service::http::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
-use golem_worker_service_base::service::http_request_definition_lookup::{
+use golem_worker_service_base::service::api_definition_lookup::{
     ApiDefinitionLookup, ApiDefinitionLookupError,
 };
 use golem_worker_service_base::service::template::{RemoteTemplateService, TemplateServiceNoop};

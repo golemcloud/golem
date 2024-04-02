@@ -5,10 +5,10 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 
+use crate::primitive::GetPrimitive;
 use getter::GetError;
 use getter::Getter;
 use path::Path;
-use crate::primitive::GetPrimitive;
 
 use crate::expression::{
     ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber,
@@ -509,10 +509,10 @@ mod tests {
 
     use golem_service_base::type_inference::infer_analysed_type;
 
-    use crate::evaluator::{EvaluationError, Evaluator};
-    use crate::evaluator::getter::GetError;
-    use crate::expression::Expr;
     use crate::api_definition::http::PathPattern;
+    use crate::evaluator::getter::GetError;
+    use crate::evaluator::{EvaluationError, Evaluator};
+    use crate::expression::Expr;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
     use crate::worker_bridge::worker_response::WorkerResponse;
@@ -560,7 +560,7 @@ mod tests {
             req_method: Method::GET,
             input_path: ApiInputPath {
                 base_path: uri.path().to_string(),
-                query_path: uri.query().map(|x| x.to_string())
+                query_path: uri.query().map(|x| x.to_string()),
             },
         };
 

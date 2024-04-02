@@ -1,5 +1,5 @@
-use poem_openapi::*;
 use poem_openapi::payload::Json;
+use poem_openapi::*;
 use tonic::Status;
 
 use golem_service_base::model::*;

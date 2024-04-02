@@ -5,12 +5,10 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
 
-use crate::api_definition::http::{HttpApiDefinition};
+use crate::api_definition::http::HttpApiDefinition;
 use crate::merge::Merge;
 use crate::tokeniser::tokenizer::Token;
-use crate::worker_binding::{
-    ResolvedWorkerBinding, WorkerBindingResolver,
-};
+use crate::worker_binding::{ResolvedWorkerBinding, WorkerBindingResolver};
 
 // An input request from external API gateways, that is then resolved to a worker request, using API definitions
 #[derive(Clone)]
@@ -53,7 +51,6 @@ impl InputHttpRequest {
 
         Ok(request_type_annotated_value)
     }
-
 }
 
 impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
@@ -101,7 +98,7 @@ pub struct ApiInputPath {
 
 impl ApiInputPath {
     // Return the each component of the path which can either be a literal or the value of a path_var, along with it's index
-     fn path_components(&self) -> HashMap<usize, String> {
+    fn path_components(&self) -> HashMap<usize, String> {
         let mut path_components: HashMap<usize, String> = HashMap::new();
 
         // initial `/` is excluded to not break indexes
@@ -143,19 +140,22 @@ impl ApiInputPath {
 }
 
 mod internal {
-    use std::collections::HashMap;
+    use crate::api_definition::http::MethodPattern;
+    use crate::http::http_request::internal;
+    use crate::merge::Merge;
+    use crate::primitive::{Number, Primitive};
+    use golem_service_base::type_inference::infer_analysed_type;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, Method};
     use serde_json::Value;
-    use golem_service_base::type_inference::infer_analysed_type;
-    use crate::api_definition::http::MethodPattern;
-    use crate::http::http_request::internal;
-    use crate::primitive::{Number, Primitive};
-    use crate::merge::Merge;
+    use std::collections::HashMap;
 
-    pub(crate) fn match_method(input_request_method: &Method, spec_method_pattern: &MethodPattern) -> bool {
+    pub(crate) fn match_method(
+        input_request_method: &Method,
+        spec_method_pattern: &MethodPattern,
+    ) -> bool {
         match input_request_method.clone() {
             Method::CONNECT => spec_method_pattern.is_connect(),
             Method::GET => spec_method_pattern.is_get(),
@@ -169,7 +169,6 @@ mod internal {
             _ => false,
         }
     }
-
 
     pub(crate) fn match_literals(
         request_path_values: &HashMap<usize, String>,
@@ -209,7 +208,9 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_request_body(request_body: &Value) -> Result<TypeAnnotatedValue, Vec<String>> {
+    pub(crate) fn get_request_body(
+        request_body: &Value,
+    ) -> Result<TypeAnnotatedValue, Vec<String>> {
         let inferred_type = infer_analysed_type(request_body);
         let typed_value = get_typed_value_from_json(request_body, &inferred_type)?;
 
@@ -330,7 +331,6 @@ mod internal {
             Err(unavailable_query_variables)
         }
     }
-
 }
 
 #[cfg(test)]
@@ -1151,7 +1151,10 @@ mod tests {
         spec_path_literals.insert(0, "users".to_string());
         spec_path_literals.insert(1, "1".to_string());
 
-        assert!(internal::match_literals(&request_path_values, &spec_path_literals));
+        assert!(internal::match_literals(
+            &request_path_values,
+            &spec_path_literals
+        ));
     }
 
     #[test]
@@ -1161,7 +1164,10 @@ mod tests {
         let mut spec_path_literals = HashMap::new();
         spec_path_literals.insert(0, "get-cart-contents".to_string());
 
-        assert!(!internal::match_literals(&request_path_values, &spec_path_literals));
+        assert!(!internal::match_literals(
+            &request_path_values,
+            &spec_path_literals
+        ));
     }
 
     #[test]
@@ -1171,6 +1177,9 @@ mod tests {
 
         let spec_path_literals = HashMap::new();
 
-        assert!(!internal::match_literals(&request_path_values, &spec_path_literals));
+        assert!(!internal::match_literals(
+            &request_path_values,
+            &spec_path_literals
+        ));
     }
 }

@@ -1,6 +1,6 @@
 use nom::bytes::complete::{tag, take_while};
-use nom::IResult;
 use nom::sequence::delimited;
+use nom::IResult;
 
 use super::*;
 

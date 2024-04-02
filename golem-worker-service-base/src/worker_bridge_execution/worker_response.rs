@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::{get_json_from_typed_value, get_typed_value_from_json};
 use golem_wasm_rpc::TypeAnnotatedValue;
-use http::{StatusCode};
-use poem::{Body};
+use http::StatusCode;
+use poem::Body;
 use serde_json::json;
 use tracing::info;
 
@@ -11,7 +11,9 @@ use golem_service_base::type_inference::*;
 
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_binding::ResponseMapping;
-use crate::worker_bridge_execution::worker_request_executor::{WorkerRequestExecutor, WorkerRequestExecutorError};
+use crate::worker_bridge_execution::worker_request_executor::{
+    WorkerRequestExecutor, WorkerRequestExecutorError,
+};
 use crate::worker_bridge_execution::WorkerRequest;
 
 pub struct WorkerResponse {
@@ -66,7 +68,6 @@ impl WorkerResponse {
     }
 }
 
-
 pub struct NoOpWorkerRequestExecutor {}
 
 #[async_trait]
@@ -117,18 +118,18 @@ impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
 }
 
 mod internal {
-    use std::collections::HashMap;
+    use crate::evaluator::EvaluationError;
+    use crate::evaluator::Evaluator;
+    use crate::expression::Expr;
+    use crate::merge::Merge;
+    use crate::primitive::{GetPrimitive, Primitive};
+    use crate::worker_binding::ResponseMapping;
+    use crate::worker_bridge_execution::WorkerResponse;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, StatusCode};
     use poem::{Body, ResponseParts};
-    use crate::evaluator::EvaluationError;
-    use crate::expression::Expr;
-    use crate::evaluator::Evaluator;
-    use crate::merge::Merge;
-    use crate::primitive::{GetPrimitive, Primitive};
-    use crate::worker_binding::ResponseMapping;
-    use crate::worker_bridge_execution::{WorkerResponse};
+    use std::collections::HashMap;
 
     pub(crate) struct IntermediateHttpResponse {
         body: TypeAnnotatedValue,
@@ -137,12 +138,13 @@ mod internal {
     }
 
     impl IntermediateHttpResponse {
-       pub(crate) fn from(
+        pub(crate) fn from(
             worker_response: &WorkerResponse,
             response_mapping: &ResponseMapping,
             input_request: &TypeAnnotatedValue,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
-            let type_annotated_value = input_request.merge(&worker_response.result_with_worker_response_key());
+            let type_annotated_value =
+                input_request.merge(&worker_response.result_with_worker_response_key());
 
             let status_code = get_status_code(&response_mapping.status, &type_annotated_value)?;
 
@@ -157,7 +159,7 @@ mod internal {
                 headers,
             })
         }
-       pub(crate) fn to_http_response(&self) -> poem::Response {
+        pub(crate) fn to_http_response(&self) -> poem::Response {
             let headers: Result<HeaderMap, String> = (&self.headers.headers)
                 .try_into()
                 .map_err(|e: hyper::http::Error| e.to_string());
@@ -219,7 +221,6 @@ mod internal {
         )))
     }
 
-
     #[derive(Default)]
     struct ResolvedResponseHeaders {
         headers: HashMap<String, String>,
@@ -253,4 +254,3 @@ mod internal {
         }
     }
 }
-

@@ -1,5 +1,5 @@
 use golem_api_grpc::proto::golem::worker::{
-    UnknownError, worker_error, worker_execution_error, WorkerError as GrpcWorkerError,
+    worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
 };
 use golem_common::model::{AccountId, TemplateId, WorkerId};
 use golem_service_base::model::{GolemError, VersionedTemplateId};

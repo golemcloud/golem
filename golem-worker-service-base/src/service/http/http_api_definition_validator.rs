@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use poem_openapi::Object;
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
