@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 
 use crate::expression::Expr;
 use crate::worker_binding::ResponseMapping;
@@ -7,6 +8,35 @@ pub struct HttpResponseMapping {
     pub body: Expr,   // ${function.return}
     pub status: Expr, // "200" or if ${response.body.id == 1} "200" else "400"
     pub headers: HashMap<String, Expr>,
+}
+
+impl Display for HttpResponseMapping {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let response_mapping: ResponseMapping = self.into();
+        let expr_json = Expr::to_json_value(&response_mapping.0).unwrap();
+
+        write!(f, "{}", expr_json.to_string())
+    }
+
+}
+
+impl Into<ResponseMapping> for HttpResponseMapping {
+    fn into(self) -> ResponseMapping {
+        let mut headers = HashMap::new();
+        for (key, value) in self.headers {
+            headers.insert(key, Box::new(value));
+        }
+
+        ResponseMapping(Expr::Record(
+            vec![
+                ("body".to_string(), Box::new(self.body)),
+                ("status".to_string(), Box::new(self.status)),
+                ("headers".to_string(), Box::new(Expr::Record(headers))),
+            ]
+                .into_iter()
+                .collect(),
+        ))
+    }
 }
 
 impl TryFrom<&ResponseMapping> for HttpResponseMapping {
@@ -105,10 +135,10 @@ mod tests {
     fn test_try_from_response_mapping_missing_status() {
         let response_mapping = ResponseMapping(Expr::Record(
             vec![
-                ("body".to_string(), Expr::Variable("function.return".to_string())),
+                ("body".to_string(), Box::new(Expr::Variable("function.return".to_string()))),
                 (
                     "headers".to_string(),
-                    Expr::Record(vec![("Content-Type".to_string(), Box:new(Expr::Literal("application/json".to_string())))]),
+                    Box::new(Expr::Record(vec![("Content-Type".to_string(), Box::new(Expr::Literal("application/json".to_string())))])),
                 ),
             ]
                 .into_iter()
@@ -124,9 +154,9 @@ mod tests {
     fn test_try_from_response_mapping_headers_not_object() {
         let response_mapping = ResponseMapping(Expr::Record(
             vec![
-                ("body".to_string(), Expr::Variable("function.return".to_string())),
-                ("status".to_string(), Expr::Literal("200".to_string())),
-                ("headers".to_string(), Expr::Literal("application/json".to_string())),
+                ("body".to_string(), Box::new(Expr::Variable("worker.response".to_string()))),
+                ("status".to_string(), Box::new(Expr::Literal("200".to_string()))),
+                ("headers".to_string(), Box::new(Expr::Literal("application/json".to_string()))),
             ]
                 .into_iter()
                 .collect(),
