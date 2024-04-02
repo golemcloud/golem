@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::ops::Deref;
+
 use crate::expression::Expr;
 use crate::worker_binding::ResponseMapping;
 

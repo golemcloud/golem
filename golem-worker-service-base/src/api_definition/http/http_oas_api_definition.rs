@@ -32,7 +32,7 @@ mod internal {
     use golem_common::model::TemplateId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use serde_json::Value;
-    use std::collections::HashMap;
+    
     use uuid::Uuid;
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
