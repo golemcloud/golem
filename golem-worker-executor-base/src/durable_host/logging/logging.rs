@@ -17,6 +17,7 @@ use async_trait::async_trait;
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
+use crate::model::PersistenceLevel;
 use crate::preview2::wasi::logging::logging::{Host, Level};
 use crate::workerctx::WorkerCtx;
 
@@ -24,7 +25,8 @@ use crate::workerctx::WorkerCtx;
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
         record_host_function_call("logging::handler", "log");
-        if self.is_live() {
+        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
+        {
             let event_service = &self.public_state.event_service;
             let log_level = match level {
                 Level::Critical => LogLevel::Critical,

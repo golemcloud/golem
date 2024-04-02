@@ -68,7 +68,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         end: u64,
     ) -> anyhow::Result<Result<Resource<IncomingValue>, Error>> {
         record_host_function_call("blobstore::container::container", "get_data");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -79,7 +79,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             WrappedFunctionType::ReadRemote,
             "golem blobstore::container::get_data",
             |ctx| {
-                ctx.private_state.blob_store_service.get_data(
+                ctx.state.blob_store_service.get_data(
                     account_id.clone(),
                     container_name.clone(),
                     name.clone(),
@@ -108,7 +108,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         data: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::container::container", "write_data");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -124,7 +124,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             WrappedFunctionType::WriteRemote,
             "golem blobstore::container::write_data",
             |ctx| {
-                ctx.private_state.blob_store_service.write_data(
+                ctx.state.blob_store_service.write_data(
                     account_id.clone(),
                     container_name.clone(),
                     name.clone(),
@@ -144,7 +144,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
     ) -> anyhow::Result<Result<Resource<StreamObjectNames>, Error>> {
         record_host_function_call("blobstore::container::container", "list_objects");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -155,7 +155,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             WrappedFunctionType::ReadRemote,
             "golem blobstore::container::list_objects",
             |ctx| {
-                ctx.private_state
+                ctx.state
                     .blob_store_service
                     .list_objects(account_id.clone(), container_name.clone())
             },
@@ -179,7 +179,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
     ) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::container::container", "delete_object");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -190,7 +190,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             WrappedFunctionType::WriteRemote,
             "golem blobstore::container::delete_object",
             |ctx| {
-                ctx.private_state.blob_store_service.delete_object(
+                ctx.state.blob_store_service.delete_object(
                     account_id.clone(),
                     container_name.clone(),
                     name.clone(),
@@ -210,7 +210,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         names: Vec<ObjectName>,
     ) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::container::container", "delete_objects");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -221,7 +221,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             WrappedFunctionType::WriteRemote,
             "golem blobstore::container::delete_objects",
             |ctx| {
-                ctx.private_state.blob_store_service.delete_objects(
+                ctx.state.blob_store_service.delete_objects(
                     account_id.clone(),
                     container_name.clone(),
                     names.clone(),
@@ -241,7 +241,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
     ) -> anyhow::Result<Result<bool, Error>> {
         record_host_function_call("blobstore::container::container", "has_object");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -252,7 +252,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             WrappedFunctionType::ReadRemote,
             "golem blobstore::container::has_object",
             |ctx| {
-                ctx.private_state.blob_store_service.has_object(
+                ctx.state.blob_store_service.has_object(
                     account_id.clone(),
                     container_name.clone(),
                     name.clone(),
@@ -272,7 +272,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
     ) -> anyhow::Result<Result<ObjectMetadata, Error>> {
         record_host_function_call("blobstore::container::container", "object_info");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -287,7 +287,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             WrappedFunctionType::ReadRemote,
             "golem blobstore::container::object_info",
             |ctx| {
-                ctx.private_state.blob_store_service.object_info(
+                ctx.state.blob_store_service.object_info(
                     account_id.clone(),
                     container_name.clone(),
                     name.clone(),
@@ -311,7 +311,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
 
     async fn clear(&mut self, container: Resource<Container>) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::container::container", "clear");
-        let account_id = self.private_state.account_id.clone();
+        let account_id = self.state.account_id.clone();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -322,7 +322,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             WrappedFunctionType::WriteRemote,
             "golem blobstore::container::clear",
             |ctx| {
-                ctx.private_state
+                ctx.state
                     .blob_store_service
                     .clear(account_id.clone(), container_name.clone())
             },
