@@ -1138,4 +1138,28 @@ mod tests {
         };
         assert_eq!(result, Ok(expected));
     }
+
+
+    #[test]
+    fn test_evaluation_with_pattern_match_with_nested_construction() {
+        let worker_response = get_worker_response(
+            r#"
+                    {
+                        "ok": {
+                           "ids": ["id1", "id2"]
+                        }
+                    }"#,
+        );
+
+        let expr = Expr::from_primitive_string(
+            "${match worker.response { ok(value) => some(none), none => none }}",
+        )
+            .unwrap();
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let expected = TypeAnnotatedValue::Option {
+            value: Some(Box::new(TypeAnnotatedValue::Option { typ: AnalysedType::Str, value: None })),
+            typ: AnalysedType::Option(Box::new(AnalysedType::Str)),
+        };
+        assert_eq!(result, Ok(expected));
+    }
 }
