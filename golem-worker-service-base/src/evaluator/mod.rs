@@ -1191,7 +1191,7 @@ mod tests {
         let worker_response = get_worker_response(
             r#"
                     {
-                        "ok": {
+                        "err": {
                            "ids": ["id1", "id2"]
                         }
                     }"#,
