@@ -370,7 +370,7 @@ fn handle_constructor(
                    }
                    InBuiltConstructorInner::None => {
                        Ok(TypeAnnotatedValue::Option {
-                           typ: AnalysedType::Option(Box::new(AnalysedType::Str)),
+                           typ: AnalysedType::Str,
                            value: None
                        })
                    }
