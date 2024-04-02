@@ -3,11 +3,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::WorkerService;
-use golem_worker_service_base::worker_bridge::worker_response::WorkerResponse;
-use golem_worker_service_base::worker_bridge::worker_request_executor::{
-    WorkerRequestExecutor, WorkerRequestExecutorError,
+use golem_worker_service_base::worker_bridge_execution::{
+    WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
 };
-use golem_worker_service_base::worker_bridge::WorkerRequest;
 
 pub struct WorkerRequestToHttpResponse {
     pub worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
@@ -35,9 +33,10 @@ mod internal {
     use golem_common::model::CallingConvention;
     use golem_service_base::model::WorkerId;
     use golem_worker_service_base::auth::EmptyAuthCtx;
-    use golem_worker_service_base::worker_bridge::worker_response::WorkerResponse;
-    use golem_worker_service_base::worker_bridge::worker_request_executor::WorkerRequestExecutorError;
-    use golem_worker_service_base::worker_bridge::WorkerRequest;
+
+    use golem_worker_service_base::worker_bridge_execution::{
+        WorkerRequest, WorkerRequestExecutorError, WorkerResponse,
+    };
     use tracing::info;
 
     pub(crate) async fn execute(

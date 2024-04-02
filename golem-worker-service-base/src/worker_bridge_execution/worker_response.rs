@@ -1,5 +1,3 @@
-
-
 use async_trait::async_trait;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::{get_json_from_typed_value, get_typed_value_from_json};
@@ -11,15 +9,10 @@ use tracing::info;
 
 use golem_service_base::type_inference::*;
 
-
-
-
-
 use crate::tokeniser::tokenizer::Token;
-use crate::worker_binding::golem_worker_binding::ResponseMapping;
-use crate::worker_bridge::worker_request_executor::{WorkerRequestExecutor, WorkerRequestExecutorError};
-
-use crate::worker_bridge::WorkerRequest;
+use crate::worker_binding::ResponseMapping;
+use crate::worker_bridge_execution::worker_request_executor::{WorkerRequestExecutor, WorkerRequestExecutorError};
+use crate::worker_bridge_execution::WorkerRequest;
 
 pub struct WorkerResponse {
     pub result: TypeAnnotatedValue,
@@ -134,8 +127,8 @@ mod internal {
     use crate::evaluator::Evaluator;
     use crate::merge::Merge;
     use crate::primitive::{GetPrimitive, Primitive};
-    use crate::worker_binding::golem_worker_binding::ResponseMapping;
-    use crate::worker_bridge::worker_response::{WorkerResponse};
+    use crate::worker_binding::ResponseMapping;
+    use crate::worker_bridge_execution::{WorkerResponse};
 
     pub(crate) struct IntermediateHttpResponse {
         body: TypeAnnotatedValue,

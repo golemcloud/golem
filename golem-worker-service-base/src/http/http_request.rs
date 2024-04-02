@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::api_definition::http::{HttpApiDefinition};
 use crate::merge::Merge;
 use crate::tokeniser::tokenizer::Token;
-use crate::worker_binding::worker_binding_resolver::{
+use crate::worker_binding::{
     ResolvedWorkerBinding, WorkerBindingResolver,
 };
 

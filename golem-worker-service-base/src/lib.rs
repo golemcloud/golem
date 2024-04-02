@@ -4,7 +4,7 @@ pub mod api;
 pub mod repo;
 pub mod service;
 pub mod auth;
-pub mod worker_bridge;
+pub mod worker_bridge_execution;
 pub mod metrics;
 pub mod app_config;
 pub mod http;

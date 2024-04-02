@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, ApiVersion};
 use crate::parser::{GolemParser, ParseError};
 use crate::parser::path_pattern_parser::PathPatternParser;
-use crate::worker_binding::golem_worker_binding::GolemWorkerBinding;
+use crate::worker_binding::GolemWorkerBinding;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]

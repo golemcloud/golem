@@ -10,9 +10,9 @@ use crate::api_definition::http::HttpApiDefinition;
 use crate::http::{ApiInputPath, InputHttpRequest};
 use crate::service::http_request_definition_lookup::ApiDefinitionLookup;
 
-use crate::worker_binding::worker_binding_resolver::WorkerBindingResolver;
-use crate::worker_bridge::WorkerRequest;
-use crate::worker_bridge::worker_request_executor::WorkerRequestExecutor;
+use crate::worker_binding::WorkerBindingResolver;
+use crate::worker_bridge_execution::WorkerRequest;
+use crate::worker_bridge_execution::WorkerRequestExecutor;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service

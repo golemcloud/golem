@@ -33,7 +33,7 @@ mod internal {
     use golem_common::model::TemplateId;
     use crate::expression::Expr;
     use crate::api_definition::http::{MethodPattern, PathPattern, Route};
-    use crate::worker_binding::golem_worker_binding::{GolemWorkerBinding, ResponseMapping};
+    use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";

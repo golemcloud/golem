@@ -5,10 +5,13 @@ use serde_json::Value;
 use golem_common::model::TemplateId;
 
 use crate::evaluator::{Evaluator, RawString};
-use crate::worker_binding::worker_binding_resolver::ResolvedWorkerBinding;
+use crate::worker_binding::ResolvedWorkerBinding;
 
-pub mod worker_request_executor;
-pub mod worker_response;
+mod worker_request_executor;
+mod worker_response;
+
+pub use worker_request_executor::*;
+pub use worker_response::*;
 
 // Every input request can be resolved to a worker request,
 // along with the value of any variables that's associated with it.

@@ -3,11 +3,11 @@ pub mod worker;
 
 use crate::worker_bridge_request_executor::WorkerRequestToHttpResponse;
 use async_trait::async_trait;
+use golem_worker_service_base::api_definition::http::HttpApiDefinition;
+use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
-use golem_worker_service_base::definition::api_definition::{ApiDefinitionId, ApiVersion};
-use golem_worker_service_base::http::http_api_definition::HttpApiDefinition;
-use golem_worker_service_base::http::http_request::InputHttpRequest;
+use golem_worker_service_base::http::InputHttpRequest;
 use golem_worker_service_base::repo::api_definition_repo::{
     ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry,
 };
@@ -26,7 +26,7 @@ use golem_worker_service_base::service::template::{RemoteTemplateService, Templa
 use golem_worker_service_base::service::worker::{
     WorkerRequestMetadata, WorkerServiceDefault, WorkerServiceNoOp,
 };
-use golem_worker_service_base::worker_bridge::worker_request_executor::WorkerRequestExecutor;
+use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 use http::HeaderMap;
 use poem::Response;
 use std::sync::Arc;
