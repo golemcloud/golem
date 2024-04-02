@@ -98,10 +98,9 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                                                 vec![pattern],
                                             )
                                         }
-                                        _ => Err(ParseError::Message(format!(
-                                            "Expecting a valid expression inside {}",
-                                            token
-                                        ))),
+                                        expr => {
+                                          Ok(ConstructorPattern::Literal(Box::new(expr)))
+                                        }
                                     }
                                 }
                                 None => Err(ParseError::Message(format!(
