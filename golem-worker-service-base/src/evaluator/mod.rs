@@ -1193,7 +1193,7 @@ mod tests {
         );
 
         let expr = Expr::from_primitive_string(
-            "${match worker.response { ok(value) => ok(1), none => err(2) }}",
+            "${match worker.response { ok(value) => ok(1), err(msg) => err(2) }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
