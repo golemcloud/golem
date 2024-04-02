@@ -97,6 +97,25 @@ impl MethodPattern {
     }
 }
 
+impl FromStr for MethodPattern {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "get" => Ok(MethodPattern::Get),
+            "connect" => Ok(MethodPattern::Connect),
+            "post" => Ok(MethodPattern::Post),
+            "delete" => Ok(MethodPattern::Delete),
+            "put" => Ok(MethodPattern::Put),
+            "patch" => Ok(MethodPattern::Patch),
+            "options" => Ok(MethodPattern::Options),
+            "trace" => Ok(MethodPattern::Trace),
+            "head" => Ok(MethodPattern::Head),
+            _ => Err("Failed to parse method"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct LiteralInfo(pub String);
 

@@ -6,6 +6,7 @@ use tonic::transport::{Error, Server};
 use crate::grpcapi::worker::WorkerGrpcApi;
 use crate::service::Services;
 
+mod register_api_definition;
 mod worker;
 
 pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<(), Error> {

@@ -215,3 +215,207 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
         })
     }
 }
+
+/**
+ * GRPC CONVERSIONS.
+ */
+use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
+
+impl TryFrom<crate::api_definition::http::HttpApiDefinition>
+    for grpc_apidefinition::HttpApiDefinition
+{
+    type Error = String;
+
+    fn try_from(
+        value: crate::api_definition::http::HttpApiDefinition,
+    ) -> Result<Self, Self::Error> {
+        let routes = value
+            .routes
+            .into_iter()
+            .map(|r| grpc_apidefinition::HttpRoute::try_from(r))
+            .collect::<Result<Vec<grpc_apidefinition::HttpRoute>, String>>()?;
+
+        let result = grpc_apidefinition::HttpApiDefinition {
+            id: value.id.0,
+            version: value.version.0,
+            routes,
+        };
+
+        Ok(result)
+    }
+}
+
+impl TryFrom<grpc_apidefinition::HttpApiDefinition>
+    for crate::api_definition::http::HttpApiDefinition
+{
+    type Error = String;
+
+    fn try_from(value: grpc_apidefinition::HttpApiDefinition) -> Result<Self, Self::Error> {
+        let routes = value
+            .routes
+            .into_iter()
+            .map(|r| crate::api_definition::http::Route::try_from(r))
+            .collect::<Result<Vec<crate::api_definition::http::Route>, String>>()?;
+
+        let result = crate::api_definition::http::HttpApiDefinition {
+            id: crate::api_definition::ApiDefinitionId(value.id),
+            version: crate::api_definition::ApiVersion(value.version),
+            routes,
+        };
+
+        Ok(result)
+    }
+}
+
+impl TryFrom<crate::api_definition::http::Route> for grpc_apidefinition::HttpRoute {
+    type Error = String;
+
+    fn try_from(value: crate::api_definition::http::Route) -> Result<Self, Self::Error> {
+        let path = value.path.to_string();
+        let binding = grpc_apidefinition::GolemWorkerBinding::try_from(value.binding)?;
+
+        let result = grpc_apidefinition::HttpRoute {
+            method: value.method.to_string(),
+            path,
+            binding: Some(binding),
+        };
+
+        Ok(result)
+    }
+}
+
+impl TryFrom<grpc_apidefinition::HttpRoute> for crate::api_definition::http::Route {
+    type Error = String;
+
+    fn try_from(value: grpc_apidefinition::HttpRoute) -> Result<Self, Self::Error> {
+        let path = crate::api_definition::http::PathPattern::from(value.path.as_str())
+            .map_err(|e| e.to_string())?;
+        let binding = value.binding.ok_or("binding is missing")?.try_into()?;
+
+        let method = value.method.parse()?;
+
+        let result = crate::api_definition::http::Route {
+            method,
+            path,
+            binding,
+        };
+
+        Ok(result)
+    }
+}
+
+impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::GolemWorkerBinding {
+    type Error = String;
+
+    fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
+        let response = match value.response {
+            Some(v) => {
+                let r = grpc_apidefinition::ResponseMapping::try_from(v)?;
+                Some(r)
+            }
+            None => None,
+        };
+
+        let worker_id = serde_json::to_string(&value.worker_id).map_err(|e| e.to_string())?;
+        let function_params = value
+            .function_params
+            .into_iter()
+            .map(|p| serde_json::to_string(&p).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<String>, String>>()?;
+
+        let result = golem_api_grpc::proto::golem::apidefinition::GolemWorkerBinding {
+            template: Some(value.template.into()),
+            worker_id,
+            function_name: value.function_name,
+            function_params,
+            response,
+        };
+
+        Ok(result)
+    }
+}
+
+impl TryFrom<grpc_apidefinition::GolemWorkerBinding> for crate::worker_binding::GolemWorkerBinding {
+    type Error = String;
+
+    fn try_from(value: grpc_apidefinition::GolemWorkerBinding) -> Result<Self, Self::Error> {
+        let response = match value.response {
+            Some(v) => {
+                let r = v.try_into()?;
+                Some(r)
+            }
+            None => None,
+        };
+
+        let worker_id = serde_json::from_str(&value.worker_id).map_err(|e| e.to_string())?;
+        let function_params = value
+            .function_params
+            .into_iter()
+            .map(|p| serde_json::from_str(&p).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<Expr>, String>>()?;
+
+        let template_id = value.template.ok_or("template is missing")?.try_into()?;
+
+        let result = crate::worker_binding::GolemWorkerBinding {
+            template: template_id,
+            worker_id,
+            function_name: value.function_name,
+            function_params,
+            response,
+        };
+
+        Ok(result)
+    }
+}
+
+impl TryFrom<crate::worker_binding::ResponseMapping> for grpc_apidefinition::ResponseMapping {
+    type Error = String;
+
+    fn try_from(value: crate::worker_binding::ResponseMapping) -> Result<Self, Self::Error> {
+        let body = serde_json::to_string(&value.body).map_err(|e| e.to_string())?;
+        let status = serde_json::to_string(&value.status).map_err(|e| e.to_string())?;
+        let headers = value
+            .headers
+            .into_iter()
+            .map(|(k, v)| {
+                serde_json::to_string(&v)
+                    .map(|v| (k, v))
+                    .map_err(|e| e.to_string())
+            })
+            .collect::<Result<HashMap<String, String>, String>>()?;
+
+        let result = golem_api_grpc::proto::golem::apidefinition::ResponseMapping {
+            body,
+            status,
+            headers,
+        };
+
+        Ok(result)
+    }
+}
+
+impl TryFrom<grpc_apidefinition::ResponseMapping> for crate::worker_binding::ResponseMapping {
+    type Error = String;
+
+    fn try_from(value: grpc_apidefinition::ResponseMapping) -> Result<Self, Self::Error> {
+        let body = serde_json::from_str(&value.body).map_err(|e| e.to_string())?;
+        let status = serde_json::from_str(&value.status).map_err(|e| e.to_string())?;
+        let headers = value
+            .headers
+            .into_iter()
+            .map(|(k, v)| {
+                serde_json::from_str(&v)
+                    .map(|v| (k, v))
+                    .map_err(|e| e.to_string())
+            })
+            .collect::<Result<HashMap<String, Expr>, String>>()?;
+
+        let result = crate::worker_binding::ResponseMapping {
+            body,
+            status,
+            headers,
+        };
+
+        Ok(result)
+    }
+}
