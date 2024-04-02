@@ -324,9 +324,7 @@ impl Evaluator for Expr {
 
                     handle_pattern_match(&input_expr, constructors, input)
                 }
-                Expr::Constructor0(constructor) => {
-                    handle_constructor(&constructor, input)
-                },
+                Expr::Constructor0(constructor) => handle_constructor(&constructor, input),
             }
         }
 
@@ -336,61 +334,56 @@ impl Evaluator for Expr {
 
 fn handle_constructor(
     constructor: &ConstructorPattern,
-    input: &TypeAnnotatedValue
+    input: &TypeAnnotatedValue,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
     match constructor {
         ConstructorPattern::WildCard => Err(EvaluationError::Message(
             "Found a wild card which is an invalid expression".to_string(),
         )),
-        ConstructorPattern::As(_, _) => Err(
-            EvaluationError::Message("Found an as pattern which is an invalid expression".to_string()),
-        ),
-        ConstructorPattern::Constructor(constructor_name, constructors) => {
-           match constructor_name {
-               ConstructorTypeName::InBuiltConstructor(in_built) => match in_built {
-                   InBuiltConstructorInner::Ok => {
-                       let one_constructor = &constructors[0];
-                       let result = handle_constructor(one_constructor, input)?;
-                       let analysed_type = AnalysedType::from(&result);
-                       Ok(TypeAnnotatedValue::Result {
-                           value: Ok(Some(Box::new(result))),
-                           ok: Some(Box::new(analysed_type)),
-                           error: None
-                       })
-                   }
-                   InBuiltConstructorInner::Err => {
-                       let one_constructor = &constructors[0];
-                       let result = handle_constructor(one_constructor, input)?;
-                       let analysed_type = AnalysedType::from(&result);
-                       Ok(TypeAnnotatedValue::Result {
-                           value: Ok(Some(Box::new(result))),
-                           error: Some(Box::new(analysed_type)),
-                           ok: None
-                       })
-                   }
-                   InBuiltConstructorInner::None => {
-                       Ok(TypeAnnotatedValue::Option {
-                           typ: AnalysedType::Str,
-                           value: None
-                       })
-                   }
-                   InBuiltConstructorInner::Some => {
-                          let one_constructor = &constructors[0];
-                          let result = handle_constructor(one_constructor, input)?;
-                          let analysed_type = AnalysedType::from(&result);
-                          Ok(TypeAnnotatedValue::Option {
-                            value: Some(Box::new(result)),
-                            typ: analysed_type
-                          })
-                   }
-               }
-               ConstructorTypeName::CustomConstructor(_) =>
-                     Err(EvaluationError::Message("Custom constructors are not supported".to_string()))
-           }
-        }
-        ConstructorPattern::Literal(possible_expr) => {
-            possible_expr.evaluate(input)
-        }
+        ConstructorPattern::As(_, _) => Err(EvaluationError::Message(
+            "Found an as pattern which is an invalid expression".to_string(),
+        )),
+        ConstructorPattern::Constructor(constructor_name, constructors) => match constructor_name {
+            ConstructorTypeName::InBuiltConstructor(in_built) => match in_built {
+                InBuiltConstructorInner::Ok => {
+                    let one_constructor = &constructors[0];
+                    let result = handle_constructor(one_constructor, input)?;
+                    let analysed_type = AnalysedType::from(&result);
+                    Ok(TypeAnnotatedValue::Result {
+                        value: Ok(Some(Box::new(result))),
+                        ok: Some(Box::new(analysed_type)),
+                        error: None,
+                    })
+                }
+                InBuiltConstructorInner::Err => {
+                    let one_constructor = &constructors[0];
+                    let result = handle_constructor(one_constructor, input)?;
+                    let analysed_type = AnalysedType::from(&result);
+                    Ok(TypeAnnotatedValue::Result {
+                        value: Ok(Some(Box::new(result))),
+                        error: Some(Box::new(analysed_type)),
+                        ok: None,
+                    })
+                }
+                InBuiltConstructorInner::None => Ok(TypeAnnotatedValue::Option {
+                    typ: AnalysedType::Str,
+                    value: None,
+                }),
+                InBuiltConstructorInner::Some => {
+                    let one_constructor = &constructors[0];
+                    let result = handle_constructor(one_constructor, input)?;
+                    let analysed_type = AnalysedType::from(&result);
+                    Ok(TypeAnnotatedValue::Option {
+                        value: Some(Box::new(result)),
+                        typ: analysed_type,
+                    })
+                }
+            },
+            ConstructorTypeName::CustomConstructor(_) => Err(EvaluationError::Message(
+                "Custom constructors are not supported".to_string(),
+            )),
+        },
+        ConstructorPattern::Literal(possible_expr) => possible_expr.evaluate(input),
     }
 }
 fn handle_pattern_match(
@@ -1106,7 +1099,7 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${match worker.response { ok(value) => some(value.ids[0]), none => 'not found' }}",
         )
-            .unwrap();
+        .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         let expected = TypeAnnotatedValue::Option {
             value: Some(Box::new(TypeAnnotatedValue::Str("id1".to_string()))),
@@ -1129,7 +1122,7 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${match worker.response { ok(value) => none, none => 'not found' }}",
         )
-            .unwrap();
+        .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         let expected = TypeAnnotatedValue::Option {
             value: None,
@@ -1137,7 +1130,6 @@ mod tests {
         };
         assert_eq!(result, Ok(expected));
     }
-
 
     #[test]
     fn test_evaluation_with_pattern_match_with_nested_construction() {
@@ -1153,10 +1145,13 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${match worker.response { ok(value) => some(none), none => none }}",
         )
-            .unwrap();
+        .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         let expected = TypeAnnotatedValue::Option {
-            value: Some(Box::new(TypeAnnotatedValue::Option { typ: AnalysedType::Str, value: None })),
+            value: Some(Box::new(TypeAnnotatedValue::Option {
+                typ: AnalysedType::Str,
+                value: None,
+            })),
             typ: AnalysedType::Option(Box::new(AnalysedType::Str)),
         };
         assert_eq!(result, Ok(expected));
@@ -1176,12 +1171,12 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${match worker.response { ok(value) => ok(1), none => err(2) }}",
         )
-            .unwrap();
+        .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         let expected = TypeAnnotatedValue::Result {
             value: Ok(Some(Box::new(TypeAnnotatedValue::U64(1)))),
             ok: Some(Box::new(AnalysedType::U64)),
-            error: None
+            error: None,
         };
         assert_eq!(result, Ok(expected));
     }
@@ -1200,12 +1195,12 @@ mod tests {
         let expr = Expr::from_primitive_string(
             "${match worker.response { ok(value) => ok(1), none => err(2) }}",
         )
-            .unwrap();
+        .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         let expected = TypeAnnotatedValue::Result {
             value: Err(Some(Box::new(TypeAnnotatedValue::U64(2)))),
             error: Some(Box::new(AnalysedType::U64)),
-            ok: None
+            ok: None,
         };
         assert_eq!(result, Ok(expected));
     }

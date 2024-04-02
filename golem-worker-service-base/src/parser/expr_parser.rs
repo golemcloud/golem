@@ -63,9 +63,13 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
 
                 Token::Request => go(cursor, context, prev_expression.apply_with(Expr::Request())),
 
-                Token::None => go(cursor, context, prev_expression.apply_with(
-                    Expr::Constructor0(ConstructorPattern::constructor("none", vec![])?)
-                )),
+                Token::None => go(
+                    cursor,
+                    context,
+                    prev_expression.apply_with(Expr::Constructor0(
+                        ConstructorPattern::constructor("none", vec![])?,
+                    )),
+                ),
 
                 token @ Token::Some | token @ Token::Ok | token @ Token::Err => {
                     match cursor.next_non_empty_token() {
@@ -98,14 +102,10 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                                                 vec![pattern],
                                             )
                                         }
-                                        expr => {
-                                            ConstructorPattern::constructor(
-                                                token.to_string().as_str(),
-                                                vec![ConstructorPattern::Literal(Box::new(
-                                                    expr,
-                                                ))],
-                                            )
-                                        }
+                                        expr => ConstructorPattern::constructor(
+                                            token.to_string().as_str(),
+                                            vec![ConstructorPattern::Literal(Box::new(expr))],
+                                        ),
                                     }
                                 }
                                 None => Err(ParseError::Message(format!(
@@ -127,7 +127,6 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                         ))),
                     }
                 }
-
 
                 Token::Worker => go(cursor, context, prev_expression.apply_with(Expr::Worker())),
 
