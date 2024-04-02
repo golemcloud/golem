@@ -4,6 +4,7 @@ version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
 description = "GRPC API for Golem services"
 
 
@@ -16,6 +17,7 @@ bytes = { workspace = true }
 futures-core = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 prost = { workspace = true }
+prost-types = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
