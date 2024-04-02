@@ -17,7 +17,5 @@ pub struct GolemWorkerBinding {
     pub response: Option<ResponseMapping>,
 }
 
-// TODO; https://github.com/golemcloud/golem/issues/318
-// This will make GolemWorkerBidning generic for all protocols
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub struct ResponseMapping(pub Expr);
