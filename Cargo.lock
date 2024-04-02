@@ -3026,7 +3026,7 @@ dependencies = [
  "golem-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc 0.0.16",
- "http 0.2.11",
+ "http 0.2.12",
  "humantime-serde",
  "lazy_static",
  "mappable-rc",
