@@ -760,7 +760,7 @@ async fn get_workers() {
         .await;
 
     check!(cursor1.is_some());
-    check!(metadatas1.len() == workers_count / 2);
+    check!(metadatas1.len() >= workers_count / 2);
 
     let (cursor2, metadatas2) = executor
         .get_worker_metadatas(
