@@ -15,10 +15,7 @@ pub struct TemplateCompilationServiceDefault {
 }
 
 impl TemplateCompilationServiceDefault {
-    pub fn new(host: String, port: u16) -> Self {
-        let uri = format!("http://{}:{}", host, port)
-            .parse()
-            .expect("Failed to parse TemplateCompilationService URI");
+    pub fn new(uri: http_02::Uri) -> Self {
         Self { uri }
     }
 }

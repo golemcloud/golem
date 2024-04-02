@@ -15,6 +15,7 @@
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use golem_service_base::config::TemplateStoreConfig;
+use golem_template_service_base::config::TemplateCompilationConfig;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -49,7 +50,6 @@ pub struct TemplateServiceConfig {
     pub db: DbConfig,
     pub template_store: TemplateStoreConfig,
     pub compilation: TemplateCompilationConfig,
-    pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -79,21 +79,6 @@ pub struct DbPostgresConfig {
     pub schema: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "type", content = "config")]
-#[derive(Default)]
-pub enum TemplateCompilationConfig {
-    Enabled(TemplateCompilationEnabledConfig),
-    #[default]
-    Disabled,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct TemplateCompilationEnabledConfig {
-    pub host: String,
-    pub port: u16,
-}
-
 impl TemplateServiceConfig {
     pub fn new() -> Self {
         Figment::new()
@@ -114,7 +99,6 @@ impl Default for TemplateServiceConfig {
             db: DbConfig::default(),
             template_store: TemplateStoreConfig::default(),
             compilation: TemplateCompilationConfig::default(),
-            worker_executor_client_cache: WorkerExecutorClientCacheConfig::default(),
         }
     }
 }
