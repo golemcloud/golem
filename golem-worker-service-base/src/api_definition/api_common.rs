@@ -1,7 +1,5 @@
-
 use std::fmt::Debug;
 use std::fmt::Display;
-
 
 use bincode::{Decode, Encode};
 use poem_openapi::NewType;

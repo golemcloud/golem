@@ -10,7 +10,7 @@ use tracing::{debug, info};
 use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
 
-use crate::definition::api_definition::ApiDefinitionId;
+use crate::api_definition::ApiDefinitionId;
 use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
 
 #[async_trait]
@@ -391,7 +391,7 @@ mod tests {
     use golem_common::config::RedisConfig;
 
     use crate::definition::api_definition::{ApiDefinitionId, ApiVersion};
-    use crate::http::http_api_definition::HttpApiDefinition;
+    use crate::api_definition::http::HttpApiDefinition;
 
     use super::*;
 

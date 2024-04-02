@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use golem_common::model::TemplateId;
 use golem_service_base::model::Template;
 
-use crate::definition::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, ApiVersion};
+use crate::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, ApiVersion};
 use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};

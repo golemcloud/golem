@@ -9,7 +9,7 @@ use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::definition::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, ApiVersion};
+use crate::api_definition::{ApiDefinitionId, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, ApiVersion};
 use crate::parser::{GolemParser, ParseError};
 use crate::parser::path_pattern_parser::PathPatternParser;
 use crate::worker_binding::golem_worker_binding::GolemWorkerBinding;
@@ -297,7 +297,7 @@ pub struct Route {
 mod tests {
     use golem_common::serialization;
 
-    use crate::expression::expr::Expr;
+    use crate::expression::Expr;
 
     use super::*;
 

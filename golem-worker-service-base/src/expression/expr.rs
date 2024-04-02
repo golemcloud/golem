@@ -633,7 +633,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use crate::evaluator::Evaluator;
-    use crate::expression::expr::Expr;
+    use crate::expression::Expr;
     use crate::worker_request::worker_response::WorkerResponse;
 
     #[test]

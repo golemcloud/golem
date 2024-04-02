@@ -5,9 +5,9 @@ use hyper::header::HOST;
 use poem::{Body, Endpoint, Request, Response};
 use poem::http::StatusCode;
 use tracing::{error, info};
-use crate::http::http_api_definition::HttpApiDefinition;
+use crate::api_definition::http::HttpApiDefinition;
 
-use crate::http::http_request::{ApiInputPath, InputHttpRequest};
+use crate::http::{ApiInputPath, InputHttpRequest};
 use crate::service::http_request_definition_lookup::ApiDefinitionLookup;
 
 use crate::worker_binding::worker_binding_resolver::WorkerBindingResolver;

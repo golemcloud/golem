@@ -10,7 +10,7 @@ use getter::Getter;
 use path::Path;
 use crate::primitive::GetPrimitive;
 
-use crate::expression::expr::{
+use crate::expression::{
     ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber,
 };
 use crate::merge::Merge;
@@ -511,8 +511,8 @@ mod tests {
 
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::evaluator::getter::GetError;
-    use crate::expression::expr::Expr;
-    use crate::http::http_api_definition::PathPattern;
+    use crate::expression::Expr;
+    use crate::api_definition::http::PathPattern;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
     use crate::worker_bridge::worker_response::WorkerResponse;

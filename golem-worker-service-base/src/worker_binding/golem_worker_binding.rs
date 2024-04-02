@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use golem_common::model::TemplateId;
 
-use crate::expression::expr::Expr;
+use crate::expression::Expr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]

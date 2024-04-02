@@ -130,7 +130,7 @@ mod internal {
     use http::{HeaderMap, StatusCode};
     use poem::{Body, ResponseParts};
     use crate::evaluator::EvaluationError;
-    use crate::expression::expr::Expr;
+    use crate::expression::Expr;
     use crate::evaluator::Evaluator;
     use crate::merge::Merge;
     use crate::primitive::{GetPrimitive, Primitive};

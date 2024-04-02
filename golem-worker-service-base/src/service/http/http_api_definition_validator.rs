@@ -8,7 +8,7 @@ use golem_service_base::model::{
     Export, ExportFunction, ExportInstance, Template, TemplateMetadata,
 };
 
-use crate::http::http_api_definition::{HttpApiDefinition, MethodPattern, PathPattern, Route};
+use crate::api_definition::http::{HttpApiDefinition, MethodPattern, PathPattern, Route};
 use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 
 // Http Api Definition Validator

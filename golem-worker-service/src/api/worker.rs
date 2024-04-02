@@ -9,7 +9,7 @@ use poem_openapi::*;
 use tap::TapFallible;
 
 use golem_service_base::model::*;
-use golem_worker_service_base::api::error::WorkerApiBaseError;
+use golem_worker_service_base::api::WorkerApiBaseError;
 
 use crate::empty_worker_metadata;
 use crate::service::{template::TemplateService, worker::WorkerService};

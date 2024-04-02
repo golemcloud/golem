@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use golem_common::model::TemplateId;
 
-use crate::definition::api_definition::{ApiDefinitionId, ApiVersion};
-use crate::expression::expr::Expr;
-use crate::http::http_api_definition::MethodPattern;
+use crate::api_definition::{ApiDefinitionId, ApiVersion};
+use crate::expression::Expr;
+use crate::api_definition::http::MethodPattern;
 
 // Mostly this data structures that represents the actual incoming request
 // exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.
@@ -49,11 +49,11 @@ pub struct ResponseMapping {
     pub headers: HashMap<String, serde_json::value::Value>,
 }
 
-impl TryFrom<crate::http::http_api_definition::HttpApiDefinition> for HttpApiDefinition {
+impl TryFrom<crate::api_definition::http::HttpApiDefinition> for HttpApiDefinition {
     type Error = String;
 
     fn try_from(
-        value: crate::http::http_api_definition::HttpApiDefinition,
+        value: crate::api_definition::http::HttpApiDefinition,
     ) -> Result<Self, Self::Error> {
         let mut routes = Vec::new();
         for route in value.routes {
@@ -69,10 +69,10 @@ impl TryFrom<crate::http::http_api_definition::HttpApiDefinition> for HttpApiDef
     }
 }
 
-impl TryInto<crate::http::http_api_definition::HttpApiDefinition> for HttpApiDefinition {
+impl TryInto<crate::api_definition::http::HttpApiDefinition> for HttpApiDefinition {
     type Error = String;
 
-    fn try_into(self) -> Result<crate::http::http_api_definition::HttpApiDefinition, Self::Error> {
+    fn try_into(self) -> Result<crate::api_definition::http::HttpApiDefinition, Self::Error> {
         let mut routes = Vec::new();
 
         for route in self.routes {
@@ -80,7 +80,7 @@ impl TryInto<crate::http::http_api_definition::HttpApiDefinition> for HttpApiDef
             routes.push(v);
         }
 
-        Ok(crate::http::http_api_definition::HttpApiDefinition {
+        Ok(crate::api_definition::http::HttpApiDefinition {
             id: self.id,
             version: self.version,
             routes,
@@ -88,10 +88,10 @@ impl TryInto<crate::http::http_api_definition::HttpApiDefinition> for HttpApiDef
     }
 }
 
-impl TryFrom<crate::http::http_api_definition::Route> for Route {
+impl TryFrom<crate::api_definition::http::Route> for Route {
     type Error = String;
 
-    fn try_from(value: crate::http::http_api_definition::Route) -> Result<Self, Self::Error> {
+    fn try_from(value: crate::api_definition::http::Route) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
         let binding = GolemWorkerBinding::try_from(value.binding)?;
 
@@ -103,15 +103,15 @@ impl TryFrom<crate::http::http_api_definition::Route> for Route {
     }
 }
 
-impl TryInto<crate::http::http_api_definition::Route> for Route {
+impl TryInto<crate::api_definition::http::Route> for Route {
     type Error = String;
 
-    fn try_into(self) -> Result<crate::http::http_api_definition::Route, Self::Error> {
-        let path = crate::http::http_api_definition::PathPattern::from(self.path.as_str())
+    fn try_into(self) -> Result<crate::api_definition::http::Route, Self::Error> {
+        let path = crate::api_definition::http::PathPattern::from(self.path.as_str())
             .map_err(|e| e.to_string())?;
         let binding = self.binding.try_into()?;
 
-        Ok(crate::http::http_api_definition::Route {
+        Ok(crate::api_definition::http::Route {
             method: self.method,
             path,
             binding,

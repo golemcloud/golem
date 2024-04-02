@@ -5,8 +5,8 @@ pub mod worker_connect;
 
 use crate::api::worker::WorkerApi;
 use crate::service::Services;
-use golem_worker_service_base::api::custom_http_request_api::CustomHttpRequestApi;
-use golem_worker_service_base::api::healthcheck;
+use golem_worker_service_base::api::CustomHttpRequestApi;
+use golem_worker_service_base::api::HealthcheckApi;
 use poem::endpoint::PrometheusExporter;
 use poem::{get, EndpointExt, Route};
 use poem_openapi::OpenApiService;
@@ -17,7 +17,7 @@ use std::sync::Arc;
 type ApiServices = (
     WorkerApi,
     register_api_definition_api::RegisterApiDefinitionApi,
-    healthcheck::HealthcheckApi,
+    HealthcheckApi,
 );
 
 pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {
@@ -59,7 +59,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             register_api_definition_api::RegisterApiDefinitionApi::new(
                 services.definition_service.clone(),
             ),
-            healthcheck::HealthcheckApi,
+            HealthcheckApi,
         ),
         "Golem API",
         "2.0",

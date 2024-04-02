@@ -5,7 +5,7 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
 
-use crate::http::http_api_definition::{HttpApiDefinition};
+use crate::api_definition::http::{HttpApiDefinition};
 use crate::merge::Merge;
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_binding::worker_binding_resolver::{
@@ -150,7 +150,7 @@ mod internal {
     use http::{HeaderMap, Method};
     use serde_json::Value;
     use golem_service_base::type_inference::infer_analysed_type;
-    use crate::http::http_api_definition::MethodPattern;
+    use crate::api_definition::http::MethodPattern;
     use crate::http::http_request::internal;
     use crate::primitive::{Number, Primitive};
     use crate::merge::Merge;
@@ -341,7 +341,7 @@ mod tests {
 
     use golem_common::model::TemplateId;
 
-    use crate::http::http_api_definition::HttpApiDefinition;
+    use crate::api_definition::http::HttpApiDefinition;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::worker_bridge::WorkerRequest;
 

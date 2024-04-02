@@ -1,1 +1,2 @@
-pub(crate) mod expr;
+pub(crate) use expr::*;
+mod expr;
