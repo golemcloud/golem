@@ -86,14 +86,6 @@ impl Token {
             token => Token::RawString(token.to_string()),
         }
     }
-
-    pub fn is_code(&self) -> bool {
-        matches!(self, Token::InterpolationStart)
-    }
-
-    pub fn raw_string(input: &str) -> Token {
-        Token::RawString(input.to_string())
-    }
 }
 
 impl Display for Token {
@@ -149,13 +141,6 @@ impl Token {
         match self {
             Self::RawString(string) => string.is_empty(),
             _ => false,
-        }
-    }
-
-    pub fn trim(&self) -> Token {
-        match self {
-            Self::RawString(string) => Self::RawString(string.trim().to_string()),
-            anything => anything.clone(),
         }
     }
 }
@@ -388,17 +373,6 @@ impl TokeniserResult {
     pub fn to_cursor(&self) -> TokenCursor {
         TokenCursor::new(self.value.clone())
     }
-
-    pub fn filter_spaces(&self) -> TokeniserResult {
-        TokeniserResult {
-            value: self
-                .value
-                .iter()
-                .filter(|token| !token.trim().is_empty())
-                .cloned()
-                .collect(),
-        }
-    }
 }
 
 fn tokenise_string_with_index(input_string: &str) -> Vec<(usize, &str)> {
@@ -446,10 +420,11 @@ impl Iterator for Tokenizer {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
 
     use super::{Token, Tokenizer};
+
     extern crate alloc;
-    use alloc::vec::Vec;
 
     #[test]
     fn test_raw() {
@@ -457,9 +432,9 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::Space,
-                Token::raw_string("bar")
+                Token::RawString("bar".to_string())
             ]
         );
     }
@@ -471,9 +446,9 @@ mod tests {
             tokens,
             vec![
                 Token::OpenParen,
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::Space,
-                Token::raw_string("bar"),
+                Token::RawString("bar".to_string()),
                 Token::CloseParen
             ]
         );
@@ -485,11 +460,11 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::Space,
                 Token::Dot,
                 Token::Space,
-                Token::raw_string("bar"),
+                Token::RawString("bar".to_string()),
             ]
         );
     }
@@ -513,9 +488,9 @@ mod tests {
             tokens,
             vec![
                 Token::OpenSquareBracket,
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::Space,
-                Token::raw_string("bar"),
+                Token::RawString("bar".to_string()),
                 Token::ClosedSquareBracket
             ]
         );
@@ -527,7 +502,7 @@ mod tests {
 
         assert_eq!(
             tokens,
-            vec![Token::If, Token::Space, Token::raw_string("x"),]
+            vec![Token::If, Token::Space, Token::RawString("x".to_string()),]
         );
     }
 
@@ -538,9 +513,9 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("asif"),
+                Token::RawString("asif".to_string()),
                 Token::Space,
-                Token::raw_string("x")
+                Token::RawString("x".to_string())
             ]
         );
     }
@@ -552,9 +527,9 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("ifis"),
+                Token::RawString("ifis".to_string()),
                 Token::Space,
-                Token::raw_string("x")
+                Token::RawString("x".to_string())
             ]
         );
     }
@@ -569,20 +544,20 @@ mod tests {
                 Token::If,
                 Token::Space,
                 Token::InterpolationStart,
-                Token::raw_string("x"),
+                Token::RawString("x".to_string()),
                 Token::Space,
                 Token::GreaterThan,
                 Token::Space,
-                Token::raw_string("1"),
+                Token::RawString("1".to_string()),
                 Token::ClosedCurlyBrace,
                 Token::Space,
                 Token::Then,
                 Token::Space,
-                Token::raw_string("1"),
+                Token::RawString("1".to_string()),
                 Token::Space,
                 Token::Else,
                 Token::Space,
-                Token::raw_string("0"),
+                Token::RawString("0".to_string()),
             ]
         );
     }
@@ -603,18 +578,18 @@ else${z}
                 Token::If,
                 Token::Space,
                 Token::InterpolationStart,
-                Token::raw_string("x"),
+                Token::RawString("x".to_string()),
                 Token::ClosedCurlyBrace,
                 Token::Space,
                 Token::Then,
                 Token::Space,
                 Token::InterpolationStart,
-                Token::raw_string("y"),
+                Token::RawString("y".to_string()),
                 Token::ClosedCurlyBrace,
                 Token::NewLine,
                 Token::Else,
                 Token::InterpolationStart,
-                Token::raw_string("z"),
+                Token::RawString("z".to_string()),
                 Token::ClosedCurlyBrace,
                 Token::NewLine,
             ]
@@ -625,7 +600,7 @@ else${z}
     fn test_if_then_else_false_expr() {
         let tokens: Vec<Token> = Tokenizer::new("ifxthenyelsez").run().value;
 
-        assert_eq!(tokens, vec![Token::raw_string("ifxthenyelsez"),]);
+        assert_eq!(tokens, vec![Token::RawString("ifxthenyelsez".to_string()),]);
     }
 
     #[test]
@@ -634,7 +609,11 @@ else${z}
 
         assert_eq!(
             tokens,
-            vec![Token::raw_string("f"), Token::Space, Token::GreaterThan,]
+            vec![
+                Token::RawString("f".to_string()),
+                Token::Space,
+                Token::GreaterThan,
+            ]
         );
     }
 
@@ -645,12 +624,12 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("f"),
+                Token::RawString("f".to_string()),
                 Token::Space,
                 Token::Space,
                 Token::GreaterThan,
                 Token::Space,
-                Token::raw_string("g")
+                Token::RawString("g".to_string())
             ]
         );
     }
@@ -665,11 +644,11 @@ else${z}
             tokens,
             vec![
                 Token::InterpolationStart,
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::ClosedCurlyBrace,
                 Token::GreaterThan,
                 Token::InterpolationStart,
-                Token::raw_string("bar"),
+                Token::RawString("bar".to_string()),
                 Token::ClosedCurlyBrace,
             ]
         );
@@ -681,7 +660,11 @@ else${z}
 
         assert_eq!(
             tokens,
-            vec![Token::raw_string("f"), Token::Space, Token::LessThan,]
+            vec![
+                Token::RawString("f".to_string()),
+                Token::Space,
+                Token::LessThan,
+            ]
         );
     }
 
@@ -692,11 +675,11 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("f"),
+                Token::RawString("f".to_string()),
                 Token::Space,
                 Token::LessThan,
                 Token::Space,
-                Token::raw_string("g")
+                Token::RawString("g".to_string())
             ]
         );
     }
@@ -708,9 +691,9 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("f"),
+                Token::RawString("f".to_string()),
                 Token::LessThan,
-                Token::raw_string("g")
+                Token::RawString("g".to_string())
             ]
         );
     }
@@ -725,13 +708,13 @@ else${z}
             tokens,
             vec![
                 Token::InterpolationStart,
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::ClosedCurlyBrace,
                 Token::Space,
                 Token::GreaterThan,
                 Token::Space,
                 Token::InterpolationStart,
-                Token::raw_string("bar"),
+                Token::RawString("bar".to_string()),
                 Token::ClosedCurlyBrace,
             ]
         );
@@ -747,13 +730,13 @@ else${z}
             tokens,
             vec![
                 Token::InterpolationStart,
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::ClosedCurlyBrace,
                 Token::Space,
                 Token::LessThan,
                 Token::Space,
                 Token::InterpolationStart,
-                Token::raw_string("bar"),
+                Token::RawString("bar".to_string()),
                 Token::ClosedCurlyBrace,
             ]
         );
@@ -769,13 +752,13 @@ else${z}
             tokens,
             vec![
                 Token::InterpolationStart,
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::ClosedCurlyBrace,
                 Token::Space,
                 Token::EqualTo,
                 Token::Space,
                 Token::InterpolationStart,
-                Token::raw_string("bar"),
+                Token::RawString("bar".to_string()),
                 Token::ClosedCurlyBrace,
             ]
         );
@@ -788,11 +771,11 @@ else${z}
             tokens,
             vec![
                 Token::InterpolationStart,
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::ClosedCurlyBrace,
-                Token::raw_string("-raw_"),
+                Token::RawString("-raw_".to_string()),
                 Token::InterpolationStart,
-                Token::raw_string("bar"),
+                Token::RawString("bar".to_string()),
                 Token::ClosedCurlyBrace,
             ]
         );
@@ -805,9 +788,9 @@ else${z}
             tokens,
             vec![
                 Token::InterpolationStart,
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::ClosedCurlyBrace,
-                Token::raw_string("-^raw")
+                Token::RawString("-^raw".to_string())
             ]
         );
     }
@@ -818,10 +801,10 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("raw"),
+                Token::RawString("raw".to_string()),
                 Token::Space,
                 Token::InterpolationStart,
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::ClosedCurlyBrace,
             ]
         );
@@ -833,19 +816,19 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::Space,
                 Token::InterpolationStart,
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::ClosedCurlyBrace,
                 Token::Space,
-                Token::raw_string("raw"),
+                Token::RawString("raw".to_string()),
                 Token::Space,
                 Token::InterpolationStart,
-                Token::raw_string("bar"),
+                Token::RawString("bar".to_string()),
                 Token::ClosedCurlyBrace,
                 Token::Space,
-                Token::raw_string("bar")
+                Token::RawString("bar".to_string())
             ]
         );
     }
@@ -857,15 +840,15 @@ else${z}
             tokens,
             vec![
                 Token::InterpolationStart,
-                Token::raw_string("foo"),
+                Token::RawString("foo".to_string()),
                 Token::ClosedCurlyBrace,
                 Token::Space,
-                Token::raw_string("raw"),
+                Token::RawString("raw".to_string()),
                 Token::InterpolationStart,
-                Token::raw_string("hi"),
+                Token::RawString("hi".to_string()),
                 Token::ClosedCurlyBrace,
                 Token::Space,
-                Token::raw_string("bar"),
+                Token::RawString("bar".to_string()),
             ]
         );
     }
@@ -885,20 +868,20 @@ else${z}
                 Token::Space,
                 Token::Worker,
                 Token::Dot,
-                Token::raw_string("response"),
+                Token::RawString("response".to_string()),
                 Token::Space,
                 Token::OpenCurlyBrace,
                 Token::Space,
                 Token::Some,
                 Token::OpenParen,
-                Token::raw_string("value"),
+                Token::RawString("value".to_string()),
                 Token::CloseParen,
                 Token::Space,
                 Token::Arrow,
                 Token::Space,
                 Token::Worker,
                 Token::Dot,
-                Token::raw_string("response"),
+                Token::RawString("response".to_string()),
                 Token::Comma,
                 Token::Space,
                 Token::None,
@@ -906,7 +889,7 @@ else${z}
                 Token::Arrow,
                 Token::Space,
                 Token::Quote,
-                Token::raw_string("some_value"),
+                Token::RawString("some_value".to_string()),
                 Token::Quote,
                 Token::Space,
                 Token::ClosedCurlyBrace,

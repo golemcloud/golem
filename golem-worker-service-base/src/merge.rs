@@ -1,6 +1,6 @@
 use golem_wasm_rpc::TypeAnnotatedValue;
 
-pub trait Merge {
+pub(crate) trait Merge {
     fn merge(&self, other: &Self) -> Self;
 }
 

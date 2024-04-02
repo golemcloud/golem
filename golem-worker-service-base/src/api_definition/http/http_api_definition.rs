@@ -1,58 +1,47 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
+use Iterator;
 
-use crate::expr::*;
-use crate::parser::path_pattern_parser::PathPatternParser;
-use crate::parser::{GolemParser, ParseError};
 use bincode::{Decode, Encode};
 use derive_more::Display;
-use golem_common::model::TemplateId;
-use poem_openapi::{Enum, NewType};
+use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
-use Iterator;
+
+use crate::api_definition::{
+    ApiDefinitionId, ApiVersion, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion,
+};
+use crate::parser::path_pattern_parser::PathPatternParser;
+use crate::parser::{GolemParser, ParseError};
+use crate::worker_binding::GolemWorkerBinding;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]
-pub struct ApiDefinition {
+pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
-    pub version: Version,
+    pub version: ApiVersion,
     pub routes: Vec<Route>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-#[serde(rename_all = "camelCase")]
-pub struct GolemWorkerBinding {
-    pub template: TemplateId,
-    pub worker_id: Expr,
-    pub function_name: String,
-    pub function_params: Vec<Expr>,
-    pub response: Option<ResponseMapping>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-pub struct ResponseMapping {
-    pub body: Expr,   // ${function.return}
-    pub status: Expr, // "200" or if ${response.body.id == 1} "200" else "400"
-    pub headers: HashMap<String, Expr>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
-pub struct ApiDefinitionId(pub String);
-
-impl Display for ApiDefinitionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+impl HasGolemWorkerBindings for HttpApiDefinition {
+    fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding> {
+        self.routes
+            .iter()
+            .map(|route| route.binding.clone())
+            .collect()
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
-pub struct Version(pub String);
+impl HasApiDefinitionId for HttpApiDefinition {
+    fn get_api_definition_id(&self) -> ApiDefinitionId {
+        self.id.clone()
+    }
+}
 
-impl Display for Version {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+impl HasVersion for HttpApiDefinition {
+    fn get_version(&self) -> ApiVersion {
+        self.version.clone()
     }
 }
 
@@ -309,6 +298,8 @@ pub struct Route {
 #[cfg(test)]
 mod tests {
     use golem_common::serialization;
+
+    use crate::expression::Expr;
 
     use super::*;
 
@@ -573,11 +564,11 @@ mod tests {
         fn test_serde(path_pattern: &str, worker_id: &str, function_params: &str) {
             let yaml = get_api_spec(path_pattern, worker_id, function_params);
 
-            let result: ApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
+            let result: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
 
             let yaml2 = serde_yaml::to_value(result.clone()).unwrap();
 
-            let result2: ApiDefinition = serde_yaml::from_value(yaml2.clone()).unwrap();
+            let result2: HttpApiDefinition = serde_yaml::from_value(yaml2.clone()).unwrap();
 
             assert_eq!(result, result2);
         }
@@ -611,9 +602,9 @@ mod tests {
     fn test_api_spec_encode_decode() {
         fn test_encode_decode(path_pattern: &str, worker_id: &str, function_params: &str) {
             let yaml = get_api_spec(path_pattern, worker_id, function_params);
-            let original: ApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
+            let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
             let encoded = serialization::serialize(&original).unwrap();
-            let decoded: ApiDefinition = serialization::deserialize(&encoded).unwrap();
+            let decoded: HttpApiDefinition = serialization::deserialize(&encoded).unwrap();
 
             assert_eq!(original, decoded);
         }

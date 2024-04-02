@@ -1,33 +1,34 @@
 use std::sync::Arc;
 
-use crate::api_definition::ResponseMapping;
+use crate::api_definition::http::HttpApiDefinition;
 use async_trait::async_trait;
 use hyper::header::HOST;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
-use crate::api_request_route_resolver::WorkerBindingResolver;
-use crate::http_request::{ApiInputPath, InputHttpRequest};
-use crate::service::http_request_definition_lookup::HttpRequestDefinitionLookup;
-use crate::worker_request::WorkerRequest;
-use crate::worker_request_to_response::WorkerRequestToResponse;
+use crate::http::{ApiInputPath, InputHttpRequest};
+use crate::service::api_definition_lookup::ApiDefinitionLookup;
+
+use crate::worker_binding::WorkerBindingResolver;
+use crate::worker_bridge_execution::WorkerRequest;
+use crate::worker_bridge_execution::WorkerRequestExecutor;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
-    pub worker_to_http_response_service:
-        Arc<dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send>,
-    pub api_definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
+    pub worker_to_http_response_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
+    pub api_definition_lookup_service:
+        Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
     pub fn new(
-        worker_to_http_response_service: Arc<
-            dyn WorkerRequestToResponse<ResponseMapping, Response> + Sync + Send,
+        worker_to_http_response_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
+        api_definition_lookup_service: Arc<
+            dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
         >,
-        api_definition_lookup_service: Arc<dyn HttpRequestDefinitionLookup + Sync + Send>,
     ) -> Self {
         Self {
             worker_to_http_response_service,
@@ -67,15 +68,19 @@ impl CustomHttpRequestApi {
 
         let api_request = InputHttpRequest {
             input_path: ApiInputPath {
-                base_path: uri.path(),
-                query_path: uri.query(),
+                base_path: uri.path().to_string(),
+                query_path: uri.query().map(|x| x.to_string()),
             },
-            headers: &headers,
-            req_method: &req_parts.method,
+            headers,
+            req_method: req_parts.method,
             req_body: json_request_body,
         };
 
-        let api_definition = match self.api_definition_lookup_service.get(&api_request).await {
+        let api_definition = match self
+            .api_definition_lookup_service
+            .get(api_request.clone())
+            .await
+        {
             Ok(api_definition) => api_definition,
             Err(err) => {
                 error!("API request host: {} - error: {}", host, err);
@@ -104,13 +109,28 @@ impl CustomHttpRequestApi {
                     };
 
                 // Execute the request using a executor
-                self.worker_to_http_response_service
-                    .execute(
-                        resolved_worker_request.clone(),
+                match self
+                    .worker_to_http_response_service
+                    .execute(resolved_worker_request.clone())
+                    .await
+                {
+                    Ok(worker_response) => worker_response.to_http_response(
                         &resolved_route.resolved_worker_binding_template.response,
                         &resolved_route.typed_value_from_input,
-                    )
-                    .await
+                    ),
+
+                    Err(e) => {
+                        error!(
+                            "API request id: {} - request error: {}",
+                            &api_definition.id, e
+                        );
+                        Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::from_string(
+                                format!("API request error {}", e).to_string(),
+                            ))
+                    }
+                }
             }
 
             None => {

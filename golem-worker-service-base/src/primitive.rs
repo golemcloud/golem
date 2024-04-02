@@ -1,12 +1,13 @@
-use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
 
-pub trait GetPrimitive {
+use golem_wasm_rpc::TypeAnnotatedValue;
+
+pub(crate) trait GetPrimitive {
     fn get_primitive(&self) -> Option<Primitive>;
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub enum Primitive {
+pub(crate) enum Primitive {
     Num(Number),
     String(String),
     Bool(bool),
@@ -29,7 +30,7 @@ impl From<String> for Primitive {
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub enum Number {
+pub(crate) enum Number {
     PosInt(u64),
     NegInt(i64),
     Float(f64),

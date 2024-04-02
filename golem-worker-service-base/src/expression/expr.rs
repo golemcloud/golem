@@ -627,13 +627,14 @@ impl Display for InternalValue {
 //TODO: GOL-249 Add more round trip tests
 #[cfg(test)]
 mod tests {
-    use crate::evaluator::Evaluator;
-    use crate::expr::Expr;
-    use crate::worker_response::WorkerResponse;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use serde_json::{json, Value};
+
+    use crate::evaluator::Evaluator;
+    use crate::expression::Expr;
+    use crate::worker_bridge_execution::WorkerResponse;
 
     #[test]
     fn test_expr_from_json_value() {

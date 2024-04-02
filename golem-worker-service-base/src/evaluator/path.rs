@@ -18,14 +18,6 @@ impl Path {
         path.update_index(index);
         path
     }
-}
-
-impl Path {
-    pub fn from_raw_string(input: &str) -> Path {
-        let mut path = Path::default();
-        path.update_key(input);
-        path
-    }
 
     pub fn update_key(&mut self, input: &str) {
         self.0.push(PathComponent::key_name(input));

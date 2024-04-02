@@ -1,16 +1,24 @@
-use super::tokeniser::tokenizer::{Token, Tokenizer};
-use crate::expr::{
-    ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber,
-};
-use crate::getter::{GetError, Getter};
-use crate::merge::Merge;
-use crate::path::Path;
-use crate::primitive::GetPrimitive;
+use std::fmt::Display;
+use std::ops::Deref;
+
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
-use std::fmt::Display;
-use std::ops::Deref;
+
+use crate::primitive::GetPrimitive;
+use getter::GetError;
+use getter::Getter;
+use path::Path;
+
+use crate::expression::{
+    ConstructorPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, InnerNumber,
+};
+use crate::merge::Merge;
+
+use crate::tokeniser::tokenizer::{Token, Tokenizer};
+
+mod getter;
+mod path;
 
 pub trait Evaluator {
     fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
@@ -102,10 +110,10 @@ impl Evaluator for Expr {
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
             match expr.clone() {
                 Expr::Request() => input
-                    .get(&Path::from_raw_string(Token::Request.to_string().as_str()))
+                    .get(&Path::from_key(Token::Request.to_string().as_str()))
                     .map_err(|err| err.into()),
                 Expr::Worker() => input
-                    .get(&Path::from_raw_string(Token::Worker.to_string().as_str()))
+                    .get(&Path::from_key(Token::Worker.to_string().as_str()))
                     .map_err(|err| err.into()),
 
                 Expr::SelectIndex(expr, index) => {
@@ -304,7 +312,7 @@ impl Evaluator for Expr {
                     .map_err(|err| err.into()),
 
                 Expr::Variable(variable) => input
-                    .get(&Path::from_raw_string(variable.as_str()))
+                    .get(&Path::from_key(variable.as_str()))
                     .map_err(|err| err.into()),
 
                 Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(bool)),
@@ -349,23 +357,23 @@ fn handle_pattern_match(
                     // Lazily evaluated. We need to look at the patterns only when it is required
                     let pattern_expr_variable = || {
                         match &patterns.first() {
-                        Some(ConstructorPattern::Literal(expr)) => match *expr.clone() {
-                            Expr::Variable(variable) => Ok(variable),
-                            _ => {
-                                 Err(EvaluationError::Message(
+                            Some(ConstructorPattern::Literal(expr)) => match *expr.clone() {
+                                Expr::Variable(variable) => Ok(variable),
+                                _ => {
+                                    Err(EvaluationError::Message(
                                         "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
                                     ))
+                                }
+                            },
+                            None => Err(EvaluationError::Message(
+                                "Zero patterns found".to_string(),
+                            )),
+                            _ => {
+                                Err(EvaluationError::Message(
+                                    "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
+                                ))
                             }
-                        },
-                        None => Err(EvaluationError::Message(
-                            "Zero patterns found".to_string(),
-                        )),
-                        _ => {
-                            Err(EvaluationError::Message(
-                                "Currently only variable pattern is supported. i.e, some(value), ok(value), err(message) etc".to_string(),
-                            ))
                         }
-                    }
                     };
                     match condition_key {
                         ConstructorTypeName::InBuiltConstructor(constructor_type) => {
@@ -490,21 +498,24 @@ fn handle_pattern_match(
 
 #[cfg(test)]
 mod tests {
-    use crate::api_definition::PathPattern;
-    use crate::evaluator::{EvaluationError, Evaluator};
-    use crate::expr::Expr;
-    use crate::getter::GetError;
-    use crate::http_request::{ApiInputPath, InputHttpRequest};
-    use crate::merge::Merge;
-    use crate::worker_response::WorkerResponse;
-    use golem_service_base::type_inference::infer_analysed_type;
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, Method, Uri};
     use serde_json::{json, Value};
-    use std::collections::HashMap;
-    use std::str::FromStr;
+
+    use golem_service_base::type_inference::infer_analysed_type;
+
+    use crate::api_definition::http::PathPattern;
+    use crate::evaluator::getter::GetError;
+    use crate::evaluator::{EvaluationError, Evaluator};
+    use crate::expression::Expr;
+    use crate::http::{ApiInputPath, InputHttpRequest};
+    use crate::merge::Merge;
+    use crate::worker_bridge_execution::WorkerResponse;
 
     fn get_worker_response(input: &str) -> WorkerResponse {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");
@@ -525,10 +536,10 @@ mod tests {
 
         let input_http_request = InputHttpRequest {
             req_body: request_body.clone(),
-            headers: &header_map,
-            req_method: &Method::GET,
+            headers: header_map.clone(),
+            req_method: Method::GET,
             input_path: ApiInputPath {
-                base_path: "/api",
+                base_path: "/api".to_string(),
                 query_path: None,
             },
         };
@@ -536,7 +547,6 @@ mod tests {
         input_http_request
             .get_type_annotated_value(vec![], &HashMap::new())
             .unwrap()
-            .merge(&InputHttpRequest::get_headers(header_map).unwrap())
     }
 
     fn resolved_variables_from_request_path(
@@ -545,11 +555,11 @@ mod tests {
     ) -> TypeAnnotatedValue {
         let input_http_request = InputHttpRequest {
             req_body: serde_json::Value::Null,
-            headers: &HeaderMap::new(),
-            req_method: &Method::GET,
+            headers: HeaderMap::new(),
+            req_method: Method::GET,
             input_path: ApiInputPath {
-                base_path: uri.path(),
-                query_path: uri.query(),
+                base_path: uri.path().to_string(),
+                query_path: uri.query().map(|x| x.to_string()),
             },
         };
 

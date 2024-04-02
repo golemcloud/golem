@@ -1,2 +1,2 @@
-pub mod cursor;
-pub mod tokenizer;
+pub(crate) mod cursor;
+pub(crate) mod tokenizer;
