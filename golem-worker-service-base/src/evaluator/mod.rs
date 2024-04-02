@@ -579,7 +579,6 @@ mod tests {
         let value: Value = serde_json::from_str(input).expect("Failed to parse json");
 
         let expected_type = infer_analysed_type(&value);
-        dbg!(expected_type.clone());
         let result_as_typed_value = get_typed_value_from_json(&value, &expected_type).unwrap();
         WorkerResponse {
             result: result_as_typed_value,
@@ -1159,6 +1158,54 @@ mod tests {
         let expected = TypeAnnotatedValue::Option {
             value: Some(Box::new(TypeAnnotatedValue::Option { typ: AnalysedType::Str, value: None })),
             typ: AnalysedType::Option(Box::new(AnalysedType::Str)),
+        };
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_with_ok_construction() {
+        let worker_response = get_worker_response(
+            r#"
+                    {
+                        "ok": {
+                           "ids": ["id1", "id2"]
+                        }
+                    }"#,
+        );
+
+        let expr = Expr::from_primitive_string(
+            "${match worker.response { ok(value) => ok(1), none => err(2) }}",
+        )
+            .unwrap();
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let expected = TypeAnnotatedValue::Result {
+            value: Ok(Some(Box::new(TypeAnnotatedValue::U64(1)))),
+            ok: Some(Box::new(AnalysedType::U64)),
+            error: None
+        };
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_with_err_construction() {
+        let worker_response = get_worker_response(
+            r#"
+                    {
+                        "ok": {
+                           "ids": ["id1", "id2"]
+                        }
+                    }"#,
+        );
+
+        let expr = Expr::from_primitive_string(
+            "${match worker.response { ok(value) => ok(1), none => err(2) }}",
+        )
+            .unwrap();
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let expected = TypeAnnotatedValue::Result {
+            value: Err(Some(Box::new(TypeAnnotatedValue::U64(2)))),
+            error: Some(Box::new(AnalysedType::U64)),
+            ok: None
         };
         assert_eq!(result, Ok(expected));
     }
