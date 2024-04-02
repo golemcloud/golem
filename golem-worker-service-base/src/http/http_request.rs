@@ -71,7 +71,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             let request_path_components: HashMap<usize, String> =
                 api_request.input_path.path_components();
 
-            if internal::match_method(&request_method, spec_method)
+            if internal::match_method(request_method, spec_method)
                 && internal::match_literals(&request_path_components, &spec_path_literals)
             {
                 let request_details = api_request

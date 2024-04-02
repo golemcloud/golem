@@ -71,7 +71,7 @@ impl CustomHttpRequestApi {
                 base_path: uri.path().to_string(),
                 query_path: uri.query().map(|x| x.to_string())
             },
-            headers: headers,
+            headers,
             req_method: req_parts.method,
             req_body: json_request_body,
         };
