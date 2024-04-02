@@ -118,6 +118,7 @@ impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
 }
 
 mod internal {
+    use crate::api_definition::http::HttpResponseMapping;
     use crate::evaluator::EvaluationError;
     use crate::evaluator::Evaluator;
     use crate::expression::Expr;
@@ -130,7 +131,6 @@ mod internal {
     use http::{HeaderMap, StatusCode};
     use poem::{Body, ResponseParts};
     use std::collections::HashMap;
-    use crate::api_definition::http::HttpResponseMapping;
 
     pub(crate) struct IntermediateHttpResponse {
         body: TypeAnnotatedValue,
@@ -149,10 +149,13 @@ mod internal {
 
             let http_response_mapping = HttpResponseMapping::try_from(response_mapping)?;
 
-            let status_code = get_status_code(&http_response_mapping.status, &type_annotated_value)?;
+            let status_code =
+                get_status_code(&http_response_mapping.status, &type_annotated_value)?;
 
-            let headers =
-                ResolvedResponseHeaders::from(&http_response_mapping.headers, &type_annotated_value)?;
+            let headers = ResolvedResponseHeaders::from(
+                &http_response_mapping.headers,
+                &type_annotated_value,
+            )?;
 
             let response_body = http_response_mapping.body.evaluate(&type_annotated_value)?;
 

@@ -109,7 +109,6 @@ impl TryInto<crate::api_definition::http::Route> for Route {
     }
 }
 
-
 impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     type Error = String;
 
@@ -144,7 +143,7 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     fn try_into(self) -> Result<crate::worker_binding::GolemWorkerBinding, Self::Error> {
         let response: Option<crate::worker_binding::ResponseMapping> = match self.response {
             Some(v) => {
-                let r = Expr::from_json_value(&v). map_err(|e| e.to_string())?;
+                let r = Expr::from_json_value(&v).map_err(|e| e.to_string())?;
                 Some(crate::worker_binding::ResponseMapping(r))
             }
             None => None,

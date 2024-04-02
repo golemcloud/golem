@@ -32,7 +32,7 @@ mod internal {
     use golem_common::model::TemplateId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use serde_json::Value;
-    
+
     use uuid::Uuid;
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
@@ -135,14 +135,15 @@ mod internal {
         let response = worker_bridge_info.get("response");
         match response {
             Some(response) => {
-                let response_mapping_expr = Expr::from_json_value(response)
-                    .map_err(|err| err.to_string())?;
+                let response_mapping_expr =
+                    Expr::from_json_value(response).map_err(|err| err.to_string())?;
 
-                let _ = HttpResponseMapping::try_from(&ResponseMapping(response_mapping_expr.clone()))
-                    .map_err(|err| err.to_string())?;
+                let _ =
+                    HttpResponseMapping::try_from(&ResponseMapping(response_mapping_expr.clone()))
+                        .map_err(|err| err.to_string())?;
 
                 Ok(Some(ResponseMapping(response_mapping_expr)))
-            },
+            }
             None => Ok(None),
         }
     }
