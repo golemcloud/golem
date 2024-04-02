@@ -204,7 +204,7 @@ mod test {
         let api = make_route();
         let client = TestClient::new(api);
 
-        let definition = http_api_definition::HttpApiDefinition {
+        let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
             version: ApiVersion("1.0".to_string()),
             routes: vec![],
@@ -232,7 +232,7 @@ mod test {
         let api = make_route();
         let client = TestClient::new(api);
 
-        let definition = http_api_definition::HttpApiDefinition {
+        let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
             version: ApiVersion("1.0".to_string()),
             routes: vec![],
@@ -244,7 +244,7 @@ mod test {
             .await;
         response.assert_status_is_ok();
 
-        let definition = http_api_definition::HttpApiDefinition {
+        let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
             version: ApiVersion("2.0".to_string()),
             routes: vec![],
