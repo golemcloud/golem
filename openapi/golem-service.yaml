@@ -717,7 +717,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ApiDefinition'
+                $ref: '#/components/schemas/HttpApiDefinition'
         '400':
           description: ''
           content:
@@ -783,7 +783,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ApiDefinition'
+                  $ref: '#/components/schemas/HttpApiDefinition'
         '400':
           description: ''
           content:
@@ -827,7 +827,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/ApiDefinition'
+              $ref: '#/components/schemas/HttpApiDefinition'
         required: true
       responses:
         '200':
@@ -835,7 +835,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ApiDefinition'
+                $ref: '#/components/schemas/HttpApiDefinition'
         '400':
           description: ''
           content:
@@ -947,7 +947,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ApiDefinition'
+                  $ref: '#/components/schemas/HttpApiDefinition'
         '400':
           description: ''
           content:
@@ -1446,21 +1446,6 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
 components:
   schemas:
-    ApiDefinition:
-      type: object
-      properties:
-        id:
-          type: string
-        version:
-          type: string
-        routes:
-          type: array
-          items:
-            $ref: '#/components/schemas/Route'
-      required:
-      - id
-      - version
-      - routes
     CallingConvention:
       type: string
       enum:
@@ -1952,6 +1937,21 @@ components:
       - functionParams
     HealthcheckResponse:
       type: object
+    HttpApiDefinition:
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Route'
+      required:
+      - id
+      - version
+      - routes
     InterruptResponse:
       type: object
     InvocationKey:

@@ -4,10 +4,11 @@ use std::{
 };
 
 use futures::{Stream, StreamExt};
-use golem_api_grpc::proto::golem::worker::LogEvent;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::{Status, Streaming};
+
+use golem_api_grpc::proto::golem::worker::LogEvent;
 
 pub struct ConnectWorkerStream {
     receiver: mpsc::Receiver<Result<LogEvent, Status>>,

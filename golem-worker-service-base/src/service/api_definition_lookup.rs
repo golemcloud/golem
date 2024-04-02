@@ -1,13 +1,12 @@
-use crate::api_definition::ApiDefinition;
-use crate::http_request::InputHttpRequest;
-use async_trait::async_trait;
 use std::fmt::Display;
 
+use async_trait::async_trait;
+
 #[async_trait]
-pub trait HttpRequestDefinitionLookup {
+pub trait ApiDefinitionLookup<Input, ApiDefinition> {
     async fn get(
         &self,
-        input_http_request: &InputHttpRequest<'_>,
+        input_http_request: Input,
     ) -> Result<ApiDefinition, ApiDefinitionLookupError>;
 }
 

@@ -7,12 +7,12 @@ use serde_json::Value;
 
 use crate::parser::expr_parser::ExprParser;
 use crate::parser::{GolemParser, ParseError};
-use crate::value_typed::ValueTyped;
+use crate::primitive::Primitive;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
     Request(),
-    WorkerResponse(),
+    Worker(),
     SelectField(Box<Expr>, String),
     SelectIndex(Box<Expr>, usize),
     Sequence(Vec<Expr>),
@@ -293,13 +293,9 @@ impl Expr {
                     }
                 }
 
-                // A request is a valid code, hence we interpolate
                 Expr::Request() => Ok(InternalValue::Interpolated("request".to_string())),
 
-                // A worker response is a valid code, hence we interpolate
-                Expr::WorkerResponse() => {
-                    Ok(InternalValue::Interpolated("worker.response".to_string()))
-                }
+                Expr::Worker() => Ok(InternalValue::Interpolated("worker".to_string())),
 
                 Expr::Record(values) => {
                     let mut mapping = serde_json::Map::new();
@@ -344,8 +340,8 @@ impl Expr {
                     Ok(InternalValue::RawJson(Value::Array(vs)))
                 }
 
-                Expr::Literal(value) => match ValueTyped::from_string(value) {
-                    ValueTyped::String(string) => {
+                Expr::Literal(value) => match Primitive::from(value.clone()) {
+                    Primitive::String(string) => {
                         if is_code {
                             Ok(InternalValue::Quoted(string.clone()))
                         } else {
@@ -353,13 +349,8 @@ impl Expr {
                         }
                     }
 
-                    ValueTyped::I64(i64) => Ok(InternalValue::NonInterpolated(i64.to_string())),
-                    ValueTyped::U64(u64) => Ok(InternalValue::NonInterpolated(u64.to_string())),
-                    ValueTyped::Float(f64) => Ok(InternalValue::NonInterpolated(f64.to_string())),
-                    ValueTyped::Boolean(bool) => {
-                        Ok(InternalValue::NonInterpolated(bool.to_string()))
-                    }
-                    ValueTyped::ComplexJson(value) => Ok(InternalValue::RawJson(value)),
+                    Primitive::Num(num) => Ok(InternalValue::NonInterpolated(num.to_string())),
+                    Primitive::Bool(bool) => Ok(InternalValue::NonInterpolated(bool.to_string())),
                 },
 
                 Expr::PathVar(value) => Ok(InternalValue::Interpolated(value.clone())),
@@ -636,10 +627,14 @@ impl Display for InternalValue {
 //TODO: GOL-249 Add more round trip tests
 #[cfg(test)]
 mod tests {
-    use crate::evaluator::Evaluator;
-    use crate::expr::Expr;
-    use crate::resolved_variables::ResolvedVariables;
+    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc::json::get_typed_value_from_json;
+    use golem_wasm_rpc::TypeAnnotatedValue;
     use serde_json::{json, Value};
+
+    use crate::evaluator::Evaluator;
+    use crate::expression::Expr;
+    use crate::worker_bridge_execution::WorkerResponse;
 
     #[test]
     fn test_expr_from_json_value() {
@@ -704,83 +699,119 @@ mod tests {
 
     #[test]
     fn expr_to_string_round_trip_match_expr_ok() {
-        let worker_response = &json!({"ok": { "id" : "afsal"} });
+        let worker_response = get_ok_worker_response();
 
         let expr1_string = "${match worker.response { ok(x) => '${x.id}-foo', err(msg) => msg }}";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
         let value1 = expr1
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
+            .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
         let value2 = expr2
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
+            .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
-        let expected = Value::String("afsal-foo".to_string());
+        let expected = TypeAnnotatedValue::Str("afsal-foo".to_string());
         assert_eq!((&value1, &value2), (&expected, &expected));
     }
 
     #[test]
     fn expr_to_string_round_trip_match_expr_err() {
-        let worker_response = &json!({"err": { "id" : "afsal"} });
+        let worker_response = get_err_worker_response();
 
         let expr1_string = "${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
         let value1 = expr1
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
+            .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
         let value2 = expr2
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
+            .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
-        let expected = Value::String("error".to_string());
+        let expected = TypeAnnotatedValue::Str("error".to_string());
         assert_eq!((&value1, &value2), (&expected, &expected));
+    }
+
+    fn get_err_worker_response() -> WorkerResponse {
+        let worker_response_value = get_typed_value_from_json(
+            &json!({"err": { "id" : "afsal"} }),
+            &AnalysedType::Result {
+                error: Some(Box::new(AnalysedType::Record(vec![(
+                    "id".to_string(),
+                    AnalysedType::Str,
+                )]))),
+                ok: None,
+            },
+        )
+        .unwrap();
+
+        WorkerResponse {
+            result: worker_response_value,
+        }
+    }
+
+    fn get_ok_worker_response() -> WorkerResponse {
+        let worker_response_value = get_typed_value_from_json(
+            &json!({"ok": { "id" : "afsal"} }),
+            &AnalysedType::Result {
+                ok: Some(Box::new(AnalysedType::Record(vec![(
+                    "id".to_string(),
+                    AnalysedType::Str,
+                )]))),
+                error: None,
+            },
+        )
+        .unwrap();
+
+        WorkerResponse {
+            result: worker_response_value,
+        }
     }
 
     #[test]
     fn expr_to_string_round_trip_match_expr_append() {
-        let worker_response = &json!({"err": { "id" : "afsal"} });
+        let worker_response = get_err_worker_response();
 
         let expr1_string =
             "append-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
         let value1 = expr1
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
+            .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
         let value2 = expr2
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
+            .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
-        let expected = Value::String("append-error".to_string());
+        let expected = TypeAnnotatedValue::Str("append-error".to_string());
         assert_eq!((&value1, &value2), (&expected, &expected));
     }
 
     #[test]
     fn expr_to_string_round_trip_match_expr_append_suffix() {
-        let worker_response = &json!({"err": { "id" : "afsal"} });
+        let worker_response = get_err_worker_response();
 
         let expr1_string =
             "prefix-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}-suffix";
         let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
         let value1 = expr1
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
+            .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
         let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
         let value2 = expr2
-            .evaluate(&ResolvedVariables::from_worker_response(worker_response))
+            .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
-        let expected = Value::String("prefix-error-suffix".to_string());
+        let expected = TypeAnnotatedValue::Str("prefix-error-suffix".to_string());
         assert_eq!((&value1, &value2), (&expected, &expected));
     }
 }
