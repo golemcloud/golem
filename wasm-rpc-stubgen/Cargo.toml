@@ -4,6 +4,7 @@ version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/wasm-rpc"
 description = "Golem WASM RPC stub generator"
 
 [lib]
