@@ -122,7 +122,10 @@ mod tests {
         assert_eq!(infer_analysed_type(&value), AnalysedType::Record(vec![]));
 
         let value = Value::Null;
-        assert_eq!(infer_analysed_type(&value), AnalysedType::Option(Box::new(AnalysedType::Str)));
+        assert_eq!(
+            infer_analysed_type(&value),
+            AnalysedType::Option(Box::new(AnalysedType::Str))
+        );
 
         let mut map = serde_json::map::Map::new();
         map.insert("ok".to_string(), Value::String("hello".to_string()));
