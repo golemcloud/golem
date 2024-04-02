@@ -2955,7 +2955,7 @@ dependencies = [
 
 [[package]]
 name = "golem-shard-manager"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-rwlock",
@@ -3016,7 +3016,7 @@ dependencies = [
 
 [[package]]
 name = "golem-template-service"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
