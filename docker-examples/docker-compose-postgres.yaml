@@ -163,6 +163,8 @@ services:
       - template_compiled_store:/template_compiled_store
     ports:
       - "${WORKER_EXECUTOR_HTTP_PORT}:${WORKER_EXECUTOR_HTTP_PORT}"
+    depends_on:
+      - redis
 
 volumes:
   redis_data:
