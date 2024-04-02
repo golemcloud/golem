@@ -130,6 +130,7 @@ mod internal {
     use http::{HeaderMap, StatusCode};
     use poem::{Body, ResponseParts};
     use std::collections::HashMap;
+    use crate::api_definition::http::HttpResponseMapping;
 
     pub(crate) struct IntermediateHttpResponse {
         body: TypeAnnotatedValue,
@@ -146,12 +147,14 @@ mod internal {
             let type_annotated_value =
                 input_request.merge(&worker_response.result_with_worker_response_key());
 
-            let status_code = get_status_code(&response_mapping.status, &type_annotated_value)?;
+            let http_response_mapping = HttpResponseMapping::try_from(response_mapping)?;
+
+            let status_code = get_status_code(&http_response_mapping.status, &type_annotated_value)?;
 
             let headers =
-                ResolvedResponseHeaders::from(&response_mapping.headers, &type_annotated_value)?;
+                ResolvedResponseHeaders::from(&http_response_mapping.headers, &type_annotated_value)?;
 
-            let response_body = response_mapping.body.evaluate(&type_annotated_value)?;
+            let response_body = http_response_mapping.body.evaluate(&type_annotated_value)?;
 
             Ok(IntermediateHttpResponse {
                 body: response_body,

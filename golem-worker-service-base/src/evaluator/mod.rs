@@ -30,6 +30,12 @@ pub enum EvaluationError {
     Message(String),
 }
 
+impl From<String> for EvaluationError {
+    fn from(string: String) -> Self {
+        EvaluationError::Message(string)
+    }
+}
+
 impl Display for EvaluationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
