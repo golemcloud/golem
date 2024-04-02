@@ -3,6 +3,8 @@ mod bindings;
 use reqwest::{Client, Response};
 use crate::bindings::exports::golem::it::api::Guest;
 use crate::bindings::golem::api::host::*;
+use crate::bindings::wasi;
+use crate::bindings::wasi::io::streams::StreamError;
 
 struct Component;
 
@@ -74,6 +76,82 @@ impl Guest for Component {
         oplog_commit(replicas);
         println!("Finished commit");
     }
+
+    fn atomic_region() {
+        let now = std::time::SystemTime::now();
+        println!("Starting atomic region at {now:?}");
+
+        let begin = mark_begin_operation();
+
+        remote_side_effect("1"); // repeated 3x
+        remote_side_effect("2"); // repeated 3x
+
+        let decision = remote_call(1); // will return false on the 3rd call
+        if decision {
+            panic!("crash 1");
+        }
+
+        remote_side_effect("3"); // only performed once
+
+        mark_end_operation(begin);
+        println!("Finished atomic region");
+
+        remote_side_effect("4"); // only performed once
+
+        let begin = mark_begin_operation();
+        remote_side_effect("5"); // repeated 3x
+        let decision = remote_call(2); // will return false on the 3rd call
+        if decision {
+            panic!("crash 2");
+        }
+        mark_end_operation(begin);
+
+        remote_side_effect("6"); // only performed once
+    }
+
+    fn idempotence_flag(enabled: bool) {
+        let original = get_idempotence_mode();
+        if original != enabled {
+            set_idempotence_mode(enabled);
+            println!("Changed idempotence mode from {original} to {enabled}");
+        }
+
+        let future_response = send_remote_side_effect("1");
+
+        let begin = mark_begin_operation();
+        let decision = remote_call(1); // will return false on the 2nd call
+        if decision {
+            panic!("crash 1");
+        }
+        mark_end_operation(begin);
+
+        let incoming_response = get_incoming_response(&future_response);
+        let body = read_body(&incoming_response);
+
+        println!("Received response from remote side-effect: {} {}", incoming_response.status(), String::from_utf8(body).unwrap());
+    }
+
+    fn persist_nothing() {
+        println!("Initial level: {:?}", get_oplog_persistence_level());
+
+        remote_side_effect("1"); // repeated 1x
+
+        set_oplog_persistence_level(PersistenceLevel::PersistNothing);
+        remote_side_effect("2"); // repeated 3x
+        println!("Changed level: {:?}", get_oplog_persistence_level());
+        set_oplog_persistence_level(PersistenceLevel::Smart);
+
+        remote_side_effect("3"); // only performed once
+
+        let begin = mark_begin_operation();
+        let decision = remote_call(1); // will return false on the 3rd call
+        if decision {
+            panic!("crash 1");
+        }
+        mark_end_operation(begin);
+
+        remote_side_effect("4"); // only performed once
+    }
 }
 
 fn remote_call(param: u64) -> bool {
@@ -93,5 +171,98 @@ fn remote_call(param: u64) -> bool {
     let body = response.json::<bool>().expect("Invalid response");
 
     println!("Received {status} {body}");
+    body
+}
+
+fn remote_side_effect(message: &str) {
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let client = Client::builder().build().unwrap();
+
+    let url = format!("http://localhost:{port}/side-effect");
+
+    println!("Sending POST {url}");
+
+    let response: Response = client.post(&url)
+        .body(message.to_string())
+        .send()
+        .expect("Request failed");
+
+    let status = response.status();
+
+    println!("Received {status}");
+}
+
+// Using the low-level wasi-http API to initiate a remote call without reading the response
+// useful for failing in the middle of an ongoing request to test idempotence modes
+fn send_remote_side_effect(message: &str) -> wasi::http::types::FutureIncomingResponse {
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let headers = wasi::http::types::Fields::new();
+    let request = wasi::http::types::OutgoingRequest::new(headers);
+    request.set_method(&wasi::http::types::Method::Post).unwrap();
+    request.set_path_with_query(Some("/side-effect")).unwrap();
+    request.set_scheme(Some(&wasi::http::types::Scheme::Http)).unwrap();
+    request.set_authority(Some(&format!("localhost:{port}"))).unwrap();
+
+    let request_body = request.body().unwrap();
+    let request_body_stream = request_body.write().unwrap();
+    request_body_stream.write(message.as_bytes()).unwrap();
+    drop(request_body_stream);
+    wasi::http::types::OutgoingBody::finish(request_body, None).unwrap();
+
+    let options = wasi::http::types::RequestOptions::new();
+    options.set_connect_timeout(Some(5000000000)).unwrap(); // 5s
+    options.set_first_byte_timeout(Some(5000000000)).unwrap(); // 5s
+    options.set_between_bytes_timeout(Some(5000000000)).unwrap(); // 5s
+
+    let future_incoming_response = wasi::http::outgoing_handler::handle(request, Some(options)).unwrap();
+
+    future_incoming_response
+}
+
+fn get_incoming_response(
+    future_incoming_response: &wasi::http::types::FutureIncomingResponse,
+) -> wasi::http::types::IncomingResponse {
+    let incoming_response = match future_incoming_response.get() {
+        Some(Ok(Ok(incoming_response))) => {
+            println!("Got incoming response");
+            incoming_response
+        }
+        Some(Ok(Err(err))) => {
+            println!("Returned with error code: {err:?}");
+            panic!("Error: {:?}", err)
+        }
+        Some(Err(err)) => {
+            println!("Returned with error: {err:?}");
+            panic!("Error: {:?}", err)
+        }
+        None => {
+            println!("No incoming response yet, polling");
+            let pollable = future_incoming_response.subscribe();
+            let _ = wasi::io::poll::poll(&[&pollable]);
+            get_incoming_response(future_incoming_response)
+        }
+    };
+    incoming_response
+}
+
+fn read_body(incoming_response: &wasi::http::types::IncomingResponse) -> Vec<u8> {
+    let response_body = incoming_response.consume().unwrap();
+    let response_body_stream = response_body.stream().unwrap();
+    let mut body = Vec::new();
+
+    let mut eof = false;
+    while !eof {
+        match response_body_stream.read(u64::MAX) {
+            Ok(mut body_chunk) => {
+                body.append(&mut body_chunk);
+            }
+            Err(StreamError::Closed) => {
+                eof = true;
+            }
+            Err(err) => panic!("Error: {:?}", err),
+        }
+    }
     body
 }
