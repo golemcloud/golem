@@ -34,14 +34,6 @@ pub struct MessageBody {
     message: String,
 }
 
-// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-// pub struct RouteValidationError {
-//     pub method: MethodPattern,
-//     pub path: String,
-//     pub template: TemplateId,
-//     pub detail: String,
-// }
-
 #[derive(ApiResponse)]
 pub enum ApiEndpointError {
     #[oai(status = 400)]
