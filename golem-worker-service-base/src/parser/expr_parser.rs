@@ -123,7 +123,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     }
                 }
 
-                
+
                 Token::Worker => go(cursor, context, prev_expression.apply_with(Expr::Worker())),
 
                 Token::InterpolationStart => {
