@@ -99,7 +99,12 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                                             )
                                         }
                                         expr => {
-                                          Ok(ConstructorPattern::Literal(Box::new(expr)))
+                                            ConstructorPattern::constructor(
+                                                token.to_string().as_str(),
+                                                vec![ConstructorPattern::Literal(Box::new(
+                                                    expr,
+                                                ))],
+                                            )
                                         }
                                     }
                                 }

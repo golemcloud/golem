@@ -324,7 +324,9 @@ impl Evaluator for Expr {
 
                     handle_pattern_match(&input_expr, constructors, input)
                 }
-                Expr::Constructor0(constructor) => handle_constructor(&constructor, input),
+                Expr::Constructor0(constructor) => {
+                    handle_constructor(&constructor, input)
+                },
             }
         }
 
@@ -1092,7 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluation_with_pattern_match_with_select_with_construction() {
+    fn test_evaluation_with_pattern_match_with_some_construction() {
         let worker_response = get_worker_response(
             r#"
                     {
@@ -1109,7 +1111,30 @@ mod tests {
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         let expected = TypeAnnotatedValue::Option {
             value: Some(Box::new(TypeAnnotatedValue::Str("id1".to_string()))),
-            typ: AnalysedType::Option(Box::new(AnalysedType::Str)),
+            typ: AnalysedType::Str,
+        };
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_with_none_construction() {
+        let worker_response = get_worker_response(
+            r#"
+                    {
+                        "ok": {
+                           "ids": ["id1", "id2"]
+                        }
+                    }"#,
+        );
+
+        let expr = Expr::from_primitive_string(
+            "${match worker.response { ok(value) => none, none => 'not found' }}",
+        )
+            .unwrap();
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let expected = TypeAnnotatedValue::Option {
+            value: None,
+            typ: AnalysedType::Str,
         };
         assert_eq!(result, Ok(expected));
     }
