@@ -63,6 +63,10 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
 
                 Token::Request => go(cursor, context, prev_expression.apply_with(Expr::Request())),
 
+                Token::None => go(cursor, context, prev_expression.apply_with(
+                    Expr::Constructor0(ConstructorPattern::constructor("none", vec![])?)
+                )),
+
                 token @ Token::Some | token @ Token::Ok | token @ Token::Err => {
                     match cursor.next_non_empty_token() {
                         Some(Token::OpenParen) => {
@@ -120,11 +124,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     }
                 }
 
-                Token::None => Err(ParseError::Message(format!(
-                    "Dangling keyword {}",
-                    Token::None
-                ))),
-
+                
                 Token::Worker => go(cursor, context, prev_expression.apply_with(Expr::Worker())),
 
                 Token::InterpolationStart => {
