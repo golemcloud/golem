@@ -1,13 +1,26 @@
-use std::collections::{hash_map, HashMap};
+use std::collections::HashMap;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 struct RadixNode<T> {
     pattern: Vec<Pattern>,
-    children: Vec<RadixNode<T>>,
+    children: HashMap<Pattern, RadixNode<T>>,
     data: Option<T>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+impl<T> std::fmt::Debug for RadixNode<T>
+where
+    T: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RadixNode")
+            .field("pattern", &self.pattern)
+            .field("children", &self.children.values())
+            .field("data", &self.data)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Pattern {
     Static(String),
     Variable(String),
@@ -17,7 +30,7 @@ impl<T> RadixNode<T> {
     pub fn new(pattern: Vec<Pattern>) -> Self {
         Self {
             pattern,
-            children: Vec::new(),
+            children: HashMap::new(),
             data: None,
         }
     }
@@ -28,7 +41,7 @@ impl<T> RadixNode<T> {
             return;
         }
 
-        for child in &mut self.children {
+        if let Some(child) = self.children.get_mut(&path[0]) {
             let common_prefix_len = child
                 .pattern
                 .iter()
@@ -50,15 +63,18 @@ impl<T> RadixNode<T> {
                         data: new_child_data,
                     };
 
-                    child.children.push(new_child);
+                    child
+                        .children
+                        .insert(new_child.pattern[0].clone(), new_child);
                     child.push(&path[common_prefix_len..], data);
                 }
                 return;
             }
         }
 
-        self.children.push(RadixNode::new(path.to_vec()));
-        if let Some(child) = self.children.last_mut() {
+        let new_node = RadixNode::new(path.to_vec());
+        self.children.insert(path[0].clone(), new_node);
+        if let Some(child) = self.children.get_mut(&path[0]) {
             child.data = Some(data);
         }
     }
@@ -68,7 +84,7 @@ impl<T> RadixNode<T> {
             return self.data.as_ref();
         }
 
-        for child in &self.children {
+        if let Some(child) = self.children.get(&path[0]) {
             if path.starts_with(&child.pattern) {
                 return child.get(&path[child.pattern.len()..]);
             }
