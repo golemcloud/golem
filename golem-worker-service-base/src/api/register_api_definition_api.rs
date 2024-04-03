@@ -216,9 +216,6 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     }
 }
 
-/**
- * GRPC CONVERSIONS.
- */
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 
 impl TryFrom<crate::api_definition::http::HttpApiDefinition>
