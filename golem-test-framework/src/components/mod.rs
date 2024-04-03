@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_api_grpc::proto::grpc::health::v1::health_check_response::ServingStatus;
 use golem_api_grpc::proto::grpc::health::v1::HealthCheckRequest;
+use once_cell::sync::Lazy;
 use std::io::{BufRead, BufReader};
 use std::process::Child;
 use std::thread::JoinHandle;
@@ -20,7 +22,6 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
-use golem_api_grpc::proto::grpc::health::v1::health_check_response::ServingStatus;
 
 pub mod rdb;
 pub mod redis;
@@ -123,3 +124,8 @@ async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str) {
         }
     }
 }
+
+// Using a global docker client to avoid the restrictions of the testcontainers library,
+// binding the container lifetime to the client.
+static DOCKER: Lazy<testcontainers::clients::Cli> =
+    Lazy::new(testcontainers::clients::Cli::default);

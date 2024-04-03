@@ -6,7 +6,7 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-use golem_test_framework::config::{TestDependencies, EnvBasedTestDependencies};
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 
 #[allow(dead_code)]
 mod common;
@@ -21,10 +21,7 @@ pub mod transactions;
 pub mod wasi;
 
 #[ctor]
-pub static DOCKER: testcontainers::clients::Cli = testcontainers::clients::Cli::default();
-
-#[ctor]
-pub static CONFIG: EnvBasedTestDependencies = EnvBasedTestDependencies::new(&DOCKER);
+pub static CONFIG: EnvBasedTestDependencies = EnvBasedTestDependencies::new(0);
 
 #[dtor]
 unsafe fn drop_config() {

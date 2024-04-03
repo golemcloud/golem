@@ -13,28 +13,29 @@
 // limitations under the License.
 
 use crate::components::redis::Redis;
-use crate::components::NETWORK;
+use crate::components::{DOCKER, NETWORK};
 use std::sync::atomic::{AtomicBool, Ordering};
 use testcontainers::{Container, RunnableImage};
 use testcontainers_modules::redis::REDIS_PORT;
 use tracing::info;
 
-pub struct DockerRedis<'d> {
-    container: Container<'d, testcontainers_modules::redis::Redis>,
+pub struct DockerRedis {
+    container: Container<'static, testcontainers_modules::redis::Redis>,
     prefix: String,
     valid: AtomicBool,
 }
 
-impl<'d> DockerRedis<'d> {
-    pub fn new(docker: &'d testcontainers::clients::Cli, prefix: String) -> Self {
+impl DockerRedis {
+    const NAME: &'static str = "golem_redis";
+
+    pub fn new(prefix: String) -> Self {
         info!("Starting Redis container");
 
-        let name = "golem_redis";
         let image = RunnableImage::from(testcontainers_modules::redis::Redis)
             .with_tag("7.2")
-            .with_container_name(name)
+            .with_container_name(Self::NAME)
             .with_network(NETWORK);
-        let container = docker.run(image);
+        let container = DOCKER.run(image);
 
         super::wait_for_startup("localhost", container.get_host_port_ipv4(REDIS_PORT));
 
@@ -46,18 +47,26 @@ impl<'d> DockerRedis<'d> {
     }
 }
 
-impl<'d> Redis for DockerRedis<'d> {
+impl Redis for DockerRedis {
     fn assert_valid(&self) {
         if !self.valid.load(Ordering::Acquire) {
             std::panic!("Redis has been closed")
         }
     }
 
-    fn host(&self) -> &str {
+    fn private_host(&self) -> &str {
+        Self::NAME
+    }
+
+    fn private_port(&self) -> u16 {
+        REDIS_PORT
+    }
+
+    fn public_host(&self) -> &str {
         "localhost"
     }
 
-    fn port(&self) -> u16 {
+    fn public_port(&self) -> u16 {
         self.container.get_host_port_ipv4(REDIS_PORT)
     }
 
@@ -72,7 +81,7 @@ impl<'d> Redis for DockerRedis<'d> {
     }
 }
 
-impl<'d> Drop for DockerRedis<'d> {
+impl Drop for DockerRedis {
     fn drop(&mut self) {
         self.kill()
     }

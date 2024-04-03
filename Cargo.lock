@@ -3061,6 +3061,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-rpc",
+ "once_cell",
  "postgres",
  "redis 0.25.2",
  "testcontainers",

@@ -17,7 +17,7 @@ use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::template_service::TemplateService;
 use crate::components::worker_service::{env_vars, WorkerService};
-use crate::components::NETWORK;
+use crate::components::{DOCKER, NETWORK};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,18 +25,17 @@ use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
 use tracing::{info, Level};
 
-pub struct DockerWorkerService<'d> {
-    container: Container<'d, GolemWorkerServiceImage>,
+pub struct DockerWorkerService {
+    container: Container<'static, GolemWorkerServiceImage>,
 }
 
-impl<'d> DockerWorkerService<'d> {
+impl DockerWorkerService {
     const NAME: &'static str = "golem_worker_service";
     const HTTP_PORT: u16 = 8082;
     const GRPC_PORT: u16 = 9092;
     const CUSTOM_REQUEST_PORT: u16 = 9093;
 
     pub fn new(
-        docker: &'d testcontainers::clients::Cli,
         template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
@@ -64,27 +63,43 @@ impl<'d> DockerWorkerService<'d> {
         ))
         .with_container_name(Self::NAME)
         .with_network(NETWORK);
-        let container = docker.run(image);
+        let container = DOCKER.run(image);
 
         Self { container }
     }
 }
 
 #[async_trait]
-impl<'d> WorkerService for DockerWorkerService<'d> {
-    fn host(&self) -> &str {
+impl WorkerService for DockerWorkerService {
+    fn private_host(&self) -> &str {
+        Self::NAME
+    }
+
+    fn private_http_port(&self) -> u16 {
+        Self::HTTP_PORT
+    }
+
+    fn private_grpc_port(&self) -> u16 {
+        Self::GRPC_PORT
+    }
+
+    fn private_custom_request_port(&self) -> u16 {
+        Self::CUSTOM_REQUEST_PORT
+    }
+
+    fn public_host(&self) -> &str {
         "localhost"
     }
 
-    fn http_port(&self) -> u16 {
+    fn public_http_port(&self) -> u16 {
         self.container.get_host_port_ipv4(Self::HTTP_PORT)
     }
 
-    fn grpc_port(&self) -> u16 {
+    fn public_grpc_port(&self) -> u16 {
         self.container.get_host_port_ipv4(Self::GRPC_PORT)
     }
 
-    fn custom_request_port(&self) -> u16 {
+    fn public_custom_request_port(&self) -> u16 {
         self.container.get_host_port_ipv4(Self::CUSTOM_REQUEST_PORT)
     }
 
@@ -93,7 +108,7 @@ impl<'d> WorkerService for DockerWorkerService<'d> {
     }
 }
 
-impl Drop for DockerWorkerService<'_> {
+impl Drop for DockerWorkerService {
     fn drop(&mut self) {
         self.kill();
     }

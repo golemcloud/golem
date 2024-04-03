@@ -56,7 +56,7 @@ macro_rules! lazy_field {
 }
 
 pub struct EnvBasedTestDependencies {
-    docker: &'static testcontainers::clients::Cli,
+    worker_executor_cluster_size: usize,
     rdb: lazy_field!(Rdb),
     redis: lazy_field!(Redis),
     redis_monitor: lazy_field!(RedisMonitor),
@@ -67,9 +67,9 @@ pub struct EnvBasedTestDependencies {
 }
 
 impl EnvBasedTestDependencies {
-    pub fn new(docker: &'static testcontainers::clients::Cli) -> Self {
+    pub fn new(worker_executor_cluster_size: usize) -> Self {
         Self {
-            docker,
+            worker_executor_cluster_size,
             rdb: Arc::new(Mutex::new(None)),
             redis: Arc::new(Mutex::new(None)),
             redis_monitor: Arc::new(Mutex::new(None)),
@@ -158,7 +158,7 @@ impl TestDependencies for EnvBasedTestDependencies {
                 }
                 DbType::Postgres => {
                     let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                        Arc::new(DockerPostgresRdb::new(self.docker, !Self::use_docker()));
+                        Arc::new(DockerPostgresRdb::new(!Self::use_docker()));
                     *rdb_cell = Some(rdb.clone());
                     rdb
                 }
@@ -173,7 +173,7 @@ impl TestDependencies for EnvBasedTestDependencies {
             None => {
                 let prefix = Self::redis_prefix().unwrap_or("".to_string());
                 let redis: Arc<dyn Redis + Send + Sync + 'static> = if Self::use_docker() {
-                    Arc::new(DockerRedis::new(self.docker, prefix))
+                    Arc::new(DockerRedis::new(prefix))
                 } else {
                     let host = Self::redis_host().unwrap_or("localhost".to_string());
                     let port = Self::redis_port().unwrap_or(6379);
@@ -220,20 +220,19 @@ impl TestDependencies for EnvBasedTestDependencies {
                 let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> =
                     if Self::use_docker() {
                         Arc::new(DockerShardManager::new(
-                            self.docker,
                             self.redis(),
                             Self::default_verbosity(),
                         ))
                     } else {
                         Arc::new(SpawnedShardManager::new(
-                            Path::new("target/debug/golem-shard-manager"),
-                            Path::new("golem-shard-manager"),
+                            Path::new("../target/debug/golem-shard-manager"),
+                            Path::new("../golem-shard-manager"),
                             9021,
                             9020,
                             self.redis(),
+                            Self::default_verbosity(),
                             Self::default_stdout_level(),
                             Self::default_stderr_level(),
-                            Self::default_verbosity(),
                         ))
                     };
                 *shard_manager_cell = Some(shard_manager.clone());
@@ -254,20 +253,19 @@ impl TestDependencies for EnvBasedTestDependencies {
                 let template_service: Arc<dyn TemplateService + Send + Sync + 'static> =
                     if Self::use_docker() {
                         Arc::new(DockerTemplateService::new(
-                            self.docker,
                             self.rdb(),
                             Self::default_verbosity(),
                         ))
                     } else {
                         Arc::new(SpawnedTemplateService::new(
-                            Path::new("target/debug/golem-template-service"),
-                            Path::new("golem-template-service"),
+                            Path::new("../target/debug/golem-template-service"),
+                            Path::new("../golem-template-service"),
                             8081,
                             9091,
                             self.rdb(),
+                            Self::default_verbosity(),
                             Self::default_stdout_level(),
                             Self::default_stderr_level(),
-                            Self::default_verbosity(),
                         ))
                     };
                 *template_service_cell = Some(template_service.clone());
@@ -284,7 +282,6 @@ impl TestDependencies for EnvBasedTestDependencies {
                 let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
                     if Self::use_docker() {
                         Arc::new(DockerWorkerService::new(
-                            self.docker,
                             self.template_service(),
                             self.shard_manager(),
                             self.rdb(),
@@ -293,8 +290,8 @@ impl TestDependencies for EnvBasedTestDependencies {
                         ))
                     } else {
                         Arc::new(SpawnedWorkerService::new(
-                            Path::new("target/debug/golem-worker-service"),
-                            Path::new("golem-worker-service"),
+                            Path::new("../target/debug/golem-worker-service"),
+                            Path::new("../golem-worker-service"),
                             8082,
                             9092,
                             9093,
@@ -302,9 +299,9 @@ impl TestDependencies for EnvBasedTestDependencies {
                             self.shard_manager(),
                             self.rdb(),
                             self.redis(),
+                            Self::default_verbosity(),
                             Self::default_stdout_level(),
                             Self::default_stderr_level(),
-                            Self::default_verbosity(),
                         ))
                     };
                 *worker_service_cell = Some(worker_service.clone());
@@ -322,10 +319,9 @@ impl TestDependencies for EnvBasedTestDependencies {
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = if Self::use_docker() {
                     Arc::new(DockerWorkerExecutorCluster::new(
-                        3,
+                        self.worker_executor_cluster_size,
                         9000,
                         9100,
-                        self.docker,
                         self.redis(),
                         self.template_service(),
                         self.shard_manager(),
@@ -334,11 +330,11 @@ impl TestDependencies for EnvBasedTestDependencies {
                     ))
                 } else {
                     Arc::new(SpawnedWorkerExecutorCluster::new(
-                        3,
+                        self.worker_executor_cluster_size,
                         9000,
                         9100,
-                        Path::new("target/debug/worker-executor"),
-                        Path::new("golem-worker-executor"),
+                        Path::new("../target/debug/worker-executor"),
+                        Path::new("../golem-worker-executor"),
                         self.redis(),
                         self.template_service(),
                         self.shard_manager(),

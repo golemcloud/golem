@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::components::rdb::Rdb;
-use crate::components::template_service::{
-    env_vars, wait_for_startup, TemplateService,
-};
+use crate::components::template_service::{env_vars, wait_for_startup, TemplateService};
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 
@@ -52,7 +50,7 @@ impl SpawnedTemplateService {
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(env_vars(grpc_port, http_port, rdb, verbosity))
+            .envs(env_vars(http_port, grpc_port, rdb, verbosity))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -83,15 +81,15 @@ impl SpawnedTemplateService {
 
 #[async_trait]
 impl TemplateService for SpawnedTemplateService {
-    fn host(&self) -> &str {
+    fn private_host(&self) -> &str {
         "localhost"
     }
 
-    fn http_port(&self) -> u16 {
+    fn private_http_port(&self) -> u16 {
         self.http_port
     }
 
-    fn grpc_port(&self) -> u16 {
+    fn private_grpc_port(&self) -> u16 {
         self.grpc_port
     }
 

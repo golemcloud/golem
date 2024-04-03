@@ -16,6 +16,7 @@ golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-wasm-rpc = { workspace = true }
 
 async-trait = { workspace = true }
+once_cell = "1.19.0"
 postgres = "0.19.7"
 redis = { version = "0.25.2", features = ["default"] }
 testcontainers = { version = "0.15.0", features = ["async-trait", "tokio"] }

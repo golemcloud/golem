@@ -30,13 +30,16 @@ impl SpawnedRedisMonitor {
         out_level: Level,
         err_level: Level,
     ) -> Self {
-        info!("Starting Redis monitor on port {}", redis.as_ref().port());
+        info!(
+            "Starting Redis monitor on port {}",
+            redis.as_ref().public_port()
+        );
 
         let mut child = Command::new("redis-cli")
             .arg("-h")
-            .arg(redis.as_ref().host())
+            .arg(redis.as_ref().public_host())
             .arg("-p")
-            .arg(redis.as_ref().port().to_string())
+            .arg(redis.as_ref().public_port().to_string())
             .arg("monitor")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

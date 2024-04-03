@@ -91,7 +91,7 @@ impl SpawnedShardManager {
     ) -> (Child, ChildProcessLogger) {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(env_vars(grpc_port, http_port, redis, verbosity))
+            .envs(env_vars(http_port, grpc_port, redis, verbosity))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -117,15 +117,15 @@ impl SpawnedShardManager {
 
 #[async_trait]
 impl ShardManager for SpawnedShardManager {
-    fn host(&self) -> &str {
+    fn private_host(&self) -> &str {
         "localhost"
     }
 
-    fn http_port(&self) -> u16 {
+    fn private_http_port(&self) -> u16 {
         self.http_port
     }
 
-    fn grpc_port(&self) -> u16 {
+    fn private_grpc_port(&self) -> u16 {
         self.grpc_port
     }
 

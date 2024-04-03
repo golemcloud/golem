@@ -14,7 +14,7 @@
 
 use crate::components::redis::Redis;
 use crate::components::worker_executor::{env_vars, WorkerExecutor};
-use crate::components::NETWORK;
+use crate::components::{DOCKER, NETWORK};
 use async_trait::async_trait;
 
 use std::collections::HashMap;
@@ -27,19 +27,17 @@ use crate::components::template_service::TemplateService;
 use crate::components::worker_service::WorkerService;
 use tracing::{info, Level};
 
-pub struct DockerWorkerExecutor<'d> {
+pub struct DockerWorkerExecutor {
+    name: String,
     http_port: u16,
     grpc_port: u16,
-    container: Container<'d, WorkerExecutorImage>,
+    container: Container<'static, WorkerExecutorImage>,
 }
 
-impl<'d> DockerWorkerExecutor<'d> {
-    const NAME: &'static str = "golem_worker_executor";
-
+impl DockerWorkerExecutor {
     pub fn new(
         http_port: u16,
         grpc_port: u16,
-        docker: &'d testcontainers::clients::Cli,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
@@ -58,36 +56,45 @@ impl<'d> DockerWorkerExecutor<'d> {
             verbosity,
         );
 
-        let image = RunnableImage::from(
-            WorkerExecutorImage::new(
-                grpc_port,
-                http_port,
-                env_vars,
-            ),
-        )
-        .with_container_name(Self::NAME)
-        .with_network(NETWORK);
-        let container = docker.run(image);
+        let name = format!("golem-worker-executor-{grpc_port}");
+
+        let image = RunnableImage::from(WorkerExecutorImage::new(grpc_port, http_port, env_vars))
+            .with_container_name(&name)
+            .with_network(NETWORK);
+        let container = DOCKER.run(image);
 
         Self {
+            name,
             http_port,
             grpc_port,
-            container
+            container,
         }
     }
 }
 
 #[async_trait]
-impl<'d> WorkerExecutor for DockerWorkerExecutor<'d> {
-    fn host(&self) -> &str {
+impl WorkerExecutor for DockerWorkerExecutor {
+    fn private_host(&self) -> &str {
+        &self.name
+    }
+
+    fn private_http_port(&self) -> u16 {
+        self.http_port
+    }
+
+    fn private_grpc_port(&self) -> u16 {
+        self.grpc_port
+    }
+
+    fn public_host(&self) -> &str {
         "localhost"
     }
 
-    fn http_port(&self) -> u16 {
+    fn public_http_port(&self) -> u16 {
         self.container.get_host_port_ipv4(self.http_port)
     }
 
-    fn grpc_port(&self) -> u16 {
+    fn public_grpc_port(&self) -> u16 {
         self.container.get_host_port_ipv4(self.grpc_port)
     }
 
@@ -100,7 +107,7 @@ impl<'d> WorkerExecutor for DockerWorkerExecutor<'d> {
     }
 }
 
-impl<'d> Drop for DockerWorkerExecutor<'d> {
+impl Drop for DockerWorkerExecutor {
     fn drop(&mut self) {
         self.kill();
     }

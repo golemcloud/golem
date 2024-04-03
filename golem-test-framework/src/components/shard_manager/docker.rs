@@ -14,7 +14,7 @@
 
 use crate::components::redis::Redis;
 use crate::components::shard_manager::{env_vars, ShardManager};
-use crate::components::NETWORK;
+use crate::components::{DOCKER, NETWORK};
 use async_trait::async_trait;
 
 use std::collections::HashMap;
@@ -22,23 +22,18 @@ use std::sync::Arc;
 use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
 
-
 use tracing::{info, Level};
 
-pub struct DockerShardManager<'d> {
-    container: Container<'d, ShardManagerImage>,
+pub struct DockerShardManager {
+    container: Container<'static, ShardManagerImage>,
 }
 
-impl<'d> DockerShardManager<'d> {
+impl DockerShardManager {
     const NAME: &'static str = "golem_shard_manager";
     const HTTP_PORT: u16 = 9021;
     const GRPC_PORT: u16 = 9020;
 
-    pub fn new(
-        docker: &'d testcontainers::clients::Cli,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        verbosity: Level,
-    ) -> Self {
+    pub fn new(redis: Arc<dyn Redis + Send + Sync + 'static>, verbosity: Level) -> Self {
         info!("Starting golem-shard-manager container");
 
         let env_vars = env_vars(Self::HTTP_PORT, Self::GRPC_PORT, redis, verbosity);
@@ -50,23 +45,35 @@ impl<'d> DockerShardManager<'d> {
         ))
         .with_container_name(Self::NAME)
         .with_network(NETWORK);
-        let container = docker.run(image);
+        let container = DOCKER.run(image);
 
         Self { container }
     }
 }
 
 #[async_trait]
-impl<'d> ShardManager for DockerShardManager<'d> {
-    fn host(&self) -> &str {
+impl ShardManager for DockerShardManager {
+    fn private_host(&self) -> &str {
+        Self::NAME
+    }
+
+    fn private_http_port(&self) -> u16 {
+        Self::HTTP_PORT
+    }
+
+    fn private_grpc_port(&self) -> u16 {
+        Self::GRPC_PORT
+    }
+
+    fn public_host(&self) -> &str {
         "localhost"
     }
 
-    fn http_port(&self) -> u16 {
+    fn public_http_port(&self) -> u16 {
         self.container.get_host_port_ipv4(Self::HTTP_PORT)
     }
 
-    fn grpc_port(&self) -> u16 {
+    fn public_grpc_port(&self) -> u16 {
         self.container.get_host_port_ipv4(Self::GRPC_PORT)
     }
 
@@ -79,7 +86,7 @@ impl<'d> ShardManager for DockerShardManager<'d> {
     }
 }
 
-impl<'d> Drop for DockerShardManager<'d> {
+impl Drop for DockerShardManager {
     fn drop(&mut self) {
         self.kill();
     }

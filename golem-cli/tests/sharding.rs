@@ -1,30 +1,24 @@
 use crate::cli::{Cli, CliLive};
-use crate::context::shard_manager::ShardManager;
-use crate::context::worker::WorkerExecutor;
-use crate::context::{Context, ContextInfo, EnvConfig};
 use golem_cli::clients::template::TemplateView;
 use golem_cli::model::InvocationKey;
 use golem_client::model::VersionedWorkerId;
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use libtest_mimic::{Arguments, Conclusion, Failed, Trial};
 use rand::prelude::*;
 use serde_json::Value;
-use std::collections::HashSet;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::Duration;
-use testcontainers::clients;
+use tracing::info;
 
 pub mod cli;
-pub mod context;
 
-fn run(context: ContextInfo) -> Conclusion {
+fn run(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Conclusion {
     let args = Arguments::from_args();
-
-    let context = Arc::new(context);
 
     let mut tests = Vec::new();
 
-    tests.append(&mut all(context.clone()));
+    tests.append(&mut all(deps.clone()));
 
     libtest_mimic::run(&args, tests)
 }
@@ -32,35 +26,32 @@ fn run(context: ContextInfo) -> Conclusion {
 fn main() -> Result<(), Failed> {
     env_logger::init();
 
-    let (tx, rx) = std::sync::mpsc::channel();
+    let deps: Arc<dyn TestDependencies + Send + Sync + 'static> =
+        Arc::new(EnvBasedTestDependencies::new(10));
+    let cluster = deps.worker_executor_cluster(); // forcing startup by getting it
+    info!("Using cluster with {:?} worker executors", cluster.size());
+
     let (stop_tx, stop_rx) = std::sync::mpsc::channel();
 
+    let deps_clone = deps.clone();
     let context_handler = std::thread::spawn(move || {
-        let docker = clients::Cli::default();
-        let context = Context::start(&docker, EnvConfig::from_env_with_shards(0)).unwrap();
-
-        let context_info = context.info();
-
-        tx.send(context_info).unwrap();
-
-        make_env_unstable(context, stop_rx);
-
-        drop(docker);
+        make_env_unstable(deps_clone, stop_rx);
     });
 
-    let context_info = rx.recv().unwrap();
-
-    let res = run(context_info);
+    let res = run(deps.clone());
 
     stop_tx.send(()).unwrap();
     context_handler.join().unwrap();
 
+    drop(cluster);
+    drop(deps);
+
     res.exit()
 }
 
-pub fn all(context: Arc<ContextInfo>) -> Vec<Trial> {
-    let cli = CliLive::make(&context).unwrap().with_long_args();
-    let ctx = (context, cli);
+pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
+    let cli = CliLive::make(deps.clone()).unwrap().with_long_args();
+    let ctx = (deps.clone(), cli);
     vec![Trial::test_in_context(
         "service_is_responsive_to_shard_changes".to_string(),
         ctx.clone(),
@@ -74,98 +65,69 @@ enum Command {
     RestartShardManager,
 }
 
-fn start_shard(context: &mut Context) {
-    let used_ids: HashSet<u16> = context
-        .worker_executors
-        .worker_executors
-        .iter()
-        .map(|we| we.shard_id)
-        .collect();
-    let mut ids = (0..10)
-        .filter(|i| !used_ids.contains(i))
-        .collect::<Vec<_>>();
-    let mut rng = thread_rng();
-    ids.shuffle(&mut rng);
+fn start_shard(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) {
+    let mut stopped = deps.worker_executor_cluster().stopped_indices();
+    if !stopped.is_empty() {
+        let mut rng = thread_rng();
+        stopped.shuffle(&mut rng);
 
-    if let Some(id) = ids.first() {
-        match WorkerExecutor::start(
-            context.docker,
-            *id,
-            &context.env,
-            &context.redis.info(),
-            &context.golem_worker_service.info(),
-            &context.golem_template_service.info(),
-            &context.shard_manager.as_ref().unwrap().info(),
-        ) {
-            Ok(we) => context.worker_executors.worker_executors.push(we),
-            Err(e) => {
-                println!("Failed to start worker: {e:?}");
-            }
-        }
+        deps.worker_executor_cluster().start(stopped[0]);
     }
 }
 
-fn stop_shard(context: &mut Context) {
-    let len = context.worker_executors.worker_executors.len();
+fn stop_shard(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) {
+    let mut started = deps.worker_executor_cluster().started_indices();
+    if !started.is_empty() {
+        let mut rng = thread_rng();
+        started.shuffle(&mut rng);
 
-    if len == 0 {
-        return;
-    }
-
-    let mut rng = thread_rng();
-    let i = rng.gen_range(0..len);
-    let we = context.worker_executors.worker_executors.remove(i);
-    drop(we) // Not needed. Just making it explicit;
-}
-
-fn reload_shard_manager(context: &mut Context) {
-    let old_shard_manager = context.shard_manager.take();
-    drop(old_shard_manager); // Important! We should stop the old one first.
-    match ShardManager::start(context.docker, &context.env, &context.redis.info()) {
-        Ok(shard_manager) => context.shard_manager = Some(shard_manager),
-        Err(e) => {
-            println!("!!! Failed to start shard manager: {e:?}");
-        }
+        deps.worker_executor_cluster().stop(started[0]);
     }
 }
 
-fn make_env_unstable(context: Context, stop_rx: Receiver<()>) {
-    let mut context = context;
+fn reload_shard_manager(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) {
+    deps.shard_manager().kill();
+    deps.shard_manager().restart();
+}
 
+fn make_env_unstable(
+    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+    stop_rx: Receiver<()>,
+) {
     println!("!!! Starting Golem Sharding Tester");
 
-    fn worker(context: &mut Context) {
+    fn worker(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) {
         let mut commands = [
             Command::StartShard,
             Command::StopShard,
             Command::RestartShardManager,
         ];
-        let mut rng = rand::thread_rng();
+        let mut rng = thread_rng();
         commands.shuffle(&mut rng);
         match commands[0] {
             Command::StartShard => {
                 println!("!!! Golem Sharding Tester starting shard");
-                start_shard(context);
+                start_shard(deps.clone());
                 println!("!!! Golem Sharding Tester started shard");
             }
             Command::StopShard => {
                 println!("!!! Golem Sharding Tester stopping shard");
-                stop_shard(context);
+                stop_shard(deps.clone());
                 println!("!!! Golem Sharding Tester stopped shard");
             }
             Command::RestartShardManager => {
                 println!("!!! Golem Sharding Tester reloading shard manager");
-                reload_shard_manager(context);
+                reload_shard_manager(deps.clone());
                 println!("!!! Golem Sharding Tester reloaded shard manager");
             }
         }
     }
 
     while stop_rx.try_recv().is_err() {
-        let mut rng = rand::thread_rng();
+        let mut rng = thread_rng();
         let n = rng.gen_range(1..10);
         std::thread::sleep(Duration::from_secs(n));
-        worker(&mut context);
+        worker(deps.clone());
     }
 }
 
@@ -294,7 +256,7 @@ fn get_invocation_key_invoke_and_await_with_retry(
 }
 
 fn service_is_responsive_to_shard_changes(
-    (context, cli): (Arc<ContextInfo>, CliLive),
+    (context, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
 ) -> Result<(), Failed> {
     let template_name = "echo-service-1".to_string();
 
@@ -306,8 +268,7 @@ fn service_is_responsive_to_shard_changes(
         &cfg.arg('t', "template-name"),
         &template_name,
         context
-            .env
-            .wasm_root
+            .template_directory()
             .join("option-service.wasm")
             .to_str()
             .unwrap(),

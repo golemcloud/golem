@@ -13,22 +13,22 @@
 // limitations under the License.
 
 use crate::components::rdb::{DbInfo, PostgresInfo, Rdb};
-use crate::components::NETWORK;
+use crate::components::{DOCKER, NETWORK};
 use testcontainers::{Container, RunnableImage};
 use tracing::info;
 
-pub struct DockerPostgresRdb<'d> {
-    container: Container<'d, testcontainers_modules::postgres::Postgres>,
+pub struct DockerPostgresRdb {
+    container: Container<'static, testcontainers_modules::postgres::Postgres>,
     host: String,
     port: u16,
     host_port: u16,
 }
 
-impl<'d> DockerPostgresRdb<'d> {
+impl DockerPostgresRdb {
     const DEFAULT_PORT: u16 = 5432;
 
     // TODO: can we simplify this and get rid of local_env (and always use localhost and exposed ports)?
-    pub fn new(docker: &'d testcontainers::clients::Cli, local_env: bool) -> Self {
+    pub fn new(local_env: bool) -> Self {
         info!("Starting Postgres container");
 
         let name = "golem_postgres";
@@ -41,7 +41,7 @@ impl<'d> DockerPostgresRdb<'d> {
             image.with_container_name(name).with_network(NETWORK)
         };
 
-        let container = docker.run(image);
+        let container = DOCKER.run(image);
 
         let host = if local_env { "localhost" } else { name };
         let port = if local_env {
@@ -77,7 +77,7 @@ impl<'d> DockerPostgresRdb<'d> {
     }
 }
 
-impl<'d> Rdb for DockerPostgresRdb<'d> {
+impl Rdb for DockerPostgresRdb {
     fn info(&self) -> DbInfo {
         DbInfo::Postgres(PostgresInfo {
             host: self.host.clone(),
@@ -95,7 +95,7 @@ impl<'d> Rdb for DockerPostgresRdb<'d> {
     }
 }
 
-impl<'d> Drop for DockerPostgresRdb<'d> {
+impl Drop for DockerPostgresRdb {
     fn drop(&mut self) {
         self.kill();
     }

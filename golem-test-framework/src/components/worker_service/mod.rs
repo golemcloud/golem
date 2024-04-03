@@ -34,13 +34,29 @@ pub mod spawned;
 #[async_trait]
 pub trait WorkerService {
     async fn client(&self) -> WorkerServiceClient<Channel> {
-        new_client(self.host(), self.grpc_port()).await
+        new_client(self.public_host(), self.public_grpc_port()).await
     }
 
-    fn host(&self) -> &str;
-    fn http_port(&self) -> u16;
-    fn grpc_port(&self) -> u16;
-    fn custom_request_port(&self) -> u16;
+    fn private_host(&self) -> &str;
+    fn private_http_port(&self) -> u16;
+    fn private_grpc_port(&self) -> u16;
+    fn private_custom_request_port(&self) -> u16;
+
+    fn public_host(&self) -> &str {
+        self.private_host()
+    }
+
+    fn public_http_port(&self) -> u16 {
+        self.private_http_port()
+    }
+
+    fn public_grpc_port(&self) -> u16 {
+        self.private_grpc_port()
+    }
+
+    fn public_custom_request_port(&self) -> u16 {
+        self.private_custom_request_port()
+    }
 
     fn kill(&self);
 }
@@ -70,19 +86,19 @@ fn env_vars(
     let vars: &[(&str, &str)] = &[
         ("RUST_LOG"                                   , &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
         ("RUST_BACKTRACE"                             , "1"),
-        ("GOLEM__REDIS__HOST"                         , redis.host()),
-        ("GOLEM__REDIS__PORT"                        , &redis.port().to_string()),
+        ("GOLEM__REDIS__HOST"                         , redis.private_host()),
+        ("GOLEM__REDIS__PORT"                         , &redis.private_port().to_string()),
         ("GOLEM__REDIS__DATABASE"                     , "1"),
-        ("GOLEM__TEMPLATE_SERVICE__HOST"              , template_service.host()),
-        ("GOLEM__TEMPLATE_SERVICE__PORT"              , &template_service.grpc_port().to_string()),
+        ("GOLEM__TEMPLATE_SERVICE__HOST"              , template_service.private_host()),
+        ("GOLEM__TEMPLATE_SERVICE__PORT"              , &template_service.private_grpc_port().to_string()),
         ("GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN"      , "5C832D93-FF85-4A8F-9803-513950FDFDB1"),
         ("ENVIRONMENT"                                , "local"),
         ("GOLEM__ENVIRONMENT"                         , "ittest"),
-        ("GOLEM__ROUTING_TABLE__HOST"                 , &shard_manager.host()),
-        ("GOLEM__ROUTING_TABLE__PORT"                 , &shard_manager.grpc_port().to_string()),
+        ("GOLEM__ROUTING_TABLE__HOST"                 , &shard_manager.private_host()),
+        ("GOLEM__ROUTING_TABLE__PORT"                 , &shard_manager.private_grpc_port().to_string()),
         ("GOLEM__CUSTOM_REQUEST_PORT"                 , &custom_request_port.to_string()),
-        ("GOLEM__WORKER_GRPC_PORT", &grpc_port.to_string()),
-        ("GOLEM__PORT", &http_port.to_string()),
+        ("GOLEM__WORKER_GRPC_PORT"                    , &grpc_port.to_string()),
+        ("GOLEM__PORT"                                , &http_port.to_string()),
 
     ];
 

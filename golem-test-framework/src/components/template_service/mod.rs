@@ -31,12 +31,25 @@ pub mod spawned;
 #[async_trait]
 pub trait TemplateService {
     async fn client(&self) -> TemplateServiceClient<Channel> {
-        new_client(self.host(), self.grpc_port()).await
+        new_client(self.public_host(), self.public_grpc_port()).await
     }
 
-    fn host(&self) -> &str;
-    fn http_port(&self) -> u16;
-    fn grpc_port(&self) -> u16;
+    fn private_host(&self) -> &str;
+    fn private_http_port(&self) -> u16;
+    fn private_grpc_port(&self) -> u16;
+
+    fn public_host(&self) -> &str {
+        self.private_host()
+    }
+
+    fn public_http_port(&self) -> u16 {
+        self.private_http_port()
+    }
+
+    fn public_grpc_port(&self) -> u16 {
+        self.private_grpc_port()
+    }
+
     fn kill(&self);
 }
 

@@ -31,12 +31,25 @@ pub mod spawned;
 #[async_trait]
 pub trait ShardManager {
     async fn client(&self) -> ShardManagerServiceClient<Channel> {
-        new_client(self.host(), self.grpc_port()).await
+        new_client(self.public_host(), self.public_grpc_port()).await
     }
 
-    fn host(&self) -> &str;
-    fn http_port(&self) -> u16;
-    fn grpc_port(&self) -> u16;
+    fn private_host(&self) -> &str;
+    fn private_http_port(&self) -> u16;
+    fn private_grpc_port(&self) -> u16;
+
+    fn public_host(&self) -> &str {
+        self.private_host()
+    }
+
+    fn public_http_port(&self) -> u16 {
+        self.private_http_port()
+    }
+
+    fn public_grpc_port(&self) -> u16 {
+        self.private_grpc_port()
+    }
+
     fn kill(&self);
     fn restart(&self);
 }
@@ -62,9 +75,9 @@ fn env_vars(
     let env: &[(&str, &str)] = &[
         ("RUST_LOG", &format!("{log_level},h2=warn,cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn")),
         ("RUST_BACKTRACE", "1"),
-        ("REDIS__HOST", redis.host()),
-        ("GOLEM__REDIS__HOST", &redis.host()),
-        ("GOLEM__REDIS__PORT", &redis.port().to_string()),
+        ("REDIS__HOST", redis.private_host()),
+        ("GOLEM__REDIS__HOST", &redis.private_host()),
+        ("GOLEM__REDIS__PORT", &redis.private_port().to_string()),
         ("GOLEM__REDIS__KEY_PREFIX", redis.prefix()),
         ("GOLEM_SHARD_MANAGER_PORT", &grpc_port.to_string()),
         ("GOLEM__HTTP_PORT", &http_port.to_string()),

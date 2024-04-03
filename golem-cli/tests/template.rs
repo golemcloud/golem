@@ -1,10 +1,15 @@
-use std::sync::Arc;
 use crate::cli::{Cli, CliLive};
 use golem_cli::clients::template::TemplateView;
-use libtest_mimic::{Failed, Trial};
 use golem_test_framework::config::TestDependencies;
+use libtest_mimic::{Failed, Trial};
+use std::sync::Arc;
 
-fn make(suffix: &str, name: &str, cli: CliLive, deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
+fn make(
+    suffix: &str,
+    name: &str,
+    cli: CliLive,
+    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+) -> Vec<Trial> {
     let ctx = (deps, name.to_string(), cli);
     vec![
         Trial::test_in_context(
@@ -30,14 +35,14 @@ pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial
         "_short",
         "CLI short",
         CliLive::make(deps.clone()).unwrap().with_short_args(),
-        deps.clone()
+        deps.clone(),
     );
 
     let mut long_args = make(
         "_long",
         "CLI long",
         CliLive::make(deps.clone()).unwrap().with_long_args(),
-        deps
+        deps,
     );
 
     short_args.append(&mut long_args);
@@ -46,7 +51,11 @@ pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial
 }
 
 fn template_add_and_find_all(
-    (deps, name, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, String, CliLive),
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
 ) -> Result<(), Failed> {
     let template_name = format!("{name} template add and find all");
     let env_service = deps.template_directory().join("environment-service.wasm");
@@ -64,7 +73,11 @@ fn template_add_and_find_all(
 }
 
 fn template_add_and_find_by_name(
-    (deps, name, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, String, CliLive),
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
 ) -> Result<(), Failed> {
     let template_name_other = format!("{name} template add and find by name other");
     let template_name = format!("{name} template add and find by name");
@@ -96,7 +109,11 @@ fn template_add_and_find_by_name(
 }
 
 fn template_update(
-    (deps, name, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, String, CliLive),
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
 ) -> Result<(), Failed> {
     let template_name = format!("{name} template update");
     let env_service = deps.template_directory().join("environment-service.wasm");

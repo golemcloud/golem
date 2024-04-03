@@ -33,7 +33,7 @@ impl ProvidedWorkerExecutorCluster {
 }
 
 impl WorkerExecutorCluster for ProvidedWorkerExecutorCluster {
-    fn count(&self) -> usize {
+    fn size(&self) -> usize {
         1
     }
 
@@ -45,7 +45,19 @@ impl WorkerExecutorCluster for ProvidedWorkerExecutorCluster {
         self.worker_executor.restart()
     }
 
+    fn stop(&self, _index: usize) {}
+
+    fn start(&self, _index: usize) {}
+
     fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>> {
         vec![self.worker_executor.clone()]
+    }
+
+    fn stopped_indices(&self) -> Vec<usize> {
+        vec![]
+    }
+
+    fn started_indices(&self) -> Vec<usize> {
+        vec![0]
     }
 }

@@ -19,11 +19,13 @@ use crate::components::worker_executor::docker::DockerWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
 
 pub struct DockerWorkerExecutorCluster {
     worker_executors: Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>>,
+    stopped_indices: Arc<Mutex<HashSet<usize>>>,
 }
 
 impl DockerWorkerExecutorCluster {
@@ -31,7 +33,6 @@ impl DockerWorkerExecutorCluster {
         size: usize,
         base_http_port: u16,
         base_grpc_port: u16,
-        docker: &'static testcontainers::clients::Cli,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
@@ -49,7 +50,6 @@ impl DockerWorkerExecutorCluster {
                 Arc::new(DockerWorkerExecutor::new(
                     http_port,
                     grpc_port,
-                    docker,
                     redis.clone(),
                     template_service.clone(),
                     shard_manager.clone(),
@@ -60,28 +60,70 @@ impl DockerWorkerExecutorCluster {
             worker_executors.push(worker_executor);
         }
 
-        Self { worker_executors }
+        Self {
+            worker_executors,
+            stopped_indices: Arc::new(Mutex::new(HashSet::new())),
+        }
     }
 }
 
 impl WorkerExecutorCluster for DockerWorkerExecutorCluster {
-    fn count(&self) -> usize {
+    fn size(&self) -> usize {
         self.worker_executors.len()
     }
 
     fn kill_all(&self) {
+        info!("Killing all worker executors");
         for worker_executor in &self.worker_executors {
             worker_executor.kill();
         }
     }
 
     fn restart_all(&self) {
+        info!("Restarting all worker executors");
         for worker_executor in &self.worker_executors {
             worker_executor.restart();
         }
     }
 
+    fn stop(&self, index: usize) {
+        let mut stopped = self.stopped_indices.lock().unwrap();
+        if !stopped.contains(&index) {
+            self.worker_executors[index].kill();
+            stopped.insert(index);
+        }
+    }
+
+    fn start(&self, index: usize) {
+        let mut stopped = self.stopped_indices.lock().unwrap();
+        if stopped.contains(&index) {
+            self.worker_executors[index].restart();
+            stopped.remove(&index);
+        }
+    }
+
     fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>> {
-        self.worker_executors.iter().cloned().collect()
+        self.worker_executors.to_vec()
+    }
+
+    fn stopped_indices(&self) -> Vec<usize> {
+        self.stopped_indices
+            .lock()
+            .unwrap()
+            .iter()
+            .copied()
+            .collect()
+    }
+
+    fn started_indices(&self) -> Vec<usize> {
+        let all_indices = HashSet::from_iter(0..self.worker_executors.len());
+        let stopped_indices = self.stopped_indices.lock().unwrap();
+        all_indices.difference(&stopped_indices).copied().collect()
+    }
+}
+
+impl Drop for DockerWorkerExecutorCluster {
+    fn drop(&mut self) {
+        self.kill_all();
     }
 }

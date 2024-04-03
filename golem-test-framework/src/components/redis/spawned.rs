@@ -75,11 +75,11 @@ impl Redis for SpawnedRedis {
         }
     }
 
-    fn host(&self) -> &str {
+    fn private_host(&self) -> &str {
         "localhost"
     }
 
-    fn port(&self) -> u16 {
+    fn private_port(&self) -> u16 {
         self.port
     }
 

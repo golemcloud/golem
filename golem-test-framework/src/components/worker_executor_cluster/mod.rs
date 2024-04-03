@@ -20,9 +20,15 @@ pub mod provided;
 pub mod spawned;
 
 pub trait WorkerExecutorCluster {
-    fn count(&self) -> usize;
+    fn size(&self) -> usize;
     fn kill_all(&self);
     fn restart_all(&self);
 
+    fn stop(&self, index: usize);
+    fn start(&self, index: usize);
+
     fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>>;
+
+    fn stopped_indices(&self) -> Vec<usize>;
+    fn started_indices(&self) -> Vec<usize>;
 }

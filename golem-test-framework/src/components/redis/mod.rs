@@ -23,15 +23,28 @@ pub mod spawned;
 pub trait Redis {
     fn assert_valid(&self);
 
-    fn host(&self) -> &str;
-    fn port(&self) -> u16;
+    fn private_host(&self) -> &str;
+    fn private_port(&self) -> u16;
+
+    fn public_host(&self) -> &str {
+        self.private_host()
+    }
+    fn public_port(&self) -> u16 {
+        self.private_port()
+    }
+
     fn prefix(&self) -> &str;
 
     fn kill(&self);
 
     fn try_get_connection(&self, db: u16) -> RedisResult<redis::Connection> {
-        let client =
-            redis::Client::open(format!("redis://{}:{}/{}", self.host(), self.port(), db)).unwrap();
+        let client = redis::Client::open(format!(
+            "redis://{}:{}/{}",
+            self.public_host(),
+            self.public_port(),
+            db
+        ))
+        .unwrap();
         client.get_connection()
     }
 

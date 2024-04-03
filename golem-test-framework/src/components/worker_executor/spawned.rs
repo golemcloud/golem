@@ -110,8 +110,8 @@ impl SpawnedWorkerExecutor {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
             .envs(env_vars(
-                grpc_port,
                 http_port,
+                grpc_port,
                 template_service,
                 shard_manager,
                 worker_service,
@@ -143,15 +143,15 @@ impl SpawnedWorkerExecutor {
 
 #[async_trait]
 impl WorkerExecutor for SpawnedWorkerExecutor {
-    fn host(&self) -> &str {
+    fn private_host(&self) -> &str {
         "localhost"
     }
 
-    fn http_port(&self) -> u16 {
+    fn private_http_port(&self) -> u16 {
         self.http_port
     }
 
-    fn grpc_port(&self) -> u16 {
+    fn private_grpc_port(&self) -> u16 {
         self.grpc_port
     }
 

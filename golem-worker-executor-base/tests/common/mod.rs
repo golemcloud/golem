@@ -862,7 +862,7 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
     let redis_monitor = CONFIG.redis_monitor();
     redis.assert_valid();
     redis_monitor.assert_valid();
-    println!("Using Redis on port {}", redis.port());
+    println!("Using Redis on port {}", redis.public_port());
 
     let prometheus = golem_worker_executor_base::metrics::register_all();
     let config = GolemConfig {
@@ -882,7 +882,7 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
         promises: PromisesConfig::Redis,
         workers: WorkersServiceConfig::Redis,
         redis: RedisConfig {
-            port: redis.port(),
+            port: redis.public_port(),
             key_prefix: context.redis_prefix(),
             ..Default::default()
         },

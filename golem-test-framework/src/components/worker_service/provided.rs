@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::worker_service::{WorkerService};
+use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
-
 
 use tracing::info;
 
@@ -39,19 +38,19 @@ impl ProvidedWorkerService {
 
 #[async_trait]
 impl WorkerService for ProvidedWorkerService {
-    fn host(&self) -> &str {
+    fn private_host(&self) -> &str {
         &self.host
     }
 
-    fn http_port(&self) -> u16 {
+    fn private_http_port(&self) -> u16 {
         self.http_port
     }
 
-    fn grpc_port(&self) -> u16 {
+    fn private_grpc_port(&self) -> u16 {
         self.grpc_port
     }
 
-    fn custom_request_port(&self) -> u16 {
+    fn private_custom_request_port(&self) -> u16 {
         self.custom_request_port
     }
 

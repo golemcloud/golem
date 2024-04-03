@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::shard_manager::{ShardManager};
+use crate::components::shard_manager::ShardManager;
 use async_trait::async_trait;
 
 use tracing::info;
@@ -36,15 +36,15 @@ impl ProvidedShardManager {
 
 #[async_trait]
 impl ShardManager for ProvidedShardManager {
-    fn host(&self) -> &str {
+    fn private_host(&self) -> &str {
         &self.host
     }
 
-    fn http_port(&self) -> u16 {
+    fn private_http_port(&self) -> u16 {
         self.http_port
     }
 
-    fn grpc_port(&self) -> u16 {
+    fn private_grpc_port(&self) -> u16 {
         self.grpc_port
     }
 

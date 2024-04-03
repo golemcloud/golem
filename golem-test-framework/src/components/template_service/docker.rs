@@ -14,7 +14,7 @@
 
 use crate::components::rdb::Rdb;
 use crate::components::template_service::{env_vars, TemplateService};
-use crate::components::NETWORK;
+use crate::components::{DOCKER, NETWORK};
 use async_trait::async_trait;
 
 use std::collections::HashMap;
@@ -22,23 +22,18 @@ use std::sync::Arc;
 use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
 
-
 use tracing::{info, Level};
 
-pub struct DockerTemplateService<'d> {
-    container: Container<'d, GolemTemplateServiceImage>,
+pub struct DockerTemplateService {
+    container: Container<'static, GolemTemplateServiceImage>,
 }
 
-impl<'d> DockerTemplateService<'d> {
+impl DockerTemplateService {
     const NAME: &'static str = "golem_template_service";
     const HTTP_PORT: u16 = 8081;
     const GRPC_PORT: u16 = 9091;
 
-    pub fn new(
-        docker: &'d testcontainers::clients::Cli,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        verbosity: Level,
-    ) -> Self {
+    pub fn new(rdb: Arc<dyn Rdb + Send + Sync + 'static>, verbosity: Level) -> Self {
         info!("Starting golem-template-service container");
 
         let env_vars = env_vars(Self::HTTP_PORT, Self::GRPC_PORT, rdb, verbosity);
@@ -50,23 +45,35 @@ impl<'d> DockerTemplateService<'d> {
         ))
         .with_container_name(Self::NAME)
         .with_network(NETWORK);
-        let container = docker.run(image);
+        let container = DOCKER.run(image);
 
         Self { container }
     }
 }
 
 #[async_trait]
-impl<'d> TemplateService for DockerTemplateService<'d> {
-    fn host(&self) -> &str {
+impl TemplateService for DockerTemplateService {
+    fn private_host(&self) -> &str {
+        Self::NAME
+    }
+
+    fn private_http_port(&self) -> u16 {
+        Self::HTTP_PORT
+    }
+
+    fn private_grpc_port(&self) -> u16 {
+        Self::GRPC_PORT
+    }
+
+    fn public_host(&self) -> &str {
         "localhost"
     }
 
-    fn http_port(&self) -> u16 {
+    fn public_http_port(&self) -> u16 {
         self.container.get_host_port_ipv4(Self::HTTP_PORT)
     }
 
-    fn grpc_port(&self) -> u16 {
+    fn public_grpc_port(&self) -> u16 {
         self.container.get_host_port_ipv4(Self::GRPC_PORT)
     }
 
@@ -75,7 +82,7 @@ impl<'d> TemplateService for DockerTemplateService<'d> {
     }
 }
 
-impl Drop for DockerTemplateService<'_> {
+impl Drop for DockerTemplateService {
     fn drop(&mut self) {
         self.kill();
     }

@@ -464,7 +464,9 @@ fn auction_example(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let auction_registry_wasm = deps.template_directory().join("auction_registry_composed.wasm");
+    let auction_registry_wasm = deps
+        .template_directory()
+        .join("auction_registry_composed.wasm");
     let auction_wasm = deps.template_directory().join("auction.wasm");
     let cfg = &cli.config;
 
