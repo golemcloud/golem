@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::result::Result;
 
 use poem_openapi::*;
@@ -37,16 +36,7 @@ pub struct GolemWorkerBinding {
     pub worker_id: serde_json::value::Value,
     pub function_name: String,
     pub function_params: Vec<serde_json::value::Value>,
-    pub response: Option<ResponseMapping>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-pub struct ResponseMapping {
-    pub body: serde_json::value::Value,
-    // ${function.return}
-    pub status: serde_json::value::Value,
-    // "200" or if ${response.body.id == 1} "200" else "400"
-    pub headers: HashMap<String, serde_json::value::Value>,
+    pub response: Option<serde_json::value::Value>,
 }
 
 impl TryFrom<crate::api_definition::http::HttpApiDefinition> for HttpApiDefinition {
@@ -119,52 +109,13 @@ impl TryInto<crate::api_definition::http::Route> for Route {
     }
 }
 
-impl TryFrom<crate::worker_binding::ResponseMapping> for ResponseMapping {
-    type Error = String;
-
-    fn try_from(value: crate::worker_binding::ResponseMapping) -> Result<Self, Self::Error> {
-        let body = serde_json::to_value(value.body).map_err(|e| e.to_string())?;
-        let status = serde_json::to_value(value.status).map_err(|e| e.to_string())?;
-        let mut headers = HashMap::new();
-        for (key, value) in value.headers {
-            let v = serde_json::to_value(value).map_err(|e| e.to_string())?;
-            headers.insert(key.to_string(), v);
-        }
-        Ok(Self {
-            body,
-            status,
-            headers,
-        })
-    }
-}
-
-impl TryInto<crate::worker_binding::ResponseMapping> for ResponseMapping {
-    type Error = String;
-
-    fn try_into(self) -> Result<crate::worker_binding::ResponseMapping, Self::Error> {
-        let body: Expr = serde_json::from_value(self.body).map_err(|e| e.to_string())?;
-        let status: Expr = serde_json::from_value(self.status).map_err(|e| e.to_string())?;
-        let mut headers = HashMap::new();
-        for (key, value) in self.headers {
-            let v: Expr = serde_json::from_value(value).map_err(|e| e.to_string())?;
-            headers.insert(key.to_string(), v);
-        }
-
-        Ok(crate::worker_binding::ResponseMapping {
-            body,
-            status,
-            headers,
-        })
-    }
-}
-
 impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     type Error = String;
 
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
-        let response: Option<ResponseMapping> = match value.response {
+        let response: Option<serde_json::value::Value> = match value.response {
             Some(v) => {
-                let r = ResponseMapping::try_from(v)?;
+                let r = Expr::to_json_value(&v.0).map_err(|e| e.to_string())?;
                 Some(r)
             }
             None => None,
@@ -192,8 +143,8 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     fn try_into(self) -> Result<crate::worker_binding::GolemWorkerBinding, Self::Error> {
         let response: Option<crate::worker_binding::ResponseMapping> = match self.response {
             Some(v) => {
-                let r: crate::worker_binding::ResponseMapping = v.try_into()?;
-                Some(r)
+                let r = Expr::from_json_value(&v).map_err(|e| e.to_string())?;
+                Some(crate::worker_binding::ResponseMapping(r))
             }
             None => None,
         };
