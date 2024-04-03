@@ -193,9 +193,6 @@ impl Token {
     }
 }
 
-// Vec<Token>
-// Vec<PlaceHolder> Space Vec<PlaceHolder>
-
 struct State {
     pos: usize,
 }
@@ -213,14 +210,10 @@ impl<'t> Tokenizer<'t> {
     pub fn eat_while(&mut self, f: impl Fn(char) -> bool) -> Option<&str> {
         let beginning = self.state.pos;
 
-        dbg!(beginning);
-
         self.state.pos += self
             .next_chars()
             .map_while(|ch| f(ch).then(|| ch.len_utf8()))
             .sum::<usize>();
-
-        dbg!(self.state.pos);
 
         self.text.get(beginning..self.state.pos)
     }
@@ -252,8 +245,6 @@ impl<'t> Tokenizer<'t> {
         }
     }
 
-    // Collect tokens gets rid of empty spaces and make sure everything is trimmed
-    // If needed raw versions as it is, use `.collect()` instead of `.collect_tokens`
     pub fn run(self) -> TokeniserResult {
         let all_tokens: Vec<Token> = self.collect();
 
