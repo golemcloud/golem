@@ -2,8 +2,8 @@ use std::fmt::Display;
 use std::str::Chars;
 
 use regex::Regex;
+use crate::tokeniser::cursor::TokenCursor;
 
-use super::cursor::TokenCursor;
 
 // Typical usage:
 //
@@ -238,10 +238,14 @@ impl<'t> Tokenizer<'t> {
     pub fn eat_while(&mut self, f: impl Fn(char) -> bool) -> Option<&str> {
         let beginning = self.state.pos;
 
+        dbg!(beginning);
+
         self.state.pos += self
             .next_chars()
             .map_while(|ch| f(ch).then(|| ch.len_utf8()))
             .sum::<usize>();
+
+        dbg!(self.state.pos);
 
         self.text.get(beginning..self.state.pos)
     }
@@ -277,6 +281,10 @@ impl<'t> Tokenizer<'t> {
     pub fn run(self) -> TokeniserResult {
         let all_tokens: Vec<Token> = self.collect();
 
+        for token in &all_tokens {
+            dbg!(token);
+        }
+
         TokeniserResult {
             value: all_tokens
                 .into_iter()
@@ -291,7 +299,8 @@ impl<'t> Tokenizer<'t> {
     }
 
     fn get_single_char_token(&mut self) -> Option<Token> {
-        let ch = self.text.chars().next()?;
+        let ch = self.rest().chars().next()?;
+        dbg!(ch);
         if let Some(token) = match ch {
             ',' => Some(Token::Comma),
             '{' => Some(Token::LCurly),
@@ -316,11 +325,11 @@ impl<'t> Tokenizer<'t> {
     }
 
     fn get_multi_char_token(&mut self) -> Option<Token> {
-        let ch = self.text.chars().next()?;
+        let ch = self.rest().chars().next()?;
         match ch {
             'a'..='z' | 'A'..='Z' => {
                 // Eat characters from kebab-names (ascii alphanumeric and dash)
-                let str = self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-');
+                let str = self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
                 match str {
                     Some("worker") => Some(Token::MultiChar(MultiCharTokens::Worker)),
                     Some("request") => Some(Token::MultiChar(MultiCharTokens::Request)),
@@ -332,7 +341,8 @@ impl<'t> Tokenizer<'t> {
                     Some("if") => Some(Token::MultiChar(MultiCharTokens::If)),
                     Some("then") => Some(Token::MultiChar(MultiCharTokens::Then)),
                     Some("else") => Some(Token::MultiChar(MultiCharTokens::Else)),
-                    _ => None,
+                    Some(random) => Some(Token::MultiChar(MultiCharTokens::Other(random.to_string()))),
+                    None => None,
                 }
             }
             '0'..='9' => {
@@ -604,6 +614,26 @@ else${z}
             ]
         );
     }
+
+    #[test]
+    fn test_dummy() {
+        let tokens: Vec<Token> = Tokenizer::new("f").run().value;
+
+        dbg!(&tokens);
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::raw_string("f".to_string()),
+                Token::Space,
+                Token::Space,
+                Token::GreaterThan,
+                Token::Space,
+                Token::raw_string("g".to_string())
+            ]
+        );
+    }
+
 
     #[test]
     fn test_greater_than_with_space() {

@@ -1,5 +1,4 @@
 use ::http::Uri;
-
 pub mod api;
 pub mod api_definition;
 pub mod app_config;
@@ -13,7 +12,7 @@ mod parser;
 mod primitive;
 pub mod repo;
 pub mod service;
-mod tokeniser;
+pub mod tokeniser;
 mod worker_binding;
 pub mod worker_bridge_execution;
 pub trait UriBackConversion {
