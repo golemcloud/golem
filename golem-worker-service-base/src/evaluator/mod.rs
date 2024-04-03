@@ -330,7 +330,7 @@ impl Evaluator for Expr {
 
                     handle_pattern_match(&input_expr, constructors, input)
                 }
-                Expr::Constructor0(constructor) => handle_constructor(&constructor, input),
+                Expr::Constructor0(constructor) => handle_expr_construction(&constructor, input),
             }
         }
 
@@ -338,7 +338,7 @@ impl Evaluator for Expr {
     }
 }
 
-fn handle_constructor(
+fn handle_expr_construction(
     constructor: &ConstructorPattern,
     input: &TypeAnnotatedValue,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
@@ -352,8 +352,11 @@ fn handle_constructor(
         ConstructorPattern::Constructor(constructor_name, constructors) => match constructor_name {
             ConstructorTypeName::InBuiltConstructor(in_built) => match in_built {
                 InBuiltConstructorInner::Ok => {
-                    let one_constructor = &constructors[0];
-                    let result = handle_constructor(one_constructor, input)?;
+                    let one_constructor = constructors.first().ok_or(EvaluationError::Message(
+                        "Ok constructor should have one constructor".to_string(),
+                    ))?;
+
+                    let result = handle_expr_construction(one_constructor, input)?;
                     let analysed_type = AnalysedType::from(&result);
                     Ok(TypeAnnotatedValue::Result {
                         value: Ok(Some(Box::new(result))),
@@ -362,8 +365,10 @@ fn handle_constructor(
                     })
                 }
                 InBuiltConstructorInner::Err => {
-                    let one_constructor = &constructors[0];
-                    let result = handle_constructor(one_constructor, input)?;
+                    let one_constructor = constructors.first().ok_or(EvaluationError::Message(
+                        "Err constructor should have one constructor".to_string(),
+                    ))?;
+                    let result = handle_expr_construction(one_constructor, input)?;
                     let analysed_type = AnalysedType::from(&result);
                     Ok(TypeAnnotatedValue::Result {
                         value: Err(Some(Box::new(result))),
@@ -376,8 +381,10 @@ fn handle_constructor(
                     value: None,
                 }),
                 InBuiltConstructorInner::Some => {
-                    let one_constructor = &constructors[0];
-                    let result = handle_constructor(one_constructor, input)?;
+                    let one_constructor = constructors.first().ok_or(EvaluationError::Message(
+                        "Some constructor should have one constructor".to_string(),
+                    ))?;
+                    let result = handle_expr_construction(one_constructor, input)?;
                     let analysed_type = AnalysedType::from(&result);
                     Ok(TypeAnnotatedValue::Option {
                         value: Some(Box::new(result)),

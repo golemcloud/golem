@@ -3017,6 +3017,7 @@ dependencies = [
 name = "golem-template-service"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "console-subscriber",
  "figment",
@@ -3024,6 +3025,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
+ "golem-template-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc 0.0.16",
  "http 0.2.12",
@@ -3040,6 +3042,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tap",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -3049,6 +3052,21 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "golem-template-service-base"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-service-base",
+ "golem-wasm-ast",
+ "http 0.2.12",
+ "serde",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
