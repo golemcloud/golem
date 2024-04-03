@@ -26,8 +26,8 @@ pub trait VersionHandler {
 }
 
 pub struct VersionHandlerLive<
-    T: HealthCheckClient + Send + Sync + Send + Sync,
-    W: HealthCheckClient + Send + Sync + Send + Sync,
+    T: HealthCheckClient + Send + Sync,
+    W: HealthCheckClient + Send + Sync,
 > {
     pub template_client: T,
     pub worker_client: W,
