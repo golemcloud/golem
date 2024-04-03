@@ -346,7 +346,10 @@ fn handle_constructor(
         ConstructorPattern::Constructor(constructor_name, constructors) => match constructor_name {
             ConstructorTypeName::InBuiltConstructor(in_built) => match in_built {
                 InBuiltConstructorInner::Ok => {
-                    let one_constructor = &constructors[0];
+                    let one_constructor = constructors.first().ok_or(EvaluationError::Message(
+                        "Ok constructor should have one constructor".to_string(),
+                    ))?;
+
                     let result = handle_constructor(one_constructor, input)?;
                     let analysed_type = AnalysedType::from(&result);
                     Ok(TypeAnnotatedValue::Result {
@@ -356,7 +359,9 @@ fn handle_constructor(
                     })
                 }
                 InBuiltConstructorInner::Err => {
-                    let one_constructor = &constructors[0];
+                    let one_constructor = constructors.first().ok_or(EvaluationError::Message(
+                        "Err constructor should have one constructor".to_string(),
+                    ))?;
                     let result = handle_constructor(one_constructor, input)?;
                     let analysed_type = AnalysedType::from(&result);
                     Ok(TypeAnnotatedValue::Result {
@@ -370,7 +375,9 @@ fn handle_constructor(
                     value: None,
                 }),
                 InBuiltConstructorInner::Some => {
-                    let one_constructor = &constructors[0];
+                    let one_constructor = constructors.first().ok_or(EvaluationError::Message(
+                        "Some constructor should have one constructor".to_string(),
+                    ))?;
                     let result = handle_constructor(one_constructor, input)?;
                     let analysed_type = AnalysedType::from(&result);
                     Ok(TypeAnnotatedValue::Option {
