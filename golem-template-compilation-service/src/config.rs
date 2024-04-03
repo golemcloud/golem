@@ -51,7 +51,7 @@ impl TemplateServiceConfig {
             .authority(format!("{}:{}", self.host, self.port).as_str())
             .path_and_query("/")
             .build()
-            .expect("Failed to build TemplateServiceTemplateService  URI")
+            .expect("Failed to build TemplateService URI")
     }
 }
 

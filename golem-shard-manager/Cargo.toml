@@ -23,7 +23,7 @@ figment = { workspace = true }
 fred = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-http_02 = { package = "http", version = "0.2.11" }
+http_02 = { workspace = true }
 humantime-serde = { workspace = true }
 kube = { version = "0.88.1", features = ["client"], optional = true }
 k8s-openapi = { version = "0.21.1", features = ["earliest"], optional = true }
