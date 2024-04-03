@@ -14,6 +14,7 @@ golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
 golem-wasm-rpc = { workspace = true }
+wasm-wave = "0.5.1"
 
 golem-wasm-ast = { workspace = true }
 async-trait = { workspace = true }
