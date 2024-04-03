@@ -29,7 +29,7 @@ service WorkerService {
   rpc GetInvocationKey (GetInvocationKeyRequest) returns (GetInvocationKeyResponse);
   rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
-  rpc GetWorkerMetadatas(GetWorkerMetadatasRequest) returns (GetWorkerMetadatasResponse);
+  rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
 
 
   // Temporary for proxying the REST API
@@ -178,7 +178,7 @@ message InvokeAndAwaitResponseJson {
   }
 }
 
-message GetWorkerMetadatasRequest {
+message GetWorkersMetadataRequest {
   golem.template.TemplateId template_id = 1;
   golem.worker.WorkerFilter filter = 2;
   uint64 cursor = 3;
@@ -187,14 +187,14 @@ message GetWorkerMetadatasRequest {
 }
 
 
-message GetWorkerMetadatasResponse {
+message GetWorkersMetadataResponse {
   oneof result {
-    GetWorkerMetadatasSuccessResponse success = 1;
+    GetWorkersMetadataSuccessResponse success = 1;
     WorkerError error = 2;
   }
 }
 
-message GetWorkerMetadatasSuccessResponse {
+message GetWorkersMetadataSuccessResponse {
   repeated golem.worker.WorkerMetadata workers = 1;
-  uint64 cursor = 2;
+  optional uint64 cursor = 2;
 }

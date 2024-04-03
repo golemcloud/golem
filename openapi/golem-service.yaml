@@ -64,7 +64,7 @@ paths:
     get:
       tags:
       - Worker
-      operationId: get_worker_metadatas
+      operationId: get_workers_metadata
       parameters:
       - in: path
         name: template_id
@@ -113,7 +113,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerMetadatasResponse'
+                $ref: '#/components/schemas/WorkersMetadataResponse'
         '400':
           description: ''
           content:
@@ -730,11 +730,11 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/templates/{template_id}/workers/get:
+  /v2/templates/{template_id}/workers/find:
     post:
       tags:
       - Worker
-      operationId: worker_metadatas
+      operationId: find_workers_metadata
       parameters:
       - in: path
         name: template_id
@@ -749,7 +749,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/WorkerMetadatasRequest'
+              $ref: '#/components/schemas/WorkersMetadataRequest'
         required: true
       responses:
         '200':
@@ -757,7 +757,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerMetadatasResponse'
+                $ref: '#/components/schemas/WorkersMetadataResponse'
         '400':
           description: ''
           content:
@@ -2463,31 +2463,6 @@ components:
       - status
       - templateVersion
       - retryCount
-    WorkerMetadatasRequest:
-      type: object
-      properties:
-        filter:
-          $ref: '#/components/schemas/WorkerFilter'
-        cursor:
-          type: integer
-          format: uint64
-        count:
-          type: integer
-          format: uint64
-        precise:
-          type: boolean
-    WorkerMetadatasResponse:
-      type: object
-      properties:
-        workers:
-          type: array
-          items:
-            $ref: '#/components/schemas/WorkerMetadata'
-        cursor:
-          type: integer
-          format: uint64
-      required:
-      - workers
     WorkerNameFilter:
       type: object
       properties:
@@ -2584,6 +2559,31 @@ components:
       required:
       - comparator
       - value
+    WorkersMetadataRequest:
+      type: object
+      properties:
+        filter:
+          $ref: '#/components/schemas/WorkerFilter'
+        cursor:
+          type: integer
+          format: uint64
+        count:
+          type: integer
+          format: uint64
+        precise:
+          type: boolean
+    WorkersMetadataResponse:
+      type: object
+      properties:
+        workers:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerMetadata'
+        cursor:
+          type: integer
+          format: uint64
+      required:
+      - workers
     Export:
       discriminator:
         propertyName: type

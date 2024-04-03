@@ -16,13 +16,13 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::{
     complete_promise_response, delete_worker_response, get_invocation_key_response,
-    get_worker_metadata_response, get_worker_metadatas_response, interrupt_worker_response,
+    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
     invoke_and_await_response, invoke_and_await_response_json, invoke_response,
     launch_new_worker_response, resume_worker_response, CompletePromiseRequest,
     CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
     GetInvocationKeyRequest, GetInvocationKeyResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, GetWorkerMetadatasRequest, GetWorkerMetadatasResponse,
-    GetWorkerMetadatasSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
     InvokeAndAwaitRequest, InvokeAndAwaitRequestJson, InvokeAndAwaitResponse,
     InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson, InvokeResponse, InvokeResultJson,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse,
@@ -119,21 +119,19 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
-    async fn get_worker_metadatas(
+    async fn get_workers_metadata(
         &self,
-        request: Request<GetWorkerMetadatasRequest>,
-    ) -> Result<Response<GetWorkerMetadatasResponse>, Status> {
-        let response = match self.get_worker_metadatas(request.into_inner()).await {
-            Ok((cursor, workers)) => {
-                get_worker_metadatas_response::Result::Success(GetWorkerMetadatasSuccessResponse {
-                    workers,
-                    cursor: cursor.unwrap_or(0), // FIXME can we do option in proto?
-                })
-            }
-            Err(error) => get_worker_metadatas_response::Result::Error(error),
-        };
+        request: Request<GetWorkersMetadataRequest>,
+    ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
+        let response =
+            match self.get_workers_metadata(request.into_inner()).await {
+                Ok((cursor, workers)) => get_workers_metadata_response::Result::Success(
+                    GetWorkersMetadataSuccessResponse { workers, cursor },
+                ),
+                Err(error) => get_workers_metadata_response::Result::Error(error),
+            };
 
-        Ok(Response::new(GetWorkerMetadatasResponse {
+        Ok(Response::new(GetWorkersMetadataResponse {
             result: Some(response),
         }))
     }
@@ -353,9 +351,9 @@ impl WorkerGrpcApi {
         Ok(metadata.into())
     }
 
-    async fn get_worker_metadatas(
+    async fn get_workers_metadata(
         &self,
-        request: GetWorkerMetadatasRequest,
+        request: GetWorkersMetadataRequest,
     ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GrpcWorkerError> {
         let template_id: golem_common::model::TemplateId = request
             .template_id
@@ -373,7 +371,7 @@ impl WorkerGrpcApi {
 
         let (new_cursor, workers) = self
             .worker_service
-            .get_metadatas(
+            .find_metadata(
                 &template_id,
                 filter,
                 request.cursor,

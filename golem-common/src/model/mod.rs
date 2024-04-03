@@ -1164,6 +1164,14 @@ impl WorkerFilter {
     pub fn new_created_at(comparator: FilterComparator, value: Timestamp) -> Self {
         WorkerFilter::CreatedAt(WorkerCreatedAtFilter::new(comparator, value))
     }
+
+    pub fn from(filters: Vec<String>) -> Result<WorkerFilter, String> {
+        let mut fs = Vec::new();
+        for f in filters {
+            fs.push(WorkerFilter::from_str(&f)?);
+        }
+        Ok(WorkerFilter::new_and(fs))
+    }
 }
 
 impl Display for WorkerFilter {

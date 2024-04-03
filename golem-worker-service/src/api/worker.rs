@@ -251,35 +251,28 @@ impl WorkerApi {
     #[oai(
         path = "/:template_id/workers",
         method = "get",
-        operation_id = "get_worker_metadatas"
+        operation_id = "get_workers_metadata"
     )]
-    async fn get_worker_metadatas(
+    async fn get_workers_metadata(
         &self,
         template_id: Path<TemplateId>,
         filter: Query<Option<Vec<String>>>,
         cursor: Query<Option<u64>>,
         count: Query<Option<u64>>,
         precise: Query<Option<bool>>,
-    ) -> Result<Json<WorkerMetadatasResponse>> {
-        let filter = if let Some(filter) = filter.0 {
-            if filter.is_empty() {
-                None
-            } else {
-                let mut filters = Vec::new();
-                for f in filter {
-                    filters.push(WorkerFilter::from_str(&f).map_err(|e| {
-                        WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
-                    })?);
-                }
-                Some(WorkerFilter::new_and(filters))
+    ) -> Result<Json<WorkersMetadataResponse>> {
+        let filter = match filter.0 {
+            Some(filters) if !filters.is_empty() => {
+                Some(WorkerFilter::from(filters).map_err(|e| {
+                    WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                })?)
             }
-        } else {
-            None
+            _ => None,
         };
 
         let (cursor, workers) = self
             .worker_service
-            .get_metadatas(
+            .find_metadata(
                 &template_id.0,
                 filter,
                 cursor.0.unwrap_or(0),
@@ -289,22 +282,22 @@ impl WorkerApi {
             )
             .await?;
 
-        Ok(Json(WorkerMetadatasResponse { workers, cursor }))
+        Ok(Json(WorkersMetadataResponse { workers, cursor }))
     }
 
     #[oai(
-        path = "/:template_id/workers/get",
+        path = "/:template_id/workers/find",
         method = "post",
-        operation_id = "worker_metadatas"
+        operation_id = "find_workers_metadata"
     )]
-    async fn worker_metadatas(
+    async fn find_workers_metadata(
         &self,
         template_id: Path<TemplateId>,
-        params: Json<WorkerMetadatasRequest>,
-    ) -> Result<Json<WorkerMetadatasResponse>> {
+        params: Json<WorkersMetadataRequest>,
+    ) -> Result<Json<WorkersMetadataResponse>> {
         let (cursor, workers) = self
             .worker_service
-            .get_metadatas(
+            .find_metadata(
                 &template_id.0,
                 params.filter.clone(),
                 params.cursor.unwrap_or(0),
@@ -314,7 +307,7 @@ impl WorkerApi {
             )
             .await?;
 
-        Ok(Json(WorkerMetadatasResponse { workers, cursor }))
+        Ok(Json(WorkersMetadataResponse { workers, cursor }))
     }
 
     #[oai(

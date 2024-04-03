@@ -21,6 +21,7 @@ use http::Uri;
 use poem_openapi::{Enum, NewType, Object, Union};
 use rand::seq::IteratorRandom;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashSet;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -2631,7 +2632,7 @@ pub struct InterruptResponse {}
 pub struct ResumeResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-pub struct WorkerMetadatasRequest {
+pub struct WorkersMetadataRequest {
     pub filter: Option<WorkerFilter>,
     pub cursor: Option<u64>,
     pub count: Option<u64>,
@@ -2639,7 +2640,7 @@ pub struct WorkerMetadatasRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-pub struct WorkerMetadatasResponse {
+pub struct WorkersMetadataResponse {
     pub workers: Vec<WorkerMetadata>,
     pub cursor: Option<u64>,
 }
@@ -3108,6 +3109,10 @@ impl RoutingTable {
 
     pub fn first(&self) -> Option<&Pod> {
         self.shard_assignments.values().next()
+    }
+
+    pub fn all(&self) -> HashSet<&Pod> {
+        self.shard_assignments.values().collect()
     }
 }
 

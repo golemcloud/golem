@@ -31,8 +31,8 @@ service WorkerExecutor {
   rpc AssignShards(AssignShardsRequest) returns (AssignShardsResponse);
   rpc GetWorkerMetadata(golem.worker.WorkerId) returns (GetWorkerMetadataResponse);
   rpc ResumeWorker(ResumeWorkerRequest) returns (ResumeWorkerResponse);
-  rpc GetRunningWorkerMetadatas(GetRunningWorkerMetadatasRequest) returns (GetRunningWorkerMetadatasResponse);
-  rpc GetWorkerMetadatas(GetWorkerMetadatasRequest) returns (GetWorkerMetadatasResponse);
+  rpc GetRunningWorkersMetadata(GetRunningWorkersMetadataRequest) returns (GetRunningWorkersMetadataResponse);
+  rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
 }
 
 message InvokeWorkerResponse {
@@ -183,24 +183,24 @@ message ResumeWorkerResponse {
   }
 }
 
-message GetRunningWorkerMetadatasRequest {
+message GetRunningWorkersMetadataRequest {
   golem.template.TemplateId template_id = 1;
   golem.worker.WorkerFilter filter = 2;
 }
 
 
-message GetRunningWorkerMetadatasResponse {
+message GetRunningWorkersMetadataResponse {
   oneof result {
-    GetRunningWorkerMetadatasSuccessResponse success = 1;
+    GetRunningWorkersMetadataSuccessResponse success = 1;
     golem.worker.WorkerExecutionError failure = 2;
   }
 }
 
-message GetRunningWorkerMetadatasSuccessResponse {
+message GetRunningWorkersMetadataSuccessResponse {
   repeated golem.worker.WorkerMetadata workers = 1;
 }
 
-message GetWorkerMetadatasRequest {
+message GetWorkersMetadataRequest {
   golem.template.TemplateId template_id = 1;
   golem.worker.WorkerFilter filter = 2;
   uint64 cursor = 3;
@@ -209,14 +209,14 @@ message GetWorkerMetadatasRequest {
 }
 
 
-message GetWorkerMetadatasResponse {
+message GetWorkersMetadataResponse {
   oneof result {
-    GetWorkerMetadatasSuccessResponse success = 1;
+    GetWorkersMetadataSuccessResponse success = 1;
     golem.worker.WorkerExecutionError failure = 2;
   }
 }
 
-message GetWorkerMetadatasSuccessResponse {
+message GetWorkersMetadataSuccessResponse {
   repeated golem.worker.WorkerMetadata workers = 1;
-  uint64 cursor = 2;
+  optional uint64 cursor = 2;
 }

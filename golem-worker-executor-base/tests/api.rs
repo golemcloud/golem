@@ -639,8 +639,8 @@ async fn delete_instance() {
 
     let metadata1 = executor.get_worker_metadata(&worker_id).await;
 
-    let (cursor1, metadatas1) = executor
-        .get_worker_metadatas(
+    let (cursor1, values1) = executor
+        .get_workers_metadata(
             &worker_id.template_id,
             Some(WorkerFilter::new_name(
                 StringFilterComparator::Equal,
@@ -656,7 +656,7 @@ async fn delete_instance() {
 
     let metadata2 = executor.get_worker_metadata(&worker_id).await;
 
-    check!(metadatas1.len() == 1);
+    check!(values1.len() == 1);
     check!(cursor1.is_none());
     check!(metadata1.is_some());
     check!(metadata2.is_none());
@@ -671,14 +671,14 @@ async fn get_workers() {
         expected_count: usize,
         executor: &mut TestWorkerExecutor,
     ) -> Vec<WorkerMetadata> {
-        let (cursor, metadatas) = executor
-            .get_worker_metadatas(template_id, filter, 0, 20, true)
+        let (cursor, values) = executor
+            .get_workers_metadata(template_id, filter, 0, 20, true)
             .await;
 
-        check!(metadatas.len() == expected_count);
+        check!(values.len() == expected_count);
         check!(cursor.is_none());
 
-        metadatas
+        values
     }
 
     let context = common::TestContext::new();
@@ -755,30 +755,30 @@ async fn get_workers() {
 
     get_check(&template_id, None, workers_count, &mut executor).await;
 
-    let (cursor1, metadatas1) = executor
-        .get_worker_metadatas(&template_id, None, 0, (workers_count / 2) as u64, true)
+    let (cursor1, values1) = executor
+        .get_workers_metadata(&template_id, None, 0, (workers_count / 2) as u64, true)
         .await;
 
     check!(cursor1.is_some());
-    check!(metadatas1.len() >= workers_count / 2);
+    check!(values1.len() >= workers_count / 2);
 
-    let (cursor2, metadatas2) = executor
-        .get_worker_metadatas(
+    let (cursor2, values2) = executor
+        .get_workers_metadata(
             &template_id,
             None,
             cursor1.unwrap(),
-            (workers_count - metadatas1.len()) as u64,
+            (workers_count - values1.len()) as u64,
             true,
         )
         .await;
 
-    check!(metadatas2.len() == workers_count - metadatas1.len());
+    check!(values2.len() == workers_count - values1.len());
 
     if let Some(cursor2) = cursor2 {
-        let (_, metadatas3) = executor
-            .get_worker_metadatas(&template_id, None, cursor2, workers_count as u64, true)
+        let (_, values3) = executor
+            .get_workers_metadata(&template_id, None, cursor2, workers_count as u64, true)
             .await;
-        check!(metadatas3.len() == 0);
+        check!(values3.len() == 0);
     }
 
     for worker_id in worker_ids {
@@ -1298,8 +1298,8 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
 
     sleep(Duration::from_secs(2)).await;
     let status1 = executor.get_worker_metadata(&worker_id).await.unwrap();
-    let metadatas1 = executor
-        .get_running_worker_metadatas(
+    let values1 = executor
+        .get_running_workers_metadata(
             &worker_id.template_id,
             Some(WorkerFilter::new_name(
                 StringFilterComparator::Equal,
@@ -1313,8 +1313,8 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
 
     sleep(Duration::from_secs(2)).await;
     let status2 = executor.get_worker_metadata(&worker_id).await.unwrap();
-    let metadatas2 = executor
-        .get_running_worker_metadatas(
+    let values2 = executor
+        .get_running_workers_metadata(
             &worker_id.template_id,
             Some(WorkerFilter::new_name(
                 StringFilterComparator::Equal,
@@ -1362,10 +1362,10 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
     http_server.abort();
 
     check!(status1.last_known_status.status == WorkerStatus::Running);
-    check!(!metadatas1.is_empty());
+    check!(!values1.is_empty());
     // first running
     check!(status2.last_known_status.status == WorkerStatus::Interrupted);
-    check!(metadatas2.is_empty());
+    check!(values2.is_empty());
     // first interrupted
     check!(status3.last_known_status.status == WorkerStatus::Running);
     // first resumed
