@@ -16,22 +16,26 @@ impl Display for HttpResponseMapping {
         let response_mapping: ResponseMapping = self.clone().into();
         let expr_json = Expr::to_json_value(&response_mapping.0).unwrap();
 
-        write!(f, "{}", expr_json.to_string())
+        write!(f, "{}", expr_json)
     }
 }
 
-impl Into<ResponseMapping> for HttpResponseMapping {
-    fn into(self) -> ResponseMapping {
-        let mut headers = vec![];
-        for (key, value) in self.headers {
-            headers.push((key, Box::new(value)));
-        }
-
+impl From<HttpResponseMapping> for ResponseMapping {
+    fn from(http_response_mapping: HttpResponseMapping) -> Self {
         ResponseMapping(Expr::Record(
             vec![
-                ("body".to_string(), Box::new(self.body)),
-                ("status".to_string(), Box::new(self.status)),
-                ("headers".to_string(), Box::new(Expr::Record(headers))),
+                ("body".to_string(), Box::new(http_response_mapping.body)),
+                ("status".to_string(), Box::new(http_response_mapping.status)),
+                (
+                    "headers".to_string(),
+                    Box::new(Expr::Record(
+                        http_response_mapping
+                            .headers
+                            .into_iter()
+                            .map(|(key, value)| (key, Box::new(value)))
+                            .collect::<Vec<(String, Box<Expr>)>>(),
+                    )),
+                ),
             ]
             .into_iter()
             .collect(),
