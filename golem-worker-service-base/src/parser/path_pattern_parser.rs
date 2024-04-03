@@ -41,20 +41,24 @@ fn get_path_pattern(input: &str) -> Result<AllPathPatterns, ParseError> {
         path_patterns.push(pattern);
     }
 
+    let mut query_params: Vec<QueryInfo> = vec![];
+
     if let Some(query_side) = query_side {
         for query_component in query_side.split('&') {
-            let (_, pattern) = alt((get_query_parser, get_literal_parser))(query_component.trim())
+            let (_, pattern) = (get_query_parser)(query_component.trim())
                 .map_err(|err| ParseError::Message(err.to_string()))?;
-            path_patterns.push(pattern);
+            query_params.push(pattern);
         }
     }
 
-    Ok(AllPathPatterns { path_patterns })
+    Ok(AllPathPatterns {
+        path_patterns,
+        query_params,
+    })
 }
 
-fn get_query_parser(input: &str) -> IResult<&str, PathPattern> {
-    place_holder_parser::parse_place_holder(input)
-        .map(|x| (x.0, PathPattern::Query(QueryInfo { key_name: x.1 .0 })))
+fn get_query_parser(input: &str) -> IResult<&str, QueryInfo> {
+    place_holder_parser::parse_place_holder(input).map(|x| (x.0, QueryInfo { key_name: x.1 .0 }))
 }
 
 fn get_path_var_parser(index: usize, input: &str) -> IResult<&str, PathPattern> {

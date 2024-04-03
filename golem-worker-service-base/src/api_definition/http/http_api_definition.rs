@@ -111,21 +111,23 @@ pub struct QueryInfo {
     pub key_name: String,
 }
 
+impl Display for QueryInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{{}}}", self.key_name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct AllPathPatterns {
     pub path_patterns: Vec<PathPattern>,
+    pub query_params: Vec<QueryInfo>,
 }
 
 impl AllPathPatterns {
-    #[inline]
-    pub fn iter(&self) -> std::slice::Iter<'_, PathPattern> {
-        self.path_patterns.iter()
-    }
-
     pub fn get_path_variables(&self) -> HashMap<usize, String> {
         let mut result: HashMap<usize, String> = HashMap::new();
 
-        for path_pattern in self.iter() {
+        for path_pattern in self.path_patterns.iter() {
             if let PathPattern::Var(var_info) = path_pattern {
                 result.insert(var_info.index, var_info.key_name.clone());
             }
@@ -137,7 +139,7 @@ impl AllPathPatterns {
     pub fn get_path_literals(&self) -> HashMap<usize, String> {
         let mut result: HashMap<usize, String> = HashMap::new();
 
-        for (index, path_pattern) in self.iter().enumerate() {
+        for (index, path_pattern) in self.path_patterns.iter().enumerate() {
             if let PathPattern::Literal(literal_info) = path_pattern {
                 result.insert(index, literal_info.0.clone());
             }
@@ -147,15 +149,10 @@ impl AllPathPatterns {
     }
 
     pub fn get_query_variables(&self) -> Vec<String> {
-        let mut result: Vec<String> = vec![];
-
-        for path_pattern in self.iter() {
-            if let PathPattern::Query(query_info) = path_pattern {
-                result.push(query_info.key_name.clone());
-            }
-        }
-
-        result
+        self.query_params
+            .iter()
+            .map(|x| x.key_name.clone())
+            .collect()
     }
 
     pub fn get_path_prefixed_variables(&self) -> HashSet<String> {
@@ -185,22 +182,23 @@ impl IntoIterator for AllPathPatterns {
 
 impl Display for AllPathPatterns {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut query_params = false;
         for (index, pattern) in self.path_patterns.iter().enumerate() {
-            let mut sep = '/';
-            if let PathPattern::Query(_) = pattern {
-                if query_params {
-                    sep = '&';
-                } else {
-                    query_params = true;
-                    sep = '?';
-                }
-            }
             if index > 0 {
-                write!(f, "{}", sep)?;
+                write!(f, "{}", '/')?;
             }
             write!(f, "{}", pattern)?;
         }
+
+        if !self.query_params.is_empty() {
+            write!(f, "{}", '?')?;
+            for (index, query) in self.query_params.iter().enumerate() {
+                if index > 0 {
+                    write!(f, "{}", '&')?;
+                }
+                write!(f, "{}", query)?;
+            }
+        }
+
         Ok(())
     }
 }
@@ -237,24 +235,17 @@ impl Serialize for AllPathPatterns {
 pub enum PathPattern {
     Literal(LiteralInfo),
     Var(VarInfo),
-    Query(QueryInfo),
 }
 
 impl PathPattern {
-    pub fn literal(value: &str) -> PathPattern {
-        PathPattern::Literal(LiteralInfo(value.to_string()))
+    pub fn literal(value: impl Into<String>) -> PathPattern {
+        PathPattern::Literal(LiteralInfo(value.into()))
     }
 
-    pub fn var(value: &str, index: usize) -> PathPattern {
+    pub fn var(value: impl Into<String>, index: usize) -> PathPattern {
         PathPattern::Var(VarInfo {
-            key_name: value.to_string(),
+            key_name: value.into(),
             index,
-        })
-    }
-
-    pub fn query(value: &str) -> PathPattern {
-        PathPattern::Query(QueryInfo {
-            key_name: value.to_string(),
         })
     }
 }
@@ -272,7 +263,6 @@ impl Display for PathPattern {
         match self {
             PathPattern::Literal(info) => write!(f, "{}", info.0),
             PathPattern::Var(info) => write!(f, "{{{}}}", info.key_name),
-            PathPattern::Query(info) => write!(f, "{{{}}}", info.key_name),
         }
     }
 }
@@ -299,6 +289,7 @@ mod tests {
 
         let expected = AllPathPatterns {
             path_patterns: vec![PathPattern::literal("foo")],
+            query_params: vec![],
         };
 
         assert_eq!(result, Ok(expected));
@@ -311,6 +302,7 @@ mod tests {
 
         let expected = AllPathPatterns {
             path_patterns: vec![PathPattern::literal("foo"), PathPattern::literal("bar")],
+            query_params: vec![],
         };
 
         assert_eq!(result, Ok(expected));
@@ -327,6 +319,7 @@ mod tests {
                 PathPattern::literal("bar"),
                 PathPattern::var("var", 2),
             ],
+            query_params: vec![],
         };
 
         assert_eq!(result, Ok(expected));
@@ -342,8 +335,14 @@ mod tests {
                 PathPattern::literal("foo"),
                 PathPattern::literal("bar"),
                 PathPattern::var("var", 2),
-                PathPattern::query("userid1"),
-                PathPattern::query("userid2"),
+            ],
+            query_params: vec![
+                QueryInfo {
+                    key_name: "userid1".to_string(),
+                },
+                QueryInfo {
+                    key_name: "userid2".to_string(),
+                },
             ],
         };
 
@@ -374,22 +373,6 @@ mod tests {
         let expected = vec!["userid1".to_string(), "userid2".to_string()];
 
         assert_eq!(query_variables_map, expected);
-    }
-
-    #[test]
-    fn test_iterator_of_path_pattern() {
-        let path1 = PathPattern::literal("foo");
-        let path2 = PathPattern::literal("bar");
-        let path4: PathPattern = PathPattern::var("component", 2);
-        let path3: PathPattern = PathPattern::query("user-id");
-
-        let vector = AllPathPatterns {
-            path_patterns: vec![path1, path2, path3, path4],
-        };
-
-        let result = vector.into_iter().next();
-
-        assert_eq!(result, Some(PathPattern::literal("foo")));
     }
 
     // #[test]
