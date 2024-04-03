@@ -1217,4 +1217,25 @@ mod tests {
         };
         assert_eq!(result, Ok(expected));
     }
+
+    #[test]
+    fn test_evaluation_with_wave_like_syntax() {
+        let expr = Expr::from_primitive_string(
+            "${{a : ok(1)}}",
+        )
+            .unwrap();
+
+        dbg!(expr.clone());
+        let result = expr.evaluate(&TypeAnnotatedValue::Record {
+            value: vec![],
+            typ: vec![],
+        });
+        
+        let expected = TypeAnnotatedValue::Result {
+            value: Err(Some(Box::new(TypeAnnotatedValue::U64(2)))),
+            error: Some(Box::new(AnalysedType::U64)),
+            ok: None,
+        };
+        assert_eq!(result, Ok(expected));
+    }
 }

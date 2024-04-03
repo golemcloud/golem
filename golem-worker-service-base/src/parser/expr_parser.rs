@@ -478,9 +478,10 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                 Token::RParen => go(cursor, context, prev_expression),
                 Token::Space => go(cursor, context, prev_expression),
                 Token::NewLine => go(cursor, context, prev_expression),
-                Token::LCurly => go(cursor, context, prev_expression),
+                Token::LCurly => create_record(cursor, vec![ &Token::interpolation_start(), &Token::LCurly], Some(&Token::RCurly)),
                 Token::MultiChar(MultiCharTokens::Arrow) => go(cursor, context, prev_expression),
                 Token::Comma => go(cursor, context, prev_expression),
+                Token::Colon => go(cursor, context, prev_expression),
             }
         } else {
             match prev_expression {
@@ -504,6 +505,71 @@ mod internal {
     use crate::tokeniser::cursor::TokenCursor;
     use crate::tokeniser::tokenizer::{MultiCharTokens, Token, TokeniserResult, Tokenizer};
     use strum_macros::Display;
+
+    pub(crate) fn create_record(
+        cursor: &mut TokenCursor,
+        possible_nested_token_starts: Vec<&Token>,
+        capture_until: Option<&Token>,
+    ) -> Result<Expr, ParseError> {
+        let mut record = vec![];
+
+        fn go(
+            cursor: &mut TokenCursor,
+            record: &mut Vec<(String, Expr)>,
+            possible_nested_token_starts: Vec<&Token>,
+            capture_until: Option<&Token>,
+        ) -> Result<(), ParseError> {
+            match cursor.next_non_empty_token() {
+                Some(Token::RCurly) => Ok(()),
+                Some(Token::MultiChar(MultiCharTokens::Other(key))) => {
+                    let key = key.to_string();
+                    let value = match cursor.next_non_empty_token() {
+                        Some(Token::Colon) => {
+                            let captured_string = cursor.capture_string_until(
+                                possible_nested_token_starts.clone(),
+                                capture_until.unwrap_or(&Token::Comma),
+                            );
+
+                            match captured_string {
+                                Some(captured_string) => {
+                                    let expr = parse_with_context(
+                                        captured_string.as_str(),
+                                        Context::Code,
+                                    )?;
+                                    Ok(expr)
+                                }
+                                None => Err(ParseError::Message(
+                                    "Expecting a value after colon".to_string(),
+                                )),
+                            }
+                        }
+                        _ => Err(ParseError::Message(
+                            "Expecting a colon after key in record".to_string(),
+                        )),
+                    };
+
+                    match value {
+                        Ok(expr) => {
+                            record.push((key, expr));
+                            go(cursor, record, possible_nested_token_starts, capture_until)
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                Some(token) => Err(ParseError::Message(format!(
+                    "Expecting a key in record. But found {}",
+                    token
+                ))),
+                None => Err(ParseError::Message(
+                    "Expecting a key in record. But found nothing".to_string(),
+                )),
+            }
+        }
+
+        go(cursor, &mut record, possible_nested_token_starts, capture_until)?;
+
+        Ok(Expr::Record(record.iter().map(|(s, e)| (s.clone(), Box::new(e.clone()))).collect::<Vec<_>>()))
+    }
 
     pub(crate) fn resolve_literal_in_code_context(primitive: &str) -> Expr {
         if let Ok(u64) = primitive.parse::<u64>() {

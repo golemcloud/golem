@@ -25,6 +25,7 @@ pub enum Token {
     Dot,
     Comma,
     Quote,
+    Colon,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -146,6 +147,7 @@ impl Display for Token {
                 Token::Comma => ",",
                 Token::Quote => "'",
                 Token::LessThan => "<",
+                Token::Colon => ":",
                 Token::MultiChar(multi_char) => match multi_char {
                     MultiCharTokens::Else => "else",
                     MultiCharTokens::EqualTo => "==",
@@ -277,6 +279,7 @@ impl<'t> Tokenizer<'t> {
             ' ' => Some(Token::Space),
             '>' => Some(Token::GreaterThan),
             '<' => Some(Token::LessThan),
+            ':' => Some(Token::Colon),
             _ => None,
         } {
             self.progress();
