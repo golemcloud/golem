@@ -478,7 +478,11 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                 Token::RParen => go(cursor, context, prev_expression),
                 Token::Space => go(cursor, context, prev_expression),
                 Token::NewLine => go(cursor, context, prev_expression),
-                Token::LCurly => create_record(cursor, vec![ &Token::interpolation_start(), &Token::LCurly], Some(&Token::RCurly)),
+                Token::LCurly => create_record(
+                    cursor,
+                    vec![&Token::interpolation_start(), &Token::LCurly],
+                    Some(&Token::RCurly),
+                ),
                 Token::MultiChar(MultiCharTokens::Arrow) => go(cursor, context, prev_expression),
                 Token::Comma => go(cursor, context, prev_expression),
                 Token::Colon => go(cursor, context, prev_expression),
@@ -566,9 +570,19 @@ mod internal {
             }
         }
 
-        go(cursor, &mut record, possible_nested_token_starts, capture_until)?;
+        go(
+            cursor,
+            &mut record,
+            possible_nested_token_starts,
+            capture_until,
+        )?;
 
-        Ok(Expr::Record(record.iter().map(|(s, e)| (s.clone(), Box::new(e.clone()))).collect::<Vec<_>>()))
+        Ok(Expr::Record(
+            record
+                .iter()
+                .map(|(s, e)| (s.clone(), Box::new(e.clone())))
+                .collect::<Vec<_>>(),
+        ))
     }
 
     pub(crate) fn resolve_literal_in_code_context(primitive: &str) -> Expr {
