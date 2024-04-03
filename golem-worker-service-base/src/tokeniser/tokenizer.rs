@@ -19,6 +19,7 @@ pub enum Token {
     LSquare,
     RSquare,
     GreaterThan,
+    LessThan,
     Space,
     NewLine,
     LParen,
@@ -27,6 +28,7 @@ pub enum Token {
     Comma,
     Quote,
 }
+
 
 #[derive(Clone, PartialEq, Debug)]
 enum MultiCharTokens {
@@ -45,6 +47,7 @@ enum MultiCharTokens {
     Then,
     Else,
     Arrow,
+    Number(String),
     Other(String)
 }
 
@@ -69,13 +72,84 @@ impl Display for MultiCharTokens {
                 MultiCharTokens::None => "none",
                 MultiCharTokens::Match => "match",
                 MultiCharTokens::Arrow => "=>",
-                MultiCharTokens::Other(string) => string.as_str()
+                MultiCharTokens::Other(string) => string.as_str(),
+                MultiCharTokens::Number(number) => number.as_str(),
             })
         }
 }
 
 
 impl Token {
+    pub fn raw_string(string: String) -> Token {
+        Token::MultiChar(MultiCharTokens::Other(string))
+    }
+
+    pub fn interpolation_start() -> Token {
+        Token::MultiChar(MultiCharTokens::InterpolationStart)
+    }
+
+    pub fn worker() -> Token {
+        Token::MultiChar(MultiCharTokens::Worker)
+    }
+
+    pub fn request() -> Token {
+        Token::MultiChar(MultiCharTokens::Request)
+    }
+
+    pub fn if_token() -> Token {
+        Token::MultiChar(MultiCharTokens::If)
+    }
+
+    pub fn then() -> Token {
+        Token::MultiChar(MultiCharTokens::Then)
+    }
+
+    pub fn else_token() -> Token {
+        Token::MultiChar(MultiCharTokens::Else)
+    }
+
+    pub fn match_token() -> Token {
+        Token::MultiChar(MultiCharTokens::Match)
+    }
+
+    pub fn ok() -> Token {
+        Token::MultiChar(MultiCharTokens::Ok)
+    }
+
+    pub fn err() -> Token {
+        Token::MultiChar(MultiCharTokens::Err)
+    }
+
+    pub fn some() -> Token {
+        Token::MultiChar(MultiCharTokens::Some)
+    }
+
+    pub fn none() -> Token {
+        Token::MultiChar(MultiCharTokens::None)
+    }
+
+    pub fn arrow() -> Token {
+        Token::MultiChar(MultiCharTokens::Arrow)
+    }
+
+    pub fn greater_than_or_equal_to() -> Token {
+        Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo)
+    }
+
+    pub fn less_than_or_equal_to() -> Token {
+        Token::MultiChar(MultiCharTokens::LessThanOrEqualTo)
+    }
+
+    pub fn equal_to() -> Token {
+        Token::MultiChar(MultiCharTokens::EqualTo)
+    }
+
+    pub fn number(number: String) -> Token {
+        Token::MultiChar(MultiCharTokens::Number(number))
+    }
+
+
+
     // If a token needs to be considered as only a raw string
     pub fn as_raw_string_token(&self) -> Token {
         match self {
@@ -104,7 +178,8 @@ impl Display for Token {
                 Token::LCurly => "{",
                 Token::Comma => ",",
                 Token::Quote => "'",
-                Token::MultiChar(multi_char) => multi_char.to_string().as_str()
+                Token::LessThan => "<",
+                Token::MultiChar(multi_char) => multi_char.to_string().as_str(),
             }
         )
     }
@@ -160,6 +235,10 @@ pub struct Tokenizer<'a> {
 
 impl<'t> Tokenizer {
 
+    fn next_char(&self) -> Option<char> {
+        self.text.chars().next()
+    }
+
     fn next_chars(&self) -> Chars<'t> {
         self.text.get(self.state.pos..).unwrap().chars()
     }
@@ -173,6 +252,10 @@ impl<'t> Tokenizer {
             .sum::<usize>();
 
         self.text.get(beginning..self.state.pos)
+    }
+
+    pub fn peek(&self, by: usize) -> Option<&str> {
+        self.text.chars().get(self.state.pos..self.state.pos + by)
     }
 
     pub fn rest(&self) -> &str {
@@ -206,174 +289,8 @@ impl<'t> Tokenizer {
         }
     }
 
-    fn get_token(&mut self) -> Token {
-        let mut token: Option<Token> = None;
-
-        for (character_index, c) in tokenise_string_with_index(self.text.as_str()) {
-            if c == "<" {
-                token = Some(Token::RawString(self.text[..character_index].to_string())); // Example: we token out the string just before <, and marks the state as <
-                self.text = self.text[character_index + 1..].to_string();
-                self.state = TokenizerState::Static(Token::LessThan);
-                break;
-            } else if c == "<=" {
-                token = Some(Token::RawString(self.text[..character_index].to_string())); // Example: we token out the string just before <, and marks the state as <
-                self.text = self.text[character_index + 2..].to_string();
-                self.state = TokenizerState::Static(Token::LessThanOrEqualTo);
-                break;
-            } else if c == ">" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 1..].to_string();
-                self.state = TokenizerState::Static(Token::GreaterThan);
-                break;
-            } else if c == ">=" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 2..].to_string();
-                self.state = TokenizerState::Static(Token::GreaterThanOrEqualTo);
-                break;
-            } else if c == "==" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 2..].to_string();
-                self.state = TokenizerState::Static(Token::EqualTo);
-                break;
-            } else if c == "if" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 2..].to_string();
-                self.state = TokenizerState::Static(Token::If);
-                break;
-            } else if c == "then" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 4..].to_string();
-                self.state = TokenizerState::Static(Token::Then);
-                break;
-            } else if c == "else" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 4..].to_string();
-                self.state = TokenizerState::Static(Token::Else);
-                break;
-            } else if c == "(" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 1..].to_string();
-                self.state = TokenizerState::Static(Token::LParen);
-                break;
-            } else if c == ")" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 1..].to_string();
-                self.state = TokenizerState::Static(Token::RParen);
-                break;
-            } else if c == "[" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 1..].to_string();
-                self.state = TokenizerState::Static(Token::LSquare);
-                break;
-            } else if c == "]" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 1..].to_string();
-                self.state = TokenizerState::Static(Token::RSquare);
-                break;
-            } else if c == "${" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 2..].to_string();
-                self.state = TokenizerState::Static(Token::InterpolationStart);
-                break;
-            } else if c == "=>" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 2..].to_string();
-                self.state = TokenizerState::Static(Token::Arrow);
-                break;
-            } else if c == "{" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 1..].to_string();
-                self.state = TokenizerState::Static(Token::LCurly);
-                break;
-            } else if c == "}" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 1..].to_string();
-                self.state = TokenizerState::Static(Token::RCurly);
-                break;
-            } else if c == " " {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 1..].to_string();
-                self.state = TokenizerState::Static(Token::Space);
-                break;
-            } else if c == "\n" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 1..].to_string();
-                self.state = TokenizerState::Static(Token::NewLine);
-                break;
-            } else if c == "." {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + 1..].to_string();
-                self.state = TokenizerState::Static(Token::Dot);
-                break;
-            } else if c == "worker" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text =
-                    self.text[character_index + Token::Worker.to_string().len()..].to_string();
-                self.state = TokenizerState::Static(Token::Worker);
-                break;
-            } else if c == "request" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text =
-                    self.text[character_index + Token::Request.to_string().len()..].to_string();
-                self.state = TokenizerState::Static(Token::Request);
-                break;
-            } else if c == "ok" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + Token::Ok.to_string().len()..].to_string();
-                self.state = TokenizerState::Static(Token::Ok);
-                break;
-            } else if c == "err" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + Token::Err.to_string().len()..].to_string();
-                self.state = TokenizerState::Static(Token::Err);
-                break;
-            } else if c == "some" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text =
-                    self.text[character_index + Token::Some.to_string().len()..].to_string();
-                self.state = TokenizerState::Static(Token::Some);
-                break;
-            } else if c == "none" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text =
-                    self.text[character_index + Token::None.to_string().len()..].to_string();
-                self.state = TokenizerState::Static(Token::None);
-                break;
-            } else if c == "null" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text = self.text[character_index + "null".to_string().len()..].to_string();
-                self.state = TokenizerState::Static(Token::None);
-                break;
-            } else if c == "match" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text =
-                    self.text[character_index + Token::Match.to_string().len()..].to_string();
-                self.state = TokenizerState::Static(Token::Match);
-                break;
-            } else if c == "," {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text =
-                    self.text[character_index + Token::Comma.to_string().len()..].to_string();
-                self.state = TokenizerState::Static(Token::Comma);
-                break;
-            } else if c == "'" {
-                token = Some(Token::RawString(self.text[..character_index].to_string()));
-                self.text =
-                    self.text[character_index + Token::Quote.to_string().len()..].to_string();
-                self.state = TokenizerState::Static(Token::Quote);
-                break;
-            }
-        }
-
-        match token {
-            Some(token) => token,
-            None => {
-                token = Some(Token::RawString(self.text.clone()));
-                self.text = "".to_string();
-                self.state = TokenizerState::End;
-                token.unwrap()
-            }
-        }
+    fn next_token(&mut self) -> Option<Token> {
+        self.get_single_char_token().or_else(|| self.get_multi_char_token())
     }
 
     fn get_single_char_token(&mut self) -> Option<Token> {
@@ -391,6 +308,7 @@ impl<'t> Tokenizer {
             '\n' => Some(Token::NewLine),
             ' ' => Some(Token::Space),
             '>' => Some(Token::GreaterThan),
+            '<' => Some(Token::LessThan),
             _ => None,
         } {
             self.progress();
@@ -402,45 +320,68 @@ impl<'t> Tokenizer {
 
     fn get_multi_char_token(&mut self) -> Option<Token> {
         let ch = self.text.chars().next()?;
-        let token = match ch {
+        match ch {
             'a'..='z' | 'A'..='Z' => {
                 // Eat characters from kebab-names (ascii alphanumeric and dash)
                 let str = self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-');
                 match str {
-                    Some("worker") => Token::MultiChar(MultiCharTokens::Worker),
-                    Some("request") =>Token::MultiChar(MultiCharTokens::Request),
-                    Some("ok") => Token::MultiChar(MultiCharTokens::Ok),
-                    Some("err") => Token::MultiChar(MultiCharTokens::Err),
-                    Some("some") => Token::MultiChar(MultiCharTokens::Some),
-                    Some("none") => Token::MultiChar(MultiCharTokens::None),
-                    Some("match") => Token::MultiChar(MultiCharTokens::Match),
-                    Some("if") => Token::MultiChar(MultiCharTokens::If),
-                    Some("then") => Token::MultiChar(MultiCharTokens::Then),
-                    Some("else") => Token::MultiChar(MultiCharTokens::Else),
-                    Some("${") =>  Token::MultiChar(MultiCharTokens::InterpolationStart),
-                    Some(">=") => Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo),
-                    Some("<=") => Token::MultiChar(MultiCharTokens::LessThanOrEqualTo),
-                    Some("==") => Token::MultiChar(MultiCharTokens::EqualTo),
-                    Some("=>") => Token::MultiChar(MultiCharTokens::Arrow),
-                    Some(chars) => Token::MultiChar(MultiCharTokens::Other(chars.to_string())),
-                
+                    Some("worker") => Some(Token::MultiChar(MultiCharTokens::Worker)),
+                    Some("request") =>Some(Token::MultiChar(MultiCharTokens::Request)),
+                    Some("ok") => Some(Token::MultiChar(MultiCharTokens::Ok)),
+                    Some("err") => Some(Token::MultiChar(MultiCharTokens::Err)),
+                    Some("some") => Some(Token::MultiChar(MultiCharTokens::Some)),
+                    Some("none") => Some(Token::MultiChar(MultiCharTokens::None)),
+                    Some("match") => Some(Token::MultiChar(MultiCharTokens::Match)),
+                    Some("if") => Some(Token::MultiChar(MultiCharTokens::If)),
+                    Some("then") => Some(Token::MultiChar(MultiCharTokens::Then)),
+                    Some("else") => Some(Token::MultiChar(MultiCharTokens::Else)),
+                    _ => None
+
                 }
             }
             '0'..='9' => {
                 // Eat characters from numbers (including decimals and exponents)
-                self.eat_while(|ch| matches!(ch, '0'..='9' | '-' | '.' | 'e' | 'E' | '+'));
-                Token::Number
+                let str = self.eat_while(|ch| matches!(ch, '0'..='9' | '-' | '.' | 'e' | 'E' | '+'));
+                if let Some(str) = str {
+                    Some(Token::MultiChar(MultiCharTokens::Number(str.to_string())))
+                } else {
+                    None
+                }
             }
-            '\'' => {
-                self.eat_string('\'')?;
-                Token::Char
+            _ => {
+                let peeked = self.peek(2);
+                match peeked {
+                    Some("=>") => {
+                        self.progress_by(&'=');
+                        self.progress_by(&'>');
+                        Some(Token::MultiChar(MultiCharTokens::Arrow))
+                    }
+                    Some(">=") => {
+                        self.progress_by(&'>');
+                        self.progress_by(&'=');
+                        Some(Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo))
+                    }
+                    Some("<=") => {
+                        self.progress_by(&'<');
+                        self.progress_by(&'=');
+                        Some(Token::MultiChar(MultiCharTokens::LessThanOrEqualTo))
+                    }
+                    Some("==") => {
+                        self.progress_by(&'=');
+                        self.progress_by(&'=');
+                        Some(Token::MultiChar(MultiCharTokens::EqualTo))
+                    }
+                    Some("${") => {
+                        self.progress_by(&'$');
+                        self.progress_by(&'{');
+                        Some(Token::MultiChar(MultiCharTokens::InterpolationStart))
+                    }
+                    _ => None
+
+                }
             }
-            '"' => {
-                self.eat_string('"')?;
-                Token::String
-            }
-            _ => return Err(LexError::UnexpectedChar(self.pos)),
-        };
+
+        }
     }
 }
 
@@ -456,50 +397,11 @@ impl TokeniserResult {
 }
 
 
-fn get_multi_char_tokens(ch: char) -> Option<Token> {
-
-}
-
-fn tokenise_string_with_index(input_string: &str) -> Vec<(usize, &str)> {
-    let mut result: Vec<(usize, &str)> = Vec::new();
-    let mut current_index = 0;
-    let token_regex_pattern = Regex::new(
-        r"(worker|request|,|\.|'|<=|\$\{|}|>=|\n| |==|<|>|\bif\b|\bthen\b|\belse\b|=>|\{|\bsome\b|\bnone\b|\bmatch\b|\bok\b|\berr\b|[ -]|[^\s])|[\(\)]|\[|\]|(\w+)",
-    )
-        .unwrap();
-
-    for capture in token_regex_pattern.captures_iter(input_string) {
-        if let Some(matched) = capture.get(1) {
-            let matched_str = matched.as_str();
-            result.push((current_index, matched_str));
-            current_index += matched_str.len();
-        } else if let Some(matched) = capture.get(2) {
-            let matched_str = matched.as_str();
-            result.push((current_index, matched_str));
-            current_index += matched_str.len();
-        }
-    }
-
-    result
-}
-
 impl Iterator for Tokenizer {
     type Item = Token;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.state.is_end() {
-            return None;
-        }
-
-        match self.state.clone() {
-            TokenizerState::Beginning => Some(self.get_token()),
-            TokenizerState::Text => Some(self.get_token()),
-            TokenizerState::Static(inner) => {
-                self.state = TokenizerState::Text;
-                Some(inner)
-            }
-            TokenizerState::End => None,
-        }
+        self.next_token()
     }
 }
 
@@ -517,9 +419,9 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::RawString("foo".to_string()),
+                Token::raw_string("foo".to_string()),
                 Token::Space,
-                Token::RawString("bar".to_string())
+                Token::raw_string("bar".to_string())
             ]
         );
     }
@@ -531,9 +433,9 @@ mod tests {
             tokens,
             vec![
                 Token::LParen,
-                Token::RawString("foo".to_string()),
+                Token::raw_string("foo".to_string()),
                 Token::Space,
-                Token::RawString("bar".to_string()),
+                Token::raw_string("bar".to_string()),
                 Token::RParen
             ]
         );
@@ -545,11 +447,11 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::RawString("foo".to_string()),
+                Token::raw_string("foo".to_string()),
                 Token::Space,
                 Token::Dot,
                 Token::Space,
-                Token::RawString("bar".to_string()),
+                Token::raw_string("bar".to_string()),
             ]
         );
     }
@@ -557,13 +459,13 @@ mod tests {
     #[test]
     fn test_request() {
         let tokens: Vec<Token> = Tokenizer::new("request .").run().value;
-        assert_eq!(tokens, vec![Token::Request, Token::Space, Token::Dot,]);
+        assert_eq!(tokens, vec![Token::request(), Token::Space, Token::Dot,]);
     }
 
     #[test]
     fn test_worker_response() {
         let tokens: Vec<Token> = Tokenizer::new("worker.").run().value;
-        assert_eq!(tokens, vec![Token::Worker, Token::Dot]);
+        assert_eq!(tokens, vec![Token::worker(), Token::Dot]);
     }
 
     #[test]
@@ -573,9 +475,9 @@ mod tests {
             tokens,
             vec![
                 Token::LSquare,
-                Token::RawString("foo".to_string()),
+                Token::raw_string("foo".to_string()),
                 Token::Space,
-                Token::RawString("bar".to_string()),
+                Token::raw_string("bar".to_string()),
                 Token::RSquare
             ]
         );
@@ -587,7 +489,7 @@ mod tests {
 
         assert_eq!(
             tokens,
-            vec![Token::If, Token::Space, Token::RawString("x".to_string()),]
+            vec![Token::if_token(), Token::Space, Token::raw_string("x".to_string()),]
         );
     }
 
@@ -598,9 +500,9 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::RawString("asif".to_string()),
+                Token::raw_string("asif".to_string()),
                 Token::Space,
-                Token::RawString("x".to_string())
+                Token::raw_string("x".to_string())
             ]
         );
     }
@@ -612,9 +514,9 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::RawString("ifis".to_string()),
+                Token::raw_string("ifis".to_string()),
                 Token::Space,
-                Token::RawString("x".to_string())
+                Token::raw_string("x".to_string())
             ]
         );
     }
@@ -626,23 +528,23 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::If,
+                Token::if_token(),
                 Token::Space,
-                Token::InterpolationStart,
-                Token::RawString("x".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("x".to_string()),
                 Token::Space,
                 Token::GreaterThan,
                 Token::Space,
-                Token::RawString("1".to_string()),
+                Token::raw_string("1".to_string()),
                 Token::RCurly,
                 Token::Space,
-                Token::Then,
+                Token::then(),
                 Token::Space,
-                Token::RawString("1".to_string()),
+                Token::raw_string("1".to_string()),
                 Token::Space,
-                Token::Else,
+                Token::else_token(),
                 Token::Space,
-                Token::RawString("0".to_string()),
+                Token::raw_string("0".to_string()),
             ]
         );
     }
@@ -660,21 +562,21 @@ else${z}
             tokens,
             vec![
                 Token::NewLine,
-                Token::If,
+                Token::if_token(),
                 Token::Space,
-                Token::InterpolationStart,
-                Token::RawString("x".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("x".to_string()),
                 Token::RCurly,
                 Token::Space,
-                Token::Then,
+                Token::then(),
                 Token::Space,
-                Token::InterpolationStart,
-                Token::RawString("y".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("y".to_string()),
                 Token::RCurly,
                 Token::NewLine,
-                Token::Else,
-                Token::InterpolationStart,
-                Token::RawString("z".to_string()),
+                Token::else_token(),
+                Token::interpolation_start(),
+                Token::raw_string("z".to_string()),
                 Token::RCurly,
                 Token::NewLine,
             ]
@@ -685,7 +587,7 @@ else${z}
     fn test_if_then_else_false_expr() {
         let tokens: Vec<Token> = Tokenizer::new("ifxthenyelsez").run().value;
 
-        assert_eq!(tokens, vec![Token::RawString("ifxthenyelsez".to_string()),]);
+        assert_eq!(tokens, vec![Token::raw_string("ifxthenyelsez".to_string()),]);
     }
 
     #[test]
@@ -695,7 +597,7 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::RawString("f".to_string()),
+                Token::raw_string("f".to_string()),
                 Token::Space,
                 Token::GreaterThan,
             ]
@@ -709,12 +611,12 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::RawString("f".to_string()),
+                Token::raw_string("f".to_string()),
                 Token::Space,
                 Token::Space,
                 Token::GreaterThan,
                 Token::Space,
-                Token::RawString("g".to_string())
+                Token::raw_string("g".to_string())
             ]
         );
     }
@@ -728,12 +630,12 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::InterpolationStart,
-                Token::RawString("foo".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("foo".to_string()),
                 Token::RCurly,
                 Token::GreaterThan,
-                Token::InterpolationStart,
-                Token::RawString("bar".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("bar".to_string()),
                 Token::RCurly,
             ]
         );
@@ -746,7 +648,7 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::RawString("f".to_string()),
+                Token::raw_string("f".to_string()),
                 Token::Space,
                 Token::LessThan,
             ]
@@ -760,11 +662,11 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::RawString("f".to_string()),
+                Token::raw_string("f".to_string()),
                 Token::Space,
                 Token::LessThan,
                 Token::Space,
-                Token::RawString("g".to_string())
+                Token::raw_string("g".to_string())
             ]
         );
     }
@@ -776,9 +678,9 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::RawString("f".to_string()),
+                Token::raw_string("f".to_string()),
                 Token::LessThan,
-                Token::RawString("g".to_string())
+                Token::raw_string("g".to_string())
             ]
         );
     }
@@ -792,14 +694,14 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::InterpolationStart,
-                Token::RawString("foo".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("foo".to_string()),
                 Token::RCurly,
                 Token::Space,
                 Token::GreaterThan,
                 Token::Space,
-                Token::InterpolationStart,
-                Token::RawString("bar".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("bar".to_string()),
                 Token::RCurly,
             ]
         );
@@ -814,14 +716,14 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::InterpolationStart,
-                Token::RawString("foo".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("foo".to_string()),
                 Token::RCurly,
                 Token::Space,
                 Token::LessThan,
                 Token::Space,
-                Token::InterpolationStart,
-                Token::RawString("bar".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("bar".to_string()),
                 Token::RCurly,
             ]
         );
@@ -836,14 +738,14 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::InterpolationStart,
-                Token::RawString("foo".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("foo".to_string()),
                 Token::RCurly,
                 Token::Space,
-                Token::EqualTo,
+                Token::equal_to(),
                 Token::Space,
-                Token::InterpolationStart,
-                Token::RawString("bar".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("bar".to_string()),
                 Token::RCurly,
             ]
         );
@@ -855,12 +757,12 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::InterpolationStart,
-                Token::RawString("foo".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("foo".to_string()),
                 Token::RCurly,
-                Token::RawString("-raw_".to_string()),
-                Token::InterpolationStart,
-                Token::RawString("bar".to_string()),
+                Token::raw_string("-raw_".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("bar".to_string()),
                 Token::RCurly,
             ]
         );
@@ -872,10 +774,10 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::InterpolationStart,
-                Token::RawString("foo".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("foo".to_string()),
                 Token::RCurly,
-                Token::RawString("-^raw".to_string())
+                Token::raw_string("-^raw".to_string())
             ]
         );
     }
@@ -886,10 +788,10 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::RawString("raw".to_string()),
+                Token::raw_string("raw".to_string()),
                 Token::Space,
-                Token::InterpolationStart,
-                Token::RawString("foo".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("foo".to_string()),
                 Token::RCurly,
             ]
         );
@@ -901,19 +803,19 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::RawString("foo".to_string()),
+                Token::raw_string("foo".to_string()),
                 Token::Space,
-                Token::InterpolationStart,
-                Token::RawString("foo".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("foo".to_string()),
                 Token::RCurly,
                 Token::Space,
-                Token::RawString("raw".to_string()),
+                Token::raw_string("raw".to_string()),
                 Token::Space,
-                Token::InterpolationStart,
-                Token::RawString("bar".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("bar".to_string()),
                 Token::RCurly,
                 Token::Space,
-                Token::RawString("bar".to_string())
+                Token::raw_string("bar".to_string())
             ]
         );
     }
@@ -924,16 +826,16 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::InterpolationStart,
-                Token::RawString("foo".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("foo".to_string()),
                 Token::RCurly,
                 Token::Space,
-                Token::RawString("raw".to_string()),
-                Token::InterpolationStart,
-                Token::RawString("hi".to_string()),
+                Token::raw_string("raw".to_string()),
+                Token::interpolation_start(),
+                Token::raw_string("hi".to_string()),
                 Token::RCurly,
                 Token::Space,
-                Token::RawString("bar".to_string()),
+                Token::raw_string("bar".to_string()),
             ]
         );
     }
@@ -948,33 +850,33 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::InterpolationStart,
-                Token::Match,
+                Token::interpolation_start(),
+                Token::match_token(),
                 Token::Space,
-                Token::Worker,
+                Token::worker(),
                 Token::Dot,
-                Token::RawString("response".to_string()),
+                Token::raw_string("response".to_string()),
                 Token::Space,
                 Token::LCurly,
                 Token::Space,
-                Token::Some,
+                Token::some(),
                 Token::LParen,
-                Token::RawString("value".to_string()),
+                Token::raw_string("value".to_string()),
                 Token::RParen,
                 Token::Space,
-                Token::Arrow,
+                Token::arrow(),
                 Token::Space,
-                Token::Worker,
+                Token::worker(),
                 Token::Dot,
-                Token::RawString("response".to_string()),
+                Token::raw_string("response".to_string()),
                 Token::Comma,
                 Token::Space,
-                Token::None,
+                Token::none(),
                 Token::Space,
-                Token::Arrow,
+                Token::arrow(),
                 Token::Space,
                 Token::Quote,
-                Token::RawString("some_value".to_string()),
+                Token::raw_string("some_value".to_string()),
                 Token::Quote,
                 Token::Space,
                 Token::RCurly,
