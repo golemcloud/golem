@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::expression::{ConstructorPattern, Expr};
 use crate::tokeniser::cursor::TokenCursor;
-use crate::tokeniser::tokenizer::{Token, TokeniserResult, Tokenizer};
+use crate::tokeniser::tokenizer::{MultiCharTokens, Token, TokeniserResult, Tokenizer};
 
 use super::*;
 use internal::*;
@@ -51,7 +51,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
 
         if let Some(token) = token {
             match token {
-                Token::RawString(raw_string) => {
+                Token::MultiChar(MultiCharTokens::Other(raw_string)) => {
                     let new_expr = if context.is_code() {
                         resolve_literal_in_code_context(raw_string.as_str())
                     } else {
@@ -61,9 +61,9 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     go(cursor, context, prev_expression.apply_with(new_expr))
                 }
 
-                Token::Request => go(cursor, context, prev_expression.apply_with(Expr::Request())),
+                Token::MultiChar(MultiCharTokens::Request) => go(cursor, context, prev_expression.apply_with(Expr::Request())),
 
-                Token::None => go(
+                Token::MultiChar(MultiCharTokens::None) => go(
                     cursor,
                     context,
                     prev_expression.apply_with(Expr::Constructor0(
@@ -71,7 +71,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     )),
                 ),
 
-                token @ Token::Some | token @ Token::Ok | token @ Token::Err => {
+                token @ Token::MultiChar(MultiCharTokens::Some) | token @ Token::MultiChar(MultiCharTokens::Ok) | token @ Token::MultiChar(MultiCharTokens::Err) => {
                     match cursor.next_non_empty_token() {
                         Some(Token::LParen) => {
                             let constructor_var_optional = cursor
@@ -128,12 +128,12 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     }
                 }
 
-                Token::Worker => go(cursor, context, prev_expression.apply_with(Expr::Worker())),
+                Token::MultiChar(MultiCharTokens::Worker) => go(cursor, context, prev_expression.apply_with(Expr::Worker())),
 
-                Token::InterpolationStart => {
+                Token::MultiChar(MultiCharTokens::InterpolationStart) => {
                     let new_expr = capture_expression_until(
                         cursor,
-                        vec![&Token::InterpolationStart, &Token::LCurly],
+                        vec![&Token::interpolation_start(), &Token::LCurly],
                         Some(&Token::RCurly),
                         prev_expression,
                         go,
@@ -172,7 +172,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     go(cursor, context, expr)
                 }
 
-                Token::GreaterThanOrEqualTo => {
+                Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo) => {
                     if prev_expression.is_empty() {
                         return Err(ParseError::Message(
                             "GreaterThanOrEqualTo (>=) is applied to a non existing left expression"
@@ -237,7 +237,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     go(cursor, context, new_expr)
                 }
 
-                Token::LessThanOrEqualTo => {
+                Token::MultiChar(MultiCharTokens::LessThanOrEqualTo) => {
                     if prev_expression.is_empty() {
                         return Err(ParseError::Message(
                             "LessThanOrEqualTo (<=)  is applied to a non existing left expression"
@@ -259,7 +259,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     go(cursor, context, new_expr)
                 }
 
-                Token::EqualTo => {
+                Token::MultiChar(MultiCharTokens::EqualTo) => {
                     if prev_expression.is_empty() {
                         return Err(ParseError::Message(
                             "EqualTo (=) is applied to a non existing left expression".to_string(),
@@ -286,7 +286,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     let next_token = cursor.next_non_empty_token();
 
                     let possible_field = match next_token {
-                        Some(Token::RawString(field)) => field,
+                        Some(Token::MultiChar(MultiCharTokens::Other(field))) => field,
                         Some(token) => {
                             return Err(ParseError::Message(format!(
                                 "Expecting a valid field selection after dot instead of {}.",
@@ -352,7 +352,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     _ => Err(ParseError::Message("Invalid token [".to_string())),
                 },
 
-                Token::If => {
+                Token::MultiChar(MultiCharTokens::If) => {
                     // We expect to form Expr::Cond given three unknown variables
                     let future_expr = InternalExprResult::incomplete(
                         ExpressionContext::Condition,
@@ -381,8 +381,8 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
 
                     let captured_predicate = capture_expression_until(
                         cursor,
-                        vec![&Token::If],
-                        Some(&Token::Then),
+                        vec![&Token::if_token()],
+                        Some(&Token::then()),
                         future_expr,
                         go,
                     )?;
@@ -390,7 +390,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     go(cursor, context, captured_predicate)
                 }
 
-                Token::Match => {
+                Token::MultiChar(MultiCharTokens::Match) => {
                     let expr_under_evaluation =
                         cursor.capture_string_until(vec![], &Token::LCurly);
 
@@ -423,12 +423,12 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     go(cursor, context, new_expr?)
                 }
 
-                Token::Then => match prev_expression {
+                Token::MultiChar(MultiCharTokens::Then) => match prev_expression {
                     InternalExprResult::InComplete(ExpressionContext::Condition, _) => {
                         let mew_expr = capture_expression_until(
                             cursor,
-                            vec![&Token::Then],
-                            Some(&Token::Else),
+                            vec![&Token::then()],
+                            Some(&Token::else_token()),
                             prev_expression,
                             go,
                         )?;
@@ -442,11 +442,11 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     )),
                 },
 
-                Token::Else => match prev_expression {
+                Token::MultiChar(MultiCharTokens::Else) => match prev_expression {
                     InternalExprResult::InComplete(ExpressionContext::Condition, _) => {
                         let expr = capture_expression_until(
                             cursor,
-                            vec![&Token::Else],
+                            vec![&Token::else_token()],
                             None,
                             prev_expression,
                             go,
@@ -466,7 +466,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                 Token::Space => go(cursor, context, prev_expression),
                 Token::NewLine => go(cursor, context, prev_expression),
                 Token::LCurly => go(cursor, context, prev_expression),
-                Token::Arrow => go(cursor, context, prev_expression),
+                Token::MultiChar(MultiCharTokens::Arrow) => go(cursor, context, prev_expression),
                 Token::Comma => go(cursor, context, prev_expression),
             }
         } else {
@@ -489,7 +489,7 @@ mod internal {
     use crate::parser::expr_parser::{parse_with_context, Context};
     use crate::parser::ParseError;
     use crate::tokeniser::cursor::TokenCursor;
-    use crate::tokeniser::tokenizer::{Token, TokeniserResult, Tokenizer};
+    use crate::tokeniser::tokenizer::{MultiCharTokens, Token, TokeniserResult, Tokenizer};
     use strum_macros::Display;
 
     pub(crate) fn resolve_literal_in_code_context(primitive: &str) -> Expr {
@@ -663,9 +663,9 @@ mod internal {
         F: FnOnce(&mut TokenCursor, &mut Vec<ConstructorPatternExpr>) -> Result<(), ParseError>,
     {
         match cursor.next_non_empty_token() {
-            Some(Token::Arrow) => {
+            Some(Token::MultiChar(MultiCharTokens::Arrow)) => {
                 let index_of_closed_curly_brace = cursor.index_of_last_end_token(
-                    vec![&Token::LCurly, &Token::InterpolationStart],
+                    vec![&Token::LCurly, &Token::interpolation_start()],
                     &Token::RCurly,
                 );
                 let index_of_commaseparator = cursor.index_of_last_end_token(vec![], &Token::Comma);
@@ -706,7 +706,7 @@ mod internal {
 
                     (Some(_), None) => {
                         let captured_string = cursor.capture_string_until(
-                            vec![&Token::LCurly, &Token::InterpolationStart],
+                            vec![&Token::LCurly, &Token::interpolation_start()],
                             &Token::RCurly,
                         );
 

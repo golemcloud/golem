@@ -31,7 +31,7 @@ pub enum Token {
 
 
 #[derive(Clone, PartialEq, Debug)]
-enum MultiCharTokens {
+pub enum MultiCharTokens {
     Worker,
     Request,
     Ok,
@@ -196,7 +196,7 @@ impl Token {
 
     pub fn is_empty(&self) -> bool {
         match self {
-            Self::RawString(string) => string.is_empty(),
+            Self::MultiChar(MultiCharTokens::Other(string)) => string.is_empty(),
             _ => false,
         }
     }
@@ -260,6 +260,10 @@ impl<'t> Tokenizer {
 
     pub fn rest(&self) -> &str {
         &self.text[self.state.pos..]
+    }
+
+    pub fn progress(&mut self) {
+        self.state.pos += 1;
     }
 
     pub fn progress_by(&mut self, ch: &char) {
@@ -397,7 +401,7 @@ impl TokeniserResult {
 }
 
 
-impl Iterator for Tokenizer {
+impl<'a> Iterator for Tokenizer<'a> {
     type Item = Token;
 
     fn next(&mut self) -> Option<Self::Item> {
