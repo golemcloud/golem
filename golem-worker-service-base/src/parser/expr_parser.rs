@@ -522,42 +522,39 @@ mod internal {
             possible_nested_token_starts: Vec<&Token>,
             capture_until: Option<&Token>,
         ) -> Result<(), ParseError> {
-            match cursor.next_non_empty_token() {
-                Some(Token::RSquare) => Ok(()),
-                Some(Token::MultiChar(MultiCharTokens::Other(key))) => {
-                    let captured_string = cursor.capture_string_until(
+            let captured_string = cursor.capture_string_until(
+                possible_nested_token_starts.clone(),
+                &Token::Comma, // Wave does this
+            );
+
+            dbg!(captured_string.clone());
+
+            match captured_string {
+                Some(r) => {
+                    let expr = parse_with_context(r.as_str(), Context::Code)?;
+
+                    dbg!(expr.clone());
+
+                    record.push(expr);
+                    cursor.next_non_empty_token();
+                    go(cursor, record, possible_nested_token_starts, capture_until)
+                }
+
+                None => {
+                    let last_value = cursor.capture_string_until(
                         possible_nested_token_starts.clone(),
-                        capture_until.unwrap_or(&Token::Comma), // Wave does this
+                        &Token::RSquare,
                     );
 
-                    let value =    match captured_string {
-                        Some(captured_string) => {
-                            let expr = parse_with_context(
-                                captured_string.as_str(),
-                                Context::Code,
-                            )?;
-                            Ok(expr)
-                        }
-                        None => Err(ParseError::Message(
-                            "Expecting a value after [".to_string(),
-                        )),
-                    };
-
-                    match value {
-                        Ok(expr) => {
+                    match last_value {
+                        Some(last_value) => {
+                            let expr = parse_with_context(last_value.as_str(), Context::Code)?;
                             record.push(expr);
-                            go(cursor, record, possible_nested_token_starts, capture_until)
+                            Ok(())
                         }
-                        Err(e) => Err(e),
+                        None => Ok(()),
                     }
                 }
-                Some(token) => Err(ParseError::Message(format!(
-                    "Expecting a valid value in list. But found {}",
-                    token
-                ))),
-                None => Err(ParseError::Message(
-                    "Expecting a valid value in between [ ]. But found nothing".to_string(),
-                )),
             }
         }
 
