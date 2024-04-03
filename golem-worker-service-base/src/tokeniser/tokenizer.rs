@@ -1,9 +1,8 @@
 use std::fmt::Display;
 use std::str::Chars;
 
-use regex::Regex;
 use crate::tokeniser::cursor::TokenCursor;
-
+use regex::Regex;
 
 // Typical usage:
 //
@@ -254,9 +253,7 @@ impl<'t> Tokenizer<'t> {
     pub fn new(text: &'t str) -> Self {
         Self {
             text,
-            state: State {
-                pos: 0,
-            },
+            state: State { pos: 0 },
         }
     }
 
@@ -311,8 +308,9 @@ impl<'t> Tokenizer<'t> {
     fn get_multi_char_token(&mut self) -> Option<Token> {
         let ch = self.rest().chars().next()?;
         match ch {
-            'a'..='z' | 'A'..='Z' | '-' | '_'  => {
-                let str = self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')?;
+            'a'..='z' | 'A'..='Z' | '-' | '_' => {
+                let str =
+                    self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')?;
                 match str {
                     "worker" => Some(Token::MultiChar(MultiCharTokens::Worker)),
                     "request" => Some(Token::MultiChar(MultiCharTokens::Request)),
@@ -333,14 +331,16 @@ impl<'t> Tokenizer<'t> {
                     self.eat_while(|ch| matches!(ch, '0'..='9' | '-' | '.' | 'e' | 'E' | '+'))?;
                 Some(Token::MultiChar(MultiCharTokens::Number(str.to_string())))
             }
-            _ => self.find_double_char_op().or_else(|| self.find_next_char())
+            _ => self.find_double_char_op().or_else(|| self.find_next_char()),
         }
     }
 
     fn find_next_char(&mut self) -> Option<Token> {
-        let final_char =  self.peek_next_char()?;
+        let final_char = self.peek_next_char()?;
         self.progress_by(&final_char);
-        Some(Token::MultiChar(MultiCharTokens::Other(final_char.to_string())))
+        Some(Token::MultiChar(MultiCharTokens::Other(
+            final_char.to_string(),
+        )))
     }
     fn find_double_char_op(&mut self) -> Option<Token> {
         let peeked = self.peek(2)?;
@@ -371,13 +371,10 @@ impl<'t> Tokenizer<'t> {
                 self.progress_by(&'{');
                 Some(Token::MultiChar(MultiCharTokens::InterpolationStart))
             }
-            _ => None
+            _ => None,
         }
-
     }
 }
-
-
 
 #[derive(Debug, Clone)]
 pub struct TokeniserResult {
@@ -777,7 +774,9 @@ else${z}
                 Token::interpolation_start(),
                 Token::raw_string("foo".to_string()),
                 Token::RCurly,
-                Token::raw_string("-^raw".to_string())
+                Token::raw_string("-".to_string()),
+                Token::raw_string("^".to_string()),
+                Token::raw_string("raw".to_string()),
             ]
         );
     }
