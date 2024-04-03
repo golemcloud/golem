@@ -76,7 +76,7 @@ impl<'t> Evaluator for RawString<'t> {
             match token {
                 Token::InterpolationStart => {
                     let place_holder_name = cursor
-                        .capture_string_until(vec![&Token::InterpolationStart], &Token::CloseParen);
+                        .capture_string_until(vec![&Token::InterpolationStart], &Token::RParen);
 
                     if let Some(place_holder_name) = place_holder_name {
                         let type_annotated_value =

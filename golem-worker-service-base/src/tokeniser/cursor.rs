@@ -173,15 +173,15 @@ mod tests {
     #[test]
     fn capture_string_test() {
         let tokens = vec![
-            Token::OpenParen,
+            Token::LParen,
             Token::RawString("afsal".to_string()),
-            Token::CloseParen,
+            Token::RParen,
         ];
 
         let mut cursor = TokenCursor::new(tokens.clone());
         cursor.next_token();
         let result = cursor
-            .capture_string_until(vec![&Token::OpenParen], &Token::CloseParen)
+            .capture_string_until(vec![&Token::LParen], &Token::RParen)
             .unwrap();
 
         assert_eq!(result, "afsal".to_string())
@@ -190,17 +190,17 @@ mod tests {
     #[test]
     fn capture_string_test_nested() {
         let tokens = vec![
-            Token::OpenParen,
-            Token::OpenParen,
+            Token::LParen,
+            Token::LParen,
             Token::RawString("afsal".to_string()),
-            Token::CloseParen,
-            Token::CloseParen,
+            Token::RParen,
+            Token::RParen,
         ];
 
         let mut cursor = TokenCursor::new(tokens.clone());
         cursor.next_token();
         let result = cursor
-            .capture_string_until(vec![&Token::OpenParen], &Token::CloseParen)
+            .capture_string_until(vec![&Token::LParen], &Token::RParen)
             .unwrap();
 
         assert_eq!(result, "(afsal)".to_string())
@@ -208,11 +208,11 @@ mod tests {
 
     #[test]
     fn capture_character_test() {
-        let tokens = vec![Token::CloseParen];
+        let tokens = vec![Token::RParen];
 
         let mut cursor = TokenCursor::new(tokens.clone());
         let result = cursor
-            .capture_string_until(vec![&Token::OpenParen], &Token::CloseParen)
+            .capture_string_until(vec![&Token::LParen], &Token::RParen)
             .unwrap();
         assert_eq!(result, "".to_string())
     }
@@ -222,7 +222,7 @@ mod tests {
         let tokens = vec![];
 
         let mut cursor = TokenCursor::new(tokens.clone());
-        let result = cursor.capture_string_until(vec![&Token::OpenParen], &Token::CloseParen);
+        let result = cursor.capture_string_until(vec![&Token::LParen], &Token::RParen);
 
         assert_eq!(result, None)
     }

@@ -73,11 +73,11 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
 
                 token @ Token::Some | token @ Token::Ok | token @ Token::Err => {
                     match cursor.next_non_empty_token() {
-                        Some(Token::OpenParen) => {
+                        Some(Token::LParen) => {
                             let constructor_var_optional = cursor
                                 .capture_string_until_and_skip_end(
-                                    vec![&Token::OpenParen],
-                                    &Token::CloseParen,
+                                    vec![&Token::LParen],
+                                    &Token::RParen,
                                 );
                             let constructor = match constructor_var_optional {
                                 Some(constructor_var) => {
@@ -133,8 +133,8 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                 Token::InterpolationStart => {
                     let new_expr = capture_expression_until(
                         cursor,
-                        vec![&Token::InterpolationStart, &Token::OpenCurlyBrace],
-                        Some(&Token::ClosedCurlyBrace),
+                        vec![&Token::InterpolationStart, &Token::LCurly],
+                        Some(&Token::RCurly),
                         prev_expression,
                         go,
                     )?;
@@ -160,11 +160,11 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     go(cursor, context, prev_expression.apply_with(new_expr?))
                 }
 
-                Token::OpenParen => {
+                Token::LParen => {
                     let expr = capture_expression_until(
                         cursor,
-                        vec![&Token::OpenParen],
-                        Some(&Token::CloseParen),
+                        vec![&Token::LParen],
+                        Some(&Token::RParen),
                         prev_expression,
                         go,
                     )?;
@@ -317,11 +317,11 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     }
                 }
 
-                Token::OpenSquareBracket => match prev_expression {
+                Token::LSquare => match prev_expression {
                     InternalExprResult::Complete(prev_expr) => {
                         let optional_possible_index = cursor.capture_string_until(
-                            vec![&Token::OpenSquareBracket],
-                            &Token::ClosedSquareBracket,
+                            vec![&Token::LSquare],
+                            &Token::RSquare,
                         );
 
                         match optional_possible_index {
@@ -392,7 +392,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
 
                 Token::Match => {
                     let expr_under_evaluation =
-                        cursor.capture_string_until(vec![], &Token::OpenCurlyBrace);
+                        cursor.capture_string_until(vec![], &Token::LCurly);
 
                     let new_expr = match expr_under_evaluation {
                         Some(expr_under_evaluation) => {
@@ -402,7 +402,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                             let expression =
                                 go(&mut new_cursor, Context::Code, InternalExprResult::Empty)?;
                             match cursor.next_non_empty_token() {
-                                Some(Token::OpenCurlyBrace) => {
+                                Some(Token::LCurly) => {
                                     let constructors = get_constructors(cursor)?;
                                     Ok(InternalExprResult::complete(Expr::PatternMatch(
                                         Box::new(expression),
@@ -460,12 +460,12 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     )),
                 },
 
-                Token::ClosedCurlyBrace => go(cursor, context, prev_expression),
-                Token::ClosedSquareBracket => go(cursor, context, prev_expression),
-                Token::CloseParen => go(cursor, context, prev_expression),
+                Token::RCurly => go(cursor, context, prev_expression),
+                Token::RSquare => go(cursor, context, prev_expression),
+                Token::RParen => go(cursor, context, prev_expression),
                 Token::Space => go(cursor, context, prev_expression),
                 Token::NewLine => go(cursor, context, prev_expression),
-                Token::OpenCurlyBrace => go(cursor, context, prev_expression),
+                Token::LCurly => go(cursor, context, prev_expression),
                 Token::Arrow => go(cursor, context, prev_expression),
                 Token::Comma => go(cursor, context, prev_expression),
             }
@@ -590,11 +590,11 @@ mod internal {
                     let next_non_empty_open_braces = cursor.next_non_empty_token();
 
                     match next_non_empty_open_braces {
-                        Some(Token::OpenParen) => {
+                        Some(Token::LParen) => {
                             let constructor_var_optional = cursor
                                 .capture_string_until_and_skip_end(
-                                    vec![&Token::OpenParen],
-                                    &Token::CloseParen,
+                                    vec![&Token::LParen],
+                                    &Token::RParen,
                                 );
 
                             match constructor_var_optional {
@@ -665,8 +665,8 @@ mod internal {
         match cursor.next_non_empty_token() {
             Some(Token::Arrow) => {
                 let index_of_closed_curly_brace = cursor.index_of_last_end_token(
-                    vec![&Token::OpenCurlyBrace, &Token::InterpolationStart],
-                    &Token::ClosedCurlyBrace,
+                    vec![&Token::LCurly, &Token::InterpolationStart],
+                    &Token::RCurly,
                 );
                 let index_of_commaseparator = cursor.index_of_last_end_token(vec![], &Token::Comma);
 
@@ -689,8 +689,8 @@ mod internal {
                         } else {
                             // End of constructor
                             let captured_string = cursor.capture_string_until(
-                                vec![&Token::OpenCurlyBrace],
-                                &Token::ClosedCurlyBrace,
+                                vec![&Token::LCurly],
+                                &Token::RCurly,
                             );
                             let individual_expr = parse_with_context(
                                 captured_string.unwrap().as_str(),
@@ -706,8 +706,8 @@ mod internal {
 
                     (Some(_), None) => {
                         let captured_string = cursor.capture_string_until(
-                            vec![&Token::OpenCurlyBrace, &Token::InterpolationStart],
-                            &Token::ClosedCurlyBrace,
+                            vec![&Token::LCurly, &Token::InterpolationStart],
+                            &Token::RCurly,
                         );
 
                         let individual_expr =
