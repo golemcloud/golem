@@ -573,7 +573,7 @@ mod tests {
 
     use golem_service_base::type_inference::infer_analysed_type;
 
-    use crate::api_definition::http::PathPattern;
+    use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expression::Expr;
@@ -614,7 +614,7 @@ mod tests {
 
     fn resolved_variables_from_request_path(
         uri: Uri,
-        path_pattern: PathPattern,
+        path_pattern: AllPathPatterns,
     ) -> TypeAnnotatedValue {
         let input_http_request = InputHttpRequest {
             req_body: serde_json::Value::Null,
@@ -638,7 +638,7 @@ mod tests {
     fn test_evaluation_with_request_path() {
         let uri = Uri::builder().path_and_query("/pId/items").build().unwrap();
 
-        let path_pattern = PathPattern::from_str("/{id}/items").unwrap();
+        let path_pattern = AllPathPatterns::from_str("/{id}/items").unwrap();
 
         let resolved_variables = resolved_variables_from_request_path(uri, path_pattern);
 
@@ -953,7 +953,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let path_pattern = PathPattern::from_str("/shopping-cart/{id}").unwrap();
+        let path_pattern = AllPathPatterns::from_str("/shopping-cart/{id}").unwrap();
 
         let resolved_variables_path = resolved_variables_from_request_path(uri, path_pattern);
 

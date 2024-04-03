@@ -1,20 +1,20 @@
 use nom::branch::alt;
 use nom::IResult;
 
-use crate::api_definition::http::{PathPattern, QueryInfo, VarInfo};
+use crate::api_definition::http::{AllPathPatterns, PathPattern, QueryInfo, VarInfo};
 use crate::parser::{literal_parser, place_holder_parser, ParseError};
 
 use super::*;
 
 pub struct PathPatternParser;
 
-impl GolemParser<PathPattern> for PathPatternParser {
-    fn parse(&self, input: &str) -> Result<PathPattern, ParseError> {
+impl GolemParser<AllPathPatterns> for PathPatternParser {
+    fn parse(&self, input: &str) -> Result<AllPathPatterns, ParseError> {
         get_path_pattern(input)
     }
 }
 
-fn get_path_pattern(input: &str) -> Result<PathPattern, ParseError> {
+fn get_path_pattern(input: &str) -> Result<AllPathPatterns, ParseError> {
     let split_path_and_query: Vec<&str> = input.split('?').collect();
 
     let path_side = split_path_and_query
@@ -49,7 +49,7 @@ fn get_path_pattern(input: &str) -> Result<PathPattern, ParseError> {
         }
     }
 
-    Ok(PathPattern::Zip(path_patterns))
+    Ok(AllPathPatterns { path_patterns })
 }
 
 fn get_query_parser(input: &str) -> IResult<&str, PathPattern> {

@@ -8,7 +8,7 @@ use golem_service_base::model::{
     Export, ExportFunction, ExportInstance, Template, TemplateMetadata,
 };
 
-use crate::api_definition::http::{HttpApiDefinition, MethodPattern, PathPattern, Route};
+use crate::api_definition::http::{AllPathPatterns, HttpApiDefinition, MethodPattern, Route};
 use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 
 // Http Api Definition Validator
@@ -80,7 +80,7 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub struct RouteKey<'a> {
         pub method: &'a MethodPattern,
-        pub path: &'a PathPattern,
+        pub path: &'a AllPathPatterns,
     }
 
     let mut seen = std::collections::HashSet::new();

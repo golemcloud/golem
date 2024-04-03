@@ -26,7 +26,7 @@ pub fn get_api_definition_from_oas(open_api: &str) -> Result<HttpApiDefinition, 
 }
 
 mod internal {
-    use crate::api_definition::http::{HttpResponseMapping, MethodPattern, PathPattern, Route};
+    use crate::api_definition::http::{AllPathPatterns, HttpResponseMapping, MethodPattern, Route};
     use crate::expression::Expr;
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::TemplateId;
@@ -79,7 +79,7 @@ mod internal {
     pub(crate) fn get_route_from_path_item(
         method: &str,
         path_item: &PathItem,
-        path_pattern: &PathPattern,
+        path_pattern: &AllPathPatterns,
     ) -> Result<Route, String> {
         let method_res = match method {
             "get" => Ok(MethodPattern::Get),
@@ -179,7 +179,7 @@ mod internal {
         Expr::from_json_value(worker_id).map_err(|err| err.to_string())
     }
 
-    pub(crate) fn get_path_pattern(path: &str) -> Result<PathPattern, String> {
-        PathPattern::from(path).map_err(|err| err.to_string())
+    pub(crate) fn get_path_pattern(path: &str) -> Result<AllPathPatterns, String> {
+        AllPathPatterns::from(path).map_err(|err| err.to_string())
     }
 }

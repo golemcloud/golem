@@ -14,12 +14,6 @@ pub enum ParseError {
     Message(String),
 }
 
-impl From<&str> for ParseError {
-    fn from(s: &str) -> Self {
-        ParseError::Message(s.to_string())
-    }
-}
-
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
