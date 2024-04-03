@@ -9,10 +9,6 @@ description = "Base functionalities of Golem Worker Service"
 
 [lib]
 
-[[bin]]
-name = "golem-worker-service-base"
-path = "src/main.rs"
-
 [dependencies]
 golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
