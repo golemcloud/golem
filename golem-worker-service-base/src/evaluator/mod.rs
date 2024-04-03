@@ -1301,4 +1301,36 @@ mod tests {
 
         assert_eq!(result, expected);
     }
+
+    #[test]
+    fn test_evaluation_with_wave_like_syntax_result_list() {
+        let expr = Expr::from_primitive_string("${[ok(1),ok(2)]}").unwrap();
+
+        dbg!(expr.clone());
+        let result = expr.evaluate(&TypeAnnotatedValue::Record {
+            value: vec![],
+            typ: vec![],
+        });
+
+        let expected = Ok(TypeAnnotatedValue::List {
+            typ: AnalysedType::Result {
+                ok: Some(Box::new(AnalysedType::U64)),
+                error: None,
+            },
+            values: vec![
+                TypeAnnotatedValue::Result {
+                    ok: Some(Box::new(AnalysedType::U64)),
+                    error: None,
+                    value: Ok(Some(Box::new(TypeAnnotatedValue::U64(1)))),
+                },
+                TypeAnnotatedValue::Result {
+                    ok: Some(Box::new(AnalysedType::U64)),
+                    error: None,
+                    value: Ok(Some(Box::new(TypeAnnotatedValue::U64(2)))),
+                },
+            ],
+        });
+
+        assert_eq!(result, expected);
+    }
 }
