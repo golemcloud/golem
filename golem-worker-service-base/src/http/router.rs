@@ -188,6 +188,42 @@ mod test {
     use super::*;
 
     #[test]
+    fn test_push_and_get() {
+        let mut root = RadixNode::default();
+
+        let path1 = vec![
+            Pattern::Static("a".to_string()),
+            Pattern::Static("b".to_string()),
+            Pattern::Static("c".to_string()),
+        ];
+
+        root.push(path1.as_slice(), 1);
+        assert_eq!(root.get(&path1), Some(&1),);
+
+        let path2 = vec![
+            Pattern::Static("a".to_string()),
+            Pattern::Static("b".to_string()),
+            Pattern::Static("d".to_string()),
+        ];
+
+        root.push(path2.as_slice(), 2);
+
+        assert_eq!(root.get(&path1), Some(&1),);
+        assert_eq!(root.get(&path2), Some(&2),);
+
+        let path3 = vec![
+            Pattern::Static("a".to_string()),
+            Pattern::Static("a".to_string()),
+        ];
+
+        root.push(path3.as_slice(), 3);
+
+        assert_eq!(root.get(&path1), Some(&1),);
+        assert_eq!(root.get(&path2), Some(&2),);
+        assert_eq!(root.get(&path3), Some(&3),);
+    }
+
+    #[test]
     fn test_matches() {
         let mut root = RadixNode::default();
 
@@ -287,38 +323,155 @@ mod test {
     }
 
     #[test]
-    fn test_push_and_get() {
+    fn test_multiple_variables() {
         let mut root = RadixNode::default();
 
         let path1 = vec![
-            Pattern::Static("a".to_string()),
-            Pattern::Static("b".to_string()),
-            Pattern::Static("c".to_string()),
+            Pattern::Static("api".to_string()),
+            Pattern::Variable,
+            Pattern::Static("users".to_string()),
+            Pattern::Variable,
         ];
 
         root.push(path1.as_slice(), 1);
-        assert_eq!(root.get(&path1), Some(&1),);
+
+        assert_eq!(
+            Some(MatchResult {
+                data: &1,
+                variables: vec!["v1", "123"]
+            }),
+            root.matches("/api/v1/users/123")
+        );
+    }
+
+    #[test]
+    fn test_multiple_variables_different_order() {
+        let mut root = RadixNode::default();
+
+        let path1 = vec![
+            Pattern::Static("api".to_string()),
+            Pattern::Variable,
+            Pattern::Static("users".to_string()),
+            Pattern::Variable,
+        ];
+
+        root.push(path1.as_slice(), 1);
 
         let path2 = vec![
-            Pattern::Static("a".to_string()),
-            Pattern::Static("b".to_string()),
-            Pattern::Static("d".to_string()),
+            Pattern::Static("api".to_string()),
+            Pattern::Static("users".to_string()),
+            Pattern::Variable,
+            Pattern::Variable,
         ];
 
         root.push(path2.as_slice(), 2);
 
-        assert_eq!(root.get(&path1), Some(&1),);
-        assert_eq!(root.get(&path2), Some(&2),);
+        assert_eq!(
+            Some(MatchResult {
+                data: &1,
+                variables: vec!["v1", "123"]
+            }),
+            root.matches("/api/v1/users/123")
+        );
+
+        assert_eq!(
+            Some(MatchResult {
+                data: &2,
+                variables: vec!["456", "789"]
+            }),
+            root.matches("/api/users/456/789")
+        );
+    }
+
+    #[test]
+    fn test_conflict_variable_static() {
+        let mut root = RadixNode::default();
+
+        let path1 = vec![
+            Pattern::Static("api".to_string()),
+            Pattern::Variable,
+            Pattern::Static("users".to_string()),
+        ];
+
+        root.push(path1.as_slice(), 1);
+
+        let path2 = vec![
+            Pattern::Static("api".to_string()),
+            Pattern::Static("v1".to_string()),
+            Pattern::Static("users".to_string()),
+        ];
+
+        root.push(path2.as_slice(), 2);
+
+        assert_eq!(
+            Some(MatchResult {
+                data: &2,
+                variables: vec![]
+            }),
+            root.matches("/api/v1/users")
+        );
+
+        assert_eq!(
+            Some(MatchResult {
+                data: &1,
+                variables: vec!["v2"]
+            }),
+            root.matches("/api/v2/users")
+        );
+    }
+
+    #[test]
+    fn test_multiple_routes_resolution() {
+        let mut root = RadixNode::default();
+
+        let path1 = vec![
+            Pattern::Static("api".to_string()),
+            Pattern::Variable,
+            Pattern::Static("users".to_string()),
+        ];
+
+        root.push(path1.as_slice(), 1);
+
+        let path2 = vec![
+            Pattern::Static("api".to_string()),
+            Pattern::Static("v1".to_string()),
+            Pattern::Static("users".to_string()),
+            Pattern::Variable,
+        ];
+
+        root.push(path2.as_slice(), 2);
 
         let path3 = vec![
-            Pattern::Static("a".to_string()),
-            Pattern::Static("a".to_string()),
+            Pattern::Static("api".to_string()),
+            Pattern::Variable,
+            Pattern::Static("users".to_string()),
+            Pattern::Static("profile".to_string()),
         ];
 
         root.push(path3.as_slice(), 3);
 
-        assert_eq!(root.get(&path1), Some(&1),);
-        assert_eq!(root.get(&path2), Some(&2),);
-        assert_eq!(root.get(&path3), Some(&3),);
+        assert_eq!(
+            Some(MatchResult {
+                data: &1,
+                variables: vec!["v2"]
+            }),
+            root.matches("/api/v2/users")
+        );
+
+        assert_eq!(
+            Some(MatchResult {
+                data: &2,
+                variables: vec!["123"]
+            }),
+            root.matches("/api/v1/users/123")
+        );
+
+        assert_eq!(
+            Some(MatchResult {
+                data: &3,
+                variables: vec!["456"]
+            }),
+            root.matches("/api/456/users/profile")
+        );
     }
 }
