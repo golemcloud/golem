@@ -256,9 +256,9 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
     type Error = String;
 
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
-        let response = match value.response {
+        let response: Option<String> = match value.response {
             Some(v) => {
-                let r = grpc_apidefinition::ResponseMapping::try_from(v)?;
+                let r = v.0.to_string().map_err(|e| e.to_string())?;
                 Some(r)
             }
             None => None,
@@ -287,10 +287,11 @@ impl TryFrom<grpc_apidefinition::GolemWorkerBinding> for crate::worker_binding::
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::GolemWorkerBinding) -> Result<Self, Self::Error> {
-        let response = match value.response {
+        let response: Option<crate::worker_binding::ResponseMapping> = match value.response {
             Some(v) => {
-                let r = v.try_into()?;
-                Some(r)
+                let json_value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
+                let r = Expr::from_json_value(&json_value).map_err(|e| e.to_string())?;
+                Some(crate::worker_binding::ResponseMapping(r))
             }
             None => None,
         };
@@ -310,58 +311,6 @@ impl TryFrom<grpc_apidefinition::GolemWorkerBinding> for crate::worker_binding::
             function_name: value.function_name,
             function_params,
             response,
-        };
-
-        Ok(result)
-    }
-}
-
-impl TryFrom<crate::worker_binding::ResponseMapping> for grpc_apidefinition::ResponseMapping {
-    type Error = String;
-
-    fn try_from(value: crate::worker_binding::ResponseMapping) -> Result<Self, Self::Error> {
-        let body = serde_json::to_string(&value.body).map_err(|e| e.to_string())?;
-        let status = serde_json::to_string(&value.status).map_err(|e| e.to_string())?;
-        let headers = value
-            .headers
-            .into_iter()
-            .map(|(k, v)| {
-                serde_json::to_string(&v)
-                    .map(|v| (k, v))
-                    .map_err(|e| e.to_string())
-            })
-            .collect::<Result<HashMap<String, String>, String>>()?;
-
-        let result = golem_api_grpc::proto::golem::apidefinition::ResponseMapping {
-            body,
-            status,
-            headers,
-        };
-
-        Ok(result)
-    }
-}
-
-impl TryFrom<grpc_apidefinition::ResponseMapping> for crate::worker_binding::ResponseMapping {
-    type Error = String;
-
-    fn try_from(value: grpc_apidefinition::ResponseMapping) -> Result<Self, Self::Error> {
-        let body = serde_json::from_str(&value.body).map_err(|e| e.to_string())?;
-        let status = serde_json::from_str(&value.status).map_err(|e| e.to_string())?;
-        let headers = value
-            .headers
-            .into_iter()
-            .map(|(k, v)| {
-                serde_json::from_str(&v)
-                    .map(|v| (k, v))
-                    .map_err(|e| e.to_string())
-            })
-            .collect::<Result<HashMap<String, Expr>, String>>()?;
-
-        let result = crate::worker_binding::ResponseMapping {
-            body,
-            status,
-            headers,
         };
 
         Ok(result)
