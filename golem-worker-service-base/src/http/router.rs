@@ -101,8 +101,6 @@ impl<T: std::fmt::Debug> RadixNode<T> {
             .split('/')
             .collect::<Vec<_>>();
 
-        println!("path: {path:?}");
-
         let mut node = self;
         let mut path_segments = path.as_slice();
         let mut variables = Vec::new();
@@ -119,8 +117,6 @@ impl<T: std::fmt::Debug> RadixNode<T> {
 
             let current_segment = path_segments[0];
 
-            println!("current_segment: {current_segment:?}");
-
             let next_child = node
                 .children
                 .iter()
@@ -131,8 +127,6 @@ impl<T: std::fmt::Debug> RadixNode<T> {
                 .map(|(_, child)| child);
 
             if let Some(child) = next_child {
-                println!("child: {child:#?}");
-
                 let common_prefix_len = child
                     .pattern
                     .iter()
