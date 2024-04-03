@@ -3065,7 +3065,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
- "http 0.2.11",
+ "http 0.2.12",
  "serde",
  "thiserror",
  "tracing",
