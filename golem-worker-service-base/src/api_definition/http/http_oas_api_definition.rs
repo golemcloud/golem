@@ -26,13 +26,13 @@ pub fn get_api_definition_from_oas(open_api: &str) -> Result<HttpApiDefinition, 
 }
 
 mod internal {
-    use crate::api_definition::http::{MethodPattern, PathPattern, Route};
+    use crate::api_definition::http::{HttpResponseMapping, MethodPattern, PathPattern, Route};
     use crate::expression::Expr;
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::TemplateId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use serde_json::Value;
-    use std::collections::HashMap;
+
     use uuid::Uuid;
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
@@ -134,33 +134,16 @@ mod internal {
     ) -> Result<Option<ResponseMapping>, String> {
         let response = worker_bridge_info.get("response");
         match response {
-            Some(response) => Ok(Some(ResponseMapping {
-                status: Expr::from_json_value(response.get("status").ok_or("No status found")?)
-                    .map_err(|err| err.to_string())?,
-                headers: {
-                    let mut header_map = HashMap::new();
+            Some(response) => {
+                let response_mapping_expr =
+                    Expr::from_json_value(response).map_err(|err| err.to_string())?;
 
-                    let header_iter = response
-                        .get("headers")
-                        .ok_or("No headers found")?
-                        .as_object()
-                        .ok_or("headers is not an object")?
-                        .iter();
+                let _ =
+                    HttpResponseMapping::try_from(&ResponseMapping(response_mapping_expr.clone()))
+                        .map_err(|err| err.to_string())?;
 
-                    for (header_name, value) in header_iter {
-                        let value_str = value.as_str().ok_or("Header value is not a string")?;
-                        header_map.insert(
-                            header_name.clone(),
-                            Expr::from_primitive_string(value_str)
-                                .map_err(|err| err.to_string())?,
-                        );
-                    }
-
-                    header_map
-                },
-                body: Expr::from_json_value(response.get("body").ok_or("No body found")?)
-                    .map_err(|err| err.to_string())?,
-            })),
+                Ok(Some(ResponseMapping(response_mapping_expr)))
+            }
             None => Ok(None),
         }
     }
