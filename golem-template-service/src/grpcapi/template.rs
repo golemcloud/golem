@@ -39,30 +39,25 @@ use crate::service::template;
 impl From<template::TemplateError> for TemplateError {
     fn from(value: template::TemplateError) -> Self {
         let error = match value {
-            template::TemplateError::Internal(error) => {
-                template_error::Error::InternalError(ErrorBody { error })
+            template::TemplateError::AlreadyExists(_) => {
+                template_error::Error::AlreadyExists(ErrorBody {
+                    error: value.to_string(),
+                })
             }
-            template::TemplateError::IOError(error) => {
-                template_error::Error::InternalError(ErrorBody { error })
+            template::TemplateError::UnknownTemplateId(_)
+            | template::TemplateError::UnknownVersionedTemplateId(_) => {
+                template_error::Error::NotFound(ErrorBody {
+                    error: value.to_string(),
+                })
             }
             template::TemplateError::TemplateProcessingError(error) => {
                 template_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![error],
+                    errors: vec![error.to_string()],
                 })
             }
-            template::TemplateError::AlreadyExists(_) => {
-                template_error::Error::AlreadyExists(ErrorBody {
-                    error: "Template already exists".to_string(),
-                })
-            }
-            template::TemplateError::UnknownTemplateId(_) => {
-                template_error::Error::NotFound(ErrorBody {
-                    error: "Template not found".to_string(),
-                })
-            }
-            template::TemplateError::UnknownVersionedTemplateId(_) => {
-                template_error::Error::NotFound(ErrorBody {
-                    error: "Template not found".to_string(),
+            template::TemplateError::Internal(error) => {
+                template_error::Error::InternalError(ErrorBody {
+                    error: error.to_string(),
                 })
             }
         };
