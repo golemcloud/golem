@@ -45,8 +45,8 @@ impl InputHttpRequest {
         let merged = body_value.merge(&request_header_values).merge(&path_value);
 
         let request_type_annotated_value = TypeAnnotatedValue::Record {
-            value: vec![(Token::Request.to_string(), merged.clone())],
-            typ: vec![(Token::Request.to_string(), AnalysedType::from(&merged))],
+            value: vec![(Token::request().to_string(), merged.clone())],
+            typ: vec![(Token::request().to_string(), AnalysedType::from(&merged))],
         };
 
         Ok(request_type_annotated_value)

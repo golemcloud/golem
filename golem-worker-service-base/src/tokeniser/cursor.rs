@@ -156,7 +156,7 @@ impl TokenCursor {
 
     pub fn skip_whitespace(&mut self) {
         while let Some(token) = self.peek() {
-            if token.is_white_space() {
+            if token.to_string().chars().all(|c| c.is_whitespace()) {
                 self.advance();
             } else {
                 break;
@@ -171,16 +171,12 @@ mod tests {
 
     #[test]
     fn capture_string_test() {
-        let tokens = vec![
-            Token::OpenParen,
-            Token::RawString("afsal".to_string()),
-            Token::CloseParen,
-        ];
+        let tokens = vec![Token::LParen, Token::raw_string("afsal"), Token::RParen];
 
         let mut cursor = TokenCursor::new(tokens.clone());
         cursor.next_token();
         let result = cursor
-            .capture_string_until(vec![&Token::OpenParen], &Token::CloseParen)
+            .capture_string_until(vec![&Token::LParen], &Token::RParen)
             .unwrap();
 
         assert_eq!(result, "afsal".to_string())
@@ -189,29 +185,29 @@ mod tests {
     #[test]
     fn capture_string_test_nested() {
         let tokens = vec![
-            Token::OpenParen,
-            Token::OpenParen,
-            Token::RawString("afsal".to_string()),
-            Token::CloseParen,
-            Token::CloseParen,
+            Token::LParen,
+            Token::LParen,
+            Token::raw_string("afsal"),
+            Token::RParen,
+            Token::RParen,
         ];
 
         let mut cursor = TokenCursor::new(tokens.clone());
         cursor.next_token();
         let result = cursor
-            .capture_string_until(vec![&Token::OpenParen], &Token::CloseParen)
+            .capture_string_until(vec![&Token::LParen], &Token::RParen)
             .unwrap();
 
-        assert_eq!(result, "(afsal)".to_string())
+        assert_eq!(result, "(afsal)")
     }
 
     #[test]
     fn capture_character_test() {
-        let tokens = vec![Token::CloseParen];
+        let tokens = vec![Token::RParen];
 
         let mut cursor = TokenCursor::new(tokens.clone());
         let result = cursor
-            .capture_string_until(vec![&Token::OpenParen], &Token::CloseParen)
+            .capture_string_until(vec![&Token::LParen], &Token::RParen)
             .unwrap();
         assert_eq!(result, "".to_string())
     }
@@ -221,14 +217,14 @@ mod tests {
         let tokens = vec![];
 
         let mut cursor = TokenCursor::new(tokens.clone());
-        let result = cursor.capture_string_until(vec![&Token::OpenParen], &Token::CloseParen);
+        let result = cursor.capture_string_until(vec![&Token::LParen], &Token::RParen);
 
         assert_eq!(result, None)
     }
 
     #[test]
     fn test_capture_string_from() {
-        let tokens = vec![Token::Else, Token::RawString("foo".to_string())];
+        let tokens = vec![Token::else_token(), Token::raw_string("foo")];
 
         let mut cursor = TokenCursor::new(tokens.clone());
         let result = cursor.capture_tail();
