@@ -248,10 +248,6 @@ impl<'t> Tokenizer<'t> {
     pub fn run(self) -> TokeniserResult {
         let all_tokens: Vec<Token> = self.collect();
 
-        for token in &all_tokens {
-            dbg!(token);
-        }
-
         TokeniserResult {
             value: all_tokens
                 .into_iter()
@@ -267,7 +263,6 @@ impl<'t> Tokenizer<'t> {
 
     fn get_single_char_token(&mut self) -> Option<Token> {
         let ch = self.rest().chars().next()?;
-        dbg!(ch);
         if let Some(token) = match ch {
             ',' => Some(Token::Comma),
             '{' => Some(Token::LCurly),
