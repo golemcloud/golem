@@ -2090,8 +2090,7 @@ components:
         functionParams:
           type: array
           items: {}
-        response:
-          $ref: '#/components/schemas/ResponseMapping'
+        response: {}
       required:
       - template
       - workerId
@@ -2176,18 +2175,6 @@ components:
       required:
       - workerId
       - oplogIdx
-    ResponseMapping:
-      type: object
-      properties:
-        body: {}
-        status: {}
-        headers:
-          type: object
-          additionalProperties: {}
-      required:
-      - body
-      - status
-      - headers
     ResumeResponse:
       type: object
     Route:

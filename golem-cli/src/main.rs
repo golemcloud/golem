@@ -24,10 +24,12 @@ use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, Packa
 use reqwest::Url;
 use tracing_subscriber::FmtSubscriber;
 
+use golem_cli::clients::health_check::HealthCheckClientLive;
 use golem_cli::clients::template::TemplateClientLive;
 use golem_cli::clients::worker::WorkerClientLive;
 use golem_cli::examples;
 use golem_cli::template::{TemplateHandler, TemplateHandlerLive, TemplateSubcommand};
+use golem_cli::version::{VersionHandler, VersionHandlerLive};
 use golem_cli::worker::{WorkerHandler, WorkerHandlerLive, WorkerSubcommand};
 
 #[derive(Subcommand, Debug)]
@@ -169,7 +171,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
 
     let template_client = TemplateClientLive {
         client: golem_client::api::TemplateClientLive {
-            context: template_context,
+            context: template_context.clone(),
         },
     };
     let template_srv = TemplateHandlerLive {
@@ -186,6 +188,32 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         client: worker_client,
         templates: &template_srv,
     };
+
+    let health_check_client_for_template = HealthCheckClientLive {
+        client: golem_client::api::HealthCheckClientLive {
+            context: template_context.clone(),
+        },
+    };
+
+    let health_check_client_for_worker = HealthCheckClientLive {
+        client: golem_client::api::HealthCheckClientLive {
+            context: worker_context.clone(),
+        },
+    };
+
+    let update_srv = VersionHandlerLive {
+        template_client: health_check_client_for_template,
+        worker_client: health_check_client_for_worker,
+    };
+
+    let yellow = "\x1b[33m";
+    let reset_color = "\x1b[0m";
+
+    let version_check = update_srv.check().await;
+
+    if let Err(err) = version_check {
+        eprintln!("{}{}{}", yellow, err.0, reset_color)
+    }
 
     let res = match cmd.command {
         Command::Template { subcommand } => template_srv.handle(subcommand).await,
