@@ -15,7 +15,7 @@ use crate::expression::{
 };
 use crate::merge::Merge;
 
-use crate::tokeniser::tokenizer::{Token, Tokenizer};
+use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
 mod getter;
 mod path;
@@ -74,9 +74,9 @@ impl<'t> Evaluator for RawString<'t> {
 
         while let Some(token) = cursor.next_token() {
             match token {
-                Token::InterpolationStart => {
+                Token::MultiChar(MultiCharTokens::InterpolationStart) => {
                     let place_holder_name = cursor
-                        .capture_string_until(vec![&Token::InterpolationStart], &Token::CloseParen);
+                        .capture_string_until(vec![&Token::interpolation_start()], &Token::RParen);
 
                     if let Some(place_holder_name) = place_holder_name {
                         let type_annotated_value =
@@ -116,10 +116,10 @@ impl Evaluator for Expr {
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
             match expr.clone() {
                 Expr::Request() => input
-                    .get(&Path::from_key(Token::Request.to_string().as_str()))
+                    .get(&Path::from_key(Token::request().to_string().as_str()))
                     .map_err(|err| err.into()),
                 Expr::Worker() => input
-                    .get(&Path::from_key(Token::Worker.to_string().as_str()))
+                    .get(&Path::from_key(Token::worker().to_string().as_str()))
                     .map_err(|err| err.into()),
 
                 Expr::SelectIndex(expr, index) => {

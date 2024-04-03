@@ -54,11 +54,11 @@ impl WorkerResponse {
 
         TypeAnnotatedValue::Record {
             typ: vec![(
-                Token::Worker.to_string(), // at key worker, a record from response to worker_response type
+                Token::worker().to_string(),
                 AnalysedType::Record(response_type.clone()),
             )],
             value: vec![(
-                Token::Worker.to_string(),
+                Token::worker().to_string(),
                 TypeAnnotatedValue::Record {
                     typ: response_type.clone(),
                     value: vec![(response_key.clone(), worker_response_value.clone())],
