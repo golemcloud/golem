@@ -1223,7 +1223,6 @@ mod tests {
     fn test_evaluation_with_wave_like_syntax_ok_record() {
         let expr = Expr::from_primitive_string("${{a : ok(1)}}").unwrap();
 
-        dbg!(expr.clone());
         let result = expr.evaluate(&TypeAnnotatedValue::Record {
             value: vec![],
             typ: vec![],
@@ -1232,24 +1231,22 @@ mod tests {
         let expected = Ok(TypeAnnotatedValue::Record {
             typ: vec![(
                 "a".to_string(),
-                Result {
-                    ok: Some(TypeAnnotatedValue::U64),
+                AnalysedType::Result {
+                    ok: Some(Box::new(AnalysedType::U64)),
                     error: None,
                 },
             )],
             value: vec![(
                 "a".to_string(),
-                Result {
-                    ok: Some(TypeAnnotatedValue::U64),
+                TypeAnnotatedValue:: Result {
+                    ok: Some(Box::new(AnalysedType::U64)),
                     error: None,
-                    value: Ok(Some(TypeAnnotatedValue::U64(1))),
+                    value: Ok(Some(Box::new(TypeAnnotatedValue::U64(1)))),
                 },
             )],
         });
 
-
-
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -1265,21 +1262,21 @@ mod tests {
         let expected = Ok(TypeAnnotatedValue::Record {
             typ: vec![(
                 "a".to_string(),
-                Result {
-                    ok: Some(TypeAnnotatedValue::U64),
-                    error: None,
+                AnalysedType::Result {
+                    error: Some(Box::new(AnalysedType::U64)),
+                    ok: None,
                 },
             )],
             value: vec![(
                 "a".to_string(),
-                Result {
+                TypeAnnotatedValue::Result {
                     ok: None,
-                    error: Some(TypeAnnotatedValue::U64),
-                    value: Err(Some(TypeAnnotatedValue::U64(1))),
+                    error: Some(Box::new(AnalysedType::U64)),
+                    value: Err(Some(Box::new(TypeAnnotatedValue::U64(1)))),
                 },
             )],
         });
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 }

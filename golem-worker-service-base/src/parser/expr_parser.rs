@@ -362,8 +362,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                             )),
                         }
                     }
-
-                    _ => Err(ParseError::Message("Invalid token [".to_string())),
+                    _ => create_list(cursor, vec![&Token::LSquare], Some(&Token::RSquare)),
                 },
 
                 Token::MultiChar(MultiCharTokens::If) => {
@@ -509,6 +508,68 @@ mod internal {
     use crate::tokeniser::cursor::TokenCursor;
     use crate::tokeniser::tokenizer::{MultiCharTokens, Token, TokeniserResult, Tokenizer};
     use strum_macros::Display;
+
+    pub(crate) fn create_list(
+        cursor: &mut TokenCursor,
+        possible_nested_token_starts: Vec<&Token>,
+        capture_until: Option<&Token>,
+    ) -> Result<Expr, ParseError> {
+        let mut record = vec![];
+
+        fn go(
+            cursor: &mut TokenCursor,
+            record: &mut Vec<Expr>,
+            possible_nested_token_starts: Vec<&Token>,
+            capture_until: Option<&Token>,
+        ) -> Result<(), ParseError> {
+            match cursor.next_non_empty_token() {
+                Some(Token::RSquare) => Ok(()),
+                Some(Token::MultiChar(MultiCharTokens::Other(key))) => {
+                    let captured_string = cursor.capture_string_until(
+                        possible_nested_token_starts.clone(),
+                        capture_until.unwrap_or(&Token::Comma), // Wave does this
+                    );
+
+                    let value =    match captured_string {
+                        Some(captured_string) => {
+                            let expr = parse_with_context(
+                                captured_string.as_str(),
+                                Context::Code,
+                            )?;
+                            Ok(expr)
+                        }
+                        None => Err(ParseError::Message(
+                            "Expecting a value after [".to_string(),
+                        )),
+                    };
+
+                    match value {
+                        Ok(expr) => {
+                            record.push(expr);
+                            go(cursor, record, possible_nested_token_starts, capture_until)
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                Some(token) => Err(ParseError::Message(format!(
+                    "Expecting a valid value in list. But found {}",
+                    token
+                ))),
+                None => Err(ParseError::Message(
+                    "Expecting a valid value in between [ ]. But found nothing".to_string(),
+                )),
+            }
+        }
+
+        go(
+            cursor,
+            &mut record,
+            possible_nested_token_starts,
+            capture_until,
+        )?;
+
+        Ok(Expr::Sequence(record))
+    }
 
     pub(crate) fn create_record(
         cursor: &mut TokenCursor,
