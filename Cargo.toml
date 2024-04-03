@@ -9,6 +9,7 @@ members = [
     "golem-service-base",
     "golem-template-compilation-service",
     "golem-template-service",
+    "golem-test-framework",
     "golem-shard-manager",
     "golem-worker-executor-base",
     "golem-worker-executor",

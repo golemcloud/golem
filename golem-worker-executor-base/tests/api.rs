@@ -1,4 +1,4 @@
-use crate::{common, REDIS};
+use crate::{common, CONFIG};
 use std::collections::HashMap;
 use std::env;
 use std::io::Write;
@@ -22,6 +22,7 @@ use golem_worker_executor_base::error::GolemError;
 use serde_json::Value;
 
 use crate::common::{val_pair, TestWorkerExecutor};
+use golem_test_framework::config::TestDependencies;
 use tokio::time::sleep;
 use tonic::transport::Body;
 use tracing::debug;
@@ -1858,7 +1859,7 @@ async fn reconstruct_interrupted_state() {
     // Explicitly deleting the status information from Redis to check if it can be
     // reconstructed from Redis
 
-    let mut redis = REDIS.get_connection();
+    let mut redis = CONFIG.redis().get_connection(0);
     let _: () = redis
         .del(format!(
             "{}instance:status:{}",

@@ -1,0 +1,27 @@
+[package]
+name = "golem-test-framework"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+description = "Test framework for integration tests and benchmarks"
+
+
+[lib]
+
+
+[dependencies]
+golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
+golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-wasm-rpc = { workspace = true }
+
+async-trait = { workspace = true }
+postgres = "0.19.7"
+redis = { version = "0.25.2", features = ["default"] }
+testcontainers = { version = "0.15.0", features = ["async-trait", "tokio"] }
+testcontainers-modules = { version = "0.3.2", features = ["postgres", "redis"] }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }

@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, RwLock};
 use std::{env, panic};
 
-use crate::REDIS;
+use crate::CONFIG;
 use golem_api_grpc::proto::golem::worker::{
     log_event, worker_execution_error, CallingConvention, LogEvent, StdErrLog, StdOutLog,
     WorkerExecutionError,
@@ -82,6 +82,7 @@ use tokio::task::JoinHandle;
 use golem::api;
 use golem_common::config::RedisConfig;
 use golem_common::model::regions::DeletedRegions;
+use golem_test_framework::config::TestDependencies;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
@@ -857,8 +858,11 @@ impl TestContext {
 }
 
 pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> {
-    REDIS.assert_valid();
-    println!("Using Redis on port {}", REDIS.port);
+    let redis = CONFIG.redis();
+    let redis_monitor = CONFIG.redis_monitor();
+    redis.assert_valid();
+    redis_monitor.assert_valid();
+    println!("Using Redis on port {}", redis.port());
 
     let prometheus = golem_worker_executor_base::metrics::register_all();
     let config = GolemConfig {
@@ -878,7 +882,7 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
         promises: PromisesConfig::Redis,
         workers: WorkersServiceConfig::Redis,
         redis: RedisConfig {
-            port: REDIS.port,
+            port: redis.port(),
             key_prefix: context.redis_prefix(),
             ..Default::default()
         },

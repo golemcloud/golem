@@ -2804,6 +2804,7 @@ dependencies = [
  "futures-util",
  "golem-client",
  "golem-examples",
+ "golem-test-framework",
  "golem-wasm-rpc-stubgen",
  "h2 0.3.25",
  "http 1.1.0",
@@ -2815,7 +2816,7 @@ dependencies = [
  "native-tls",
  "postgres",
  "rand 0.8.5",
- "redis",
+ "redis 0.24.0",
  "reqwest",
  "serde",
  "serde_json",
@@ -2890,14 +2891,15 @@ dependencies = [
 
 [[package]]
 name = "golem-examples"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5324164fe3b1def57fd7c6dda44ba3236dda230d6a37b324e005b365feea51bf"
+checksum = "460abdb7e15ef1d411ed52d76d7a992196cf2d3bf8a7473ab71152b53194d1b5"
 dependencies = [
  "Inflector",
  "cargo_metadata",
  "copy_dir",
  "derive_more",
+ "dir-diff",
  "fancy-regex",
  "golem-wit",
  "include_dir",
@@ -3052,6 +3054,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-test-framework"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-wasm-rpc",
+ "postgres",
+ "redis 0.25.2",
+ "testcontainers",
+ "testcontainers-modules",
+ "tokio",
+ "tonic",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "golem-wasm-ast"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3184,6 +3205,7 @@ dependencies = [
  "gethostname",
  "golem-api-grpc",
  "golem-common",
+ "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "golem-wit",
@@ -3200,12 +3222,13 @@ dependencies = [
  "prometheus",
  "proptest",
  "prost 0.12.3",
- "redis",
+ "redis 0.25.2",
  "ringbuf",
  "rustls 0.22.3",
  "serde",
  "serde_json",
  "tempfile",
+ "testcontainers",
  "thiserror",
  "tokio",
  "tokio-rustls 0.25.0",
@@ -5802,6 +5825,21 @@ dependencies = [
  "ryu",
  "sha1_smol",
  "socket2 0.4.10",
+ "url",
+]
+
+[[package]]
+name = "redis"
+version = "0.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71d64e978fd98a0e6b105d066ba4889a7301fca65aeac850a877d8797343feeb"
+dependencies = [
+ "combine",
+ "itoa",
+ "percent-encoding",
+ "ryu",
+ "sha1_smol",
+ "socket2 0.5.6",
  "url",
 ]
 

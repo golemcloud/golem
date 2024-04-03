@@ -1,15 +1,12 @@
-use ctor::{ctor, dtor};
-
-use redis::{Commands, RedisResult};
 use std::ops::Deref;
-use std::panic;
-use std::process::{Child, Command};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+
+use ctor::{ctor, dtor};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
+
+use golem_test_framework::config::{TestDependencies, EnvBasedTestDependencies};
 
 #[allow(dead_code)]
 mod common;
@@ -23,83 +20,18 @@ pub mod scalability;
 pub mod transactions;
 pub mod wasi;
 
-#[allow(dead_code)]
-struct Redis {
-    pub host: String,
-    pub port: u16,
-    child: Option<Child>,
-    valid: AtomicBool,
-}
-
-impl Redis {
-    pub fn new() -> Self {
-        let host = "localhost".to_string();
-        let port = 6379;
-        let child = Command::new("redis-server")
-            .arg("--port")
-            .arg(port.to_string())
-            .arg("--save")
-            .arg("")
-            .arg("--appendonly")
-            .arg("no")
-            .spawn()
-            .expect("Failed to spawn redis server");
-
-        let start = Instant::now();
-        let mut client = redis::Client::open(format!("redis://{host}:{port}")).unwrap();
-        loop {
-            let result: RedisResult<Vec<String>> = client.keys("*");
-            if result.is_ok() {
-                break;
-            }
-
-            if start.elapsed().as_secs() > 10 {
-                panic!("Failed to verify that Redis is running");
-            }
-        }
-
-        Self {
-            host,
-            port,
-            child: Some(child),
-            valid: AtomicBool::new(true),
-        }
-    }
-
-    pub fn assert_valid(&self) {
-        if !self.valid.load(Ordering::Acquire) {
-            panic!("Redis has been closed")
-        }
-    }
-
-    pub fn kill(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            self.valid.store(false, Ordering::Release);
-            let _ = child.kill();
-        }
-    }
-
-    pub fn get_connection(&self) -> redis::Connection {
-        self.assert_valid();
-        let client = redis::Client::open(format!("redis://{}:{}", self.host, self.port)).unwrap();
-        client.get_connection().unwrap()
-    }
-}
-
-impl Drop for Redis {
-    fn drop(&mut self) {
-        self.kill();
-    }
-}
+#[ctor]
+pub static DOCKER: testcontainers::clients::Cli = testcontainers::clients::Cli::default();
 
 #[ctor]
-pub static REDIS: Redis = Redis::new();
+pub static CONFIG: EnvBasedTestDependencies = EnvBasedTestDependencies::new(&DOCKER);
 
 #[dtor]
-unsafe fn drop_redis() {
-    let redis_ptr = REDIS.deref() as *const Redis;
-    let redis_ptr = redis_ptr as *mut Redis;
-    (*redis_ptr).kill()
+unsafe fn drop_config() {
+    let config_ptr = CONFIG.deref() as *const EnvBasedTestDependencies;
+    let config_ptr = config_ptr as *mut EnvBasedTestDependencies;
+    (*config_ptr).redis().kill();
+    (*config_ptr).redis_monitor().kill();
 }
 
 struct Tracing;
