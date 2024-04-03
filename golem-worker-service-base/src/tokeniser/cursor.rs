@@ -1,4 +1,5 @@
 use super::tokenizer::Token;
+use std::{slice::SliceIndex};
 
 // A better management for traversing through token
 // without worrying about white spaces
@@ -156,7 +157,7 @@ impl TokenCursor {
 
     pub fn skip_whitespace(&mut self) {
         while let Some(token) = self.peek() {
-            if token.is_white_space() {
+            if token.to_string().chars().all(|c| c.is_whitespace()) {
                 self.advance();
             } else {
                 break;

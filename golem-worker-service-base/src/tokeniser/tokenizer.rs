@@ -44,40 +44,6 @@ pub enum Token {
 }
 
 impl Token {
-    pub fn is_white_space(&self) -> bool {
-        match self {
-            Token::Space => true,
-            Token::NewLine => true,
-            Token::Else => false,
-            Token::EqualTo => false,
-            Token::InterpolationStart => false,
-            Token::ClosedCurlyBrace => false,
-            Token::GreaterThan => false,
-            Token::GreaterThanOrEqualTo => false,
-            Token::LessThanOrEqualTo => false,
-            Token::LessThan => false,
-            Token::If => false,
-            Token::Then => false,
-            Token::OpenParen => false,
-            Token::CloseParen => false,
-            Token::RawString(_) => false,
-            Token::OpenSquareBracket => false,
-            Token::ClosedSquareBracket => false,
-            Token::Dot => false,
-            Token::Worker => false,
-            Token::Request => false,
-            Token::Ok => false,
-            Token::Err => false,
-            Token::Some => false,
-            Token::None => false,
-            Token::OpenCurlyBrace => false,
-            Token::Match => false,
-            Token::Arrow => false,
-            Token::Comma => false,
-            Token::Quote => false,
-        }
-    }
-
     // If a token needs to be considered as only a raw string
     pub fn as_raw_string_token(&self) -> Token {
         match self {
