@@ -29,7 +29,6 @@ pub enum Token {
     Quote,
 }
 
-
 #[derive(Clone, PartialEq, Debug)]
 pub enum MultiCharTokens {
     Worker,
@@ -48,36 +47,8 @@ pub enum MultiCharTokens {
     Else,
     Arrow,
     Number(String),
-    Other(String)
+    Other(String),
 }
-
-impl Display for MultiCharTokens {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                MultiCharTokens::Else => "else",
-                MultiCharTokens::EqualTo => "==",
-                MultiCharTokens::InterpolationStart => "${",
-                MultiCharTokens::GreaterThanOrEqualTo => ">=",
-                MultiCharTokens::LessThanOrEqualTo => "<=",
-                MultiCharTokens::If => "if",
-                MultiCharTokens::Then => "then",
-                MultiCharTokens::Worker => "worker",
-                MultiCharTokens::Request => "request",
-                MultiCharTokens::Ok => "ok",
-                MultiCharTokens::Err => "err",
-                MultiCharTokens::Some => "some",
-                MultiCharTokens::None => "none",
-                MultiCharTokens::Match => "match",
-                MultiCharTokens::Arrow => "=>",
-                MultiCharTokens::Other(string) => string.as_str(),
-                MultiCharTokens::Number(number) => number.as_str(),
-            })
-        }
-}
-
 
 impl Token {
     pub fn raw_string(string: String) -> Token {
@@ -148,8 +119,6 @@ impl Token {
         Token::MultiChar(MultiCharTokens::Number(number))
     }
 
-
-
     // If a token needs to be considered as only a raw string
     pub fn as_raw_string_token(&self) -> Token {
         match self {
@@ -179,7 +148,25 @@ impl Display for Token {
                 Token::Comma => ",",
                 Token::Quote => "'",
                 Token::LessThan => "<",
-                Token::MultiChar(multi_char) => multi_char.to_string().as_str(),
+                Token::MultiChar(multi_char) => match multi_char {
+                    MultiCharTokens::Else => "else",
+                    MultiCharTokens::EqualTo => "==",
+                    MultiCharTokens::InterpolationStart => "${",
+                    MultiCharTokens::GreaterThanOrEqualTo => ">=",
+                    MultiCharTokens::LessThanOrEqualTo => "<=",
+                    MultiCharTokens::If => "if",
+                    MultiCharTokens::Then => "then",
+                    MultiCharTokens::Worker => "worker",
+                    MultiCharTokens::Request => "request",
+                    MultiCharTokens::Ok => "ok",
+                    MultiCharTokens::Err => "err",
+                    MultiCharTokens::Some => "some",
+                    MultiCharTokens::None => "none",
+                    MultiCharTokens::Match => "match",
+                    MultiCharTokens::Arrow => "=>",
+                    MultiCharTokens::Other(string) => string.as_str(),
+                    MultiCharTokens::Number(number) => number.as_str(),
+                },
             }
         )
     }
@@ -187,7 +174,13 @@ impl Display for Token {
 
 impl Token {
     pub fn is_non_empty_constructor(&self) -> bool {
-        matches!(self, Token::MultiChar(MultiCharTokens::Ok) | Token::MultiChar(MultiCharTokens::Err) | Token::MultiChar(MultiCharTokens::Some) | Token::MultiChar(MultiCharTokens::Match))
+        matches!(
+            self,
+            Token::MultiChar(MultiCharTokens::Ok)
+                | Token::MultiChar(MultiCharTokens::Err)
+                | Token::MultiChar(MultiCharTokens::Some)
+                | Token::MultiChar(MultiCharTokens::Match)
+        )
     }
 
     pub fn is_empty_constructor(&self) -> bool {
@@ -233,8 +226,7 @@ pub struct Tokenizer<'a> {
     state: State,
 }
 
-impl<'t> Tokenizer {
-
+impl<'t> Tokenizer<'t> {
     fn next_char(&self) -> Option<char> {
         self.text.chars().next()
     }
@@ -255,7 +247,7 @@ impl<'t> Tokenizer {
     }
 
     pub fn peek(&self, by: usize) -> Option<&str> {
-        self.text.chars().get(self.state.pos..self.state.pos + by)
+        self.text.get(self.state.pos..self.state.pos + by)
     }
 
     pub fn rest(&self) -> &str {
@@ -276,7 +268,7 @@ impl<'t> Tokenizer {
             state: State {
                 pos: 0,
                 state: TokenizerState::Beginning,
-            }
+            },
         }
     }
 
@@ -294,12 +286,13 @@ impl<'t> Tokenizer {
     }
 
     fn next_token(&mut self) -> Option<Token> {
-        self.get_single_char_token().or_else(|| self.get_multi_char_token())
+        self.get_single_char_token()
+            .or_else(|| self.get_multi_char_token())
     }
 
     fn get_single_char_token(&mut self) -> Option<Token> {
         let ch = self.text.chars().next()?;
-        if let Some(token) =  match ch {
+        if let Some(token) = match ch {
             ',' => Some(Token::Comma),
             '{' => Some(Token::LCurly),
             '}' => Some(Token::RCurly),
@@ -317,7 +310,7 @@ impl<'t> Tokenizer {
         } {
             self.progress();
             Some(token)
-        }  else {
+        } else {
             None
         }
     }
@@ -330,7 +323,7 @@ impl<'t> Tokenizer {
                 let str = self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-');
                 match str {
                     Some("worker") => Some(Token::MultiChar(MultiCharTokens::Worker)),
-                    Some("request") =>Some(Token::MultiChar(MultiCharTokens::Request)),
+                    Some("request") => Some(Token::MultiChar(MultiCharTokens::Request)),
                     Some("ok") => Some(Token::MultiChar(MultiCharTokens::Ok)),
                     Some("err") => Some(Token::MultiChar(MultiCharTokens::Err)),
                     Some("some") => Some(Token::MultiChar(MultiCharTokens::Some)),
@@ -339,13 +332,13 @@ impl<'t> Tokenizer {
                     Some("if") => Some(Token::MultiChar(MultiCharTokens::If)),
                     Some("then") => Some(Token::MultiChar(MultiCharTokens::Then)),
                     Some("else") => Some(Token::MultiChar(MultiCharTokens::Else)),
-                    _ => None
-
+                    _ => None,
                 }
             }
             '0'..='9' => {
                 // Eat characters from numbers (including decimals and exponents)
-                let str = self.eat_while(|ch| matches!(ch, '0'..='9' | '-' | '.' | 'e' | 'E' | '+'));
+                let str =
+                    self.eat_while(|ch| matches!(ch, '0'..='9' | '-' | '.' | 'e' | 'E' | '+'));
                 if let Some(str) = str {
                     Some(Token::MultiChar(MultiCharTokens::Number(str.to_string())))
                 } else {
@@ -380,11 +373,9 @@ impl<'t> Tokenizer {
                         self.progress_by(&'{');
                         Some(Token::MultiChar(MultiCharTokens::InterpolationStart))
                     }
-                    _ => None
-
+                    _ => None,
                 }
             }
-
         }
     }
 }
@@ -399,7 +390,6 @@ impl TokeniserResult {
         TokenCursor::new(self.value.clone())
     }
 }
-
 
 impl<'a> Iterator for Tokenizer<'a> {
     type Item = Token;
@@ -493,7 +483,11 @@ mod tests {
 
         assert_eq!(
             tokens,
-            vec![Token::if_token(), Token::Space, Token::raw_string("x".to_string()),]
+            vec![
+                Token::if_token(),
+                Token::Space,
+                Token::raw_string("x".to_string()),
+            ]
         );
     }
 
@@ -591,7 +585,10 @@ else${z}
     fn test_if_then_else_false_expr() {
         let tokens: Vec<Token> = Tokenizer::new("ifxthenyelsez").run().value;
 
-        assert_eq!(tokens, vec![Token::raw_string("ifxthenyelsez".to_string()),]);
+        assert_eq!(
+            tokens,
+            vec![Token::raw_string("ifxthenyelsez".to_string()),]
+        );
     }
 
     #[test]

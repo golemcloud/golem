@@ -1,5 +1,5 @@
 use super::tokenizer::Token;
-use std::{slice::SliceIndex};
+use std::slice::SliceIndex;
 
 // A better management for traversing through token
 // without worrying about white spaces
@@ -174,7 +174,7 @@ mod tests {
     fn capture_string_test() {
         let tokens = vec![
             Token::LParen,
-            Token::RawString("afsal".to_string()),
+            Token::raw_string("afsal".to_string()),
             Token::RParen,
         ];
 
@@ -192,7 +192,7 @@ mod tests {
         let tokens = vec![
             Token::LParen,
             Token::LParen,
-            Token::RawString("afsal".to_string()),
+            Token::raw_string("afsal".to_string()),
             Token::RParen,
             Token::RParen,
         ];
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_capture_string_from() {
-        let tokens = vec![Token::Else, Token::RawString("foo".to_string())];
+        let tokens = vec![Token::else_token(), Token::raw_string("foo".to_string())];
 
         let mut cursor = TokenCursor::new(tokens.clone());
         let result = cursor.capture_tail();

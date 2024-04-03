@@ -61,7 +61,19 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     go(cursor, context, prev_expression.apply_with(new_expr))
                 }
 
-                Token::MultiChar(MultiCharTokens::Request) => go(cursor, context, prev_expression.apply_with(Expr::Request())),
+                Token::MultiChar(MultiCharTokens::Number(number)) => {
+                    let new_expr = if context.is_code() {
+                        resolve_literal_in_code_context(number.as_str())
+                    } else {
+                        Expr::Literal(number)
+                    };
+
+                    go(cursor, context, prev_expression.apply_with(new_expr))
+                }
+
+                Token::MultiChar(MultiCharTokens::Request) => {
+                    go(cursor, context, prev_expression.apply_with(Expr::Request()))
+                }
 
                 Token::MultiChar(MultiCharTokens::None) => go(
                     cursor,
@@ -71,7 +83,9 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     )),
                 ),
 
-                token @ Token::MultiChar(MultiCharTokens::Some) | token @ Token::MultiChar(MultiCharTokens::Ok) | token @ Token::MultiChar(MultiCharTokens::Err) => {
+                token @ Token::MultiChar(MultiCharTokens::Some)
+                | token @ Token::MultiChar(MultiCharTokens::Ok)
+                | token @ Token::MultiChar(MultiCharTokens::Err) => {
                     match cursor.next_non_empty_token() {
                         Some(Token::LParen) => {
                             let constructor_var_optional = cursor
@@ -128,7 +142,9 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     }
                 }
 
-                Token::MultiChar(MultiCharTokens::Worker) => go(cursor, context, prev_expression.apply_with(Expr::Worker())),
+                Token::MultiChar(MultiCharTokens::Worker) => {
+                    go(cursor, context, prev_expression.apply_with(Expr::Worker()))
+                }
 
                 Token::MultiChar(MultiCharTokens::InterpolationStart) => {
                     let new_expr = capture_expression_until(
@@ -319,10 +335,8 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
 
                 Token::LSquare => match prev_expression {
                     InternalExprResult::Complete(prev_expr) => {
-                        let optional_possible_index = cursor.capture_string_until(
-                            vec![&Token::LSquare],
-                            &Token::RSquare,
-                        );
+                        let optional_possible_index =
+                            cursor.capture_string_until(vec![&Token::LSquare], &Token::RSquare);
 
                         match optional_possible_index {
                             Some(index) => {
@@ -391,8 +405,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                 }
 
                 Token::MultiChar(MultiCharTokens::Match) => {
-                    let expr_under_evaluation =
-                        cursor.capture_string_until(vec![], &Token::LCurly);
+                    let expr_under_evaluation = cursor.capture_string_until(vec![], &Token::LCurly);
 
                     let new_expr = match expr_under_evaluation {
                         Some(expr_under_evaluation) => {
@@ -688,10 +701,8 @@ mod internal {
                             accumulator(cursor, collected_exprs)
                         } else {
                             // End of constructor
-                            let captured_string = cursor.capture_string_until(
-                                vec![&Token::LCurly],
-                                &Token::RCurly,
-                            );
+                            let captured_string =
+                                cursor.capture_string_until(vec![&Token::LCurly], &Token::RCurly);
                             let individual_expr = parse_with_context(
                                 captured_string.unwrap().as_str(),
                                 Context::Code,
