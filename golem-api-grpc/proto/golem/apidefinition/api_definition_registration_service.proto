@@ -8,6 +8,7 @@ import "golem/apidefinition/api_definition_registration_error.proto";
 
 service ApiDefinitionRegistrationService {
   rpc CreateOrUpdateApiDefinition (CreateOrUpdateApiDefinitionRequest) returns (CreateOrUpdateResponseApiDefinitionResponse) {}
+  rpc CreateOrUpdateOpenApiDefinition (CreateOrUpdateOpenApiRequest) returns (CreateOrUpdateOpenApiResponse) {}
   rpc GetApiDefinition (GetApiDefinitionRequest) returns (GetApiDefinitionResponse) {}
   rpc GetAllApiDefinitionVersions (GetAllApiDefinitionVersionsRequest) returns (GetAllApiDefinitionVersionsResponse) {}
   rpc GetAllApiDefinitions (GetAllApiDefinitionsRequest) returns (GetAllApiDefinitionsResponse) {}

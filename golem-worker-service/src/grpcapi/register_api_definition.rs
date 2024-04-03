@@ -6,20 +6,23 @@ use golem_api_grpc::proto::golem::{
     apidefinition::{
         api_definition_registration_error,
         api_definition_registration_service_server::ApiDefinitionRegistrationService,
-        create_or_update_response_api_definition_response, delete_api_definition_response,
-        get_all_api_definition_versions_response, get_all_api_definitions_response,
-        get_api_definition_response, ApiDefinitionRegistrationError,
-        CreateOrUpdateApiDefinitionRequest, CreateOrUpdateResponseApiDefinitionResponse,
-        DeleteApiDefinitionRequest, DeleteApiDefinitionResponse,
-        GetAllApiDefinitionVersionsRequest, GetAllApiDefinitionVersionsResponse,
-        GetAllApiDefinitionsRequest, GetAllApiDefinitionsResponse, GetApiDefinitionRequest,
-        GetApiDefinitionResponse, HttpApiDefinition as GrpcHttpApiDefinition, ManyApiDefinitions,
+        create_or_update_open_api_response, create_or_update_response_api_definition_response,
+        delete_api_definition_response, get_all_api_definition_versions_response,
+        get_all_api_definitions_response, get_api_definition_response,
+        ApiDefinitionRegistrationError, CreateOrUpdateApiDefinitionRequest,
+        CreateOrUpdateOpenApiRequest, CreateOrUpdateOpenApiResponse,
+        CreateOrUpdateResponseApiDefinitionResponse, DeleteApiDefinitionRequest,
+        DeleteApiDefinitionResponse, GetAllApiDefinitionVersionsRequest,
+        GetAllApiDefinitionVersionsResponse, GetAllApiDefinitionsRequest,
+        GetAllApiDefinitionsResponse, GetApiDefinitionRequest, GetApiDefinitionResponse,
+        HttpApiDefinition as GrpcHttpApiDefinition, ManyApiDefinitions,
     },
     common::{Empty, ErrorBody, ErrorsBody},
 };
 use golem_worker_service_base::{
     api_definition::{
-        http::HttpApiDefinition as CoreHttpApiDefinition, ApiDefinitionId, ApiVersion,
+        http::{get_api_definition_from_oas, HttpApiDefinition as CoreHttpApiDefinition},
+        ApiDefinitionId, ApiVersion,
     },
     auth::{CommonNamespace, EmptyAuthCtx},
     service::{
@@ -55,7 +58,10 @@ impl ApiDefinitionRegistrationService for GrpcApiDefinitionRegistration {
         &self,
         request: tonic::Request<CreateOrUpdateApiDefinitionRequest>,
     ) -> Result<tonic::Response<CreateOrUpdateResponseApiDefinitionResponse>, tonic::Status> {
-        let result = match self.create_or_update_definition(request.into_inner()).await {
+        let result = match self
+            .create_or_update_api_definition(request.into_inner())
+            .await
+        {
             Ok(result) => {
                 create_or_update_response_api_definition_response::Result::Success(result)
             }
@@ -67,6 +73,23 @@ impl ApiDefinitionRegistrationService for GrpcApiDefinitionRegistration {
                 result: Some(result),
             },
         ))
+    }
+
+    async fn create_or_update_open_api_definition(
+        &self,
+        request: tonic::Request<CreateOrUpdateOpenApiRequest>,
+    ) -> Result<tonic::Response<CreateOrUpdateOpenApiResponse>, tonic::Status> {
+        let result = match self
+            .create_or_update_open_api_definition(request.into_inner())
+            .await
+        {
+            Ok(result) => create_or_update_open_api_response::Result::Success(result),
+            Err(error) => create_or_update_open_api_response::Result::Error(error),
+        };
+
+        Ok(tonic::Response::new(CreateOrUpdateOpenApiResponse {
+            result: Some(result),
+        }))
     }
 
     async fn get_api_definition(
@@ -138,7 +161,7 @@ impl ApiDefinitionRegistrationService for GrpcApiDefinitionRegistration {
 }
 
 impl GrpcApiDefinitionRegistration {
-    async fn create_or_update_definition(
+    async fn create_or_update_api_definition(
         &self,
         request: CreateOrUpdateApiDefinitionRequest,
     ) -> Result<GrpcHttpApiDefinition, ApiDefinitionRegistrationError> {
@@ -157,6 +180,23 @@ impl GrpcApiDefinitionRegistration {
             .await?;
 
         Ok(definition)
+    }
+
+    async fn create_or_update_open_api_definition(
+        &self,
+        request: CreateOrUpdateOpenApiRequest,
+    ) -> Result<GrpcHttpApiDefinition, ApiDefinitionRegistrationError> {
+        let definition = request.payload;
+
+        let definition = get_api_definition_from_oas(definition.as_str()).map_err(bad_request)?;
+
+        self.definition_service
+            .register(&definition, CommonNamespace::default(), &EmptyAuthCtx {})
+            .await?;
+
+        let grpc_definition = definition.try_into().map_err(internal_error)?;
+
+        Ok(grpc_definition)
     }
 
     async fn get_api_definition(

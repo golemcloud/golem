@@ -254,7 +254,7 @@ impl TryFrom<grpc_apidefinition::HttpApiDefinition>
         let routes = value
             .routes
             .into_iter()
-            .map(|r| crate::api_definition::http::Route::try_from(r))
+            .map(crate::api_definition::http::Route::try_from)
             .collect::<Result<Vec<crate::api_definition::http::Route>, String>>()?;
 
         let result = crate::api_definition::http::HttpApiDefinition {
