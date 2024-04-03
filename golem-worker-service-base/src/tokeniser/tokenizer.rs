@@ -200,25 +200,6 @@ impl Token {
 
 struct State {
     pos: usize,
-    state: TokenizerState,
-}
-#[derive(Clone)]
-enum TokenizerState {
-    Beginning,
-    Text,
-    Static(Token),
-    End,
-}
-
-impl TokenizerState {
-    fn is_end(&self) -> bool {
-        match self {
-            Self::Beginning => false,
-            Self::Text => false,
-            Self::End => true,
-            Self::Static(_) => false,
-        }
-    }
 }
 
 pub struct Tokenizer<'a> {
@@ -254,6 +235,10 @@ impl<'t> Tokenizer<'t> {
         self.text.get(self.state.pos..self.state.pos + by)
     }
 
+    pub fn peek_next_char(&self) -> Option<char> {
+        self.text.chars().nth(self.state.pos)
+    }
+
     pub fn rest(&self) -> &str {
         &self.text[self.state.pos..]
     }
@@ -271,7 +256,6 @@ impl<'t> Tokenizer<'t> {
             text,
             state: State {
                 pos: 0,
-                state: TokenizerState::Beginning,
             },
         }
     }
@@ -327,68 +311,73 @@ impl<'t> Tokenizer<'t> {
     fn get_multi_char_token(&mut self) -> Option<Token> {
         let ch = self.rest().chars().next()?;
         match ch {
-            'a'..='z' | 'A'..='Z' => {
-                // Eat characters from kebab-names (ascii alphanumeric and dash)
-                let str = self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
+            'a'..='z' | 'A'..='Z' | '-' | '_'  => {
+                let str = self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')?;
                 match str {
-                    Some("worker") => Some(Token::MultiChar(MultiCharTokens::Worker)),
-                    Some("request") => Some(Token::MultiChar(MultiCharTokens::Request)),
-                    Some("ok") => Some(Token::MultiChar(MultiCharTokens::Ok)),
-                    Some("err") => Some(Token::MultiChar(MultiCharTokens::Err)),
-                    Some("some") => Some(Token::MultiChar(MultiCharTokens::Some)),
-                    Some("none") => Some(Token::MultiChar(MultiCharTokens::None)),
-                    Some("match") => Some(Token::MultiChar(MultiCharTokens::Match)),
-                    Some("if") => Some(Token::MultiChar(MultiCharTokens::If)),
-                    Some("then") => Some(Token::MultiChar(MultiCharTokens::Then)),
-                    Some("else") => Some(Token::MultiChar(MultiCharTokens::Else)),
-                    Some(random) => Some(Token::MultiChar(MultiCharTokens::Other(random.to_string()))),
-                    None => None,
-                }
-            }
-            '0'..='9' => {
-                // Eat characters from numbers (including decimals and exponents)
-                let str =
-                    self.eat_while(|ch| matches!(ch, '0'..='9' | '-' | '.' | 'e' | 'E' | '+'));
-                if let Some(str) = str {
-                    Some(Token::MultiChar(MultiCharTokens::Number(str.to_string())))
-                } else {
-                    None
-                }
-            }
-            _ => {
-                let peeked = self.peek(2);
-                match peeked {
-                    Some("=>") => {
-                        self.progress_by(&'=');
-                        self.progress_by(&'>');
-                        Some(Token::MultiChar(MultiCharTokens::Arrow))
-                    }
-                    Some(">=") => {
-                        self.progress_by(&'>');
-                        self.progress_by(&'=');
-                        Some(Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo))
-                    }
-                    Some("<=") => {
-                        self.progress_by(&'<');
-                        self.progress_by(&'=');
-                        Some(Token::MultiChar(MultiCharTokens::LessThanOrEqualTo))
-                    }
-                    Some("==") => {
-                        self.progress_by(&'=');
-                        self.progress_by(&'=');
-                        Some(Token::MultiChar(MultiCharTokens::EqualTo))
-                    }
-                    Some("${") => {
-                        self.progress_by(&'$');
-                        self.progress_by(&'{');
-                        Some(Token::MultiChar(MultiCharTokens::InterpolationStart))
-                    }
+                    "worker" => Some(Token::MultiChar(MultiCharTokens::Worker)),
+                    "request" => Some(Token::MultiChar(MultiCharTokens::Request)),
+                    "ok" => Some(Token::MultiChar(MultiCharTokens::Ok)),
+                    "err" => Some(Token::MultiChar(MultiCharTokens::Err)),
+                    "some" => Some(Token::MultiChar(MultiCharTokens::Some)),
+                    "none" => Some(Token::MultiChar(MultiCharTokens::None)),
+                    "match" => Some(Token::MultiChar(MultiCharTokens::Match)),
+                    "if" => Some(Token::MultiChar(MultiCharTokens::If)),
+                    "then" => Some(Token::MultiChar(MultiCharTokens::Then)),
+                    "else" => Some(Token::MultiChar(MultiCharTokens::Else)),
+                    random => Some(Token::MultiChar(MultiCharTokens::Other(random.to_string()))),
                     _ => None,
                 }
             }
+            '0'..='9' => {
+                let str =
+                    self.eat_while(|ch| matches!(ch, '0'..='9' | '-' | '.' | 'e' | 'E' | '+'))?;
+                Some(Token::MultiChar(MultiCharTokens::Number(str.to_string())))
+            }
+            _ => self.find_double_char_op().or_else(|| self.find_next_char())
         }
     }
+
+    fn find_next_char(&mut self) -> Option<Token> {
+        let final_char =  self.peek_next_char()?;
+        self.progress_by(&final_char);
+        Some(Token::MultiChar(MultiCharTokens::Other(final_char.to_string())))
+    }
+    fn find_double_char_op(&mut self) -> Option<Token> {
+        let peeked = self.peek(2)?;
+
+        match peeked {
+            "=>" => {
+                self.progress_by(&'=');
+                self.progress_by(&'>');
+                Some(Token::MultiChar(MultiCharTokens::Arrow))
+            }
+            ">=" => {
+                self.progress_by(&'>');
+                self.progress_by(&'=');
+                Some(Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo))
+            }
+            "<=" => {
+                self.progress_by(&'<');
+                self.progress_by(&'=');
+                Some(Token::MultiChar(MultiCharTokens::LessThanOrEqualTo))
+            }
+            "==" => {
+                self.progress_by(&'=');
+                self.progress_by(&'=');
+                Some(Token::MultiChar(MultiCharTokens::EqualTo))
+            }
+            "${" => {
+                self.progress_by(&'$');
+                self.progress_by(&'{');
+                Some(Token::MultiChar(MultiCharTokens::InterpolationStart))
+            }
+            _ => None
+        }
+
+    }
 }
+
+
 
 #[derive(Debug, Clone)]
 pub struct TokeniserResult {
@@ -543,16 +532,16 @@ mod tests {
                 Token::Space,
                 Token::GreaterThan,
                 Token::Space,
-                Token::raw_string("1".to_string()),
+                Token::number("1".to_string()),
                 Token::RCurly,
                 Token::Space,
                 Token::then(),
                 Token::Space,
-                Token::raw_string("1".to_string()),
+                Token::number("1".to_string()),
                 Token::Space,
                 Token::else_token(),
                 Token::Space,
-                Token::raw_string("0".to_string()),
+                Token::number("0".to_string()),
             ]
         );
     }
@@ -614,26 +603,6 @@ else${z}
             ]
         );
     }
-
-    #[test]
-    fn test_dummy() {
-        let tokens: Vec<Token> = Tokenizer::new("f").run().value;
-
-        dbg!(&tokens);
-
-        assert_eq!(
-            tokens,
-            vec![
-                Token::raw_string("f".to_string()),
-                Token::Space,
-                Token::Space,
-                Token::GreaterThan,
-                Token::Space,
-                Token::raw_string("g".to_string())
-            ]
-        );
-    }
-
 
     #[test]
     fn test_greater_than_with_space() {
