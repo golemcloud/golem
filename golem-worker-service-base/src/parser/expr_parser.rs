@@ -725,48 +725,7 @@ mod internal {
         go(tokenizer, &mut flags)?;
         Ok(Expr::Flags(flags))
     }
-
-    fn accumulate_remaining_flags(tokenizer: &mut Tokenizer, flags: &mut Vec<String>) -> Result<(), ParseError> {
-        match tokenizer.next_non_empty_token() {
-            Some(Token::Comma) => {
-                // Until next comma
-                if let Some(string_until_next_comma) = tokenizer.capture_string_until(
-                    vec![],
-                    &Token::Comma,
-                ) {
-                    flags.push(string_until_next_comma);
-                    accumulate_remaining_flags(tokenizer, flags)
-                } else if let Some(last_string) = tokenizer.capture_string_until(
-                    vec![],
-                    &Token::RCurly,
-                ) {
-                    if !last_string.is_empty() {
-                        flags.push(last_string);
-                    }
-                    Ok(())
-                } else {
-                    match tokenizer.next_non_empty_token() {
-                        // If nothing
-                        Some(Token::RCurly) => Ok(()),
-                        _ => {
-                            Err(ParseError::Message(
-                                "Expecting a value after colon".to_string(),
-                            ))
-                        }
-                    }
-                }
-            }
-            Some(Token::MultiChar(MultiCharTokens::Other(next_str))) => {
-                flags.push(next_str);
-                accumulate_remaining_flags(tokenizer, flags)
-
-            }
-            _ => {
-                Ok(())
-            }
-        }
-    }
-
+    
     pub(crate) fn resolve_literal_in_code_context(primitive: &str) -> Expr {
         if let Ok(u64) = primitive.parse::<u64>() {
             Expr::Number(InnerNumber::UnsignedInteger(u64))
