@@ -2813,6 +2813,7 @@ dependencies = [
  "libtest-mimic",
  "log",
  "native-tls",
+ "openapiv3",
  "postgres",
  "rand 0.8.5",
  "redis",

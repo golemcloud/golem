@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod api_definition;
 pub mod clients;
 pub mod examples;
 pub mod model;
