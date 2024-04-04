@@ -1030,13 +1030,10 @@ mod tests {
             "${match worker.response { ok(value) => 'personal-id', err(msg) => 'not found' }}",
         )
         .unwrap();
-
-        dbg!(expr.clone());
-
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         assert_eq!(
-            result.is_err(),
-            true
+            result,
+            Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
         );
     }
 

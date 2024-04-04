@@ -810,14 +810,11 @@ mod internal {
     {
         match cursor.next_non_empty_token() {
             Some(Token::MultiChar(MultiCharTokens::Arrow)) => {
-                dbg!("Found an arrow");
                 let index_of_closed_curly_brace = cursor.index_of_last_end_token(
                     vec![&Token::LCurly, &Token::interpolation_start()],
                     &Token::RCurly,
                 );
                 let index_of_commaseparator = cursor.index_of_last_end_token(vec![], &Token::Comma);
-                dbg!(index_of_closed_curly_brace.clone());
-                dbg!(index_of_commaseparator.clone());
 
                 match (index_of_closed_curly_brace, index_of_commaseparator) {
                     (Some(end_of_constructors), Some(comma)) => {

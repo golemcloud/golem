@@ -34,13 +34,10 @@ impl<'a> TokenCursor<'a> {
         let original_token = self.current_token.clone();
         self.tokenizer.state.pos = index;
 
-        if let Some(token) = self.tokenizer.next_token() {
-            self.tokenizer.state.pos = original_state;
-            self.current_token = original_token;
-            Some(token)
-        } else {
-            None
-        }
+        let token = self.tokenizer.next_token();
+        self.tokenizer.state.pos = original_state;
+        self.current_token = original_token;
+        token
     }
 
     pub fn next_token(&mut self) -> Option<Token> {
@@ -221,10 +218,26 @@ mod tests {
         let tokens = "else foo }";
 
         let mut cursor = TokenCursor::new(tokens);
+        dbg!(cursor.tokenizer.state.pos);
+
         let result = cursor.index_of_last_end_token(vec![&Token::LCurly], &Token::RCurly);
+        dbg!(cursor.tokenizer.state.pos);
 
         let unchanged_current_toknen = cursor.next_non_empty_token().clone();
 
         assert_eq!((result, unchanged_current_toknen), (Some(9), Some(Token::else_token())))
+    }
+
+    #[test]
+    fn test_index_of_last_end_token_negative() {
+        let tokens = "'not found' }";
+
+        let mut cursor = TokenCursor::new(tokens);
+        dbg!(cursor.tokenizer.state.pos);
+        let result = cursor.index_of_last_end_token(vec![], &Token::Comma);
+        dbg!(cursor.tokenizer.state.pos);
+        let unchanged_current_toknen = cursor.next_non_empty_token().clone();
+
+        assert_eq!((result, unchanged_current_toknen), (None, Some(Token::Quote)))
     }
 }
