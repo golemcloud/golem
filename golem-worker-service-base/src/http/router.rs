@@ -37,13 +37,10 @@ impl<T> OrderedChildren<T> {
 
     #[inline]
     fn search_by_str(&self, input: &str) -> Option<&RadixNode<T>> {
-        let next_child_index = self
-            .0
-            .binary_search_by(|child| match child.pattern.first() {
-                Some(Pattern::Static(s)) => s.as_str().cmp(input),
-                Some(Pattern::Variable) => std::cmp::Ordering::Equal,
-                None => unreachable!("Child pattern is empty"),
-            });
+        let next_child_index = self.0.binary_search_by(|child| match &child.pattern[0] {
+            Pattern::Static(s) => s.as_str().cmp(input),
+            Pattern::Variable => std::cmp::Ordering::Equal,
+        });
 
         next_child_index.ok().map(|index| &self.0[index])
     }
