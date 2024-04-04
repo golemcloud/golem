@@ -188,15 +188,9 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                 }
 
                 Token::LParen => {
-                    let expr = capture_expression_until(
-                        tokenizer,
-                        vec![&Token::LParen],
-                        Some(&Token::RParen),
-                        prev_expression,
-                        go,
-                    )?;
-
-                    go(tokenizer, context, expr)
+                    create_tuple(tokenizer).and_then(|tuple| {
+                        go(tokenizer, context, prev_expression.apply_with(tuple))
+                    })
                 }
 
                 Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo) => {
@@ -552,7 +546,7 @@ mod internal {
 
         go(tokenizer, &mut tuple_elements)?;
 
-        Ok(Expr::Tuple(record))
+        Ok(Expr::Tuple(tuple_elements))
     }
 
     pub(crate) fn create_list(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
@@ -848,12 +842,12 @@ mod internal {
     {
         match tokenizer.next_non_empty_token() {
             Some(Token::MultiChar(MultiCharTokens::Arrow)) => {
-                let index_of_closed_curly_brace = tokenizer.index_of_last_end_token(
+                let index_of_closed_curly_brace = tokenizer.index_of_future_token(
                     vec![&Token::LCurly, &Token::interpolation_start()],
                     &Token::RCurly,
                 );
                 let index_of_commaseparator =
-                    tokenizer.index_of_last_end_token(vec![], &Token::Comma);
+                    tokenizer.index_of_future_token(vec![], &Token::Comma);
 
                 match (index_of_closed_curly_brace, index_of_commaseparator) {
                     (Some(end_of_constructors), Some(comma)) => {

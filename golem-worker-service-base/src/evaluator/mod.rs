@@ -329,6 +329,22 @@ impl Evaluator for Expr {
                     handle_pattern_match(&input_expr, constructors, input)
                 }
                 Expr::Constructor0(constructor) => handle_expr_construction(&constructor, input),
+                Expr::Tuple(tuple_exprs) => {
+                    let mut result: Vec<TypeAnnotatedValue> = vec![];
+
+                    for expr in tuple_exprs {
+                        let type_annotated_value = go(&expr, input)?;
+                        result.push(type_annotated_value);
+                    }
+
+                    let typ: &Vec<AnalysedType> =
+                        &result.iter().map(|x| AnalysedType::from(x)).collect();
+
+                    Ok(TypeAnnotatedValue::Tuple {
+                        value: result,
+                        typ: typ.clone()
+                    })
+                }
             }
         }
 
@@ -731,7 +747,7 @@ mod tests {
         );
 
         let expr = Expr::from_primitive_string(
-            "${if (request.header.authorisation == 'admin') then 200 else 401}",
+            "${if request.header.authorisation == 'admin' then 200 else 401}",
         )
         .unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::U64("200".parse().unwrap());
@@ -846,7 +862,7 @@ mod tests {
         );
 
         let expr =
-            Expr::from_primitive_string("${if (request.header.authorisation) then 200 else 401}")
+            Expr::from_primitive_string("${if request.header.authorisation then 200 else 401}")
                 .unwrap();
 
         dbg!(expr.clone());
@@ -1296,6 +1312,31 @@ mod tests {
             typ: AnalysedType::U64,
             values: vec![
                 TypeAnnotatedValue::U64(1),
+                TypeAnnotatedValue::U64(2),
+                TypeAnnotatedValue::U64(3),
+            ],
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_evaluation_with_wave_like_syntax_simple_tuple() {
+        let expr = Expr::from_primitive_string("${(some(1),2,3)}").unwrap();
+
+        dbg!(expr.clone());
+        let result = expr.evaluate(&TypeAnnotatedValue::Record {
+            value: vec![],
+            typ: vec![],
+        });
+
+        let expected = Ok(TypeAnnotatedValue::Tuple {
+            typ: vec![AnalysedType::Option(Box::new(AnalysedType::U64)), AnalysedType::U64, AnalysedType::U64],
+            value: vec![
+                TypeAnnotatedValue::Option{
+                    value: Some(Box::new(TypeAnnotatedValue::U64(1))),
+                    typ: AnalysedType::U64
+                },
                 TypeAnnotatedValue::U64(2),
                 TypeAnnotatedValue::U64(3),
             ],

@@ -236,7 +236,7 @@ impl<'t> Tokenizer<'t> {
     }
     // Captures the string upto the end token, leaving the cursor at the end token (leaving it to the user)
     pub fn capture_string_until(&mut self, start: Vec<&Token>, end: &Token) -> Option<String> {
-        let capture_until = self.index_of_last_end_token(start, end)?;
+        let capture_until = self.index_of_future_token(start, end)?;
 
         let tokens = self.all_tokens_until(capture_until);
 
@@ -262,15 +262,16 @@ impl<'t> Tokenizer<'t> {
         }
     }
 
-    // This is useful especially when we want to capture string between two tokens,
-    // If the start token repeats again (nested start), then it looks for
-    // the end token for the inner start, and repeats until it find
-    // the end token for the outer start. Here start corresponding to a particular end
-    // can be n number of tokens. Example `${` can be the start of `}` or `{` can be the start of `}`.
-    pub fn index_of_last_end_token(
+    // To peak ahead and see the position of  token comes first.
+    // nested_starts: List of tokens, for which we expect their corresponding closing token to be the same as future_token,
+    // to make sure we skip nested tokens and find the correct future token. Example: In `foo { bar { baz } }`, index
+    // of token `}` is the one corresponding to the first `{` if we provide nested_starts as [`{`].
+    // If we don't care nestedness, simply provide empty list for nested_starts.
+    // In that case, the index of `:` in `foo:bar:bar` is just 3.
+    pub fn index_of_future_token(
         &mut self,
         nested_starts: Vec<&Token>,
-        end: &Token,
+        future_token: &Token,
     ) -> Option<usize> {
         let starts = nested_starts
             .iter()
@@ -286,7 +287,7 @@ impl<'t> Tokenizer<'t> {
             if starts.contains(&current_token) {
                 // That it finds a start token again
                 start_token_count += 1;
-            } else if current_token == end.to_string() {
+            } else if current_token == future_token.to_string() {
                 // Making sure any nested start token was closed (making it always a zero) before break
                 if start_token_count == 0 {
                     // Found a matching end token
@@ -1039,7 +1040,7 @@ else${z}
 
         let mut tokeniser = Tokenizer::new(tokens);
 
-        let result = tokeniser.index_of_last_end_token(vec![&Token::LCurly], &Token::RCurly);
+        let result = tokeniser.index_of_future_token(vec![&Token::LCurly], &Token::RCurly);
 
         let unchanged_current_toknen = tokeniser.next_non_empty_token().clone();
 
@@ -1054,7 +1055,7 @@ else${z}
         let tokens = "'not found' }";
 
         let mut tokeniser = Tokenizer::new(tokens);
-        let result = tokeniser.index_of_last_end_token(vec![], &Token::Comma);
+        let result = tokeniser.index_of_future_token(vec![], &Token::Comma);
         let unchanged_current_toknen = tokeniser.next_non_empty_token().clone();
 
         assert_eq!(

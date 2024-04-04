@@ -341,6 +341,26 @@ impl Expr {
                     Ok(InternalValue::RawJson(Value::Array(vs)))
                 }
 
+                Expr::Tuple(values) => {
+                    let mut vs: Vec<Value> = vec![];
+                    for expr in values {
+                        match expr {
+                            Expr::Literal(value) => {
+                                vs.push(Value::String(value.clone()));
+                            }
+                            Expr::Variable(variable) => {
+                                vs.push(Value::String(format!("${{{}}}", variable)));
+                            }
+                            _ => {
+                                let value_json = expr.to_json_value()?;
+                                vs.push(value_json);
+                            }
+                        }
+                    }
+
+                    Ok(InternalValue::RawJson(Value::Array(vs)))
+                }
+
                 Expr::Literal(value) => match Primitive::from(value.clone()) {
                     Primitive::String(string) => {
                         if is_code {
