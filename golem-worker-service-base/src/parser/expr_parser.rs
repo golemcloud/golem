@@ -367,7 +367,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                             )),
                         }
                     }
-                    _ => create_list(tokenizer, vec![&Token::LSquare], Some(&Token::RSquare)),
+                    _ => create_list(tokenizer),
                 },
 
                 Token::MultiChar(MultiCharTokens::If) => {
@@ -510,21 +510,12 @@ mod internal {
     use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
     use strum_macros::Display;
 
-    pub(crate) fn create_list(
-        tokenizer: &mut Tokenizer,
-        possible_nested_token_starts: Vec<&Token>,
-        capture_until: Option<&Token>,
-    ) -> Result<Expr, ParseError> {
+    pub(crate) fn create_list(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
         let mut record = vec![];
 
-        fn go(
-            tokenizer: &mut Tokenizer,
-            record: &mut Vec<Expr>,
-            possible_nested_token_starts: Vec<&Token>,
-            capture_until: Option<&Token>,
-        ) -> Result<(), ParseError> {
+        fn go(tokenizer: &mut Tokenizer, record: &mut Vec<Expr>) -> Result<(), ParseError> {
             let captured_string = tokenizer.capture_string_until(
-                possible_nested_token_starts.clone(),
+                vec![],
                 &Token::Comma, // Wave does this
             );
 
@@ -534,19 +525,12 @@ mod internal {
 
                     record.push(expr);
                     tokenizer.next_non_empty_token();
-                    go(
-                        tokenizer,
-                        record,
-                        possible_nested_token_starts,
-                        capture_until,
-                    )
+                    go(tokenizer, record)
                 }
 
                 None => {
-                    let last_value = tokenizer.capture_string_until(
-                        possible_nested_token_starts.clone(),
-                        &Token::RSquare,
-                    );
+                    let last_value =
+                        tokenizer.capture_string_until(vec![&Token::LSquare], &Token::RSquare);
 
                     match last_value {
                         Some(last_value) => {
@@ -560,12 +544,7 @@ mod internal {
             }
         }
 
-        go(
-            tokenizer,
-            &mut record,
-            possible_nested_token_starts,
-            capture_until,
-        )?;
+        go(tokenizer, &mut record)?;
 
         Ok(Expr::Sequence(record))
     }
@@ -868,27 +847,17 @@ mod internal {
                             &Token::RCurly,
                         );
 
-                        match captured_string {
-                            Some(captured_string) => {
-                                let individual_expr =
-                                    parse_with_context(captured_string.as_str(), Context::Code)
-                                        .map(|expr| {
-                                            ConstructorPatternExpr((
-                                                constructor_pattern,
-                                                Box::new(expr),
-                                            ))
-                                        })?;
-                                collected_exprs.push(individual_expr);
-                            }
-                            None => {}
+                        if let Some(captured_string) = captured_string {
+                            let individual_expr = parse_with_context(
+                                captured_string.as_str(),
+                                Context::Code,
+                            )
+                            .map(|expr| {
+                                ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
+                            })?;
+                            collected_exprs.push(individual_expr);
                         }
-                        //
-                        // let individual_expr =
-                        //     parse_with_context(captured_string.unwrap().as_str(), Context::Code)
-                        //         .map(|expr| {
-                        //             ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
-                        //         })?;
-                        // collected_exprs.push(individual_expr);
+
                         Ok(())
                     }
 
