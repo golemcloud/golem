@@ -116,6 +116,35 @@ impl<T> RadixNode<T> {
 
                     Ok(())
                 } else {
+                    // The path partially matches the current node's pattern
+                    //
+                    // self.path = ["a", "b"]
+                    // self.data = Some(1)
+                    // self.children = {
+                    //     "c" => RadixNode { path = ["c"], data = Some(2)}
+                    // }
+                    //
+                    // path = ["a", "c"]
+                    // data = Some(3)
+                    //
+                    // becomes
+                    //
+                    // self.path = ["a"]
+                    // self.data = None
+                    // self.children = {
+                    //     "b" => RadixNode {
+                    //               path = ["b"],
+                    //               data = Some(1),
+                    //               children = {
+                    //                  RadixNode { path = ["c"], data = Some(2)}
+                    //               }
+                    //            }
+                    //     "c" => RadixNode { path = ["c"], data = Some(3)}
+                    // }
+                    //
+                    // NOTE: The C gets inserted in the recursive call.
+                    // This iteration will only create the "b" node by splitting the current node.
+
                     let new_child_pattern = self.pattern.split_off(common_prefix_len);
                     let new_child_data = self.data.take();
                     let new_child_children = std::mem::take(&mut self.children);
@@ -197,7 +226,14 @@ impl<T> RadixNode<T> {
             if common_prefix_len == node.pattern.len() {
                 let path_start = path.len() - path_segments.len();
                 let path_end = path_start + common_prefix_len;
-                let new_variables = extract_values(&path[path_start..path_end], &node.pattern);
+
+                let new_variables = path[path_start..path_end]
+                    .iter()
+                    .zip(&node.pattern)
+                    .filter_map(|(path, pattern)| match pattern {
+                        Pattern::Variable => Some(*path),
+                        Pattern::Static(_) => None,
+                    });
                 variables.extend(new_variables);
 
                 if common_prefix_len == path_segments.len() {
@@ -247,19 +283,6 @@ impl<T> RadixNode<T> {
             .take_while(|(a, b)| a == b)
             .count()
     }
-}
-
-fn extract_values<'input, 'slice>(
-    paths: &'slice [&'input str],
-    variables: &'slice [Pattern],
-) -> impl Iterator<Item = &'input str> + 'slice {
-    paths
-        .iter()
-        .zip(variables.iter())
-        .filter_map(move |(path, variable)| match variable {
-            Pattern::Variable => Some(*path),
-            Pattern::Static(_) => None,
-        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

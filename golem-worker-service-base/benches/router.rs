@@ -5,99 +5,102 @@ fn main() {
     divan::main();
 }
 
-const LENGTHS: &[usize] = &[10, 20, 50, 100];
+const NUM_ROUTES: &[usize] = &[10, 20, 50, 100];
 
-const SAMPLE_COUNT: u32 = 1000;
-const SAMPLE_SIZE: u32 = 100;
+const SAMPLE_COUNT: u32 = 10000;
+const SAMPLE_SIZE: u32 = 1000;
 
 #[divan::bench(
-    args = LENGTHS,
+    args = NUM_ROUTES,
     sample_count = SAMPLE_COUNT,
     sample_size = SAMPLE_SIZE
 )]
-fn radix_tree_matches(bencher: Bencher, len: usize) {
+fn radix_tree_all_matches(bencher: Bencher, len: usize) {
     let (original, routes) = generate_routes(len);
     let radix_tree = build_radix_tree(&routes);
 
     bencher
         .with_inputs(|| generate_match_route(&original))
-        .bench_values(|route| {
-            let result = radix_tree.matches_str(&route);
-            if result.is_none() {
-                println!("No match found for route: {}", route);
+        .bench_local_refs(|route| {
+            let refs = route.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+            let _ = radix_tree.matches(refs.as_slice());
+        });
+}
+
+const MATCH_PERCENTAGE: &[usize] = &[10, 20, 50, 100];
+
+#[divan::bench(
+    args = MATCH_PERCENTAGE,
+    sample_count = SAMPLE_COUNT,
+    sample_size = SAMPLE_SIZE
+)]
+fn radix_tree_with_misses(bencher: Bencher, miss_percent: usize) {
+    let (original, routes) = generate_routes(100);
+    let invalid_routes = ROUTES
+        .iter()
+        .filter(|r| !original.contains(r))
+        .map(|s| *s)
+        .collect::<Vec<_>>();
+
+    let radix_tree = build_radix_tree(&routes);
+
+    let miss_percent = miss_percent as f64 / 100.0;
+
+    bencher
+        .with_inputs(|| {
+            let should_miss = fastrand::f64() < miss_percent;
+
+            if should_miss {
+                generate_match_route(invalid_routes.as_slice())
+            } else {
+                generate_match_route(&original)
             }
+        })
+        .bench_local_refs(|route| {
+            let refs = route.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+            let _ = radix_tree.matches(refs.as_slice());
         });
 }
 
 fn generate_routes(n: usize) -> (Vec<&'static str>, Vec<Vec<Pattern>>) {
-    let original_routes = (0..n)
-        .map(|_| {
-            let index = fastrand::usize(..ROUTES.len());
-            ROUTES[index]
-        })
-        .collect::<Vec<_>>();
+    let mut original_routes = Vec::with_capacity(n);
+    let mut used_routes = std::collections::HashSet::with_capacity(n);
+
+    while original_routes.len() < n {
+        let route = *fastrand::choice(ROUTES).unwrap();
+        if !used_routes.contains(route) {
+            original_routes.push(route);
+            used_routes.insert(route);
+        }
+    }
 
     let patterns = original_routes.iter().map(|s| make_path(*s)).collect();
-
     (original_routes, patterns)
 }
 
 fn build_radix_tree(routes: &[Vec<Pattern>]) -> RadixNode<usize> {
     let mut radix_tree = RadixNode::default();
     for (index, route) in routes.iter().enumerate() {
-        let _ = radix_tree.insert_path(route, index);
+        radix_tree.insert_path(route, index).unwrap();
     }
     radix_tree
 }
 
-fn generate_match_route(routes: &[&str]) -> String {
-    let index = fastrand::usize(..routes.len());
-    let route = routes[index];
-    let result = route
+fn generate_match_route(routes: &[&str]) -> Vec<String> {
+    let route = fastrand::choice(routes).unwrap();
+    route
         .trim_matches('/')
         .split('/')
         .map(|segment| {
             if segment.starts_with(':') {
                 match segment {
-                    s if s.ends_with("id") => fastrand::u32(1..1000).to_string(),
-                    ":query" => generate_query(),
-                    ":username" => generate_username(),
-                    _ => "42".to_string(),
+                    _ => fastrand::u32(1..1000).to_string(),
                 }
             } else {
                 segment.to_string()
             }
         })
         .collect::<Vec<_>>()
-        .join("/");
-
-    format!("/{}", result)
-}
-
-fn generate_query() -> String {
-    let mut result = String::new();
-    let length = fastrand::usize(1..10);
-    for _ in 0..length {
-        let word_length = fastrand::usize(3..8);
-        for _ in 0..word_length {
-            let ch = fastrand::u8(b'a'..=b'z') as char;
-            result.push(ch);
-        }
-
-        result.push('+');
-    }
-    result.pop();
-    result
-}
-
-fn generate_username() -> String {
-    let mut result = String::new();
-    let length = fastrand::usize(5..15);
-    for _ in 0..length {
-        let ch = fastrand::u8(b'a'..=b'z') as char;
-        result.push(ch);
-    }
-    result
 }
 
 const ROUTES: &[&str] = &[
@@ -114,17 +117,16 @@ const ROUTES: &[&str] = &[
     "/posts",
     "/posts/trending",
     "/posts/latest",
-    "/posts/search/:query",
     "/posts/:post_id",
     "/posts/:post_id/likes",
     "/posts/:post_id/comments",
     "/posts/:post_id/comments/:comment_id",
     "/posts/:post_id/comments/:comment_id/replies",
     "/posts/:post_id/comments/:comment_id/replies/:reply_id",
-    "/profiles/:username",
-    "/profiles/:username/posts",
-    "/profiles/:username/followers",
-    "/profiles/:username/following",
+    "/profiles/:id",
+    "/profiles/:id/posts",
+    "/profiles/:id/followers",
+    "/profiles/:id/following",
     "/api/v1/users",
     "/api/v1/users/:id",
     "/api/v1/users/:id/posts",
@@ -175,9 +177,9 @@ const ROUTES: &[&str] = &[
     "/explore/users",
     "/explore/posts",
     "/explore/tags",
-    "/tags/:tag",
-    "/tags/:tag/posts",
-    "/tags/:tag/followers",
+    "/tags/:tag_id",
+    "/tags/:tag_id/posts",
+    "/tags/:tag_id/followers",
     "/feed",
     "/feed/latest",
     "/feed/trending",
@@ -205,4 +207,43 @@ const ROUTES: &[&str] = &[
     "/dashboard/overview",
     "/dashboard/analytics",
     "/dashboard/settings",
+    "/communities",
+    "/communities/:community_id",
+    "/communities/:community_id/members",
+    "/communities/:community_id/posts",
+    "/communities/:community_id/rules",
+    "/communities/:community_id/moderators",
+    "/communities/:community_id/analytics",
+    "/communities/:community_id/settings",
+    "/moderation/reports",
+    "/moderation/reports/:report_id",
+    "/moderation/banned-users",
+    "/moderation/banned-posts",
+    "/moderation/banned-comments",
+    "/moderation/filters",
+    "/moderation/filters/:filter_id",
+    "/moderation/keywords",
+    "/moderation/keywords/:keyword_id",
+    "/support/tickets",
+    "/support/tickets/:ticket_id",
+    "/support/faq",
+    "/support/contact",
+    "/jobs",
+    "/jobs/:job_id",
+    "/jobs/apply",
+    "/jobs/apply/:job_id",
+    "/press",
+    "/press/releases",
+    "/press/releases/:release_id",
+    "/legal/terms",
+    "/legal/privacy",
+    "/legal/guidelines",
+    "/legal/licenses",
+    "/partners",
+    "/partners/apply",
+    "/partners/program",
+    "/developers",
+    "/developers/docs",
+    "/developers/api",
+    "/developers/api/:version_id",
 ];
