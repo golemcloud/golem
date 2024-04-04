@@ -1,4 +1,5 @@
 pub use http_request::*;
+pub use router::*;
 
 mod http_request;
-pub mod router;
+mod router;
