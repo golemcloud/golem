@@ -647,13 +647,15 @@ mod internal {
         Tokenizer::new(input)
     }
 
-    // While at every node of Token, we can ideally form a complete expression
-    // by peeking ahead using tokenizer multiple times (an example is peek ahead 3 times for if predicate then then-expr else else-expr),
-    // sometimes it is better
-    // to defer it to further loop by forming an incomplete expression at a node.
-    // Example: At Token::If, we peek ahead only once to get the predicate, and form an incomplete expression
-    // which is nothing but a function that takes `then expr` and `else expr` to form the condition expression
-    // which will be completed only in further loops.
+    // While at every node (Token), we can somehow form a complete expression by peeking ahead using tokenizer multiple times,
+    // we can avoid this at times, and form an in-complete expression using `InternalExprResult`.
+    // This allows us to not worry about future at every token node.
+    // Example: At Token::GreaterThan, we simply form an incomplete expression with prev exression (Ex: incomplete_expr  `1 >`),
+    // which will get completed in further loop (Ex: complete_expr `1 > 2`)
+    // Another example is Token::If, where we parse only predicate and leave it to the rest of the parsing to get the branches.
+    // If we have a concrete idea of what the future should be, then it's good idea to peak ahead and complete and avoid building function.
+    // Example: We really need all the tokens until the next curly `}` in a pattern match. So at Token::Match, we peak ahead many times and get a
+    // complete match expression.
     pub(crate) enum InternalExprResult {
         Complete(Expr),
         InComplete(ExpressionContext, Box<dyn Fn(Expr) -> InternalExprResult>),
