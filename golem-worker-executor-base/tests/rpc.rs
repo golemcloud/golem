@@ -1,21 +1,20 @@
 use crate::common;
-use crate::common::{val_float32, val_list, val_pair, val_record, val_string, val_u64};
 use assert2::check;
+use golem_test_framework::dsl::{
+    val_float32, val_list, val_pair, val_record, val_string, val_u64, TestDsl,
+};
 use golem_wasm_rpc::protobuf::Val;
 use std::collections::HashMap;
-use std::path::Path;
 use std::time::SystemTime;
 
 #[tokio::test]
 #[tracing::instrument]
 async fn auction_example_1() {
     let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = common::start(&context).await.unwrap();
 
-    let registry_template_id = executor.store_template(Path::new(
-        "../test-templates/auction_registry_composed.wasm",
-    ));
-    let auction_template_id = executor.store_template(Path::new("../test-templates/auction.wasm"));
+    let registry_template_id = executor.store_template("auction_registry_composed").await;
+    let auction_template_id = executor.store_template("auction").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -23,9 +22,8 @@ async fn auction_example_1() {
         auction_template_id.to_string(),
     );
     let registry_worker_id = executor
-        .try_start_worker_versioned(&registry_template_id, 0, "auction-registry-1", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&registry_template_id, "auction-registry-1", vec![], env)
+        .await;
 
     let _ = executor.log_output(&registry_worker_id).await;
 
@@ -85,12 +83,10 @@ async fn auction_example_1() {
 #[tracing::instrument]
 async fn auction_example_2() {
     let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = common::start(&context).await.unwrap();
 
-    let registry_template_id = executor.store_template(Path::new(
-        "../test-templates/auction_registry_composed.wasm",
-    ));
-    let auction_template_id = executor.store_template(Path::new("../test-templates/auction.wasm"));
+    let registry_template_id = executor.store_template("auction_registry_composed").await;
+    let auction_template_id = executor.store_template("auction.wasm").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -98,9 +94,8 @@ async fn auction_example_2() {
         auction_template_id.to_string(),
     );
     let registry_worker_id = executor
-        .try_start_worker_versioned(&registry_template_id, 0, "auction-registry-1", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&registry_template_id, "auction-registry-1", vec![], env)
+        .await;
 
     let _ = executor.log_output(&registry_worker_id).await;
 
@@ -160,12 +155,10 @@ async fn auction_example_2() {
 #[tracing::instrument]
 async fn counter_resource_test_1() {
     let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = common::start(&context).await.unwrap();
 
-    let counters_template_id =
-        executor.store_template(Path::new("../test-templates/counters.wasm"));
-    let caller_template_id =
-        executor.store_template(Path::new("../test-templates/caller_composed.wasm"));
+    let counters_template_id = executor.store_template("counters").await;
+    let caller_template_id = executor.store_template("caller_composed").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -173,9 +166,8 @@ async fn counter_resource_test_1() {
         counters_template_id.to_string(),
     );
     let caller_worker_id = executor
-        .try_start_worker_versioned(&caller_template_id, 0, "rpc-counters-1", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&caller_template_id, "rpc-counters-1", vec![], env)
+        .await;
 
     let result = executor
         .invoke_and_await(&caller_worker_id, "test1", vec![])
@@ -197,12 +189,10 @@ async fn counter_resource_test_1() {
 #[tracing::instrument]
 async fn counter_resource_test_2() {
     let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = common::start(&context).await.unwrap();
 
-    let counters_template_id =
-        executor.store_template(Path::new("../test-templates/counters.wasm"));
-    let caller_template_id =
-        executor.store_template(Path::new("../test-templates/caller_composed.wasm"));
+    let counters_template_id = executor.store_template("counters").await;
+    let caller_template_id = executor.store_template("caller_composed").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -210,9 +200,8 @@ async fn counter_resource_test_2() {
         counters_template_id.to_string(),
     );
     let caller_worker_id = executor
-        .try_start_worker_versioned(&caller_template_id, 0, "rpc-counters-2", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&caller_template_id, "rpc-counters-2", vec![], env)
+        .await;
 
     let result1 = executor
         .invoke_and_await(&caller_worker_id, "test2", vec![])
@@ -231,12 +220,10 @@ async fn counter_resource_test_2() {
 #[tracing::instrument]
 async fn counter_resource_test_2_with_restart() {
     let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = common::start(&context).await.unwrap();
 
-    let counters_template_id =
-        executor.store_template(Path::new("../test-templates/counters.wasm"));
-    let caller_template_id =
-        executor.store_template(Path::new("../test-templates/caller_composed.wasm"));
+    let counters_template_id = executor.store_template("counters").await;
+    let caller_template_id = executor.store_template("caller_composed").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -244,16 +231,15 @@ async fn counter_resource_test_2_with_restart() {
         counters_template_id.to_string(),
     );
     let caller_worker_id = executor
-        .try_start_worker_versioned(&caller_template_id, 0, "rpc-counters-2r", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&caller_template_id, "rpc-counters-2r", vec![], env)
+        .await;
 
     let result1 = executor
         .invoke_and_await(&caller_worker_id, "test2", vec![])
         .await;
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = common::start(&context).await.unwrap();
 
     let result2 = executor
         .invoke_and_await(&caller_worker_id, "test2", vec![])
@@ -269,12 +255,10 @@ async fn counter_resource_test_2_with_restart() {
 #[tracing::instrument]
 async fn counter_resource_test_3() {
     let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = common::start(&context).await.unwrap();
 
-    let counters_template_id =
-        executor.store_template(Path::new("../test-templates/counters.wasm"));
-    let caller_template_id =
-        executor.store_template(Path::new("../test-templates/caller_composed.wasm"));
+    let counters_template_id = executor.store_template("counters").await;
+    let caller_template_id = executor.store_template("caller_composed").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -282,9 +266,8 @@ async fn counter_resource_test_3() {
         counters_template_id.to_string(),
     );
     let caller_worker_id = executor
-        .try_start_worker_versioned(&caller_template_id, 0, "rpc-counters-3", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&caller_template_id, "rpc-counters-3", vec![], env)
+        .await;
 
     let result1 = executor
         .invoke_and_await(&caller_worker_id, "test3", vec![])
@@ -303,12 +286,10 @@ async fn counter_resource_test_3() {
 #[tracing::instrument]
 async fn counter_resource_test_3_with_restart() {
     let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = common::start(&context).await.unwrap();
 
-    let counters_template_id =
-        executor.store_template(Path::new("../test-templates/counters.wasm"));
-    let caller_template_id =
-        executor.store_template(Path::new("../test-templates/caller_composed.wasm"));
+    let counters_template_id = executor.store_template("counters").await;
+    let caller_template_id = executor.store_template("caller_composed").await;
 
     let mut env = HashMap::new();
     env.insert(
@@ -316,16 +297,15 @@ async fn counter_resource_test_3_with_restart() {
         counters_template_id.to_string(),
     );
     let caller_worker_id = executor
-        .try_start_worker_versioned(&caller_template_id, 0, "rpc-counters-3r", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&caller_template_id, "rpc-counters-3r", vec![], env)
+        .await;
 
     let result1 = executor
         .invoke_and_await(&caller_worker_id, "test3", vec![])
         .await;
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = common::start(&context).await.unwrap();
 
     let result2 = executor
         .invoke_and_await(&caller_worker_id, "test3", vec![])

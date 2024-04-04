@@ -1,13 +1,16 @@
-use crate::common;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use crate::common::{start, TestContext};
 use assert2::{assert, check};
 use golem_common::model::WorkerStatus;
+use golem_test_framework::dsl::{
+    stderr_event, stdout_event, val_bool, val_list, val_option, val_pair, val_result, val_string,
+    val_triple, val_u32, val_u64, worker_error_message, TestDsl,
+};
 use golem_wasm_rpc::protobuf::{val, Val};
 use http_02::{Response, StatusCode};
 use tokio::spawn;
@@ -19,10 +22,10 @@ use warp::Filter;
 #[tokio::test]
 #[tracing::instrument]
 async fn write_stdout() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/write-stdout.wasm"));
+    let template_id = executor.store_template("write-stdout").await;
     let worker_id = executor.start_worker(&template_id, "write-stdout-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -35,16 +38,16 @@ async fn write_stdout() {
 
     drop(executor);
 
-    check!(events == vec![common::stdout_event("Sample text written to the output\n")]);
+    check!(events == vec![stdout_event("Sample text written to the output\n")]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn write_stderr() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/write-stderr.wasm"));
+    let template_id = executor.store_template("write-stderr").await;
     let worker_id = executor.start_worker(&template_id, "write-stderr-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -57,21 +60,16 @@ async fn write_stderr() {
 
     drop(executor);
 
-    check!(
-        events
-            == vec![common::stderr_event(
-                "Sample text written to the error output\n"
-            )]
-    );
+    check!(events == vec![stderr_event("Sample text written to the error output\n")]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn read_stdin() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/read-stdin.wasm"));
+    let template_id = executor.store_template("read-stdin").await;
     let worker_id = executor.start_worker(&template_id, "read-stdin-1").await;
 
     let result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
@@ -84,10 +82,10 @@ async fn read_stdin() {
 #[tokio::test]
 #[tracing::instrument]
 async fn clocks() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/clocks.wasm"));
+    let template_id = executor.store_template("clocks").await;
     let worker_id = executor.start_worker(&template_id, "clocks-1").await;
 
     let result = executor
@@ -142,17 +140,15 @@ async fn clocks() {
 #[tokio::test]
 #[tracing::instrument]
 async fn file_write_read_delete() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id =
-        executor.store_template(Path::new("../test-templates/file-write-read-delete.wasm"));
+    let template_id = executor.store_template("file-write-read-delete").await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "file-write-read-delete-1", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "file-write-read-delete-1", vec![], env)
+        .await;
 
     let result = executor
         .invoke_and_await(&worker_id, "run", vec![])
@@ -163,10 +159,10 @@ async fn file_write_read_delete() {
 
     check!(
         result
-            == vec![common::val_triple(
-                common::val_option(None),
-                common::val_option(Some(common::val_string("hello world"))),
-                common::val_option(None)
+            == vec![val_triple(
+                val_option(None),
+                val_option(Some(val_string("hello world"))),
+                val_option(None)
             )]
     );
 }
@@ -174,10 +170,10 @@ async fn file_write_read_delete() {
 #[tokio::test]
 #[tracing::instrument]
 async fn directories() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/directories.wasm"));
+    let template_id = executor.store_template("directories").await;
     let worker_id = executor.start_worker(&template_id, "directories-1").await;
 
     let result = executor
@@ -195,14 +191,8 @@ async fn directories() {
     };
     check!(tuple.values.len() == 4); //  tuple<u32, list<tuple<string, bool>>, list<tuple<string, bool>>, u32>;
 
-    check!(tuple.values[0] == common::val_u32(0)); // initial number of entries
-    check!(
-        tuple.values[1]
-            == common::val_list(vec![common::val_pair(
-                common::val_string("/test"),
-                common::val_bool(true)
-            )])
-    ); // contents of /
+    check!(tuple.values[0] == val_u32(0)); // initial number of entries
+    check!(tuple.values[1] == val_list(vec![val_pair(val_string("/test"), val_bool(true))])); // contents of /
 
     // contents of /test
     let Val {
@@ -214,24 +204,21 @@ async fn directories() {
     check!(
         list.values
             == vec![
-                common::val_pair(common::val_string("/test/dir1"), common::val_bool(true)),
-                common::val_pair(common::val_string("/test/dir2"), common::val_bool(true)),
-                common::val_pair(
-                    common::val_string("/test/hello.txt"),
-                    common::val_bool(false)
-                ),
+                val_pair(val_string("/test/dir1"), val_bool(true)),
+                val_pair(val_string("/test/dir2"), val_bool(true)),
+                val_pair(val_string("/test/hello.txt"), val_bool(false)),
             ]
     );
-    check!(tuple.values[3] == common::val_u32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+    check!(tuple.values[3] == val_u32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn directories_replay() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/directories.wasm"));
+    let template_id = executor.store_template("directories").await;
     let worker_id = executor.start_worker(&template_id, "directories-1").await;
 
     let result = executor
@@ -240,7 +227,7 @@ async fn directories_replay() {
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     // NOTE: if the directory listing would not be stable, replay would fail with divergence error
 
@@ -257,14 +244,8 @@ async fn directories_replay() {
     };
     check!(tuple.values.len() == 4); //  tuple<u32, list<tuple<string, bool>>, list<tuple<string, bool>>, u32>;
 
-    check!(tuple.values[0] == common::val_u32(0)); // initial number of entries
-    check!(
-        tuple.values[1]
-            == common::val_list(vec![common::val_pair(
-                common::val_string("/test"),
-                common::val_bool(true)
-            )])
-    ); // contents of /
+    check!(tuple.values[0] == val_u32(0)); // initial number of entries
+    check!(tuple.values[1] == val_list(vec![val_pair(val_string("/test"), val_bool(true))])); // contents of /
 
     // contents of /test
     let Val {
@@ -276,58 +257,52 @@ async fn directories_replay() {
     check!(
         list.values
             == vec![
-                common::val_pair(common::val_string("/test/dir1"), common::val_bool(true)),
-                common::val_pair(common::val_string("/test/dir2"), common::val_bool(true)),
-                common::val_pair(
-                    common::val_string("/test/hello.txt"),
-                    common::val_bool(false)
-                ),
+                val_pair(val_string("/test/dir1"), val_bool(true)),
+                val_pair(val_string("/test/dir2"), val_bool(true)),
+                val_pair(val_string("/test/hello.txt"), val_bool(false)),
             ]
     );
-    check!(tuple.values[3] == common::val_u32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+    check!(tuple.values[3] == val_u32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn file_write_read() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let template_id = executor.store_template("file-service").await;
     let worker_id = executor.start_worker(&template_id, "file-service-1").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file",
-            vec![
-                common::val_string("/testfile.txt"),
-                common::val_string("hello world"),
-            ],
+            vec![val_string("/testfile.txt"), val_string("hello world")],
         )
         .await
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/read-file",
-            vec![common::val_string("/testfile.txt")],
+            vec![val_string("/testfile.txt")],
         )
         .await
         .unwrap();
 
-    check!(result == vec![common::val_result(Ok(common::val_string("hello world")))]);
+    check!(result == vec![val_result(Ok(val_string("hello world")))]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn http_client() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = tokio::spawn(async move {
@@ -355,15 +330,14 @@ async fn http_client() {
             .await;
     });
 
-    let template_id = executor.store_template(Path::new("../test-templates/http-client.wasm"));
+    let template_id = executor.store_template("http-client").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "http-client-1", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "http-client-1", vec![], env)
+        .await;
     let rx = executor.capture_output(&worker_id).await;
 
     let result = executor
@@ -374,19 +348,14 @@ async fn http_client() {
     drop(rx);
     http_server.abort();
 
-    check!(
-        result
-            == Ok(vec![common::val_string(
-                "200 response is test-header test-body"
-            )])
-    );
+    check!(result == Ok(vec![val_string("200 response is test-header test-body")]));
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn http_client_using_reqwest() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
     let host_http_port = context.host_http_port();
@@ -419,14 +388,13 @@ async fn http_client_using_reqwest() {
             .await;
     });
 
-    let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let template_id = executor.store_template("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "http-client-reqwest-1", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "http-client-reqwest-1", vec![], env)
+        .await;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api/run", vec![])
@@ -437,7 +405,7 @@ async fn http_client_using_reqwest() {
     drop(executor);
     http_server.abort();
 
-    check!(result == vec![common::val_string("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }")]);
+    check!(result == vec![val_string("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }")]);
     check!(
         captured_body
             == "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
@@ -448,18 +416,16 @@ async fn http_client_using_reqwest() {
 #[tokio::test]
 #[tracing::instrument]
 async fn environment_service() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id =
-        executor.store_template(Path::new("../test-templates/environment-service.wasm"));
+    let template_id = executor.store_template("environment-service").await;
     let args = vec!["test-arg".to_string()];
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "environment-service-1", args, env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "environment-service-1", args, env)
+        .await;
 
     let args_result = executor
         .invoke_and_await(&worker_id, "golem:it/api/get-arguments", vec![])
@@ -473,31 +439,20 @@ async fn environment_service() {
 
     drop(executor);
 
-    check!(
-        args_result
-            == vec![common::val_result(Ok(common::val_list(vec![
-                common::val_string("test-arg")
-            ])))]
-    );
+    check!(args_result == vec![val_result(Ok(val_list(vec![val_string("test-arg")])))]);
     check!(
         env_result
-            == vec![common::val_result(Ok(common::val_list(vec![
-                common::val_pair(
-                    common::val_string("TEST_ENV"),
-                    common::val_string("test-value")
+            == vec![val_result(Ok(val_list(vec![
+                val_pair(val_string("TEST_ENV"), val_string("test-value")),
+                val_pair(
+                    val_string("GOLEM_WORKER_NAME"),
+                    val_string("environment-service-1")
                 ),
-                common::val_pair(
-                    common::val_string("GOLEM_WORKER_NAME"),
-                    common::val_string("environment-service-1")
+                val_pair(
+                    val_string("GOLEM_TEMPLATE_ID"),
+                    val_string(&template_id.to_string())
                 ),
-                common::val_pair(
-                    common::val_string("GOLEM_TEMPLATE_ID"),
-                    common::val_string(&template_id.to_string())
-                ),
-                common::val_pair(
-                    common::val_string("GOLEM_TEMPLATE_VERSION"),
-                    common::val_string("0")
-                ),
+                val_pair(val_string("GOLEM_TEMPLATE_VERSION"), val_string("0")),
             ])))]
     );
 }
@@ -505,8 +460,8 @@ async fn environment_service() {
 #[tokio::test]
 #[tracing::instrument]
 async fn http_client_response_persisted_between_invocations() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
     let host_http_port = context.host_http_port();
 
     let http_server = tokio::spawn(async move {
@@ -542,14 +497,13 @@ async fn http_client_response_persisted_between_invocations() {
             .await;
     });
 
-    let template_id = executor.store_template(Path::new("../test-templates/http-client.wasm"));
+    let template_id = executor.store_template("http-client").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "http-client-2", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "http-client-2", vec![], env)
+        .await;
     let rx = executor.capture_output(&worker_id).await;
 
     let _ = executor
@@ -560,7 +514,7 @@ async fn http_client_response_persisted_between_invocations() {
     drop(executor);
     drop(rx);
 
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
     let _rx = executor.capture_output(&worker_id).await;
 
     let result = executor
@@ -569,34 +523,29 @@ async fn http_client_response_persisted_between_invocations() {
 
     http_server.abort();
 
-    check!(
-        result
-            == Ok(vec![common::val_string(
-                "200 response is test-header test-body"
-            )])
-    );
+    check!(result == Ok(vec![val_string("200 response is test-header test-body")]));
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn sleep() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/clock-service.wasm"));
+    let template_id = executor.store_template("clock-service").await;
     let worker_id = executor.start_worker(&template_id, "clock-service-1").await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![common::val_u64(10)])
+        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![val_u64(10)])
         .await
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let start = Instant::now();
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![common::val_u64(0)])
+        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![val_u64(0)])
         .await
         .unwrap();
     let duration = start.elapsed();
@@ -607,21 +556,17 @@ async fn sleep() {
 #[tokio::test]
 #[tracing::instrument]
 async fn resuming_sleep() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/clock-service.wasm"));
+    let template_id = executor.store_template("clock-service").await;
     let worker_id = executor.start_worker(&template_id, "clock-service-2").await;
 
-    let mut executor_clone = executor.async_clone().await;
+    let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
     let fiber = spawn(async move {
         executor_clone
-            .invoke_and_await(
-                &worker_id_clone,
-                "golem:it/api/sleep",
-                vec![common::val_u64(10)],
-            )
+            .invoke_and_await(&worker_id_clone, "golem:it/api/sleep", vec![val_u64(10)])
             .await
             .unwrap();
     });
@@ -633,13 +578,13 @@ async fn resuming_sleep() {
 
     info!("Restarting worker...");
 
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     info!("Worker restarted");
 
     let start = Instant::now();
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![common::val_u64(10)])
+        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![val_u64(10)])
         .await
         .unwrap();
     let duration = start.elapsed();
@@ -651,29 +596,20 @@ async fn resuming_sleep() {
 #[tokio::test]
 #[tracing::instrument]
 async fn failing_worker() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id =
-        executor.store_template(Path::new("../test-templates/failing-component.wasm"));
+    let template_id = executor.store_template("failing-component").await;
     let worker_id = executor
         .start_worker(&template_id, "failing-worker-1")
         .await;
 
     let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api/add",
-            vec![common::val_u64(5)],
-        )
+        .invoke_and_await(&worker_id, "golem:component/api/add", vec![val_u64(5)])
         .await;
 
     let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api/add",
-            vec![common::val_u64(50)],
-        )
+        .invoke_and_await(&worker_id, "golem:component/api/add", vec![val_u64(50)])
         .await;
 
     let result3 = executor
@@ -685,77 +621,62 @@ async fn failing_worker() {
     check!(result1.is_ok());
     check!(result2.is_err());
     check!(result3.is_err());
-    check!(result2
-        .clone()
-        .err()
-        .unwrap()
-        .to_string()
+    check!(worker_error_message(&result2.clone().err().unwrap())
         .starts_with("Runtime error: error while executing at wasm backtrace:"));
-    check!(result2
-        .err()
-        .unwrap()
-        .to_string()
-        .contains("<unknown>!golem:component/api#add"));
-    check!(result3
-        .err()
-        .unwrap()
-        .to_string()
-        .starts_with("The previously invoked function failed"));
+    check!(
+        worker_error_message(&result2.err().unwrap()).contains("<unknown>!golem:component/api#add")
+    );
+    check!(worker_error_message(&result3.err().unwrap())
+        .starts_with("Previous invocation failed"));
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn file_service_write_direct() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let template_id = executor.store_template("file-service").await;
     let worker_id = executor.start_worker(&template_id, "file-service-2").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file-direct",
-            vec![
-                common::val_string("testfile.txt"),
-                common::val_string("hello world"),
-            ],
+            vec![val_string("testfile.txt"), val_string("hello world")],
         )
         .await
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/read-file",
-            vec![common::val_string("/testfile.txt")],
+            vec![val_string("/testfile.txt")],
         )
         .await
         .unwrap();
 
-    check!(result == vec![common::val_result(Ok(common::val_string("hello world")))]);
+    check!(result == vec![val_result(Ok(val_string("hello world")))]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn filesystem_write_replay_restores_file_times() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let template_id = executor.store_template("file-service").await;
     let worker_id = executor.start_worker(&template_id, "file-service-3").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file-direct",
-            vec![
-                common::val_string("testfile.txt"),
-                common::val_string("hello world"),
-            ],
+            vec![val_string("testfile.txt"), val_string("hello world")],
         )
         .await
         .unwrap();
@@ -763,19 +684,19 @@ async fn filesystem_write_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-file-info",
-            vec![common::val_string("/testfile.txt")],
+            vec![val_string("/testfile.txt")],
         )
         .await
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let times2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-file-info",
-            vec![common::val_string("/testfile.txt")],
+            vec![val_string("/testfile.txt")],
         )
         .await
         .unwrap();
@@ -786,38 +707,30 @@ async fn filesystem_write_replay_restores_file_times() {
 #[tokio::test]
 #[tracing::instrument]
 async fn filesystem_create_dir_replay_restores_file_times() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let template_id = executor.store_template("file-service").await;
     let worker_id = executor.start_worker(&template_id, "file-service-4").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![common::val_string("/test")],
+            vec![val_string("/test")],
         )
         .await
         .unwrap();
     let times1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api/get-info",
-            vec![common::val_string("/")],
-        )
+        .invoke_and_await(&worker_id, "golem:it/api/get-info", vec![val_string("/")])
         .await
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let times2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api/get-info",
-            vec![common::val_string("/")],
-        )
+        .invoke_and_await(&worker_id, "golem:it/api/get-info", vec![val_string("/")])
         .await
         .unwrap();
 
@@ -827,20 +740,17 @@ async fn filesystem_create_dir_replay_restores_file_times() {
 #[tokio::test]
 #[tracing::instrument]
 async fn file_hard_link() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let template_id = executor.store_template("file-service").await;
     let worker_id = executor.start_worker(&template_id, "file-service-5").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file",
-            vec![
-                common::val_string("/testfile.txt"),
-                common::val_string("hello world"),
-            ],
+            vec![val_string("/testfile.txt"), val_string("hello world")],
         )
         .await
         .unwrap();
@@ -849,10 +759,7 @@ async fn file_hard_link() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-link",
-            vec![
-                common::val_string("/testfile.txt"),
-                common::val_string("/link.txt"),
-            ],
+            vec![val_string("/testfile.txt"), val_string("/link.txt")],
         )
         .await
         .unwrap();
@@ -861,28 +768,28 @@ async fn file_hard_link() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/read-file",
-            vec![common::val_string("/link.txt")],
+            vec![val_string("/link.txt")],
         )
         .await
         .unwrap();
 
-    check!(result == vec![common::val_result(Ok(common::val_string("hello world")))]);
+    check!(result == vec![val_result(Ok(val_string("hello world")))]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn filesystem_link_replay_restores_file_times() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let template_id = executor.store_template("file-service").await;
     let worker_id = executor.start_worker(&template_id, "file-service-6").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![common::val_string("/test")],
+            vec![val_string("/test")],
         )
         .await
         .unwrap();
@@ -890,7 +797,7 @@ async fn filesystem_link_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![common::val_string("/test2")],
+            vec![val_string("/test2")],
         )
         .await
         .unwrap();
@@ -898,10 +805,7 @@ async fn filesystem_link_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file",
-            vec![
-                common::val_string("/test/testfile.txt"),
-                common::val_string("hello world"),
-            ],
+            vec![val_string("/test/testfile.txt"), val_string("hello world")],
         )
         .await
         .unwrap();
@@ -910,8 +814,8 @@ async fn filesystem_link_replay_restores_file_times() {
             &worker_id,
             "golem:it/api/create-link",
             vec![
-                common::val_string("/test/testfile.txt"),
-                common::val_string("/test2/link.txt"),
+                val_string("/test/testfile.txt"),
+                val_string("/test2/link.txt"),
             ],
         )
         .await
@@ -921,7 +825,7 @@ async fn filesystem_link_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test2/link.txt")],
+            vec![val_string("/test2/link.txt")],
         )
         .await
         .unwrap();
@@ -929,19 +833,19 @@ async fn filesystem_link_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test2")],
+            vec![val_string("/test2")],
         )
         .await
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let times_dir_2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test2")],
+            vec![val_string("/test2")],
         )
         .await
         .unwrap();
@@ -949,7 +853,7 @@ async fn filesystem_link_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test2/link.txt")],
+            vec![val_string("/test2/link.txt")],
         )
         .await
         .unwrap();
@@ -961,17 +865,17 @@ async fn filesystem_link_replay_restores_file_times() {
 #[tokio::test]
 #[tracing::instrument]
 async fn filesystem_remove_dir_replay_restores_file_times() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let template_id = executor.store_template("file-service").await;
     let worker_id = executor.start_worker(&template_id, "file-service-7").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![common::val_string("/test")],
+            vec![val_string("/test")],
         )
         .await
         .unwrap();
@@ -979,7 +883,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![common::val_string("/test/a")],
+            vec![val_string("/test/a")],
         )
         .await
         .unwrap();
@@ -987,7 +891,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/remove-directory",
-            vec![common::val_string("/test/a")],
+            vec![val_string("/test/a")],
         )
         .await
         .unwrap();
@@ -995,19 +899,19 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test")],
+            vec![val_string("/test")],
         )
         .await
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let times2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test")],
+            vec![val_string("/test")],
         )
         .await
         .unwrap();
@@ -1018,17 +922,17 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
 #[tokio::test]
 #[tracing::instrument]
 async fn filesystem_symlink_replay_restores_file_times() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let template_id = executor.store_template("file-service").await;
     let worker_id = executor.start_worker(&template_id, "file-service-8").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![common::val_string("/test")],
+            vec![val_string("/test")],
         )
         .await
         .unwrap();
@@ -1036,7 +940,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![common::val_string("/test2")],
+            vec![val_string("/test2")],
         )
         .await
         .unwrap();
@@ -1044,10 +948,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file-direct",
-            vec![
-                common::val_string("test/testfile.txt"),
-                common::val_string("hello world"),
-            ],
+            vec![val_string("test/testfile.txt"), val_string("hello world")],
         )
         .await
         .unwrap();
@@ -1056,8 +957,8 @@ async fn filesystem_symlink_replay_restores_file_times() {
             &worker_id,
             "golem:it/api/create-sym-link",
             vec![
-                common::val_string("../test/testfile.txt"),
-                common::val_string("/test2/link.txt"),
+                val_string("../test/testfile.txt"),
+                val_string("/test2/link.txt"),
             ],
         )
         .await
@@ -1067,7 +968,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test2/link.txt")],
+            vec![val_string("/test2/link.txt")],
         )
         .await
         .unwrap();
@@ -1075,20 +976,20 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test2")],
+            vec![val_string("/test2")],
         )
         .await
         .unwrap();
 
     drop(executor);
 
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let times_dir_2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test2")],
+            vec![val_string("/test2")],
         )
         .await
         .unwrap();
@@ -1096,7 +997,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test2/link.txt")],
+            vec![val_string("/test2/link.txt")],
         )
         .await
         .unwrap();
@@ -1108,17 +1009,17 @@ async fn filesystem_symlink_replay_restores_file_times() {
 #[tokio::test]
 #[tracing::instrument]
 async fn filesystem_rename_replay_restores_file_times() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let template_id = executor.store_template("file-service").await;
     let worker_id = executor.start_worker(&template_id, "file-service-9").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![common::val_string("/test")],
+            vec![val_string("/test")],
         )
         .await
         .unwrap();
@@ -1126,7 +1027,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![common::val_string("/test2")],
+            vec![val_string("/test2")],
         )
         .await
         .unwrap();
@@ -1134,10 +1035,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file",
-            vec![
-                common::val_string("/test/testfile.txt"),
-                common::val_string("hello world"),
-            ],
+            vec![val_string("/test/testfile.txt"), val_string("hello world")],
         )
         .await
         .unwrap();
@@ -1146,8 +1044,8 @@ async fn filesystem_rename_replay_restores_file_times() {
             &worker_id,
             "golem:it/api/rename-file",
             vec![
-                common::val_string("/test/testfile.txt"),
-                common::val_string("/test2/link.txt"),
+                val_string("/test/testfile.txt"),
+                val_string("/test2/link.txt"),
             ],
         )
         .await
@@ -1157,7 +1055,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test")],
+            vec![val_string("/test")],
         )
         .await
         .unwrap();
@@ -1165,7 +1063,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test2")],
+            vec![val_string("/test2")],
         )
         .await
         .unwrap();
@@ -1173,19 +1071,19 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test2/link.txt")],
+            vec![val_string("/test2/link.txt")],
         )
         .await
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let times_srcdir_2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test")],
+            vec![val_string("/test")],
         )
         .await
         .unwrap();
@@ -1193,7 +1091,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test2")],
+            vec![val_string("/test2")],
         )
         .await
         .unwrap();
@@ -1201,7 +1099,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test2/link.txt")],
+            vec![val_string("/test2/link.txt")],
         )
         .await
         .unwrap();
@@ -1214,17 +1112,17 @@ async fn filesystem_rename_replay_restores_file_times() {
 #[tokio::test]
 #[tracing::instrument]
 async fn filesystem_remove_file_replay_restores_file_times() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let template_id = executor.store_template("file-service").await;
     let worker_id = executor.start_worker(&template_id, "file-service-10").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![common::val_string("/test")],
+            vec![val_string("/test")],
         )
         .await
         .unwrap();
@@ -1232,10 +1130,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file",
-            vec![
-                common::val_string("/test/testfile.txt"),
-                common::val_string("hello world"),
-            ],
+            vec![val_string("/test/testfile.txt"), val_string("hello world")],
         )
         .await
         .unwrap();
@@ -1243,7 +1138,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/remove-file",
-            vec![common::val_string("/test/testfile.txt")],
+            vec![val_string("/test/testfile.txt")],
         )
         .await
         .unwrap();
@@ -1251,19 +1146,19 @@ async fn filesystem_remove_file_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test")],
+            vec![val_string("/test")],
         )
         .await
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let times2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![common::val_string("/test")],
+            vec![val_string("/test")],
         )
         .await
         .unwrap();
@@ -1274,20 +1169,17 @@ async fn filesystem_remove_file_replay_restores_file_times() {
 #[tokio::test]
 #[tracing::instrument]
 async fn filesystem_write_via_stream_replay_restores_file_times() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let template_id = executor.store_template("file-service").await;
     let worker_id = executor.start_worker(&template_id, "file-service-3").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file",
-            vec![
-                common::val_string("/testfile.txt"),
-                common::val_string("hello world"),
-            ],
+            vec![val_string("/testfile.txt"), val_string("hello world")],
         )
         .await
         .unwrap();
@@ -1295,19 +1187,19 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-file-info",
-            vec![common::val_string("/testfile.txt")],
+            vec![val_string("/testfile.txt")],
         )
         .await
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let times2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-file-info",
-            vec![common::val_string("/testfile.txt")],
+            vec![val_string("/testfile.txt")],
         )
         .await
         .unwrap();
@@ -1318,20 +1210,17 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
 #[tokio::test]
 #[tracing::instrument]
 async fn filesystem_metadata_hash() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/file-service.wasm"));
+    let template_id = executor.store_template("file-service").await;
     let worker_id = executor.start_worker(&template_id, "file-service-3").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file-direct",
-            vec![
-                common::val_string("testfile.txt"),
-                common::val_string("hello world"),
-            ],
+            vec![val_string("testfile.txt"), val_string("hello world")],
         )
         .await
         .unwrap();
@@ -1339,19 +1228,19 @@ async fn filesystem_metadata_hash() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/hash",
-            vec![common::val_string("testfile.txt")],
+            vec![val_string("testfile.txt")],
         )
         .await
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let hash2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/hash",
-            vec![common::val_string("testfile.txt")],
+            vec![val_string("testfile.txt")],
         )
         .await
         .unwrap();
@@ -1362,10 +1251,10 @@ async fn filesystem_metadata_hash() {
 #[tokio::test]
 #[tracing::instrument]
 async fn ip_address_resolve() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/networking.wasm"));
+    let template_id = executor.store_template("networking").await;
     let worker_id = executor
         .start_worker(&template_id, "ip-address-resolve-1")
         .await;
@@ -1376,7 +1265,7 @@ async fn ip_address_resolve() {
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     // If the recovery succeeds, that means that the replayed IP address resolution produced the same result as expected
 

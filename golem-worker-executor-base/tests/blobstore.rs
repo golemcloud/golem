@@ -1,15 +1,14 @@
-use crate::common;
+use crate::common::{start, TestContext};
 use assert2::check;
-use std::path::Path;
+use golem_test_framework::dsl::{val_bool, val_string, TestDsl};
 
 #[tokio::test]
 #[tracing::instrument]
 async fn blobstore_exists_return_true_if_the_container_was_created() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id =
-        executor.store_template(Path::new("../test-templates/blob-store-service.wasm"));
+    let template_id = executor.store_template("blob-store-service").await;
     let worker_name = "blob-store-service-1";
     let worker_id = executor.start_worker(&template_id, worker_name).await;
 
@@ -17,7 +16,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-container",
-            vec![common::val_string(&format!(
+            vec![val_string(&format!(
                 "{template_id}-{worker_name}-container"
             ))],
         )
@@ -28,7 +27,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/container-exists",
-            vec![common::val_string(&format!(
+            vec![val_string(&format!(
                 "{template_id}-{worker_name}-container"
             ))],
         )
@@ -37,17 +36,16 @@ async fn blobstore_exists_return_true_if_the_container_was_created() {
 
     drop(executor);
 
-    check!(result == vec![common::val_bool(true)]);
+    check!(result == vec![val_bool(true)]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn blobstore_exists_return_false_if_the_container_was_not_created() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id =
-        executor.store_template(Path::new("../test-templates/blob-store-service.wasm"));
+    let template_id = executor.store_template("blob-store-service").await;
     let worker_name = "blob-store-service-1";
     let worker_id = executor.start_worker(&template_id, worker_name).await;
 
@@ -55,7 +53,7 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/container-exists",
-            vec![common::val_string(&format!(
+            vec![val_string(&format!(
                 "{template_id}-{worker_name}-container"
             ))],
         )
@@ -64,5 +62,5 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created() {
 
     drop(executor);
 
-    check!(result == vec![common::val_bool(false)]);
+    check!(result == vec![val_bool(false)]);
 }

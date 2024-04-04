@@ -14,4 +14,9 @@
 
 /// Individual components of an integration test such as services, databases etc.
 pub mod components;
+
+/// Different ways to configure the launch of test components
 pub mod config;
+
+/// Higher level DSL for expressing common steps of tests and benchmarks
+pub mod dsl;

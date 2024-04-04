@@ -1,39 +1,22 @@
 use anyhow::Error;
 use async_trait::async_trait;
 use ctor::ctor;
-use golem_wasm_ast::analysis::AnalysisContext;
-use golem_wasm_ast::component::Component;
-use golem_wasm_ast::IgnoreAllButMetadata;
-use golem_wasm_rpc::protobuf::{
-    val, Val, ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple,
-};
+
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use prometheus::Registry;
-use std::collections::HashMap;
-use std::path::Path;
+
+use std::path::{Path, PathBuf};
 use std::string::FromUtf8Error;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, RwLock};
-use std::{env, panic};
 
-use crate::CONFIG;
-use golem_api_grpc::proto::golem::worker::{
-    log_event, worker_execution_error, CallingConvention, LogEvent, StdErrLog, StdOutLog,
-    WorkerExecutionError,
-};
+use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
+
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
-use golem_api_grpc::proto::golem::workerexecutor::{
-    create_worker_response, get_invocation_key_response, get_running_worker_metadatas_response,
-    get_worker_metadata_response, get_worker_metadatas_response, interrupt_worker_response,
-    invoke_and_await_worker_response, invoke_worker_response, resume_worker_response,
-    ConnectWorkerRequest, CreateWorkerRequest, GetInvocationKeyRequest,
-    GetRunningWorkerMetadatasRequest, GetRunningWorkerMetadatasSuccessResponse,
-    GetWorkerMetadatasRequest, GetWorkerMetadatasSuccessResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitWorkerRequest, InvokeWorkerRequest, ResumeWorkerRequest,
-};
+
 use golem_common::model::{
-    AccountId, InvocationKey, TemplateId, Timestamp, VersionedWorkerId, WorkerFilter, WorkerId,
+    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerFilter, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
@@ -73,16 +56,26 @@ use golem_worker_executor_base::workerctx::{
     StatusManagement, WorkerCtx,
 };
 use golem_worker_executor_base::Bootstrap;
-use serde_json::Value as JsonValue;
+
 use tokio::runtime::Handle;
-use tokio::select;
-use tokio::sync::mpsc::UnboundedReceiver;
+
 use tokio::task::JoinHandle;
 
 use golem::api;
 use golem_common::config::RedisConfig;
-use golem_common::model::regions::DeletedRegions;
+
+use golem_api_grpc::proto::golem::workerexecutor::{
+    get_running_worker_metadatas_response, get_worker_metadatas_response,
+    GetRunningWorkerMetadatasRequest, GetRunningWorkerMetadatasSuccessResponse,
+    GetWorkerMetadatasRequest, GetWorkerMetadatasSuccessResponse,
+};
+use golem_test_framework::components::rdb::Rdb;
+use golem_test_framework::components::redis::Redis;
+use golem_test_framework::components::redis_monitor::RedisMonitor;
+use golem_test_framework::components::shard_manager::ShardManager;
+use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
 use golem_test_framework::config::TestDependencies;
+use golem_test_framework::dsl::to_worker_metadata;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
@@ -91,188 +84,31 @@ use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
 use tonic::transport::Channel;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 use uuid::Uuid;
 use wasmtime::component::{Instance, Linker, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 
 pub struct TestWorkerExecutor {
-    pub client: WorkerExecutorClient<Channel>,
     handle: Option<JoinHandle<Result<(), String>>>,
-    grpc_port: u16,
+    deps: WorkerExecutorPerTestDependencies,
 }
 
 impl TestWorkerExecutor {
-    pub fn store_template(&self, source: &Path) -> TemplateId {
-        let template_id = self.store_template_unverified(source);
-        dump_template_info(source);
-        template_id
-    }
-
-    pub fn store_template_unverified(&self, source: &Path) -> TemplateId {
-        let uuid = Uuid::new_v4();
-
-        let cwd = env::current_dir().expect("Failed to get current directory");
-        debug!("Current directory: {cwd:?}");
-
-        let target_dir = cwd.join(Path::new("data/templates"));
-        debug!("Local template store: {target_dir:?}");
-        if !target_dir.exists() {
-            std::fs::create_dir_all(&target_dir)
-                .expect("Failed to create template store directory");
-        }
-
-        if !source.exists() {
-            panic!("Source file does not exist: {source:?}");
-        }
-
-        let _ = std::fs::copy(source, target_dir.join(format!("{uuid}-0.wasm")))
-            .expect("Failed to copy WASM to the local template store");
-
-        TemplateId(uuid)
-    }
-
-    pub fn update_template(&self, template_id: &TemplateId, source: &Path) -> i32 {
-        let cwd = env::current_dir().expect("Failed to get current directory");
-        debug!("Current directory: {cwd:?}");
-
-        let target_dir = cwd.join(Path::new("data/templates"));
-        debug!("Local template store: {target_dir:?}");
-        if !target_dir.exists() {
-            std::fs::create_dir_all(&target_dir)
-                .expect("Failed to create template store directory");
-        }
-
-        if !source.exists() {
-            panic!("Source file does not exist: {source:?}");
-        }
-
-        let template_id_str = template_id.to_string();
-        let mut versions = std::fs::read_dir(&target_dir)
-            .expect("Failed to read template store directory")
-            .filter_map(|entry| {
-                let entry = entry.unwrap();
-                let path = entry.path();
-                let file_name = path.file_name().unwrap().to_str().unwrap();
-
-                if file_name.starts_with(&template_id_str) && file_name.ends_with(".wasm") {
-                    let version_part = file_name.split('-').last().unwrap();
-                    let version_part = version_part[..version_part.len() - 5].to_string();
-                    version_part.parse::<i32>().ok()
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<i32>>();
-        versions.sort();
-        let new_version = versions.last().unwrap_or(&-1) + 1;
-        let target = target_dir.join(format!("{template_id}-{new_version}.wasm"));
-
-        let _ =
-            std::fs::copy(source, target).expect("Failed to copy WASM to the local template store");
-
-        new_version
-    }
-
-    pub async fn start_worker(&mut self, template_id: &TemplateId, name: &str) -> WorkerId {
-        self.start_worker_versioned(template_id, 0, name).await
-    }
-
-    pub async fn try_start_worker(
-        &mut self,
-        template_id: &TemplateId,
-        name: &str,
-    ) -> Result<WorkerId, worker_execution_error::Error> {
-        self.try_start_worker_versioned(template_id, 0, name, vec![], HashMap::new())
-            .await
-    }
-
-    pub async fn start_worker_versioned(
-        &mut self,
-        template_id: &TemplateId,
-        template_version: i32,
-        name: &str,
-    ) -> WorkerId {
-        self.try_start_worker_versioned(template_id, template_version, name, vec![], HashMap::new())
-            .await
-            .expect("Failed to start worker")
-    }
-
-    pub async fn try_start_worker_versioned(
-        &mut self,
-        template_id: &TemplateId,
-        template_version: i32,
-        name: &str,
-        args: Vec<String>,
-        env: HashMap<String, String>,
-    ) -> Result<WorkerId, worker_execution_error::Error> {
-        let worker_id = WorkerId {
-            template_id: template_id.clone(),
-            worker_name: name.to_string(),
-        };
-        let response = self
-            .client
-            .create_worker(CreateWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                template_version,
-                args,
-                env,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-                account_limits: None,
-            })
-            .await
-            .expect("Failed to start worker")
-            .into_inner();
-
-        match response.result {
-            None => panic!("No response from create_worker"),
-            Some(create_worker_response::Result::Success(_)) => Ok(worker_id),
-            Some(create_worker_response::Result::Failure(WorkerExecutionError {
-                error: Some(error),
-            })) => Err(error),
-            Some(create_worker_response::Result::Failure(error)) => {
-                panic!("Failed to start worker: {error:?}")
-            }
-        }
-    }
-
-    pub async fn get_worker_metadata(&mut self, worker_id: &WorkerId) -> Option<WorkerMetadata> {
-        let worker_id: golem_api_grpc::proto::golem::worker::WorkerId = worker_id.clone().into();
-        let response = self
-            .client
-            .get_worker_metadata(worker_id)
-            .await
-            .expect("Failed to get worker metadata")
-            .into_inner();
-
-        match response.result {
-            None => panic!("No response from connect_worker"),
-            Some(get_worker_metadata_response::Result::Success(metadata)) => {
-                Some(to_worker_metadata(&metadata))
-            }
-            Some(get_worker_metadata_response::Result::Failure(WorkerExecutionError {
-                error: Some(worker_execution_error::Error::WorkerNotFound(_)),
-            })) => None,
-            Some(get_worker_metadata_response::Result::Failure(error)) => {
-                panic!("Failed to get worker metadata: {error:?}")
-            }
-        }
+    pub async fn client(&self) -> WorkerExecutorClient<Channel> {
+        self.deps.worker_executor.client().await
     }
 
     pub async fn get_running_worker_metadatas(
-        &mut self,
+        &self,
         template_id: &TemplateId,
         filter: Option<WorkerFilter>,
     ) -> Vec<WorkerMetadata> {
         let template_id: golem_api_grpc::proto::golem::template::TemplateId =
             template_id.clone().into();
         let response = self
-            .client
+            .client()
+            .await
             .get_running_worker_metadatas(GetRunningWorkerMetadatasRequest {
                 template_id: Some(template_id),
                 filter: filter.map(|f| f.into()),
@@ -294,7 +130,7 @@ impl TestWorkerExecutor {
     }
 
     pub async fn get_worker_metadatas(
-        &mut self,
+        &self,
         template_id: &TemplateId,
         filter: Option<WorkerFilter>,
         cursor: u64,
@@ -304,7 +140,8 @@ impl TestWorkerExecutor {
         let template_id: golem_api_grpc::proto::golem::template::TemplateId =
             template_id.clone().into();
         let response = self
-            .client
+            .client()
+            .await
             .get_worker_metadatas(GetWorkerMetadatasRequest {
                 template_id: Some(template_id),
                 filter: filter.map(|f| f.into()),
@@ -330,491 +167,59 @@ impl TestWorkerExecutor {
             }
         }
     }
+}
 
-    pub async fn delete_worker(&mut self, worker_id: &WorkerId) {
-        let worker_id: golem_api_grpc::proto::golem::worker::WorkerId = worker_id.clone().into();
-        self.client.delete_worker(worker_id).await.unwrap();
-    }
-
-    pub async fn get_invocation_key(&mut self, worker_id: &WorkerId) -> InvocationKey {
-        match self
-            .client
-            .get_invocation_key(GetInvocationKeyRequest {
-                worker_id: Some(worker_id.clone().into()),
-            })
-            .await
-            .expect("Failed to get invocation key")
-            .into_inner()
-            .result
-            .expect("Invocation key response is empty")
-        {
-            get_invocation_key_response::Result::Success(response) => response
-                .invocation_key
-                .expect("Invocation key field is empty"),
-            get_invocation_key_response::Result::Failure(error) => {
-                panic!("Failed to get invocation key: {error:?}")
-            }
-        }
-        .into()
-    }
-
-    pub async fn invoke(
-        &mut self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<Val>,
-    ) -> Result<(), GolemError> {
-        let invoke_response = self
-            .client
-            .invoke_worker(InvokeWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                name: function_name.to_string(),
-                input: params,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-                account_limits: None,
-            })
-            .await
-            .expect("Failed to invoke worker")
-            .into_inner();
-
-        match invoke_response.result {
-            None => panic!("No response from invoke_and_await_worker"),
-            Some(invoke_worker_response::Result::Success(_)) => Ok(()),
-            Some(invoke_worker_response::Result::Failure(error)) => {
-                Err(error.try_into().expect("Failed to convert error"))
-            }
-        }
-    }
-
-    pub async fn invoke_and_await(
-        &mut self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<Val>,
-    ) -> Result<Vec<Val>, GolemError> {
-        self.invoke_and_await_custom(
-            worker_id,
-            function_name,
-            params,
-            CallingConvention::Component,
-        )
-        .await
-    }
-
-    pub async fn invoke_and_await_with_key(
-        &mut self,
-        worker_id: &WorkerId,
-        invocation_key: &InvocationKey,
-        function_name: &str,
-        params: Vec<Val>,
-    ) -> Result<Vec<Val>, GolemError> {
-        self.invoke_and_await_custom_with_key(
-            worker_id,
-            invocation_key,
-            function_name,
-            params,
-            CallingConvention::Component,
-        )
-        .await
-    }
-
-    pub async fn invoke_and_await_stdio(
-        &mut self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: JsonValue,
-    ) -> Result<JsonValue, GolemError> {
-        let json_string = params.to_string();
-        self.invoke_and_await_custom(
-            worker_id,
-            function_name,
-            vec![val_string(&json_string)],
-            CallingConvention::Stdio,
-        )
-            .await
-            .and_then(|vals| {
-                if vals.len() == 1 {
-                    let value_opt = &vals[0].val;
-
-                    match value_opt {
-                        Some(val::Val::String(s)) => {
-                            if s.is_empty() {
-                                Ok(JsonValue::Null)
-                            } else {
-                                let result: JsonValue = serde_json::from_str(s).unwrap_or(JsonValue::String(s.to_string()));
-                                Ok(result)
-                            }
-                        }
-                        _ => Err(GolemError::ValueMismatch { details: "Expecting a single string as the result value when using stdio calling convention".to_string() }),
-                    }
-                } else {
-                    Err(GolemError::ValueMismatch { details: "Expecting a single string as the result value when using stdio calling convention".to_string() })
-                }
-            })
-    }
-
-    pub async fn invoke_and_await_stdio_eventloop(
-        &mut self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: JsonValue,
-    ) -> Result<JsonValue, GolemError> {
-        let json_string = params.to_string();
-        self.invoke_and_await_custom(
-            worker_id,
-            function_name,
-            vec![val_string(&json_string)],
-            CallingConvention::StdioEventloop,
-        )
-            .await
-            .and_then(|vals| {
-                if vals.len() == 1 {
-                    let value_opt = &vals[0].val;
-
-                    match value_opt {
-                        Some(val::Val::String(s)) => {
-                            if s.is_empty() {
-                                Ok(JsonValue::Null)
-                            } else {
-                                let result: JsonValue = serde_json::from_str(s).unwrap_or(JsonValue::String(s.to_string()));
-                                Ok(result)
-                            }
-                        }
-                        _ => Err(GolemError::ValueMismatch { details: "Expecting a single string as the result value when using stdio calling convention".to_string() }),
-                    }
-                } else {
-                    Err(GolemError::ValueMismatch { details: "Expecting a single string as the result value when using stdio calling convention".to_string() })
-                }
-            })
-    }
-
-    pub async fn invoke_and_await_custom(
-        &mut self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<Val>,
-        cc: CallingConvention,
-    ) -> Result<Vec<Val>, GolemError> {
-        let invocation_key = self.get_invocation_key(worker_id).await;
-        self.invoke_and_await_custom_with_key(worker_id, &invocation_key, function_name, params, cc)
-            .await
-    }
-
-    pub async fn invoke_and_await_custom_with_key(
-        &mut self,
-        worker_id: &WorkerId,
-        invocation_key: &InvocationKey,
-        function_name: &str,
-        params: Vec<Val>,
-        cc: CallingConvention,
-    ) -> Result<Vec<Val>, GolemError> {
-        let invoke_response = self
-            .client
-            .invoke_and_await_worker(InvokeAndAwaitWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                name: function_name.to_string(),
-                input: params,
-                invocation_key: Some(invocation_key.clone().into()),
-                calling_convention: cc.into(),
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-                account_limits: None,
-            })
-            .await
-            .expect("Failed to invoke worker")
-            .into_inner();
-
-        match invoke_response.result {
-            None => panic!("No response from invoke_and_await_worker"),
-            Some(invoke_and_await_worker_response::Result::Success(response)) => {
-                Ok(response.output)
-            }
-            Some(invoke_and_await_worker_response::Result::Failure(error)) => {
-                Err(error.try_into().expect("Failed to convert error"))
-            }
-        }
-    }
-
-    pub async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut cloned_client = self.client.clone();
-        let worker_id = worker_id.clone();
-        tokio::spawn(async move {
-            let mut response = cloned_client
-                .connect_worker(ConnectWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
-                    account_limits: None,
-                })
-                .await
-                .expect("Failed to connect worker")
-                .into_inner();
-
-            while let Some(event) = response.message().await.expect("Failed to get message") {
-                debug!("Received event: {:?}", event);
-                tx.send(event).expect("Failed to send event");
-            }
-
-            debug!("Finished receiving events");
-        });
-
-        rx
-    }
-
-    pub async fn capture_output_forever(
-        &self,
-        worker_id: &WorkerId,
-    ) -> (
-        UnboundedReceiver<Option<LogEvent>>,
-        tokio::sync::oneshot::Sender<()>,
-    ) {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut cloned_client = self.client.clone();
-        let worker_id = worker_id.clone();
-        let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            let mut abort = false;
-            while !abort {
-                let mut response = cloned_client
-                    .connect_worker(ConnectWorkerRequest {
-                        worker_id: Some(worker_id.clone().into()),
-                        account_id: Some(
-                            AccountId {
-                                value: "test-account".to_string(),
-                            }
-                            .into(),
-                        ),
-                        account_limits: None,
-                    })
-                    .await
-                    .expect("Failed to connect worker")
-                    .into_inner();
-
-                loop {
-                    select! {
-                        msg = response.message() => {
-                            match msg {
-                                Ok(Some(event)) =>  {
-                                    debug!("Received event: {:?}", event);
-                                    tx.send(Some(event)).expect("Failed to send event");
-                                }
-                                Ok(None) => {
-                                    break;
-                                }
-                                Err(e) => {
-                                    panic!("Failed to get message: {:?}", e);
-                                }
-                            }
-                        }
-                        _ = (&mut abort_rx) => {
-                            abort = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            tx.send(None).expect("Failed to send event");
-            debug!("Finished receiving events");
-        });
-
-        (rx, abort_tx)
-    }
-
-    pub async fn capture_output_with_termination(
-        &self,
-        worker_id: &WorkerId,
-    ) -> UnboundedReceiver<Option<LogEvent>> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut cloned_client = self.client.clone();
-        let worker_id = worker_id.clone();
-        tokio::spawn(async move {
-            let mut response = cloned_client
-                .connect_worker(ConnectWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
-                    account_limits: None,
-                })
-                .await
-                .expect("Failed to connect worker")
-                .into_inner();
-
-            while let Some(event) = response.message().await.expect("Failed to get message") {
-                debug!("Received event: {:?}", event);
-                tx.send(Some(event)).expect("Failed to send event");
-            }
-
-            debug!("Finished receiving events");
-            tx.send(None).expect("Failed to send termination event");
-        });
-
-        rx
-    }
-
-    pub async fn log_output(&self, worker_id: &WorkerId) {
-        let mut cloned_client = self.client.clone();
-        let worker_id = worker_id.clone();
-        tokio::spawn(async move {
-            let mut response = cloned_client
-                .connect_worker(ConnectWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
-                    account_limits: None,
-                })
-                .await
-                .expect("Failed to connect worker")
-                .into_inner();
-
-            while let Some(event) = response.message().await.expect("Failed to get message") {
-                info!("Received event: {:?}", event);
-            }
-        });
-    }
-
-    pub async fn resume(&mut self, worker_id: &WorkerId) {
-        let response = self
-            .client
-            .resume_worker(ResumeWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-            })
-            .await
-            .expect("Failed to resume worker")
-            .into_inner();
-
-        match response.result {
-            None => panic!("No response from connect_worker"),
-            Some(resume_worker_response::Result::Success(_)) => {}
-            Some(resume_worker_response::Result::Failure(error)) => {
-                panic!("Failed to connect worker: {error:?}")
-            }
-        }
-    }
-
-    pub async fn interrupt(&mut self, worker_id: &WorkerId) {
-        let response = self
-            .client
-            .interrupt_worker(InterruptWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                recover_immediately: false,
-            })
-            .await
-            .expect("Failed to interrupt worker")
-            .into_inner();
-
-        match response {
-            InterruptWorkerResponse {
-                result: Some(interrupt_worker_response::Result::Success(_)),
-            } => {}
-            InterruptWorkerResponse {
-                result: Some(interrupt_worker_response::Result::Failure(error)),
-            } => panic!("Failed to interrupt worker: {error:?}"),
-            _ => panic!("Failed to interrupt worker: unknown error"),
-        }
-    }
-
-    pub async fn simulated_crash(&mut self, worker_id: &WorkerId) {
-        let response = self
-            .client
-            .interrupt_worker(InterruptWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                recover_immediately: true,
-            })
-            .await
-            .expect("Failed to crash worker")
-            .into_inner();
-
-        match response {
-            InterruptWorkerResponse {
-                result: Some(interrupt_worker_response::Result::Success(_)),
-            } => {}
-            InterruptWorkerResponse {
-                result: Some(interrupt_worker_response::Result::Failure(error)),
-            } => panic!("Failed to crash worker: {error:?}"),
-            _ => panic!("Failed to crash worker: unknown error"),
-        }
-    }
-
-    pub async fn async_clone(&self) -> Self {
-        let clone_info = self.clone_info();
-        Self::from_clone_info(clone_info).await
-    }
-
-    pub fn clone_info(&self) -> TestWorkerExecutorClone {
-        TestWorkerExecutorClone {
-            grpc_port: self.grpc_port,
-        }
-    }
-
-    pub async fn from_clone_info(clone_info: TestWorkerExecutorClone) -> Self {
-        let new_client =
-            WorkerExecutorClient::connect(format!("http://127.0.0.1:{}", clone_info.grpc_port))
-                .await
-                .expect("Failed to connect to worker executor");
+impl Clone for TestWorkerExecutor {
+    fn clone(&self) -> Self {
         Self {
-            client: new_client,
             handle: None,
-            grpc_port: clone_info.grpc_port,
+            deps: self.deps.clone(),
         }
     }
 }
 
-fn to_worker_metadata(
-    metadata: &golem_api_grpc::proto::golem::worker::WorkerMetadata,
-) -> WorkerMetadata {
-    WorkerMetadata {
-        worker_id: VersionedWorkerId {
-            worker_id: metadata
-                .worker_id
-                .clone()
-                .expect("no worker_id")
-                .clone()
-                .try_into()
-                .expect("invalid worker_id"),
-            template_version: metadata.template_version,
-        },
-        args: metadata.args.clone(),
-        env: metadata
-            .env
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect::<Vec<_>>(),
-        account_id: metadata
-            .account_id
-            .clone()
-            .expect("no account_id")
-            .clone()
-            .into(),
-        created_at: Timestamp::now_utc(), // TODO: set once it's exposed via gRPC
-        last_known_status: WorkerStatusRecord {
-            oplog_idx: 0,
-            status: metadata.status.try_into().expect("invalid status"),
-            overridden_retry_config: None, // not passed through gRPC
-            deleted_regions: DeletedRegions::new(),
-        },
+impl TestDependencies for TestWorkerExecutor {
+    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
+        self.deps.rdb()
+    }
+
+    fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static> {
+        self.deps.redis()
+    }
+
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
+        self.deps.redis_monitor()
+    }
+
+    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static> {
+        self.deps.shard_manager()
+    }
+
+    fn template_directory(&self) -> PathBuf {
+        self.deps.template_directory()
+    }
+
+    fn template_service(
+        &self,
+    ) -> Arc<
+        dyn golem_test_framework::components::template_service::TemplateService
+            + Send
+            + Sync
+            + 'static,
+    > {
+        self.deps.template_service()
+    }
+
+    fn worker_service(
+        &self,
+    ) -> Arc<
+        dyn golem_test_framework::components::worker_service::WorkerService + Send + Sync + 'static,
+    > {
+        self.deps.worker_service()
+    }
+
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
+        self.deps.worker_executor_cluster()
     }
 }
 
@@ -835,9 +240,8 @@ pub static LAST_UNIQUE_ID: AtomicU16 = AtomicU16::new(0);
 
 impl TestContext {
     pub fn new() -> Self {
-        Self {
-            unique_id: LAST_UNIQUE_ID.fetch_add(1, Ordering::Relaxed),
-        }
+        let unique_id = LAST_UNIQUE_ID.fetch_add(1, Ordering::Relaxed);
+        Self { unique_id }
     }
 
     pub fn redis_prefix(&self) -> String {
@@ -858,8 +262,8 @@ impl TestContext {
 }
 
 pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> {
-    let redis = CONFIG.redis();
-    let redis_monitor = CONFIG.redis_monitor();
+    let redis = BASE_DEPS.redis();
+    let redis_monitor = BASE_DEPS.redis_monitor();
     redis.assert_valid();
     redis_monitor.assert_valid();
     println!("Using Redis on port {}", redis.public_port());
@@ -912,206 +316,19 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
     let start = std::time::Instant::now();
     loop {
         let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
-        if let Ok(client) = client {
+        if client.is_ok() {
+            let deps = BASE_DEPS.per_test(
+                &context.redis_prefix(),
+                context.http_port(),
+                context.grpc_port(),
+            );
             break Ok(TestWorkerExecutor {
-                client,
                 handle: Some(server_handle),
-                grpc_port,
+                deps,
             });
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));
         }
-    }
-}
-
-pub fn stdout_event(s: &str) -> LogEvent {
-    LogEvent {
-        event: Some(log_event::Event::Stdout(StdOutLog {
-            message: s.to_string(),
-        })),
-    }
-}
-
-pub fn stdout_event_starting_with(event: &LogEvent, s: &str) -> bool {
-    if let LogEvent {
-        event: Some(log_event::Event::Stdout(StdOutLog { message })),
-    } = event
-    {
-        message.starts_with(s)
-    } else {
-        false
-    }
-}
-
-pub fn stderr_event(s: &str) -> LogEvent {
-    LogEvent {
-        event: Some(log_event::Event::Stderr(StdErrLog {
-            message: s.to_string(),
-        })),
-    }
-}
-
-pub fn log_event_to_string(event: &LogEvent) -> String {
-    match &event.event {
-        Some(log_event::Event::Stdout(stdout)) => stdout.message.clone(),
-        Some(log_event::Event::Stderr(stderr)) => stderr.message.clone(),
-        Some(log_event::Event::Log(log)) => log.message.clone(),
-        _ => panic!("Unexpected event type"),
-    }
-}
-
-pub async fn drain_connection(rx: UnboundedReceiver<Option<LogEvent>>) -> Vec<Option<LogEvent>> {
-    let mut rx = rx;
-    let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
-
-    if !events.contains(&None) {
-        loop {
-            match rx.recv().await {
-                Some(Some(event)) => events.push(Some(event)),
-                Some(None) => break,
-                None => break,
-            }
-        }
-    }
-    events
-}
-
-pub async fn events_to_lines(rx: &mut UnboundedReceiver<LogEvent>) -> Vec<String> {
-    let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
-    let full_output = events
-        .iter()
-        .map(log_event_to_string)
-        .collect::<Vec<_>>()
-        .join("");
-    let lines = full_output
-        .lines()
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>();
-    lines
-}
-
-pub fn val_string(s: &str) -> Val {
-    Val {
-        val: Some(val::Val::String(s.to_string())),
-    }
-}
-
-pub fn val_float32(f: f32) -> Val {
-    Val {
-        val: Some(val::Val::F32(f)),
-    }
-}
-
-pub fn val_float64(f: f64) -> Val {
-    Val {
-        val: Some(val::Val::F64(f)),
-    }
-}
-
-pub fn val_bool(b: bool) -> Val {
-    Val {
-        val: Some(val::Val::Bool(b)),
-    }
-}
-
-pub fn val_u8(i: u8) -> Val {
-    Val {
-        val: Some(val::Val::U8(i as i32)),
-    }
-}
-
-pub fn val_i32(i: i32) -> Val {
-    Val {
-        val: Some(val::Val::S32(i)),
-    }
-}
-
-pub fn val_u32(i: u32) -> Val {
-    Val {
-        val: Some(val::Val::U32(i as i64)),
-    }
-}
-
-pub fn val_u64(i: u64) -> Val {
-    Val {
-        val: Some(val::Val::U64(i as i64)),
-    }
-}
-
-pub fn val_record(items: Vec<Val>) -> Val {
-    Val {
-        val: Some(val::Val::Record(ValRecord { values: items })),
-    }
-}
-
-pub fn val_list(items: Vec<Val>) -> Val {
-    Val {
-        val: Some(val::Val::List(ValList { values: items })),
-    }
-}
-
-pub fn val_flags(count: i32, indexes: &[i32]) -> Val {
-    Val {
-        val: Some(val::Val::Flags(ValFlags {
-            count,
-            value: indexes.to_vec(),
-        })),
-    }
-}
-
-pub fn val_result(value: Result<Val, Val>) -> Val {
-    Val {
-        val: Some(val::Val::Result(Box::new(match value {
-            Ok(ok) => ValResult {
-                discriminant: 0,
-                value: Some(Box::new(ok)),
-            },
-            Err(err) => ValResult {
-                discriminant: 1,
-                value: Some(Box::new(err)),
-            },
-        }))),
-    }
-}
-
-pub fn val_option(value: Option<Val>) -> Val {
-    Val {
-        val: Some(val::Val::Option(Box::new(match value {
-            Some(some) => ValOption {
-                discriminant: 1,
-                value: Some(Box::new(some)),
-            },
-            None => ValOption {
-                discriminant: 0,
-                value: None,
-            },
-        }))),
-    }
-}
-
-pub fn val_pair(first: Val, second: Val) -> Val {
-    Val {
-        val: Some(val::Val::Tuple(ValTuple {
-            values: vec![first, second],
-        })),
-    }
-}
-
-pub fn val_triple(first: Val, second: Val, third: Val) -> Val {
-    Val {
-        val: Some(val::Val::Tuple(ValTuple {
-            values: vec![first, second, third],
-        })),
-    }
-}
-
-pub fn val_tuple4(first: Val, second: Val, third: Val, fourth: Val) -> Val {
-    Val {
-        val: Some(val::Val::Tuple(ValTuple {
-            values: vec![first, second, third, fourth],
-        })),
     }
 }
 
@@ -1558,20 +775,4 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         >(&mut linker, |x| &mut x.durable_ctx)?;
         Ok(linker)
     }
-}
-
-#[derive(Copy, Clone)]
-pub struct TestWorkerExecutorClone {
-    grpc_port: u16,
-}
-
-fn dump_template_info(path: &Path) {
-    let data = std::fs::read(path).unwrap();
-    let component = Component::<IgnoreAllButMetadata>::from_bytes(&data).unwrap();
-
-    let state = AnalysisContext::new(component);
-    let exports = state.get_top_level_exports();
-
-    info!("Exports of {path:?}: {exports:?}");
-    let _ = exports.unwrap();
 }

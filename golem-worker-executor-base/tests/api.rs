@@ -1,4 +1,3 @@
-use crate::{common, CONFIG};
 use std::collections::HashMap;
 use std::env;
 use std::io::Write;
@@ -18,11 +17,16 @@ use golem_common::model::{
     AccountId, FilterComparator, InvocationKey, PromiseId, StringFilterComparator, TemplateId,
     WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
 };
-use golem_worker_executor_base::error::GolemError;
+
 use serde_json::Value;
 
-use crate::common::{val_pair, TestWorkerExecutor};
+use crate::common::{start, TestContext, TestWorkerExecutor};
 use golem_test_framework::config::TestDependencies;
+use golem_test_framework::dsl::{
+    drain_connection, is_worker_execution_error, stdout_event, val_flags, val_float32, val_list,
+    val_option, val_pair, val_record, val_result, val_string, val_u32, val_u64, val_u8,
+    worker_error_message, TestDsl,
+};
 use tokio::time::sleep;
 use tonic::transport::Body;
 use tracing::debug;
@@ -32,13 +36,13 @@ use wasmtime_wasi::preview2::spawn;
 #[tokio::test]
 #[tracing::instrument]
 async fn interruption() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/interruption.wasm"));
+    let template_id = executor.store_template("interruption").await;
     let worker_id = executor.start_worker(&template_id, "interruption-1").await;
 
-    let mut executor_clone = executor.async_clone().await;
+    let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
     let fiber = tokio::spawn(async move {
         executor_clone
@@ -55,30 +59,26 @@ async fn interruption() {
 
     println!(
         "result: {:?}",
-        result.as_ref().map_err(|err| err.to_string())
+        result.as_ref().map_err(worker_error_message)
     );
     check!(result.is_err());
-    check!(result
-        .err()
-        .unwrap()
-        .to_string()
-        .contains("Interrupted via the Golem API"));
+    check!(worker_error_message(&result.err().unwrap()).contains("Interrupted via the Golem API"));
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn simulated_crash() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/interruption.wasm"));
+    let template_id = executor.store_template("interruption").await;
     let worker_id = executor
         .start_worker(&template_id, "simulated-crash-1")
         .await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
-    let mut executor_clone = executor.async_clone().await;
+    let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
     let fiber = tokio::spawn(async move {
         let start_time = tokio::time::Instant::now();
@@ -100,28 +100,28 @@ async fn simulated_crash() {
 
     println!(
         "result: {:?}",
-        result.as_ref().map_err(|err| err.to_string())
+        result.as_ref().map_err(worker_error_message)
     );
     check!(result.is_ok());
-    check!(result == Ok(vec![common::val_string("done")]));
-    check!(events == vec![common::stdout_event("Starting interruption test\n"),]);
+    check!(result == Ok(vec![val_string("done")]));
+    check!(events == vec![stdout_event("Starting interruption test\n"),]);
     check!(elapsed.as_secs() < 13);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn shopping_cart_example() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
+    let template_id = executor.store_template("shopping-cart").await;
     let worker_id = executor.start_worker(&template_id, "shopping-cart-1").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/initialize-cart",
-            vec![common::val_string("test-user-1")],
+            vec![val_string("test-user-1")],
         )
         .await;
 
@@ -129,11 +129,11 @@ async fn shopping_cart_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])],
         )
         .await;
@@ -142,11 +142,11 @@ async fn shopping_cart_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1001"),
-                common::val_string("Golem Cloud Subscription 1y"),
-                common::val_float32(999999.0),
-                common::val_u32(1),
+            vec![val_record(vec![
+                val_string("G1001"),
+                val_string("Golem Cloud Subscription 1y"),
+                val_float32(999999.0),
+                val_u32(1),
             ])],
         )
         .await;
@@ -155,11 +155,11 @@ async fn shopping_cart_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1002"),
-                common::val_string("Mud Golem"),
-                common::val_float32(11.0),
-                common::val_u32(10),
+            vec![val_record(vec![
+                val_string("G1002"),
+                val_string("Mud Golem"),
+                val_float32(11.0),
+                val_u32(10),
             ])],
         )
         .await;
@@ -168,7 +168,7 @@ async fn shopping_cart_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/update-item-quantity",
-            vec![common::val_string("G1002"), common::val_u32(20)],
+            vec![val_string("G1002"), val_u32(20)],
         )
         .await;
 
@@ -184,24 +184,24 @@ async fn shopping_cart_example() {
 
     assert!(
         contents
-            == Ok(vec![common::val_list(vec![
-                common::val_record(vec![
-                    common::val_string("G1000"),
-                    common::val_string("Golem T-Shirt M"),
-                    common::val_float32(100.0),
-                    common::val_u32(5),
+            == Ok(vec![val_list(vec![
+                val_record(vec![
+                    val_string("G1000"),
+                    val_string("Golem T-Shirt M"),
+                    val_float32(100.0),
+                    val_u32(5),
                 ]),
-                common::val_record(vec![
-                    common::val_string("G1001"),
-                    common::val_string("Golem Cloud Subscription 1y"),
-                    common::val_float32(999999.0),
-                    common::val_u32(1),
+                val_record(vec![
+                    val_string("G1001"),
+                    val_string("Golem Cloud Subscription 1y"),
+                    val_float32(999999.0),
+                    val_u32(1),
                 ]),
-                common::val_record(vec![
-                    common::val_string("G1002"),
-                    common::val_string("Mud Golem"),
-                    common::val_float32(11.0),
-                    common::val_u32(20),
+                val_record(vec![
+                    val_string("G1002"),
+                    val_string("Mud Golem"),
+                    val_float32(11.0),
+                    val_u32(20),
                 ]),
             ])])
     )
@@ -210,10 +210,10 @@ async fn shopping_cart_example() {
 #[tokio::test]
 #[tracing::instrument]
 async fn stdio_cc() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/stdio-cc.wasm"));
+    let template_id = executor.store_template("stdio-cc").await;
     let worker_id = executor.start_worker(&template_id, "stdio-cc-1").await;
 
     let result = executor
@@ -228,11 +228,10 @@ async fn stdio_cc() {
 #[tokio::test]
 #[tracing::instrument]
 async fn dynamic_instance_creation() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id =
-        executor.store_template(Path::new("../test-templates/environment-service.wasm"));
+    let template_id = executor.store_template("environment-service").await;
     let worker_id = WorkerId {
         template_id: template_id.clone(),
         worker_name: "dynamic-instance-creation-1".to_string(),
@@ -249,21 +248,18 @@ async fn dynamic_instance_creation() {
 
     drop(executor);
 
-    check!(args == vec![common::val_result(Ok(common::val_list(vec![])))]);
+    check!(args == vec![val_result(Ok(val_list(vec![])))]);
     check!(
-        env == vec![common::val_result(Ok(common::val_list(vec![
-            common::val_pair(
-                common::val_string("GOLEM_WORKER_NAME"),
-                common::val_string("dynamic-instance-creation-1")
+        env == vec![val_result(Ok(val_list(vec![
+            val_pair(
+                val_string("GOLEM_WORKER_NAME"),
+                val_string("dynamic-instance-creation-1")
             ),
-            common::val_pair(
-                common::val_string("GOLEM_TEMPLATE_ID"),
-                common::val_string(&format!("{}", template_id))
+            val_pair(
+                val_string("GOLEM_TEMPLATE_ID"),
+                val_string(&format!("{}", template_id))
             ),
-            common::val_pair(
-                common::val_string("GOLEM_TEMPLATE_VERSION"),
-                common::val_string("0")
-            ),
+            val_pair(val_string("GOLEM_TEMPLATE_VERSION"), val_string("0")),
         ])))]
     );
 }
@@ -271,13 +267,13 @@ async fn dynamic_instance_creation() {
 #[tokio::test]
 #[tracing::instrument]
 async fn promise() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/promise.wasm"));
+    let template_id = executor.store_template("promise").await;
     let worker_id = executor.start_worker(&template_id, "promise-1").await;
 
-    let mut executor_clone = executor.async_clone().await;
+    let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
     let fiber = tokio::spawn(async move {
         executor_clone
@@ -289,7 +285,8 @@ async fn promise() {
     sleep(Duration::from_secs(10)).await;
 
     executor
-        .client
+        .client()
+        .await
         .complete_promise(CompletePromiseRequest {
             promise_id: Some(
                 PromiseId {
@@ -307,16 +304,16 @@ async fn promise() {
 
     drop(executor);
 
-    check!(result == vec![common::val_list(vec![common::val_u8(42)])]);
+    check!(result == vec![val_list(vec![val_u8(42)])]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn get_self_uri() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+    let template_id = executor.store_template("runtime-service").await;
     let worker_id = executor
         .start_worker(&template_id, "runtime-service-1")
         .await;
@@ -325,7 +322,7 @@ async fn get_self_uri() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-self-uri",
-            vec![common::val_string("function-name")],
+            vec![val_string("function-name")],
         )
         .await
         .unwrap();
@@ -334,7 +331,7 @@ async fn get_self_uri() {
 
     check!(
         result
-            == vec![common::val_string(&format!(
+            == vec![val_string(&format!(
                 "worker://{template_id}/runtime-service-1/function-name"
             ))]
     );
@@ -343,10 +340,10 @@ async fn get_self_uri() {
 #[tokio::test]
 #[tracing::instrument]
 async fn invoking_with_same_invocation_key_is_idempotent() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
+    let template_id = executor.store_template("shopping-cart").await;
     let worker_id = executor.start_worker(&template_id, "shopping-cart-2").await;
 
     let invocation_key = executor.get_invocation_key(&worker_id).await;
@@ -355,11 +352,11 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
             &worker_id,
             &invocation_key,
             "golem:it/api/add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])],
         )
         .await
@@ -370,11 +367,11 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
             &worker_id,
             &invocation_key,
             "golem:it/api/add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])],
         )
         .await
@@ -389,11 +386,11 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
 
     check!(
         contents
-            == vec![common::val_list(vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            == vec![val_list(vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])])]
     );
 }
@@ -401,10 +398,10 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
 #[tokio::test]
 #[tracing::instrument]
 async fn invoking_with_invalid_invocation_key_is_failure() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
+    let template_id = executor.store_template("shopping-cart").await;
     let worker_id = executor.start_worker(&template_id, "shopping-cart-3").await;
 
     let invocation_key = InvocationKey {
@@ -415,11 +412,11 @@ async fn invoking_with_invalid_invocation_key_is_failure() {
             &worker_id,
             &invocation_key,
             "golem:it/api/add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])],
         )
         .await;
@@ -432,10 +429,10 @@ async fn invoking_with_invalid_invocation_key_is_failure() {
 #[tokio::test]
 #[tracing::instrument]
 async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
+    let template_id = executor.store_template("shopping-cart").await;
     let worker_id = executor.start_worker(&template_id, "shopping-cart-4").await;
 
     let invocation_key = executor.get_invocation_key(&worker_id).await;
@@ -444,29 +441,29 @@ async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
             &worker_id,
             &invocation_key,
             "golem:it/api/add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])],
         )
         .await
         .unwrap();
 
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     let _result2 = executor
         .invoke_and_await_with_key(
             &worker_id,
             &invocation_key,
             "golem:it/api/add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])],
         )
         .await
@@ -481,11 +478,11 @@ async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
 
     check!(
         contents
-            == vec![common::val_list(vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            == vec![val_list(vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])])]
     );
 }
@@ -493,10 +490,10 @@ async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
 #[tokio::test]
 #[tracing::instrument]
 async fn optional_parameters() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/option-service.wasm"));
+    let template_id = executor.store_template("option-service").await;
     let worker_id = executor
         .start_worker(&template_id, "optional-service-1")
         .await;
@@ -505,17 +502,13 @@ async fn optional_parameters() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/echo",
-            vec![common::val_option(Some(common::val_string("Hello")))],
+            vec![val_option(Some(val_string("Hello")))],
         )
         .await
         .unwrap();
 
     let echo_none = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api/echo",
-            vec![common::val_option(None)],
-        )
+        .invoke_and_await(&worker_id, "golem:it/api/echo", vec![val_option(None)])
         .await
         .unwrap();
 
@@ -523,9 +516,9 @@ async fn optional_parameters() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/todo",
-            vec![common::val_record(vec![
-                common::val_string("todo"),
-                common::val_option(Some(common::val_string("description"))),
+            vec![val_record(vec![
+                val_string("todo"),
+                val_option(Some(val_string("description"))),
             ])],
         )
         .await
@@ -535,9 +528,9 @@ async fn optional_parameters() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/todo",
-            vec![common::val_record(vec![
-                common::val_string("todo"),
-                common::val_option(Some(common::val_string("description"))),
+            vec![val_record(vec![
+                val_string("todo"),
+                val_option(Some(val_string("description"))),
             ])],
         )
         .await
@@ -545,29 +538,26 @@ async fn optional_parameters() {
 
     drop(executor);
 
-    check!(echo_some == vec![common::val_option(Some(common::val_string("Hello")))]);
-    check!(echo_none == vec![common::val_option(None)]);
-    check!(todo_some == vec![common::val_string("todo")]);
-    check!(todo_none == vec![common::val_string("todo")]);
+    check!(echo_some == vec![val_option(Some(val_string("Hello")))]);
+    check!(echo_none == vec![val_option(None)]);
+    check!(todo_some == vec![val_string("todo")]);
+    check!(todo_none == vec![val_string("todo")]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn flags_parameters() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/flags-service.wasm"));
+    let template_id = executor.store_template("flags-service").await;
     let worker_id = executor.start_worker(&template_id, "flags-service-1").await;
 
     let create_task = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-task",
-            vec![common::val_record(vec![
-                common::val_string("t1"),
-                common::val_flags(4, &[0, 1]),
-            ])],
+            vec![val_record(vec![val_string("t1"), val_flags(4, &[0, 1])])],
         )
         .await
         .unwrap();
@@ -579,21 +569,12 @@ async fn flags_parameters() {
 
     drop(executor);
 
-    check!(
-        create_task
-            == vec![common::val_record(vec![
-                common::val_string("t1"),
-                common::val_flags(4, &[0, 1, 2])
-            ])]
-    );
+    check!(create_task == vec![val_record(vec![val_string("t1"), val_flags(4, &[0, 1, 2])])]);
     check!(
         get_tasks
-            == vec![common::val_list(vec![
-                common::val_record(vec![common::val_string("t1"), common::val_flags(4, &[0])]),
-                common::val_record(vec![
-                    common::val_string("t2"),
-                    common::val_flags(4, &[0, 2, 3])
-                ])
+            == vec![val_list(vec![
+                val_record(vec![val_string("t1"), val_flags(4, &[0])]),
+                val_record(vec![val_string("t2"), val_flags(4, &[0, 2, 3])])
             ])]
     );
 }
@@ -601,10 +582,10 @@ async fn flags_parameters() {
 #[tokio::test]
 #[tracing::instrument]
 async fn variants_with_no_payloads() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/variant-service.wasm"));
+    let template_id = executor.store_template("variant-service").await;
     let worker_id = executor
         .start_worker(&template_id, "variant-service-1")
         .await;
@@ -621,10 +602,10 @@ async fn variants_with_no_payloads() {
 #[tokio::test]
 #[tracing::instrument]
 async fn delete_instance() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/option-service.wasm"));
+    let template_id = executor.store_template("option-service").await;
     let worker_id = executor
         .start_worker(&template_id, "delete-instance-1")
         .await;
@@ -633,7 +614,7 @@ async fn delete_instance() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/echo",
-            vec![common::val_option(Some(common::val_string("Hello")))],
+            vec![val_option(Some(val_string("Hello")))],
         )
         .await
         .unwrap();
@@ -682,10 +663,10 @@ async fn get_workers() {
         metadatas
     }
 
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let mut executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/option-service.wasm"));
+    let template_id = executor.store_template("option-service").await;
 
     let workers_count = 10;
     let mut worker_ids = vec![];
@@ -703,7 +684,7 @@ async fn get_workers() {
             .invoke_and_await(
                 &worker_id,
                 "golem:it/api/echo",
-                vec![common::val_option(Some(common::val_string("Hello")))],
+                vec![val_option(Some(val_string("Hello")))],
             )
             .await
             .unwrap();
@@ -792,10 +773,10 @@ async fn get_workers() {
 #[tokio::test]
 #[tracing::instrument]
 async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_parameters() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/option-service.wasm"));
+    let template_id = executor.store_template("option-service").await;
     let worker_id = executor
         .start_worker(&template_id, "fewer-than-expected-parameters-1")
         .await;
@@ -810,10 +791,10 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
 #[tokio::test]
 #[tracing::instrument]
 async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameters() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/option-service.wasm"));
+    let template_id = executor.store_template("option-service").await;
     let worker_id = executor
         .start_worker(&template_id, "more-than-expected-parameters-1")
         .await;
@@ -823,8 +804,8 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
             &worker_id,
             "golem:it/api/echo",
             vec![
-                common::val_option(Some(common::val_string("Hello"))),
-                common::val_string("extra parameter"),
+                val_option(Some(val_string("Hello"))),
+                val_string("extra parameter"),
             ],
         )
         .await;
@@ -836,23 +817,19 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
 #[tokio::test]
 #[tracing::instrument]
 async fn get_instance_metadata() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/clock-service.wasm"));
+    let template_id = executor.store_template("clock-service").await;
     let worker_id = executor
         .start_worker(&template_id, "get-instance-metadata-1")
         .await;
 
     let worker_id_clone = worker_id.clone();
-    let mut executor_clone = executor.async_clone().await;
+    let executor_clone = executor.clone();
     let fiber = tokio::spawn(async move {
         executor_clone
-            .invoke_and_await(
-                &worker_id_clone,
-                "golem:it/api/sleep",
-                vec![common::val_u64(10)],
-            )
+            .invoke_and_await(&worker_id_clone, "golem:it/api/sleep", vec![val_u64(10)])
             .await
     });
 
@@ -885,10 +862,10 @@ async fn get_instance_metadata() {
 #[tokio::test]
 #[tracing::instrument]
 async fn create_invoke_delete_create_invoke() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
+    let template_id = executor.store_template("shopping-cart").await;
     let worker_id = executor
         .start_worker(&template_id, "create-invoke-delete-create-invoke-1")
         .await;
@@ -897,11 +874,11 @@ async fn create_invoke_delete_create_invoke() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])],
         )
         .await;
@@ -916,11 +893,11 @@ async fn create_invoke_delete_create_invoke() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])],
         )
         .await;
@@ -934,10 +911,10 @@ async fn create_invoke_delete_create_invoke() {
 #[tokio::test]
 #[tracing::instrument]
 async fn recovering_an_old_instance_after_updating_a_template() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
+    let template_id = executor.store_template("shopping-cart").await;
     let worker_id = executor
         .start_worker(
             &template_id,
@@ -949,27 +926,25 @@ async fn recovering_an_old_instance_after_updating_a_template() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])],
         )
         .await
         .unwrap();
 
     // Updating the template with an incompatible new version
-    let new_version = executor.update_template(
-        &template_id,
-        Path::new("../test-templates/option-service.wasm"),
-    );
+    executor
+        .update_template(&template_id, "option-service")
+        .await;
 
     // Creating a new worker of the updated template and call it
     let worker_id2 = executor
-        .start_worker_versioned(
+        .start_worker(
             &template_id,
-            new_version,
             "recovering-an-old-instance-after-updating-a-template-2",
         )
         .await;
@@ -978,14 +953,14 @@ async fn recovering_an_old_instance_after_updating_a_template() {
         .invoke_and_await(
             &worker_id2,
             "golem:it/api/echo",
-            vec![common::val_option(Some(common::val_string("Hello")))],
+            vec![val_option(Some(val_string("Hello")))],
         )
         .await
         .unwrap();
 
     // Restarting the server to force worker recovery
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     // Call the first worker again to check if it is still working
     let r3 = executor
@@ -996,13 +971,13 @@ async fn recovering_an_old_instance_after_updating_a_template() {
     drop(executor);
 
     check!(r1 == vec![]);
-    check!(r2 == vec![common::val_option(Some(common::val_string("Hello")))]);
+    check!(r2 == vec![val_option(Some(val_string("Hello")))]);
     check!(
-        r3 == vec![common::val_list(vec![common::val_record(vec![
-            common::val_string("G1000"),
-            common::val_string("Golem T-Shirt M"),
-            common::val_float32(100.0),
-            common::val_u32(5),
+        r3 == vec![val_list(vec![val_record(vec![
+            val_string("G1000"),
+            val_string("Golem T-Shirt M"),
+            val_float32(100.0),
+            val_u32(5),
         ])])]
     );
 }
@@ -1010,10 +985,10 @@ async fn recovering_an_old_instance_after_updating_a_template() {
 #[tokio::test]
 #[tracing::instrument]
 async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/shopping-cart.wasm"));
+    let template_id = executor.store_template("shopping-cart").await;
     let worker_id = executor
         .start_worker(
             &template_id,
@@ -1025,30 +1000,28 @@ async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() 
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])],
         )
         .await
         .unwrap();
 
     // Updating the template with an incompatible new version
-    let new_version = executor.update_template(
-        &template_id,
-        Path::new("../test-templates/option-service.wasm"),
-    );
+    executor
+        .update_template(&template_id, "option-service")
+        .await;
 
     // Deleting the first instance
     executor.delete_worker(&worker_id).await;
 
     // Create a new instance with the same name and call it the first instance again to check if it is still working
     let worker_id = executor
-        .start_worker_versioned(
+        .start_worker(
             &template_id,
-            new_version,
             "recovering-an-old-instance-after-updating-a-template-1",
         )
         .await;
@@ -1057,7 +1030,7 @@ async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() 
         .invoke_and_await(
             &worker_id,
             "golem:it/api/echo",
-            vec![common::val_option(Some(common::val_string("Hello")))],
+            vec![val_option(Some(val_string("Hello")))],
         )
         .await
         .unwrap();
@@ -1065,41 +1038,40 @@ async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() 
     drop(executor);
 
     check!(r1 == vec![]);
-    check!(r2 == vec![common::val_option(Some(common::val_string("Hello")))]);
+    check!(r2 == vec![val_option(Some(val_string("Hello")))]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn trying_to_use_an_old_wasm_provides_good_error_message() {
-    let context = common::TestContext::new();
+    let context = TestContext::new();
     // case: WASM is an old version, rejected by protector
 
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
-    let template_id =
-        executor.store_template_unverified(Path::new("../test-templates/old-component.wasm"));
+    let template_id = executor.store_template_unverified("old-component").await;
     let result = executor
         .try_start_worker(&template_id, "old-component-1")
         .await;
 
     check!(result.is_err());
-    check!(
-        result.err().unwrap()
-            == worker_execution_error::Error::TemplateParseFailed(TemplateParseFailed {
-                template_id: Some(template_id.into()),
-                template_version: 0,
-                reason: "failed to parse WebAssembly module".to_string()
-            })
-    );
+    check!(is_worker_execution_error(
+        &result.err().unwrap(),
+        &worker_execution_error::Error::TemplateParseFailed(TemplateParseFailed {
+            template_id: Some(template_id.into()),
+            template_version: 0,
+            reason: "failed to parse WebAssembly module".to_string()
+        })
+    ));
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message() {
-    let context = common::TestContext::new();
+    let context = TestContext::new();
     // case: WASM can be parsed but wasmtime does not support it
-    let mut executor = common::start(&context).await.unwrap();
-    let template_id = executor.store_template(Path::new("../test-templates/write-stdout.wasm"));
+    let executor = start(&context).await.unwrap();
+    let template_id = executor.store_template("write-stdout").await;
 
     let cwd = env::current_dir().expect("Failed to get current directory");
     debug!("Current directory: {cwd:?}");
@@ -1120,23 +1092,23 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let result = executor.try_start_worker(&template_id, "bad-wasm-1").await;
 
     check!(result.is_err());
-    check!(
-        result.err().unwrap()
-            == worker_execution_error::Error::TemplateParseFailed(TemplateParseFailed {
-                template_id: Some(template_id.into()),
-                template_version: 0,
-                reason: "failed to parse WebAssembly module".to_string()
-            })
-    );
+    check!(is_worker_execution_error(
+        &result.err().unwrap(),
+        &worker_execution_error::Error::TemplateParseFailed(TemplateParseFailed {
+            template_id: Some(template_id.into()),
+            template_version: 0,
+            reason: "failed to parse WebAssembly module".to_string()
+        })
+    ));
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message_after_recovery()
 {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
-    let template_id = executor.store_template(Path::new("../test-templates/write-stdout.wasm"));
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+    let template_id = executor.store_template("write-stdout").await;
 
     let worker_id = executor
         .try_start_worker(&template_id, "bad-wasm-2")
@@ -1145,7 +1117,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 
     // worker is idle. if we restart the server it won't get recovered
     drop(executor);
-    let mut executor = common::start(&context).await.unwrap();
+    let executor = start(&context).await.unwrap();
 
     // corrupting the uploaded WASM
     let cwd = env::current_dir().expect("Failed to get current directory");
@@ -1173,21 +1145,21 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
 
     check!(result.is_err());
-    check!(
-        result.err().unwrap()
-            == GolemError::TemplateParseFailed {
-                template_id,
-                template_version: 0,
-                reason: "failed to parse WebAssembly module".to_string()
-            }
-    );
+    check!(is_worker_execution_error(
+        &result.err().unwrap(),
+        &worker_execution_error::Error::TemplateParseFailed(TemplateParseFailed {
+            template_id: Some(template_id.into()),
+            template_version: 0,
+            reason: "failed to parse WebAssembly module".to_string()
+        })
+    ));
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn long_running_poll_loop_works_as_expected() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1211,14 +1183,13 @@ async fn long_running_poll_loop_works_as_expected() {
             .await;
     });
 
-    let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let template_id = executor.store_template("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "poll-loop-template-0", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "poll-loop-template-0", vec![], env)
+        .await;
 
     executor.log_output(&worker_id).await;
 
@@ -1226,7 +1197,7 @@ async fn long_running_poll_loop_works_as_expected() {
         .invoke(
             &worker_id,
             "golem:it/api/start-polling",
-            vec![common::val_string("first")],
+            vec![val_string("first")],
         )
         .await
         .unwrap();
@@ -1253,8 +1224,8 @@ async fn long_running_poll_loop_works_as_expected() {
 #[tokio::test]
 #[tracing::instrument]
 async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1278,13 +1249,12 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
             .await;
     });
 
-    let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let template_id = executor.store_template("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "poll-loop-template-1", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "poll-loop-template-1", vec![], env)
+        .await;
 
     executor.log_output(&worker_id).await;
 
@@ -1292,7 +1262,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
         .invoke(
             &worker_id,
             "golem:it/api/start-polling",
-            vec![common::val_string("first")],
+            vec![val_string("first")],
         )
         .await
         .unwrap();
@@ -1324,7 +1294,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
         )
         .await;
 
-    let mut executor_clone = executor.async_clone().await;
+    let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
     let fiber = spawn(async move {
         // Invoke blocks until the invocation starts
@@ -1332,7 +1302,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
             .invoke(
                 &worker_id_clone,
                 "golem:it/api/start-polling",
-                vec![common::val_string("second")],
+                vec![val_string("second")],
             )
             .await
             .unwrap();
@@ -1378,8 +1348,8 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
 #[tokio::test]
 #[tracing::instrument]
 async fn long_running_poll_loop_connection_breaks_on_interrupt() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1403,13 +1373,12 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
             .await;
     });
 
-    let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let template_id = executor.store_template("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "poll-loop-template-2", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "poll-loop-template-2", vec![], env)
+        .await;
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
 
@@ -1417,7 +1386,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
         .invoke(
             &worker_id,
             "golem:it/api/start-polling",
-            vec![common::val_string("first")],
+            vec![val_string("first")],
         )
         .await
         .unwrap();
@@ -1426,20 +1395,20 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
 
     executor.interrupt(&worker_id).await;
 
-    let events = common::drain_connection(rx).await;
+    let events = drain_connection(rx).await;
 
     drop(executor);
     http_server.abort();
 
-    check!(events.contains(&Some(common::stdout_event("Calling the poll endpoint\n"))));
-    check!(events.contains(&Some(common::stdout_event("Received initial\n"))));
+    check!(events.contains(&Some(stdout_event("Calling the poll endpoint\n"))));
+    check!(events.contains(&Some(stdout_event("Received initial\n"))));
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_worker() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1463,14 +1432,13 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
             .await;
     });
 
-    let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let template_id = executor.store_template("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "poll-loop-template-3", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "poll-loop-template-3", vec![], env)
+        .await;
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
 
@@ -1478,7 +1446,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
         .invoke(
             &worker_id,
             "golem:it/api/start-polling",
-            vec![common::val_string("first")],
+            vec![val_string("first")],
         )
         .await
         .unwrap();
@@ -1487,7 +1455,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
 
     executor.interrupt(&worker_id).await;
 
-    let _ = common::drain_connection(rx).await;
+    let _ = drain_connection(rx).await;
     let status1 = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     let _rx = executor.capture_output_with_termination(&worker_id).await;
@@ -1504,8 +1472,8 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
 #[tokio::test]
 #[tracing::instrument]
 async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1529,14 +1497,13 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
             .await;
     });
 
-    let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let template_id = executor.store_template("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "poll-loop-template-4", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "poll-loop-template-4", vec![], env)
+        .await;
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
 
@@ -1544,7 +1511,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
         .invoke(
             &worker_id,
             "golem:it/api/start-polling",
-            vec![common::val_string("first")],
+            vec![val_string("first")],
         )
         .await
         .unwrap();
@@ -1554,7 +1521,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
 
     executor.interrupt(&worker_id).await;
 
-    let mut events = common::drain_connection(rx).await;
+    let mut events = drain_connection(rx).await;
     let status2 = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.resume(&worker_id).await;
@@ -1583,16 +1550,16 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
     check!(status2.last_known_status.status == WorkerStatus::Interrupted);
     check!(status3.last_known_status.status == WorkerStatus::Running);
     check!(status4.last_known_status.status == WorkerStatus::Idle);
-    check!(events.contains(&common::stdout_event("Calling the poll endpoint\n")));
-    check!(events.contains(&common::stdout_event("Received initial\n")));
-    check!(events.contains(&common::stdout_event("Poll loop finished\n")));
+    check!(events.contains(&stdout_event("Calling the poll endpoint\n")));
+    check!(events.contains(&stdout_event("Received initial\n")));
+    check!(events.contains(&stdout_event("Poll loop finished\n")));
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1616,14 +1583,13 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
             .await;
     });
 
-    let template_id = executor.store_template(Path::new("../test-templates/http-client-2.wasm"));
+    let template_id = executor.store_template("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "poll-loop-template-5", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "poll-loop-template-5", vec![], env)
+        .await;
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
 
@@ -1631,7 +1597,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
         .invoke(
             &worker_id,
             "golem:it/api/start-polling",
-            vec![common::val_string("first")],
+            vec![val_string("first")],
         )
         .await
         .unwrap();
@@ -1640,7 +1606,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
 
     executor.interrupt(&worker_id).await;
 
-    let _ = common::drain_connection(rx).await;
+    let _ = drain_connection(rx).await;
 
     executor.delete_worker(&worker_id).await;
     let metadata = executor.get_worker_metadata(&worker_id).await;
@@ -1654,11 +1620,10 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
 #[tokio::test]
 #[tracing::instrument]
 async fn shopping_cart_resource_example() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id =
-        executor.store_template(Path::new("../test-templates/shopping-cart-resource.wasm"));
+    let template_id = executor.store_template("shopping-cart-resource").await;
     let worker_id = executor
         .start_worker(&template_id, "shopping-cart-resource-1")
         .await;
@@ -1667,7 +1632,7 @@ async fn shopping_cart_resource_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/[constructor]cart",
-            vec![common::val_string("test-user-1")],
+            vec![val_string("test-user-1")],
         )
         .await
         .unwrap();
@@ -1679,11 +1644,11 @@ async fn shopping_cart_resource_example() {
             "golem:it/api/[method]cart.add-item",
             vec![
                 cart[0].clone(),
-                common::val_record(vec![
-                    common::val_string("G1000"),
-                    common::val_string("Golem T-Shirt M"),
-                    common::val_float32(100.0),
-                    common::val_u32(5),
+                val_record(vec![
+                    val_string("G1000"),
+                    val_string("Golem T-Shirt M"),
+                    val_float32(100.0),
+                    val_u32(5),
                 ]),
             ],
         )
@@ -1695,11 +1660,11 @@ async fn shopping_cart_resource_example() {
             "golem:it/api/[method]cart.add-item",
             vec![
                 cart[0].clone(),
-                common::val_record(vec![
-                    common::val_string("G1001"),
-                    common::val_string("Golem Cloud Subscription 1y"),
-                    common::val_float32(999999.0),
-                    common::val_u32(1),
+                val_record(vec![
+                    val_string("G1001"),
+                    val_string("Golem Cloud Subscription 1y"),
+                    val_float32(999999.0),
+                    val_u32(1),
                 ]),
             ],
         )
@@ -1711,11 +1676,11 @@ async fn shopping_cart_resource_example() {
             "golem:it/api/[method]cart.add-item",
             vec![
                 cart[0].clone(),
-                common::val_record(vec![
-                    common::val_string("G1002"),
-                    common::val_string("Mud Golem"),
-                    common::val_float32(11.0),
-                    common::val_u32(10),
+                val_record(vec![
+                    val_string("G1002"),
+                    val_string("Mud Golem"),
+                    val_float32(11.0),
+                    val_u32(10),
                 ]),
             ],
         )
@@ -1725,11 +1690,7 @@ async fn shopping_cart_resource_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/[method]cart.update-item-quantity",
-            vec![
-                cart[0].clone(),
-                common::val_string("G1002"),
-                common::val_u32(20),
-            ],
+            vec![cart[0].clone(), val_string("G1002"), val_u32(20)],
         )
         .await;
 
@@ -1753,24 +1714,24 @@ async fn shopping_cart_resource_example() {
 
     assert!(
         contents
-            == Ok(vec![common::val_list(vec![
-                common::val_record(vec![
-                    common::val_string("G1000"),
-                    common::val_string("Golem T-Shirt M"),
-                    common::val_float32(100.0),
-                    common::val_u32(5),
+            == Ok(vec![val_list(vec![
+                val_record(vec![
+                    val_string("G1000"),
+                    val_string("Golem T-Shirt M"),
+                    val_float32(100.0),
+                    val_u32(5),
                 ]),
-                common::val_record(vec![
-                    common::val_string("G1001"),
-                    common::val_string("Golem Cloud Subscription 1y"),
-                    common::val_float32(999999.0),
-                    common::val_u32(1),
+                val_record(vec![
+                    val_string("G1001"),
+                    val_string("Golem Cloud Subscription 1y"),
+                    val_float32(999999.0),
+                    val_u32(1),
                 ]),
-                common::val_record(vec![
-                    common::val_string("G1002"),
-                    common::val_string("Mud Golem"),
-                    common::val_float32(11.0),
-                    common::val_u32(20),
+                val_record(vec![
+                    val_string("G1002"),
+                    val_string("Mud Golem"),
+                    val_float32(11.0),
+                    val_u32(20),
                 ]),
             ])])
     )
@@ -1779,10 +1740,10 @@ async fn shopping_cart_resource_example() {
 #[tokio::test]
 #[tracing::instrument]
 async fn counter_resource_test_1() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/counters.wasm"));
+    let template_id = executor.store_template("counters").await;
     let worker_id = executor.start_worker(&template_id, "counters-1").await;
     executor.log_output(&worker_id).await;
 
@@ -1790,7 +1751,7 @@ async fn counter_resource_test_1() {
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api/[constructor]counter",
-            vec![common::val_string("counter1")],
+            vec![val_string("counter1")],
         )
         .await
         .unwrap();
@@ -1798,7 +1759,7 @@ async fn counter_resource_test_1() {
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api/[method]counter.inc-by",
-            vec![counter1[0].clone(), common::val_u64(5)],
+            vec![counter1[0].clone(), val_u64(5)],
         )
         .await;
 
@@ -1824,12 +1785,12 @@ async fn counter_resource_test_1() {
 
     drop(executor);
 
-    check!(result1 == Ok(vec![common::val_u64(5)]));
+    check!(result1 == Ok(vec![val_u64(5)]));
     check!(
         result2
-            == Ok(vec![common::val_list(vec![val_pair(
-                common::val_string("counter1"),
-                common::val_u64(5)
+            == Ok(vec![val_list(vec![val_pair(
+                val_string("counter1"),
+                val_u64(5)
             )])])
     );
 }
@@ -1837,13 +1798,13 @@ async fn counter_resource_test_1() {
 #[tokio::test]
 #[tracing::instrument]
 async fn reconstruct_interrupted_state() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/interruption.wasm"));
+    let template_id = executor.store_template("interruption").await;
     let worker_id = executor.start_worker(&template_id, "interruption-1").await;
 
-    let mut executor_clone = executor.async_clone().await;
+    let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
     let fiber = tokio::spawn(async move {
         executor_clone
@@ -1859,7 +1820,7 @@ async fn reconstruct_interrupted_state() {
     // Explicitly deleting the status information from Redis to check if it can be
     // reconstructed from Redis
 
-    let mut redis = CONFIG.redis().get_connection(0);
+    let mut redis = executor.redis().get_connection(0);
     let _: () = redis
         .del(format!(
             "{}instance:status:{}",
@@ -1877,12 +1838,7 @@ async fn reconstruct_interrupted_state() {
         .status;
 
     drop(executor);
-
     check!(result.is_err());
-    check!(result
-        .err()
-        .unwrap()
-        .to_string()
-        .contains("Interrupted via the Golem API"));
+    check!(worker_error_message(&result.err().unwrap()).contains("Interrupted via the Golem API"));
     check!(status == WorkerStatus::Interrupted);
 }

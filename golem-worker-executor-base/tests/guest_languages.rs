@@ -5,22 +5,25 @@ use std::net::SocketAddr;
 
 use chrono::Datelike;
 use http_02::{Response, StatusCode};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use golem_test_framework::dsl::{
+    events_to_lines, log_event_to_string, val_float32, val_i32, val_list, val_record, val_string,
+    val_u32, val_u64, TestDsl,
+};
 use tonic::transport::Body;
 use warp::Filter;
 
-use crate::common;
+use crate::common::{start, TestContext};
 
 #[tokio::test]
 #[tracing::instrument]
 async fn zig_example_1() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/zig-1.wasm"));
+    let template_id = executor.store_template("zig-1").await;
     let worker_id = executor.start_worker(&template_id, "zig-1").await;
 
     let result = executor
@@ -39,10 +42,10 @@ async fn zig_example_1() {
 #[tokio::test]
 #[tracing::instrument]
 async fn zig_example_2() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/zig-2.wasm"));
+    let template_id = executor.store_template("zig-2").await;
     let worker_id = executor.start_worker(&template_id, "zig-2").await;
     let rx = executor.capture_output(&worker_id).await;
 
@@ -88,20 +91,16 @@ async fn zig_example_2() {
 #[tokio::test]
 #[tracing::instrument]
 async fn tinygo_example() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/tinygo-wasi.wasm"));
+    let template_id = executor.store_template("tinygo-wasi").await;
     let worker_id = executor.start_worker(&template_id, "tinygo-wasi-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "example1",
-            vec![common::val_string("Hello Go-lem")],
-        )
+        .invoke_and_await(&worker_id, "example1", vec![val_string("Hello Go-lem")])
         .await
         .unwrap();
 
@@ -111,8 +110,8 @@ async fn tinygo_example() {
 
     drop(executor);
 
-    let first_line = common::log_event_to_string(&events[0]);
-    let second_line = common::log_event_to_string(&events[1]);
+    let first_line = log_event_to_string(&events[0]);
+    let second_line = log_event_to_string(&events[1]);
     let parts: Vec<_> = second_line.split(' ').collect();
     let last_part = parts.last().unwrap().trim();
     let now = chrono::Local::now();
@@ -120,14 +119,14 @@ async fn tinygo_example() {
 
     check!(first_line == "Hello Go-lem\n".to_string());
     check!(second_line.starts_with(&format!("test {year}")));
-    check!(result == vec!(common::val_i32(last_part.parse::<i32>().unwrap())));
+    check!(result == vec!(val_i32(last_part.parse::<i32>().unwrap())));
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn tinygo_http_client() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
@@ -162,21 +161,16 @@ async fn tinygo_http_client() {
             .await;
     });
 
-    let template_id = executor.store_template(Path::new("../test-templates/tinygo-wasi-http.wasm"));
+    let template_id = executor.store_template("tinygo-wasi-http").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "tinygo-wasi-http-1", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "tinygo-wasi-http-1", vec![], env)
+        .await;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "example1",
-            vec![common::val_string("hello tinygo!")],
-        )
+        .invoke_and_await(&worker_id, "example1", vec![val_string("hello tinygo!")])
         .await
         .unwrap();
 
@@ -187,7 +181,7 @@ async fn tinygo_http_client() {
 
     check!(
         result
-            == vec![common::val_string(
+            == vec![val_string(
                 "200 percentage: 0.250000, message: response message no X-Test header"
             )]
     );
@@ -201,10 +195,10 @@ async fn tinygo_http_client() {
 #[tokio::test]
 #[tracing::instrument]
 async fn grain_example_1() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/grain-1.wasm"));
+    let template_id = executor.store_template("grain-1").await;
     let worker_id = executor.start_worker(&template_id, "grain-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -220,9 +214,9 @@ async fn grain_example_1() {
 
     drop(executor);
 
-    let first_line = common::log_event_to_string(&events[0]);
-    let second_line = common::log_event_to_string(&events[1]);
-    let third_line = common::log_event_to_string(&events[2]);
+    let first_line = log_event_to_string(&events[0]);
+    let second_line = log_event_to_string(&events[1]);
+    let third_line = log_event_to_string(&events[2]);
 
     let now = chrono::Local::now();
     let epoch = now.timestamp_nanos_opt().unwrap();
@@ -237,20 +231,16 @@ async fn grain_example_1() {
 #[tokio::test]
 #[tracing::instrument]
 async fn java_example_1() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/java-1.wasm"));
+    let template_id = executor.store_template("java-1").await;
     let worker_id = executor.start_worker(&template_id, "java-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "run-example1",
-            vec![common::val_string("Hello Golem!")],
-        )
+        .invoke_and_await(&worker_id, "run-example1", vec![val_string("Hello Golem!")])
         .await
         .unwrap();
 
@@ -260,26 +250,26 @@ async fn java_example_1() {
 
     drop(executor);
 
-    let first_line = common::log_event_to_string(&events[0]);
+    let first_line = log_event_to_string(&events[0]);
 
     check!(first_line == "Hello world, input is Hello Golem!\n".to_string());
-    check!(result == vec![common::val_u32("Hello Golem!".len() as u32)]);
+    check!(result == vec![val_u32("Hello Golem!".len() as u32)]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn java_shopping_cart() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/java-2.wasm"));
+    let template_id = executor.store_template("java-2").await;
     let worker_id = executor.start_worker(&template_id, "java-2").await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "initialize-cart",
-            vec![common::val_string("test-user-1")],
+            vec![val_string("test-user-1")],
         )
         .await;
 
@@ -287,11 +277,11 @@ async fn java_shopping_cart() {
         .invoke_and_await(
             &worker_id,
             "add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1000"),
-                common::val_string("Golem T-Shirt M"),
-                common::val_float32(100.0),
-                common::val_u32(5),
+            vec![val_record(vec![
+                val_string("G1000"),
+                val_string("Golem T-Shirt M"),
+                val_float32(100.0),
+                val_u32(5),
             ])],
         )
         .await;
@@ -300,11 +290,11 @@ async fn java_shopping_cart() {
         .invoke_and_await(
             &worker_id,
             "add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1001"),
-                common::val_string("Golem Cloud Subscription 1y"),
-                common::val_float32(999999.0),
-                common::val_u32(1),
+            vec![val_record(vec![
+                val_string("G1001"),
+                val_string("Golem Cloud Subscription 1y"),
+                val_float32(999999.0),
+                val_u32(1),
             ])],
         )
         .await;
@@ -313,11 +303,11 @@ async fn java_shopping_cart() {
         .invoke_and_await(
             &worker_id,
             "add-item",
-            vec![common::val_record(vec![
-                common::val_string("G1002"),
-                common::val_string("Mud Golem"),
-                common::val_float32(11.0),
-                common::val_u32(10),
+            vec![val_record(vec![
+                val_string("G1002"),
+                val_string("Mud Golem"),
+                val_float32(11.0),
+                val_u32(10),
             ])],
         )
         .await;
@@ -326,7 +316,7 @@ async fn java_shopping_cart() {
         .invoke_and_await(
             &worker_id,
             "update-item-quantity",
-            vec![common::val_string("G1002"), common::val_u32(20)],
+            vec![val_string("G1002"), val_u32(20)],
         )
         .await;
 
@@ -342,24 +332,24 @@ async fn java_shopping_cart() {
 
     std::assert!(
         contents
-            == Ok(vec![common::val_list(vec![
-                common::val_record(vec![
-                    common::val_string("G1000"),
-                    common::val_string("Golem T-Shirt M"),
-                    common::val_float32(100.0),
-                    common::val_u32(5),
+            == Ok(vec![val_list(vec![
+                val_record(vec![
+                    val_string("G1000"),
+                    val_string("Golem T-Shirt M"),
+                    val_float32(100.0),
+                    val_u32(5),
                 ]),
-                common::val_record(vec![
-                    common::val_string("G1001"),
-                    common::val_string("Golem Cloud Subscription 1y"),
-                    common::val_float32(999999.0),
-                    common::val_u32(1),
+                val_record(vec![
+                    val_string("G1001"),
+                    val_string("Golem Cloud Subscription 1y"),
+                    val_float32(999999.0),
+                    val_u32(1),
                 ]),
-                common::val_record(vec![
-                    common::val_string("G1002"),
-                    common::val_string("Mud Golem"),
-                    common::val_float32(11.0),
-                    common::val_u32(20),
+                val_record(vec![
+                    val_string("G1002"),
+                    val_string("Mud Golem"),
+                    val_float32(11.0),
+                    val_u32(20),
                 ])
             ])])
     )
@@ -368,10 +358,10 @@ async fn java_shopping_cart() {
 #[tokio::test]
 #[tracing::instrument]
 async fn javascript_example_1() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/js-1.wasm"));
+    let template_id = executor.store_template("js-1").await;
     let worker_id = executor.start_worker(&template_id, "js-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -380,7 +370,7 @@ async fn javascript_example_1() {
         .invoke_and_await(
             &worker_id,
             "hello",
-            vec![common::val_string("JavaScript component")],
+            vec![val_string("JavaScript component")],
         )
         .await
         .unwrap();
@@ -391,7 +381,7 @@ async fn javascript_example_1() {
 
     drop(executor);
 
-    let first_line = common::log_event_to_string(&events[0]);
+    let first_line = log_event_to_string(&events[0]);
     let parts = first_line.split(' ').collect::<Vec<_>>();
     let now = chrono::Local::now();
 
@@ -402,25 +392,25 @@ async fn javascript_example_1() {
     check!(parts[4] == "0"); // NOTE: validating that Date.now() is not working
     check!(parts[13] != "0"); // NOTE: validating that directly calling wasi:clocks/wall-clock/now works
     check!(parts[21].to_string() == now.year().to_string());
-    check!(result == vec![common::val_string(&first_line)]);
+    check!(result == vec![val_string(&first_line)]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn javascript_example_2() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/js-2.wasm"));
+    let template_id = executor.store_template("js-2").await;
     let worker_id = executor.start_worker(&template_id, "js-2").await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![common::val_u64(5)])
+        .invoke_and_await(&worker_id, "golem:it/api/add", vec![val_u64(5)])
         .await
         .unwrap();
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![common::val_u64(6)])
+        .invoke_and_await(&worker_id, "golem:it/api/add", vec![val_u64(6)])
         .await
         .unwrap();
 
@@ -431,28 +421,21 @@ async fn javascript_example_2() {
 
     drop(executor);
 
-    check!(result == vec![common::val_u64(11)]);
+    check!(result == vec![val_u64(11)]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn csharp_example_1() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/csharp-1.wasm"));
+    let template_id = executor.store_template("csharp-1").await;
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .try_start_worker_versioned(
-            &template_id,
-            0,
-            "csharp-1",
-            vec!["test-arg".to_string()],
-            env,
-        )
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "csharp-1", vec!["test-arg".to_string()], env)
+        .await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
@@ -462,7 +445,7 @@ async fn csharp_example_1() {
         .unwrap();
 
     tokio::time::sleep(Duration::from_secs(5)).await;
-    let lines = common::events_to_lines(&mut rx).await;
+    let lines = events_to_lines(&mut rx).await;
 
     drop(executor);
 
@@ -483,10 +466,10 @@ async fn csharp_example_1() {
 #[tokio::test]
 #[tracing::instrument]
 async fn c_example_1() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/c-1.wasm"));
+    let template_id = executor.store_template("c-1").await;
     let worker_id = executor.start_worker(&template_id, "c-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -502,25 +485,25 @@ async fn c_example_1() {
 
     drop(executor);
 
-    let first_line = common::log_event_to_string(&events[0]);
+    let first_line = log_event_to_string(&events[0]);
 
     check!(first_line == "Hello World!\n".to_string());
-    check!(result == vec![common::val_i32(100)]);
+    check!(result == vec![val_i32(100)]);
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn c_example_2() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/c-1.wasm"));
+    let template_id = executor.store_template("c-1").await;
     let worker_id = executor.start_worker(&template_id, "c-2").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "print", vec![common::val_string("Hello C!")])
+        .invoke_and_await(&worker_id, "print", vec![val_string("Hello C!")])
         .await
         .unwrap();
 
@@ -530,7 +513,7 @@ async fn c_example_2() {
 
     drop(executor);
 
-    let first_line = common::log_event_to_string(&events[0]);
+    let first_line = log_event_to_string(&events[0]);
     let now = chrono::Local::now();
     let year = now.year();
 
@@ -540,10 +523,10 @@ async fn c_example_2() {
 #[tokio::test]
 #[tracing::instrument]
 async fn swift_example_1() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/swift-1.wasm"));
+    let template_id = executor.store_template("swift-1").await;
     let worker_id = executor.start_worker(&template_id, "swift-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -554,7 +537,7 @@ async fn swift_example_1() {
         .unwrap();
 
     tokio::time::sleep(Duration::from_secs(5)).await;
-    let lines = common::events_to_lines(&mut rx).await;
+    let lines = events_to_lines(&mut rx).await;
 
     drop(executor);
 
@@ -568,19 +551,19 @@ async fn swift_example_1() {
 #[tokio::test]
 #[tracing::instrument]
 async fn python_example_1() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/python-1.wasm"));
+    let template_id = executor.store_template("python-1").await;
     let worker_id = executor.start_worker(&template_id, "python-1").await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![common::val_u64(3)])
+        .invoke_and_await(&worker_id, "golem:it/api/add", vec![val_u64(3)])
         .await
         .unwrap();
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![common::val_u64(8)])
+        .invoke_and_await(&worker_id, "golem:it/api/add", vec![val_u64(8)])
         .await
         .unwrap();
 
@@ -591,5 +574,5 @@ async fn python_example_1() {
 
     drop(executor);
 
-    check!(result == vec![common::val_u64(11)]);
+    check!(result == vec![val_u64(11)]);
 }

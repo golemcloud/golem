@@ -17,9 +17,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tonic::transport::Channel;
+use tonic::Streaming;
 use tracing::Level;
 
 use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
+use golem_api_grpc::proto::golem::worker::{
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetInvocationKeyRequest,
+    GetInvocationKeyResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LogEvent,
+    ResumeWorkerRequest, ResumeWorkerResponse,
+};
 
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
@@ -28,6 +36,7 @@ use crate::components::template_service::TemplateService;
 use crate::components::wait_for_startup_grpc;
 
 pub mod docker;
+pub mod forwarding;
 pub mod provided;
 pub mod spawned;
 
@@ -35,6 +44,96 @@ pub mod spawned;
 pub trait WorkerService {
     async fn client(&self) -> WorkerServiceClient<Channel> {
         new_client(self.public_host(), self.public_grpc_port()).await
+    }
+
+    // Overridable client functions - using these instead of client() allows
+    // testing worker executors directly without the need to start a worker service,
+    // when the `WorkerService` implementation is `ForwardingWorkerService`.
+    async fn create_worker(&self, request: LaunchNewWorkerRequest) -> LaunchNewWorkerResponse {
+        self.client()
+            .await
+            .launch_new_worker(request)
+            .await
+            .expect("Failed to call golem-worker-service")
+            .into_inner()
+    }
+
+    async fn delete_worker(&self, request: DeleteWorkerRequest) -> DeleteWorkerResponse {
+        self.client()
+            .await
+            .delete_worker(request)
+            .await
+            .expect("Failed to call golem-worker-service")
+            .into_inner()
+    }
+
+    async fn get_invocation_key(
+        &self,
+        request: GetInvocationKeyRequest,
+    ) -> GetInvocationKeyResponse {
+        self.client()
+            .await
+            .get_invocation_key(request)
+            .await
+            .expect("Failed to call golem-worker-service")
+            .into_inner()
+    }
+
+    async fn get_worker_metadata(
+        &self,
+        request: GetWorkerMetadataRequest,
+    ) -> GetWorkerMetadataResponse {
+        self.client()
+            .await
+            .get_worker_metadata(request)
+            .await
+            .expect("Failed to call golem-worker-service")
+            .into_inner()
+    }
+
+    async fn invoke(&self, request: InvokeRequest) -> InvokeResponse {
+        self.client()
+            .await
+            .invoke(request)
+            .await
+            .expect("Failed to call golem-worker-service")
+            .into_inner()
+    }
+
+    async fn invoke_and_await(&self, request: InvokeAndAwaitRequest) -> InvokeAndAwaitResponse {
+        self.client()
+            .await
+            .invoke_and_await(request)
+            .await
+            .expect("Failed to call golem-worker-service")
+            .into_inner()
+    }
+
+    async fn connect_worker(&self, request: ConnectWorkerRequest) -> Streaming<LogEvent> {
+        self.client()
+            .await
+            .connect_worker(request)
+            .await
+            .expect("Failed to call golem-worker-service")
+            .into_inner()
+    }
+
+    async fn resume_worker(&self, request: ResumeWorkerRequest) -> ResumeWorkerResponse {
+        self.client()
+            .await
+            .resume_worker(request)
+            .await
+            .expect("Failed to call golem-worker-service")
+            .into_inner()
+    }
+
+    async fn interrupt_worker(&self, request: InterruptWorkerRequest) -> InterruptWorkerResponse {
+        self.client()
+            .await
+            .interrupt_worker(request)
+            .await
+            .expect("Failed to call golem-worker-service")
+            .into_inner()
     }
 
     fn private_host(&self) -> &str;

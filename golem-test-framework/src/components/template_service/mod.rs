@@ -13,18 +13,28 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use create_template_request::Data;
+use golem_api_grpc::proto::golem::template::{
+    create_template_request, create_template_response, get_template_metadata_response,
+    update_template_request, update_template_response, CreateTemplateRequest,
+    CreateTemplateRequestChunk, CreateTemplateRequestHeader, GetLatestTemplateRequest,
+    UpdateTemplateRequest, UpdateTemplateRequestChunk, UpdateTemplateRequestHeader,
+};
 use tonic::transport::Channel;
-use tracing::Level;
+use tracing::{info, Level};
 
 use golem_api_grpc::proto::golem::template::template_service_client::TemplateServiceClient;
+use golem_common::model::TemplateId;
 
 use crate::components::rdb::Rdb;
 use crate::components::wait_for_startup_grpc;
 
 pub mod docker;
+pub mod filesystem;
 pub mod provided;
 pub mod spawned;
 
@@ -32,6 +42,123 @@ pub mod spawned;
 pub trait TemplateService {
     async fn client(&self) -> TemplateServiceClient<Channel> {
         new_client(self.public_host(), self.public_grpc_port()).await
+    }
+
+    async fn add_template(&self, local_path: &Path) -> TemplateId {
+        let mut client = self.client().await;
+        let file_name = local_path.file_name().unwrap().to_string_lossy();
+        let data = std::fs::read(local_path)
+            .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
+
+        let mut chunks: Vec<CreateTemplateRequest> = vec![];
+        chunks.push(CreateTemplateRequest {
+            data: Some(Data::Header(CreateTemplateRequestHeader {
+                project_id: None,
+                template_name: file_name.to_string(),
+            })),
+        });
+        chunks.push(CreateTemplateRequest {
+            data: Some(Data::Chunk(CreateTemplateRequestChunk {
+                template_chunk: data,
+            })),
+        });
+        let response = client
+            .create_template(tokio_stream::iter(chunks))
+            .await
+            .expect("Failed to create template")
+            .into_inner();
+        match response.result {
+            None => {
+                panic!("Missing response from golem-template-service for create-template")
+            }
+            Some(create_template_response::Result::Success(template)) => {
+                info!("Created template {template:?}");
+                template
+                    .protected_template_id
+                    .unwrap()
+                    .versioned_template_id
+                    .unwrap()
+                    .template_id
+                    .unwrap()
+                    .try_into()
+                    .unwrap()
+            }
+            Some(create_template_response::Result::Error(error)) => {
+                panic!("Failed to create template in golem-template-service: {error:?}");
+            }
+        }
+    }
+
+    async fn update_template(&self, template_id: &TemplateId, local_path: &Path) -> i32 {
+        let mut client = self.client().await;
+        let data = std::fs::read(local_path)
+            .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
+
+        let mut chunks: Vec<UpdateTemplateRequest> = vec![];
+        chunks.push(UpdateTemplateRequest {
+            data: Some(update_template_request::Data::Header(
+                UpdateTemplateRequestHeader {
+                    template_id: Some(template_id.clone().into()),
+                },
+            )),
+        });
+        chunks.push(UpdateTemplateRequest {
+            data: Some(update_template_request::Data::Chunk(
+                UpdateTemplateRequestChunk {
+                    template_chunk: data,
+                },
+            )),
+        });
+        let response = client
+            .update_template(tokio_stream::iter(chunks))
+            .await
+            .expect("Failed to update template")
+            .into_inner();
+        match response.result {
+            None => {
+                panic!("Missing response from golem-template-service for create-template")
+            }
+            Some(update_template_response::Result::Success(template)) => {
+                info!("Created template {template:?}");
+                template
+                    .protected_template_id
+                    .unwrap()
+                    .versioned_template_id
+                    .unwrap()
+                    .version
+            }
+            Some(update_template_response::Result::Error(error)) => {
+                panic!("Failed to update template in golem-template-service: {error:?}");
+            }
+        }
+    }
+
+    async fn get_latest_version(&self, template_id: &TemplateId) -> i32 {
+        let response = self
+            .client()
+            .await
+            .get_latest_template_metadata(GetLatestTemplateRequest {
+                template_id: Some(template_id.clone().into()),
+            })
+            .await
+            .expect("Failed to get latest template metadata")
+            .into_inner();
+        match response.result {
+            None => {
+                panic!("Missing response from golem-template-service for create-template")
+            }
+            Some(get_template_metadata_response::Result::Success(template)) => {
+                template
+                    .template
+                    .expect("No template in response")
+                    .versioned_template_id
+                    .expect("No versioned_template_id field")
+                    .version
+            }
+            Some(get_template_metadata_response::Result::Error(error)) => {
+                panic!("Failed to get template metadata from golem-template-service: {error:?}");
+            }
+        }
     }
 
     fn private_host(&self) -> &str;

@@ -28,7 +28,7 @@ pub mod redis;
 pub mod redis_monitor;
 pub mod shard_manager;
 pub mod template_service;
-mod worker_executor;
+pub mod worker_executor;
 pub mod worker_executor_cluster;
 pub mod worker_service;
 
