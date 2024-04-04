@@ -1,12 +1,10 @@
-use std::collections::BTreeMap;
-
 #[derive(Clone, Default)]
 pub struct RadixNode<T> {
     pattern: Vec<Pattern>,
     // The key is the first pattern of the child.
     // Given the paths are perfectly de-duplicated,
     // we can assume that each child has a unique first pattern.
-    children: BTreeMap<Pattern, RadixNode<T>>,
+    children: Vec<RadixNode<T>>,
     data: Option<T>,
 }
 
@@ -17,7 +15,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RadixNode")
             .field("pattern", &self.pattern)
-            .field("children", &self.children.values())
+            .field("children", &self.children)
             .field("data", &self.data)
             .finish()
     }
@@ -60,7 +58,7 @@ impl<T> RadixNode<T> {
                     let new_path = &path[common_prefix_len..];
                     let new_path_head = &new_path[0];
 
-                    if let Some(child) = self.children.get_mut(new_path_head) {
+                    if let Some(child) = self.get_child_mut(new_path_head) {
                         child.insert_path(new_path, data)
                     } else {
                         // If there are no children, we can insert the new path directly
@@ -70,10 +68,10 @@ impl<T> RadixNode<T> {
                         } else {
                             let new_node = RadixNode {
                                 pattern: new_path.to_vec(),
-                                children: BTreeMap::new(),
+                                children: Vec::new(),
                                 data: Some(data),
                             };
-                            self.children.insert(new_path_head.clone(), new_node);
+                            self.add_child(new_node);
                             Ok(())
                         }
                     }
@@ -104,14 +102,12 @@ impl<T> RadixNode<T> {
 
                     let path_node = RadixNode {
                         pattern: path.to_vec(),
-                        children: BTreeMap::new(),
+                        children: Vec::new(),
                         data: Some(data),
                     };
 
-                    self.children
-                        .insert(self_node.pattern[0].clone(), self_node);
-                    self.children
-                        .insert(path_node.pattern[0].clone(), path_node);
+                    self.add_child(self_node);
+                    self.add_child(path_node);
 
                     Ok(())
                 } else {
@@ -125,8 +121,7 @@ impl<T> RadixNode<T> {
                         data: new_child_data,
                     };
 
-                    self.children
-                        .insert(new_child.pattern[0].clone(), new_child);
+                    self.add_child(new_child);
                     self.insert_path(path, data)
                 }
             }
@@ -140,10 +135,10 @@ impl<T> RadixNode<T> {
         } else {
             let new_node = RadixNode {
                 pattern: path.to_vec(),
-                children: BTreeMap::new(),
+                children: Vec::new(),
                 data: Some(data),
             };
-            self.children.insert(path[0].clone(), new_node);
+            self.add_child(new_node);
         }
     }
 
@@ -161,7 +156,7 @@ impl<T> RadixNode<T> {
                 return self.data.as_ref();
             } else {
                 // The path partially matches the current node's pattern
-                if let Some(child) = self.children.get(&path[common_prefix_len]) {
+                if let Some(child) = self.get_child(&path[common_prefix_len]) {
                     return child.get(&path[common_prefix_len..]);
                 }
             }
@@ -211,14 +206,14 @@ impl<T> RadixNode<T> {
 
                     match path_segments.first() {
                         Some(first_segment) => {
-                            let next_child = node
-                                .children
-                                .iter()
-                                .find(|(pattern, _)| match pattern {
-                                    Pattern::Static(s) => s == first_segment,
-                                    Pattern::Variable => true,
-                                })
-                                .map(|(_, child)| child);
+                            let next_child =
+                                node.children
+                                    .iter()
+                                    .find(|child| match child.pattern.first() {
+                                        Some(Pattern::Static(s)) => s == first_segment,
+                                        Some(Pattern::Variable) => true,
+                                        None => unreachable!("Child pattern is empty"),
+                                    });
 
                             if let Some(child) = next_child {
                                 node = child;
@@ -237,6 +232,30 @@ impl<T> RadixNode<T> {
         }
 
         None
+    }
+
+    fn get_child(&self, pattern: &Pattern) -> Option<&RadixNode<T>> {
+        let index = self
+            .children
+            .binary_search_by(|c| c.pattern.first().cmp(&Some(pattern)))
+            .ok()?;
+        self.children.get(index)
+    }
+
+    fn get_child_mut(&mut self, pattern: &Pattern) -> Option<&mut RadixNode<T>> {
+        let index = self
+            .children
+            .binary_search_by(|c| c.pattern.first().cmp(&Some(pattern)))
+            .ok()?;
+        self.children.get_mut(index)
+    }
+
+    fn add_child(&mut self, node: RadixNode<T>) {
+        let index = self
+            .children
+            .binary_search_by(|c| c.pattern.cmp(&node.pattern))
+            .unwrap_or_else(|i| i);
+        self.children.insert(index, node);
     }
 
     fn common_prefix_len(&self, path: &[Pattern]) -> usize {
