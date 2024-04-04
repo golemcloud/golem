@@ -215,13 +215,16 @@ mod tests {
         assert_eq!(result, Some(" foo".to_string()))
     }
 
+
     #[test]
     fn test_index_of_last_end_token() {
         let tokens = "else foo }";
 
         let mut cursor = TokenCursor::new(tokens);
-        let result = cursor.index_of_last_end_token(vec![&Token::LCurly], &Token::RCurly );
+        let result = cursor.index_of_last_end_token(vec![&Token::LCurly], &Token::RCurly);
 
-        assert_eq!(result, Some(10))
+        let unchanged_current_toknen = cursor.next_non_empty_token().clone();
+
+        assert_eq!((result, unchanged_current_toknen), (Some(9), Some(Token::else_token())))
     }
 }
