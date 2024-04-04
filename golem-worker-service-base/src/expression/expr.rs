@@ -266,6 +266,7 @@ impl Expr {
                     }
                 }
 
+
                 Expr::SelectIndex(expr0, index) => {
                     let expr0: &Expr = expr0;
                     let expr_internal = go(expr0, true)?;
@@ -337,6 +338,15 @@ impl Expr {
                                 vs.push(value_json);
                             }
                         }
+                    }
+
+                    Ok(InternalValue::RawJson(Value::Array(vs)))
+                }
+
+                Expr::Flags(values) => {
+                    let mut vs: Vec<Value> = vec![];
+                    for value in values {
+                        vs.push(Value::String(value.clone()));
                     }
 
                     Ok(InternalValue::RawJson(Value::Array(vs)))

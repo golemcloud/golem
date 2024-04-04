@@ -369,7 +369,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                     }
                     _ => {
                         let expr = create_list(tokenizer)?;
-                        go(tokenizer, context, prev_expression.apply_with(expr)?)
+                        go(tokenizer, context, prev_expression.apply_with(expr))
                     }
                 },
 
@@ -495,7 +495,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                         )
                     };
 
-                    go(tokenizer, context, prev_expression.apply_with(expr?)?)
+                    go(tokenizer, context, prev_expression.apply_with(expr?))
                 }
                 Token::MultiChar(MultiCharTokens::Arrow) => go(tokenizer, context, prev_expression),
                 Token::Comma => go(tokenizer, context, prev_expression),

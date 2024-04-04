@@ -345,6 +345,13 @@ impl Evaluator for Expr {
                         typ: typ.clone()
                     })
                 }
+
+                Expr::Flags(flags) => {
+                    Ok(TypeAnnotatedValue::Flags {
+                        values: flags.clone(),
+                        typ: flags,
+                    })
+                }
             }
         }
 
@@ -1340,6 +1347,24 @@ mod tests {
                 TypeAnnotatedValue::U64(2),
                 TypeAnnotatedValue::U64(3),
             ],
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_evaluation_wave_like_syntax_flag() {
+        let expr = Expr::from_primitive_string("${{A, B, C}}").unwrap();
+
+        dbg!(expr.clone());
+        let result = expr.evaluate(&TypeAnnotatedValue::Record {
+            value: vec![],
+            typ: vec![],
+        });
+
+        let expected = Ok(TypeAnnotatedValue::Flags {
+            typ: vec!["A".to_string(), "B".to_string(), "C".to_string()],
+            values: vec!["A".to_string(), "B".to_string(), "C".to_string()],
         });
 
         assert_eq!(result, expected);
