@@ -480,34 +480,34 @@ mod tests {
 
     #[test]
     fn expr_with_if_condition() {
-        test_string_expr_parse_and_encode("${if (request.path.user_id>1) then 1 else 0}");
+        test_string_expr_parse_and_encode("${if request.path.user_id>1 then 1 else 0}");
     }
 
     #[test]
     fn expr_with_if_condition_with_expr_left() {
         test_string_expr_parse_and_encode(
-            "${if (request.path.user_id>1) then request.path.user_id else 0}",
+            "${if request.path.user_id>1 then request.path.user_id else 0}",
         );
     }
 
     #[test]
     fn expr_with_if_condition_with_expr_left_right() {
         test_string_expr_parse_and_encode(
-            "${if (request.path.user_id>1) then request.path.user_id else request.path.id}",
+            "${if request.path.user_id>1 then request.path.user_id else request.path.id}",
         );
     }
 
     #[test]
     fn expr_with_if_condition_with_expr_right() {
         test_string_expr_parse_and_encode(
-            "${if (request.path.user_id>1) then 0 else request.path.id}",
+            "${if request.path.user_id>1 then 0 else request.path.id}",
         );
     }
 
     #[test]
     fn expr_with_if_condition_with_with_literals() {
         test_string_expr_parse_and_encode(
-            "foo-${if (request.path.user_id>1) then request.path.user_id else 0}",
+            "foo-${if request.path.user_id>1 then request.path.user_id else 0}",
         );
     }
 

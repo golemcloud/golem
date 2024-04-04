@@ -1206,7 +1206,9 @@ mod tests {
         assert_eq!(result, Ok(expected));
     }
 
+    // We can ignore this since we stopped supporting grouping using paranthesis
     #[test]
+    #[ignore]
     fn test_if_expr_with_paranthesis() {
         let expression_parser = ExprParser {};
 
@@ -1303,7 +1305,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${if (request.path.user_id == 1) then 1 else if (request.path.user_id == 2) then 2 else if (request.path.user_id == 3) then 3 else 0}")
+            .parse("${if request.path.user_id == 1 then 1 else if request.path.user_id == 2 then 2 else if request.path.user_id == 3 then 3 else 0}")
             .unwrap();
 
         // cond(path, 1, cond(2, 2, 0))
@@ -1456,7 +1458,9 @@ mod tests {
         assert_eq!(result, expected);
     }
 
+    //  We ignore this test as we stopped supporting using ( for nestedness
     #[test]
+    #[ignore]
     fn test_if_expr_with_nested_code() {
         let expression_parser = ExprParser {};
 
@@ -1497,12 +1501,14 @@ mod tests {
         assert_eq!(result, expected);
     }
 
+    // We  ignore this test as we stopped supporting using ( for nestedness
     #[test]
+    #[ignore]
     fn test_if_expr_with_complex_nested_code() {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("foo-${if ((if request.path.hello then 1 else 0) > 0) then request.path.user_id else 0}")
+            .parse("foo-${if (if request.path.hello then 1 else 0) > 0) then request.path.user_id else 0}")
             .unwrap();
 
         // TODOl Use our own predicate combinators
@@ -1539,7 +1545,9 @@ mod tests {
         assert_eq!(result, expected);
     }
 
+    // We  ignore this test as we stopped supporting using ( for nestedness
     #[test]
+    #[ignore]
     fn test_if_expr_with_grouping_predicate() {
         let expression_parser = ExprParser {};
 

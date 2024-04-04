@@ -1,12 +1,6 @@
 use std::fmt::Display;
 use std::str::Chars;
 
-// Typical usage:
-//
-// let result = Tokenizer::new("input_value").run();
-// let cursor = result.to_cursor();
-//   while let Some(token) = cursor.next_token() {}
-// }
 #[derive(Clone, PartialEq, Debug)]
 pub enum Token {
     MultiChar(MultiCharTokens),
@@ -389,10 +383,6 @@ impl<'t> Tokenizer<'t> {
         }
     }
 
-    pub fn run(self) -> Vec<Token> {
-        self.collect()
-    }
-
     pub fn next_token(&mut self) -> Option<Token> {
         self.get_single_char_token()
             .or_else(|| self.get_multi_char_token())
@@ -514,7 +504,7 @@ mod tests {
 
     #[test]
     fn test_raw() {
-        let tokens: Vec<Token> = Tokenizer::new("foo bar").run();
+        let tokens: Vec<Token> = Tokenizer::new("foo bar").collect();
         assert_eq!(
             tokens,
             vec![
@@ -527,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_open_close_braces() {
-        let tokens: Vec<Token> = Tokenizer::new("(foo bar)").run();
+        let tokens: Vec<Token> = Tokenizer::new("(foo bar)").collect();
         assert_eq!(
             tokens,
             vec![
@@ -542,7 +532,7 @@ mod tests {
 
     #[test]
     fn test_dot() {
-        let tokens: Vec<Token> = Tokenizer::new("foo . bar").run();
+        let tokens: Vec<Token> = Tokenizer::new("foo . bar").collect();
         assert_eq!(
             tokens,
             vec![
@@ -557,19 +547,19 @@ mod tests {
 
     #[test]
     fn test_request() {
-        let tokens: Vec<Token> = Tokenizer::new("request .").run();
+        let tokens: Vec<Token> = Tokenizer::new("request .").collect();
         assert_eq!(tokens, vec![Token::request(), Token::Space, Token::Dot,]);
     }
 
     #[test]
     fn test_worker_response() {
-        let tokens: Vec<Token> = Tokenizer::new("worker.").run();
+        let tokens: Vec<Token> = Tokenizer::new("worker.").collect();
         assert_eq!(tokens, vec![Token::worker(), Token::Dot]);
     }
 
     #[test]
     fn test_open_close_square_bracket() {
-        let tokens: Vec<Token> = Tokenizer::new("[foo bar]").run();
+        let tokens: Vec<Token> = Tokenizer::new("[foo bar]").collect();
         assert_eq!(
             tokens,
             vec![
@@ -584,7 +574,7 @@ mod tests {
 
     #[test]
     fn test_if_start() {
-        let tokens: Vec<Token> = Tokenizer::new("if x").run();
+        let tokens: Vec<Token> = Tokenizer::new("if x").collect();
 
         assert_eq!(
             tokens,
@@ -594,7 +584,7 @@ mod tests {
 
     #[test]
     fn test_false_ifs() {
-        let tokens: Vec<Token> = Tokenizer::new("asif x").run();
+        let tokens: Vec<Token> = Tokenizer::new("asif x").collect();
 
         assert_eq!(
             tokens,
@@ -608,7 +598,7 @@ mod tests {
 
     #[test]
     fn test_false_ifs2() {
-        let tokens: Vec<Token> = Tokenizer::new("ifis x").run();
+        let tokens: Vec<Token> = Tokenizer::new("ifis x").collect();
 
         assert_eq!(
             tokens,
@@ -622,7 +612,7 @@ mod tests {
 
     #[test]
     fn test_if_then_else_predicate() {
-        let tokens: Vec<Token> = Tokenizer::new("if ${x > 1} then 1 else 0").run();
+        let tokens: Vec<Token> = Tokenizer::new("if ${x > 1} then 1 else 0").collect();
 
         assert_eq!(
             tokens,
@@ -655,7 +645,7 @@ if ${x} then ${y}
 else${z}
 "#;
 
-        let tokens: Vec<Token> = Tokenizer::new(string).run();
+        let tokens: Vec<Token> = Tokenizer::new(string).collect();
 
         assert_eq!(
             tokens,
@@ -684,14 +674,14 @@ else${z}
 
     #[test]
     fn test_if_then_else_false_expr() {
-        let tokens: Vec<Token> = Tokenizer::new("ifxthenyelsez").run();
+        let tokens: Vec<Token> = Tokenizer::new("ifxthenyelsez").collect();
 
         assert_eq!(tokens, vec![Token::raw_string("ifxthenyelsez"),]);
     }
 
     #[test]
     fn test_greater_than_partial() {
-        let tokens: Vec<Token> = Tokenizer::new("f >").run();
+        let tokens: Vec<Token> = Tokenizer::new("f >").collect();
 
         assert_eq!(
             tokens,
@@ -701,7 +691,7 @@ else${z}
 
     #[test]
     fn test_greater_than_with_space() {
-        let tokens: Vec<Token> = Tokenizer::new("f  > g").run();
+        let tokens: Vec<Token> = Tokenizer::new("f  > g").collect();
 
         assert_eq!(
             tokens,
@@ -718,7 +708,7 @@ else${z}
 
     #[test]
     fn test_greater_than_no_spaces() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo}>${bar}").run();
+        let tokens: Vec<Token> = Tokenizer::new("${foo}>${bar}").collect();
 
         //  let tokens: Vec<Token> = Tokenizer::new("{foo} raw {goo}").collect();
 
@@ -738,7 +728,7 @@ else${z}
 
     #[test]
     fn test_lessthan_partial() {
-        let tokens: Vec<Token> = Tokenizer::new("f <").run();
+        let tokens: Vec<Token> = Tokenizer::new("f <").collect();
 
         assert_eq!(
             tokens,
@@ -748,7 +738,7 @@ else${z}
 
     #[test]
     fn test_less_than_with_space() {
-        let tokens: Vec<Token> = Tokenizer::new("f < g").run();
+        let tokens: Vec<Token> = Tokenizer::new("f < g").collect();
 
         assert_eq!(
             tokens,
@@ -764,7 +754,7 @@ else${z}
 
     #[test]
     fn test_less_than_with_no_space() {
-        let tokens: Vec<Token> = Tokenizer::new("f<g").run();
+        let tokens: Vec<Token> = Tokenizer::new("f<g").collect();
 
         assert_eq!(
             tokens,
@@ -778,7 +768,7 @@ else${z}
 
     #[test]
     fn test_greater_than_with_exprs() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo} > ${bar}").run();
+        let tokens: Vec<Token> = Tokenizer::new("${foo} > ${bar}").collect();
 
         //  let tokens: Vec<Token> = Tokenizer::new("{foo} raw {goo}").collect();
 
@@ -800,7 +790,7 @@ else${z}
 
     #[test]
     fn test_less_than_with_exprs() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo} < ${bar}").run();
+        let tokens: Vec<Token> = Tokenizer::new("${foo} < ${bar}").collect();
 
         //  let tokens: Vec<Token> = Tokenizer::new("{foo} raw {goo}").collect();
 
@@ -822,7 +812,7 @@ else${z}
 
     #[test]
     fn test_equal_to_with_exprs() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo} == ${bar}").run();
+        let tokens: Vec<Token> = Tokenizer::new("${foo} == ${bar}").collect();
 
         //  let tokens: Vec<Token> = Tokenizer::new("{foo} raw {goo}").collect();
 
@@ -844,7 +834,7 @@ else${z}
 
     #[test]
     fn test_with_place_holder_in_beginning_and_end() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo}-raw_${bar}").run();
+        let tokens: Vec<Token> = Tokenizer::new("${foo}-raw_${bar}").collect();
         assert_eq!(
             tokens,
             vec![
@@ -861,7 +851,7 @@ else${z}
 
     #[test]
     fn test_with_place_holder_in_beginning() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo}-^raw").run();
+        let tokens: Vec<Token> = Tokenizer::new("${foo}-^raw").collect();
         assert_eq!(
             tokens,
             vec![
@@ -877,7 +867,7 @@ else${z}
 
     #[test]
     fn test_with_place_holder_in_end() {
-        let tokens: Vec<Token> = Tokenizer::new("raw ${foo}").run();
+        let tokens: Vec<Token> = Tokenizer::new("raw ${foo}").collect();
         assert_eq!(
             tokens,
             vec![
@@ -892,7 +882,7 @@ else${z}
 
     #[test]
     fn test_with_place_holder_anywhere() {
-        let tokens: Vec<Token> = Tokenizer::new("foo ${foo} raw ${bar} bar").run();
+        let tokens: Vec<Token> = Tokenizer::new("foo ${foo} raw ${bar} bar").collect();
         assert_eq!(
             tokens,
             vec![
@@ -915,7 +905,7 @@ else${z}
 
     #[test]
     fn test_token_processing_with_dollar() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo} raw${hi} bar").run();
+        let tokens: Vec<Token> = Tokenizer::new("${foo} raw${hi} bar").collect();
         assert_eq!(
             tokens,
             vec![
@@ -938,7 +928,7 @@ else${z}
         let tokens: Vec<Token> = Tokenizer::new(
             "${match worker.response { some(value) => worker.response, none => 'some_value' } }",
         )
-        .run();
+        .collect();
 
         assert_eq!(
             tokens,

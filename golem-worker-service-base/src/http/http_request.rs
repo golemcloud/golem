@@ -616,7 +616,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             function_params,
         );
 
@@ -654,7 +654,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             function_params,
         );
 
@@ -876,7 +876,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             function_params.as_str(),
         );
 
@@ -929,7 +929,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             function_params.as_str(),
         );
 
@@ -981,7 +981,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             function_params.as_str(),
         );
 
@@ -1039,7 +1039,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "/foo/{user-id}",
-            "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             function_params.as_str(),
         );
 
