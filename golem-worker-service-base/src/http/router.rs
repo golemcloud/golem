@@ -1,12 +1,7 @@
-use std::collections::BTreeMap;
-
 #[derive(Clone, Default)]
 pub struct RadixNode<T> {
     pattern: Vec<Pattern>,
-    // The key is the first pattern of the child.
-    // Given the paths are perfectly de-duplicated,
-    // we can assume that each child has a unique first pattern.
-    children: BTreeMap<Pattern, RadixNode<T>>,
+    children: OrderedChildren<T>,
     data: Option<T>,
 }
 
@@ -17,9 +12,64 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RadixNode")
             .field("pattern", &self.pattern)
-            .field("children", &self.children.values())
+            .field("children", &self.children)
             .field("data", &self.data)
             .finish()
+    }
+}
+
+// Given the paths are perfectly de-duplicated,
+// We can assume that each child has a unique first pattern.
+#[derive(Debug, Clone)]
+struct OrderedChildren<T>(Vec<RadixNode<T>>);
+
+impl<T> Default for OrderedChildren<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl<T> OrderedChildren<T> {
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[inline]
+    fn search_by_str(&self, input: &str) -> Option<&RadixNode<T>> {
+        let next_child_index = self
+            .0
+            .binary_search_by(|child| match child.pattern.first() {
+                Some(Pattern::Static(s)) => s.as_str().cmp(input),
+                Some(Pattern::Variable) => std::cmp::Ordering::Equal,
+                None => unreachable!("Child pattern is empty"),
+            });
+
+        next_child_index.ok().map(|index| &self.0[index])
+    }
+
+    fn get_child(&self, pattern: &Pattern) -> Option<&RadixNode<T>> {
+        let index = self
+            .0
+            .binary_search_by(|c| c.pattern.first().cmp(&Some(pattern)))
+            .ok()?;
+        self.0.get(index)
+    }
+
+    fn get_child_mut(&mut self, pattern: &Pattern) -> Option<&mut RadixNode<T>> {
+        let index = self
+            .0
+            .binary_search_by(|c| c.pattern.first().cmp(&Some(pattern)))
+            .ok()?;
+        self.0.get_mut(index)
+    }
+
+    fn add_child(&mut self, node: RadixNode<T>) {
+        let index = self
+            .0
+            .binary_search_by(|c| c.pattern.cmp(&node.pattern))
+            .unwrap_or_else(|i| i);
+        self.0.insert(index, node);
     }
 }
 
@@ -30,16 +80,16 @@ pub enum Pattern {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum PushError {
+pub enum InsertionError {
     #[error("Conflict with existing route")]
     Conflict,
 }
 
 impl<T> RadixNode<T> {
-    pub fn insert_path(&mut self, path: &[Pattern], data: T) -> Result<(), PushError> {
+    pub fn insert_path(&mut self, path: &[Pattern], data: T) -> Result<(), InsertionError> {
         if path.is_empty() {
             if self.data.is_some() {
-                return Err(PushError::Conflict);
+                return Err(InsertionError::Conflict);
             } else {
                 self.data = Some(data);
                 Ok(())
@@ -51,7 +101,7 @@ impl<T> RadixNode<T> {
                 if common_prefix_len == path.len() {
                     // The path is fully consumed, update the data of the current node
                     if self.data.is_some() {
-                        Err(PushError::Conflict)
+                        Err(InsertionError::Conflict)
                     } else {
                         self.data = Some(data);
                         Ok(())
@@ -60,22 +110,10 @@ impl<T> RadixNode<T> {
                     let new_path = &path[common_prefix_len..];
                     let new_path_head = &new_path[0];
 
-                    if let Some(child) = self.children.get_mut(new_path_head) {
+                    if let Some(child) = self.children.get_child_mut(new_path_head) {
                         child.insert_path(new_path, data)
                     } else {
-                        // If there are no children, we can insert the new path directly
-                        if self.children.is_empty() {
-                            self.insert_new(new_path, data);
-                            Ok(())
-                        } else {
-                            let new_node = RadixNode {
-                                pattern: new_path.to_vec(),
-                                children: BTreeMap::new(),
-                                data: Some(data),
-                            };
-                            self.children.insert(new_path_head.clone(), new_node);
-                            Ok(())
-                        }
+                        self.insert_new(new_path, data)
                     }
                 }
             } else {
@@ -105,14 +143,12 @@ impl<T> RadixNode<T> {
 
                     let path_node = RadixNode {
                         pattern: path.to_vec(),
-                        children: BTreeMap::new(),
+                        children: OrderedChildren::default(),
                         data: Some(data),
                     };
 
-                    self.children
-                        .insert(self_node.pattern[0].clone(), self_node);
-                    self.children
-                        .insert(path_node.pattern[0].clone(), path_node);
+                    self.children.add_child(self_node);
+                    self.children.add_child(path_node);
 
                     Ok(())
                 } else {
@@ -155,25 +191,10 @@ impl<T> RadixNode<T> {
                         data: new_child_data,
                     };
 
-                    self.children
-                        .insert(new_child.pattern[0].clone(), new_child);
+                    self.children.add_child(new_child);
                     self.insert_path(path, data)
                 }
             }
-        }
-    }
-
-    fn insert_new(&mut self, path: &[Pattern], data: T) {
-        if self.pattern.is_empty() && self.data.is_none() {
-            self.pattern = path.to_vec();
-            self.data = Some(data);
-        } else {
-            let new_node = RadixNode {
-                pattern: path.to_vec(),
-                children: BTreeMap::new(),
-                data: Some(data),
-            };
-            self.children.insert(path[0].clone(), new_node);
         }
     }
 
@@ -191,7 +212,7 @@ impl<T> RadixNode<T> {
                 return self.data.as_ref();
             } else {
                 // The path partially matches the current node's pattern
-                if let Some(child) = self.children.get(&path[common_prefix_len]) {
+                if let Some(child) = self.children.get_child(&path[common_prefix_len]) {
                     return child.get(&path[common_prefix_len..]);
                 }
             }
@@ -248,15 +269,7 @@ impl<T> RadixNode<T> {
 
                     match path_segments.first() {
                         Some(first_segment) => {
-                            let next_child = node
-                                .children
-                                .iter()
-                                .find(|(pattern, _)| match pattern {
-                                    Pattern::Static(s) => s == first_segment,
-                                    Pattern::Variable => true,
-                                })
-                                .map(|(_, child)| child);
-
+                            let next_child = self.children.search_by_str(*first_segment);
                             if let Some(child) = next_child {
                                 node = child;
                             } else {
@@ -276,6 +289,27 @@ impl<T> RadixNode<T> {
         None
     }
 
+    fn insert_new(&mut self, path: &[Pattern], data: T) -> Result<(), InsertionError> {
+        if self.children.is_empty() && self.pattern.is_empty() {
+            if self.data.is_some() {
+                Err(InsertionError::Conflict)
+            } else {
+                self.pattern = path.to_vec();
+                self.data = Some(data);
+                Ok(())
+            }
+        } else {
+            let new_node = RadixNode {
+                pattern: path.to_vec(),
+                children: OrderedChildren::default(),
+                data: Some(data),
+            };
+            self.children.add_child(new_node);
+            Ok(())
+        }
+    }
+
+    #[inline]
     fn common_prefix_len(&self, path: &[Pattern]) -> usize {
         self.pattern
             .iter()
@@ -349,7 +383,7 @@ mod test {
         assert_eq!(root.get(&path2), Some(&2));
 
         assert!(root.pattern.is_empty());
-        assert_eq!(3, root.children.len());
+        assert_eq!(3, root.children.0.len());
     }
 
     #[test]
@@ -420,7 +454,7 @@ mod test {
 
         assert!(matches!(
             root.insert_path(path.as_slice(), 2),
-            Err(PushError::Conflict)
+            Err(InsertionError::Conflict)
         ));
     }
 
