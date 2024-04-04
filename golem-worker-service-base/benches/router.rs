@@ -1,65 +1,34 @@
-use divan::Bencher;
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
 use golem_worker_service_base::http::router::{make_path, Pattern, RadixNode};
 
-fn main() {
-    divan::main();
-}
+criterion_group!(benches, radix_tree_all_matches);
+criterion_main!(benches);
 
-const NUM_ROUTES: &[usize] = &[10, 20, 50, 100];
+fn radix_tree_all_matches(c: &mut Criterion) {
+    let num_routes = &[10, 20, 50, 100];
 
-const SAMPLE_COUNT: u32 = 10000;
-const SAMPLE_SIZE: u32 = 1000;
+    let mut group = c.benchmark_group("matches");
+    for (i, &len) in num_routes.into_iter().enumerate() {
+        group.bench_function(format!("{i}/len={len}"), |b| {
+            let (original, routes) = generate_routes(len);
+            let radix_tree = build_radix_tree(&routes);
 
-#[divan::bench(
-    args = NUM_ROUTES,
-    sample_count = SAMPLE_COUNT,
-    sample_size = SAMPLE_SIZE
-)]
-fn radix_tree_all_matches(bencher: Bencher, len: usize) {
-    let (original, routes) = generate_routes(len);
-    let radix_tree = build_radix_tree(&routes);
+            let match_routes: Vec<_> = (0..1000).map(|_| generate_match_route(&original)).collect();
 
-    bencher
-        .with_inputs(|| generate_match_route(&original))
-        .bench_local_refs(|route| {
-            let refs = route.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-            let _ = radix_tree.matches(refs.as_slice());
+            b.iter_with_setup(
+                || {
+                    let route = fastrand::choice(&match_routes).unwrap();
+                    let refs = route.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+                    black_box(refs)
+                },
+                |refs| {
+                    let _ = radix_tree.matches(refs.as_slice());
+                },
+            );
         });
-}
-
-const MATCH_PERCENTAGE: &[usize] = &[10, 20, 50, 100];
-
-#[divan::bench(
-    args = MATCH_PERCENTAGE,
-    sample_count = SAMPLE_COUNT,
-    sample_size = SAMPLE_SIZE
-)]
-fn radix_tree_with_misses(bencher: Bencher, miss_percent: usize) {
-    let (original, routes) = generate_routes(100);
-    let invalid_routes = ROUTES
-        .iter()
-        .filter(|r| !original.contains(r))
-        .map(|s| *s)
-        .collect::<Vec<_>>();
-
-    let radix_tree = build_radix_tree(&routes);
-
-    let miss_percent = miss_percent as f64 / 100.0;
-
-    bencher
-        .with_inputs(|| {
-            let should_miss = fastrand::f64() < miss_percent;
-
-            if should_miss {
-                generate_match_route(invalid_routes.as_slice())
-            } else {
-                generate_match_route(&original)
-            }
-        })
-        .bench_local_refs(|route| {
-            let refs = route.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-            let _ = radix_tree.matches(refs.as_slice());
-        });
+    }
+    group.finish();
 }
 
 fn generate_routes(n: usize) -> (Vec<&'static str>, Vec<Vec<Pattern>>) {

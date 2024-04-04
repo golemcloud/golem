@@ -57,7 +57,7 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
-divan = "0.1.14"
+criterion = { version = "0.3", features = ["html_reports"] }
 fastrand = "2.0.2"
 
 [[bench]]
