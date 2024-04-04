@@ -1,4 +1,4 @@
-use nom::bytes::complete::tag;
+use nom::character::complete;
 use nom::sequence::delimited;
 use nom::IResult;
 
@@ -18,7 +18,11 @@ impl GolemParser<PlaceHolder> for PlaceHolderPatternParser {
 }
 
 pub fn parse_place_holder(input: &str) -> IResult<&str, &str> {
-    delimited(tag("{"), take_until_unbalanced('{', '}'), tag("}"))(input)
+    delimited(
+        complete::char('{'),
+        take_until_unbalanced('{', '}'),
+        complete::char('}'),
+    )(input)
 }
 
 // https://stackoverflow.com/questions/70630556/parse-allowing-nested-parentheses-in-nom
@@ -72,8 +76,14 @@ fn take_until_unbalanced(
 
 #[test]
 fn test_parse_place_holder() {
-    assert_eq!(parse_place_holder("{test}").unwrap().1, "test");
-    assert_eq!(parse_place_holder("{test{test}}").unwrap().1, "test{test}");
+    assert_eq!(("", "test"), parse_place_holder("{test}").unwrap());
+    assert_eq!(
+        ("", "test{test}"),
+        parse_place_holder("{test{test}}").unwrap(),
+    );
     assert!(parse_place_holder("{test").is_err());
     assert!(parse_place_holder("test}").is_err());
+    assert!(parse_place_holder("}").is_err());
+
+    assert_eq!(("}", "test"), parse_place_holder("{test}}").unwrap());
 }
