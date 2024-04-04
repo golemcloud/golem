@@ -725,7 +725,7 @@ mod internal {
         go(tokenizer, &mut flags)?;
         Ok(Expr::Flags(flags))
     }
-    
+
     pub(crate) fn resolve_literal_in_code_context(primitive: &str) -> Expr {
         if let Ok(u64) = primitive.parse::<u64>() {
             Expr::Number(InnerNumber::UnsignedInteger(u64))
