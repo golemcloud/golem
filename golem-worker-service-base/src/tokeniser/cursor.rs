@@ -82,7 +82,7 @@ impl<'a> TokenCursor<'a> {
         // Skip head
         self.tokenizer.next_token();
 
-        let str = self.tokenizer.rest().to_string();
+        let str = self.tokenizer.consume_rest().to_string();
 
         if str.is_empty() {
             None

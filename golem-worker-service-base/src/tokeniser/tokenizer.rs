@@ -250,8 +250,15 @@ impl<'t> Tokenizer<'t> {
         self.text.chars().nth(self.state.pos)
     }
 
+    // Peek ahead the rest without traversal
     pub fn rest(&self) -> &str {
         &self.text[self.state.pos..]
+    }
+
+    pub fn consume_rest(&mut self) -> &str {
+        let str = &self.text[self.state.pos..];
+        self.progress_by_n(str.len());
+        str
     }
 
     pub fn progress(&mut self) {

@@ -903,7 +903,9 @@ mod internal {
             Some(last_token) => {
                 cursor.capture_string_until(possible_nested_token_starts, last_token)
             }
-            None => cursor.capture_tail(),
+            None => {
+                cursor.capture_tail()
+            },
         };
 
         match optional_captured_string {

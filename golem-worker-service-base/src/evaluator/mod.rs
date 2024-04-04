@@ -850,6 +850,8 @@ mod tests {
         let expr =
             Expr::from_primitive_string("${if (request.header.authorisation) then 200 else 401}")
                 .unwrap();
+
+        dbg!(expr.clone());
         let expected_evaluated_result = EvaluationError::Message(format!(
             "The predicate expression is evaluated to {} but it is not a boolean value",
             json!("admin")
