@@ -2219,7 +2219,9 @@ components:
       type: string
       enum:
       - Equal
+      - NotEqual
       - Like
+      - NotLike
     ValidationErrorsBody:
       type: object
       properties:
@@ -2531,9 +2533,12 @@ components:
     WorkerStatusFilter:
       type: object
       properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
         value:
           $ref: '#/components/schemas/WorkerStatus'
       required:
+      - comparator
       - value
     WorkerVersionFilter:
       type: object
