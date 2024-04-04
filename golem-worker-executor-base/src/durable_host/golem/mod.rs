@@ -18,6 +18,7 @@ use golem_common::config::RetryConfig;
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
+use wasmtime::component::Resource;
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UriExtensions;
@@ -27,11 +28,39 @@ use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
-use crate::preview2::golem::api::host::{OplogIndex, PersistenceLevel, RetryPolicy};
+use crate::preview2::golem::api::host::{
+    GetWorkers, HostGetWorkers, OplogIndex, PersistenceLevel, RetryPolicy, WorkerFilter,
+    WorkersMetadataResponse,
+};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{PromiseId, TemplateId, WorkerId};
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
+    async fn new(
+        &mut self,
+        template_id: golem::api::host::TemplateId,
+        filter: WorkerFilter,
+        count: u64,
+        precise: bool,
+    ) -> anyhow::Result<Resource<GetWorkers>> {
+        todo!()
+    }
+
+    async fn get(
+        &mut self,
+        self_: Resource<GetWorkers>,
+        cursor: u64,
+    ) -> anyhow::Result<Result<WorkersMetadataResponse, String>> {
+        todo!()
+    }
+
+    fn drop(&mut self, rep: Resource<GetWorkers>) -> anyhow::Result<()> {
+        todo!()
+    }
+}
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {

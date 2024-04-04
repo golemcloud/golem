@@ -50,7 +50,8 @@ message WorkerCreatedAtFilter {
 }
 
 message WorkerStatusFilter {
-  WorkerStatus value = 1;
+  golem.common.FilterComparator comparator = 1;
+  WorkerStatus value = 2;
 }
 
 message WorkerEnvFilter {

@@ -21,7 +21,8 @@ use golem_api_grpc::proto::golem::workerexecutor::{
 };
 
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, TemplateId, WorkerFilter, WorkerStatus,
+    AccountId, CallingConvention, FilterComparator, InvocationKey, TemplateId, WorkerFilter,
+    WorkerStatus,
 };
 use golem_service_base::model::{
     GolemErrorUnknown, PromiseId, ResourceLimits, VersionedWorkerId, WorkerId, WorkerMetadata,
@@ -1277,7 +1278,11 @@ fn is_connection_failure(message: &str) -> bool {
 
 fn is_filter_with_running_status(filter: WorkerFilter) -> bool {
     match filter {
-        WorkerFilter::Status(f) if f.value == WorkerStatus::Running => true,
+        WorkerFilter::Status(f)
+            if f.value == WorkerStatus::Running && f.comparator == FilterComparator::Equal =>
+        {
+            true
+        }
         WorkerFilter::And(f) => f
             .filters
             .into_iter()
