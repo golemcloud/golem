@@ -526,13 +526,9 @@ mod internal {
                 &Token::Comma, // Wave does this
             );
 
-            dbg!(captured_string.clone());
-
             match captured_string {
                 Some(r) => {
                     let expr = parse_with_context(r.as_str(), Context::Code)?;
-
-                    dbg!(expr.clone());
 
                     record.push(expr);
                     cursor.next_non_empty_token();
@@ -762,8 +758,6 @@ mod internal {
                                             vec![cons],
                                         )?;
 
-                                    dbg!(constructor_pattern.clone());
-
                                     accumulate_constructor_pattern_expr(cursor, constructor_pattern, constructor_patterns, go)
 
                                 }
@@ -816,11 +810,14 @@ mod internal {
     {
         match cursor.next_non_empty_token() {
             Some(Token::MultiChar(MultiCharTokens::Arrow)) => {
+                dbg!("Found an arrow");
                 let index_of_closed_curly_brace = cursor.index_of_last_end_token(
                     vec![&Token::LCurly, &Token::interpolation_start()],
                     &Token::RCurly,
                 );
                 let index_of_commaseparator = cursor.index_of_last_end_token(vec![], &Token::Comma);
+                dbg!(index_of_closed_curly_brace.clone());
+                dbg!(index_of_commaseparator.clone());
 
                 match (index_of_closed_curly_brace, index_of_commaseparator) {
                     (Some(end_of_constructors), Some(comma)) => {
