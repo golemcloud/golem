@@ -175,18 +175,18 @@ impl Display for AllPathPatterns {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (index, pattern) in self.path_patterns.iter().enumerate() {
             if index > 0 {
-                write!(f, "{}", '/')?;
+                write!(f, "/")?;
             }
-            write!(f, "{}", pattern)?;
+            write!(f, "{pattern}")?;
         }
 
         if !self.query_params.is_empty() {
-            write!(f, "{}", '?')?;
+            write!(f, "?")?;
             for (index, query) in self.query_params.iter().enumerate() {
                 if index > 0 {
-                    write!(f, "{}", '&')?;
+                    write!(f, "&")?;
                 }
-                write!(f, "{}", query)?;
+                write!(f, "{query}")?;
             }
         }
 

@@ -72,7 +72,7 @@ fn query_param_parser(input: &str) -> IResult<&str, QueryInfo> {
     })(input)
 }
 
-fn path_var_parser<'a>(input: &'a str) -> IResult<&'a str, ParsedPattern<'a>> {
+fn path_var_parser(input: &str) -> IResult<&str, ParsedPattern<'_>> {
     map(place_holder_parser::parse_place_holder, |x| {
         ParsedPattern::Var(x)
     })(input)
@@ -84,7 +84,7 @@ enum ParsedPattern<'a> {
     Var(&'a str),
 }
 
-fn literal_parser<'a>(input: &'a str) -> IResult<&'a str, ParsedPattern<'a>> {
+fn literal_parser(input: &str) -> IResult<&str, ParsedPattern<'_>> {
     map(take_while1(|c| !"/{}?&".contains(c)), |x| {
         ParsedPattern::Literal(x)
     })(input)

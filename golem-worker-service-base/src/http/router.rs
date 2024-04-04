@@ -86,7 +86,7 @@ impl<T> RadixNode<T> {
     pub fn insert_path(&mut self, path: &[Pattern], data: T) -> Result<(), InsertionError> {
         if path.is_empty() {
             if self.data.is_some() {
-                return Err(InsertionError::Conflict);
+                Err(InsertionError::Conflict)
             } else {
                 self.data = Some(data);
                 Ok(())
@@ -105,92 +105,89 @@ impl<T> RadixNode<T> {
                     }
                 } else {
                     let new_path = &path[common_prefix_len..];
-                    let new_path_head = &new_path[0];
 
-                    if let Some(child) = self.children.get_child_mut(new_path_head) {
+                    if let Some(child) = self.children.get_child_mut(&new_path[0]) {
                         child.insert_path(new_path, data)
                     } else {
                         self.insert_new(new_path, data)
                     }
                 }
+            } else if common_prefix_len == 0 {
+                // both self and path must become children of the current node.
+                //
+                // self.path = ["a", "b"]
+                // self.data = Some(1)
+                //
+                // path = ["c", "d"]
+                // data = Some(2)
+                //
+                // becomes
+                //
+                // self.path = []
+                // self.data = None
+                // self.children = {
+                //     "a" => RadixNode { path = ["a, "b"], data = Some(1)}
+                //     "c" => RadixNode { path = ["c", "d"], data = Some(2)}
+                // }
+
+                let self_node = RadixNode {
+                    pattern: std::mem::take(&mut self.pattern),
+                    children: std::mem::take(&mut self.children),
+                    data: self.data.take(),
+                };
+
+                let path_node = RadixNode {
+                    pattern: path.to_vec(),
+                    children: OrderedChildren::default(),
+                    data: Some(data),
+                };
+
+                self.children.add_child(self_node);
+                self.children.add_child(path_node);
+
+                Ok(())
             } else {
-                if common_prefix_len == 0 {
-                    // both self and path must become children of the current node.
-                    //
-                    // self.path = ["a", "b"]
-                    // self.data = Some(1)
-                    //
-                    // path = ["c", "d"]
-                    // data = Some(2)
-                    //
-                    // becomes
-                    //
-                    // self.path = []
-                    // self.data = None
-                    // self.children = {
-                    //     "a" => RadixNode { path = ["a, "b"], data = Some(1)}
-                    //     "c" => RadixNode { path = ["c", "d"], data = Some(2)}
-                    // }
+                // The path partially matches the current node's pattern
+                //
+                // self.path = ["a", "b"]
+                // self.data = Some(1)
+                // self.children = {
+                //     "c" => RadixNode { path = ["c"], data = Some(2)}
+                // }
+                //
+                // path = ["a", "c"]
+                // data = Some(3)
+                //
+                // becomes
+                //
+                // self.path = ["a"]
+                // self.data = None
+                // self.children = {
+                //     "b" => RadixNode {
+                //               path = ["b"],
+                //               data = Some(1),
+                //               children = {
+                //                  RadixNode { path = ["c"], data = Some(2)}
+                //               }
+                //            }
+                //     "c" => RadixNode { path = ["c"], data = Some(3)}
+                // }
+                //
+                // NOTE: The C gets inserted in the recursive call.
+                // This iteration will only create the "b" node by splitting the current node.
 
-                    let self_node = RadixNode {
-                        pattern: std::mem::take(&mut self.pattern),
-                        children: std::mem::take(&mut self.children),
-                        data: self.data.take(),
-                    };
+                let new_child_pattern = self.pattern.split_off(common_prefix_len);
+                let new_child_data = self.data.take();
+                let new_child_children = std::mem::take(&mut self.children);
 
-                    let path_node = RadixNode {
-                        pattern: path.to_vec(),
-                        children: OrderedChildren::default(),
-                        data: Some(data),
-                    };
+                let new_child = RadixNode {
+                    pattern: new_child_pattern,
+                    children: new_child_children,
+                    data: new_child_data,
+                };
 
-                    self.children.add_child(self_node);
-                    self.children.add_child(path_node);
-
-                    Ok(())
-                } else {
-                    // The path partially matches the current node's pattern
-                    //
-                    // self.path = ["a", "b"]
-                    // self.data = Some(1)
-                    // self.children = {
-                    //     "c" => RadixNode { path = ["c"], data = Some(2)}
-                    // }
-                    //
-                    // path = ["a", "c"]
-                    // data = Some(3)
-                    //
-                    // becomes
-                    //
-                    // self.path = ["a"]
-                    // self.data = None
-                    // self.children = {
-                    //     "b" => RadixNode {
-                    //               path = ["b"],
-                    //               data = Some(1),
-                    //               children = {
-                    //                  RadixNode { path = ["c"], data = Some(2)}
-                    //               }
-                    //            }
-                    //     "c" => RadixNode { path = ["c"], data = Some(3)}
-                    // }
-                    //
-                    // NOTE: The C gets inserted in the recursive call.
-                    // This iteration will only create the "b" node by splitting the current node.
-
-                    let new_child_pattern = self.pattern.split_off(common_prefix_len);
-                    let new_child_data = self.data.take();
-                    let new_child_children = std::mem::take(&mut self.children);
-
-                    let new_child = RadixNode {
-                        pattern: new_child_pattern,
-                        children: new_child_children,
-                        data: new_child_data,
-                    };
-
-                    self.children.add_child(new_child);
-                    self.insert_path(path, data)
-                }
+                self.children.add_child(new_child);
+                self.insert_path(path, data)
             }
         }
     }
@@ -266,7 +263,7 @@ impl<T> RadixNode<T> {
 
                     match path_segments.first() {
                         Some(first_segment) => {
-                            let next_child = self.children.search_by_str(*first_segment);
+                            let next_child = self.children.search_by_str(first_segment);
                             if let Some(child) = next_child {
                                 node = child;
                             } else {
