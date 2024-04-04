@@ -1,8 +1,14 @@
 use nom::branch::alt;
+use nom::bytes::complete::take_while1;
+use nom::character::complete::{char, multispace0};
+use nom::combinator::{map, opt};
+
+use nom::multi::{separated_list0, separated_list1};
+use nom::sequence::{delimited, preceded, tuple};
 use nom::IResult;
 
-use crate::api_definition::http::{AllPathPatterns, PathPattern, QueryInfo, VarInfo};
-use crate::parser::{literal_parser, place_holder_parser, ParseError};
+use crate::api_definition::http::{AllPathPatterns, LiteralInfo, PathPattern, QueryInfo, VarInfo};
+use crate::parser::{place_holder_parser, ParseError};
 
 use super::*;
 
@@ -10,69 +16,131 @@ pub struct PathPatternParser;
 
 impl GolemParser<AllPathPatterns> for PathPatternParser {
     fn parse(&self, input: &str) -> Result<AllPathPatterns, ParseError> {
-        get_path_pattern(input)
+        parse_path_pattern(input)
+            .map(|(_, result)| result)
+            .map_err(|err| ParseError::Message(err.to_string()))
     }
 }
 
-fn get_path_pattern(input: &str) -> Result<AllPathPatterns, ParseError> {
-    let split_path_and_query: Vec<&str> = input.split('?').collect();
+fn parse_path_pattern(input: &str) -> IResult<&str, AllPathPatterns> {
+    let (input, (path, query)) = tuple((
+        delimited(opt(char('/')), path_parser, opt(char('/'))),
+        opt(preceded(char('?'), query_parser)),
+    ))(input)?;
 
-    let path_side = split_path_and_query
-        .first()
-        .ok_or(ParseError::Message("Path cannot be empty".to_string()))?;
-
-    // initial `/` is excluded to not break indexes
-    let path = if path_side.starts_with('/') {
-        &path_side[1..path_side.len()]
-    } else {
-        path_side
-    };
-
-    let query_side = split_path_and_query.get(1);
-
-    let mut path_patterns: Vec<PathPattern> = vec![];
-
-    for (index, path_component) in path.split('/').enumerate().filter(|x| !x.1.is_empty()) {
-        let (_, pattern) = alt((
-            |input| get_path_var_parser(index, input),
-            get_literal_parser,
-        ))(path_component.trim())
-        .map_err(|err| ParseError::Message(err.to_string()))?;
-        path_patterns.push(pattern);
-    }
-
-    let mut query_params: Vec<QueryInfo> = vec![];
-
-    if let Some(query_side) = query_side {
-        for query_component in query_side.split('&') {
-            let (_, pattern) = (get_query_parser)(query_component.trim())
-                .map_err(|err| ParseError::Message(err.to_string()))?;
-            query_params.push(pattern);
-        }
-    }
-
-    Ok(AllPathPatterns {
-        path_patterns,
-        query_params,
-    })
+    Ok((
+        input,
+        AllPathPatterns {
+            path_patterns: path,
+            query_params: query.unwrap_or_default(),
+        },
+    ))
 }
 
-fn get_query_parser(input: &str) -> IResult<&str, QueryInfo> {
-    place_holder_parser::parse_place_holder(input).map(|x| (x.0, QueryInfo { key_name: x.1 .0 }))
-}
+fn path_parser(input: &str) -> IResult<&str, Vec<PathPattern>> {
+    let item_parser = delimited(
+        multispace0,
+        alt((path_var_parser, literal_parser)),
+        multispace0,
+    );
+    let (input, patterns) = separated_list1(char('/'), item_parser)(input)?;
 
-fn get_path_var_parser(index: usize, input: &str) -> IResult<&str, PathPattern> {
-    place_holder_parser::parse_place_holder(input).map(|x| {
-        (
-            x.0,
-            PathPattern::Var(VarInfo {
-                key_name: x.1 .0,
+    let indexed_patterns = patterns
+        .into_iter()
+        .enumerate()
+        .map(|(index, pattern)| match pattern {
+            ParsedPattern::Literal(literal) => {
+                PathPattern::Literal(LiteralInfo(literal.to_string()))
+            }
+            ParsedPattern::Var(var) => PathPattern::Var(VarInfo {
+                key_name: var.to_string(),
                 index,
             }),
-        )
-    })
+        })
+        .collect();
+
+    Ok((input, indexed_patterns))
 }
 
-fn get_literal_parser(input: &str) -> IResult<&str, PathPattern> {
-    literal_parser::parse_literal_pattern(input).map(|x| (x.0, PathPattern::Literal(x.1)))
+fn query_parser(input: &str) -> IResult<&str, Vec<QueryInfo>> {
+    separated_list0(char('&'), query_param_parser)(input)
+}
+
+fn query_param_parser(input: &str) -> IResult<&str, QueryInfo> {
+    map(place_holder_parser::parse_place_holder, |x| QueryInfo {
+        key_name: x.to_string(),
+    })(input)
+}
+
+fn path_var_parser<'a>(input: &'a str) -> IResult<&'a str, ParsedPattern<'a>> {
+    map(place_holder_parser::parse_place_holder, |x| {
+        ParsedPattern::Var(x)
+    })(input)
+}
+
+#[derive(Debug)]
+enum ParsedPattern<'a> {
+    Literal(&'a str),
+    Var(&'a str),
+}
+
+fn literal_parser<'a>(input: &'a str) -> IResult<&'a str, ParsedPattern<'a>> {
+    map(take_while1(|c| !"/{}?&".contains(c)), |x| {
+        ParsedPattern::Literal(x)
+    })(input)
+}
+
+#[test]
+fn test_parse() {
+    use crate::api_definition::http::LiteralInfo;
+
+    let result = parse_path_pattern("/api/{id}/test/{name}/test2?{query1}&{query2}");
+    assert_eq!(
+        AllPathPatterns {
+            path_patterns: vec![
+                PathPattern::Literal(LiteralInfo("api".to_string())),
+                PathPattern::Var(VarInfo {
+                    key_name: "id".to_string(),
+                    index: 1
+                }),
+                PathPattern::Literal(LiteralInfo("test".to_string())),
+                PathPattern::Var(VarInfo {
+                    key_name: "name".to_string(),
+                    index: 3
+                }),
+                PathPattern::Literal(LiteralInfo("test2".to_string())),
+            ],
+            query_params: vec![
+                QueryInfo {
+                    key_name: "query1".to_string()
+                },
+                QueryInfo {
+                    key_name: "query2".to_string()
+                }
+            ]
+        },
+        result.unwrap().1
+    );
+
+    let result = parse_path_pattern("/api/{id}/test/{name}/test2");
+
+    assert_eq!(
+        AllPathPatterns {
+            path_patterns: vec![
+                PathPattern::Literal(LiteralInfo("api".to_string())),
+                PathPattern::Var(VarInfo {
+                    key_name: "id".to_string(),
+                    index: 1
+                }),
+                PathPattern::Literal(LiteralInfo("test".to_string())),
+                PathPattern::Var(VarInfo {
+                    key_name: "name".to_string(),
+                    index: 3
+                }),
+                PathPattern::Literal(LiteralInfo("test2".to_string())),
+            ],
+            query_params: vec![]
+        },
+        result.unwrap().1
+    );
 }

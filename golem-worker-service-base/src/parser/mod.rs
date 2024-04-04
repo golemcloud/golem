@@ -1,7 +1,6 @@
 use std::fmt;
 
 pub(crate) mod expr_parser;
-pub(crate) mod literal_parser;
 pub(crate) mod path_pattern_parser;
 pub(crate) mod place_holder_parser;
 

@@ -11,15 +11,14 @@ pub struct PlaceHolder(pub String);
 impl GolemParser<PlaceHolder> for PlaceHolderPatternParser {
     fn parse(&self, str: &str) -> Result<PlaceHolder, ParseError> {
         match parse_place_holder(str) {
-            Ok(value) => Ok(value.1),
+            Ok((_, parsed)) => Ok(PlaceHolder(parsed.to_string())),
             Err(err) => Result::Err(ParseError::Message(err.to_string())),
         }
     }
 }
 
-pub fn parse_place_holder(input: &str) -> IResult<&str, PlaceHolder> {
+pub fn parse_place_holder(input: &str) -> IResult<&str, &str> {
     delimited(tag("{"), take_until_unbalanced('{', '}'), tag("}"))(input)
-        .map(|(rest, captured)| (rest, PlaceHolder(captured.to_string())))
 }
 
 // https://stackoverflow.com/questions/70630556/parse-allowing-nested-parentheses-in-nom
@@ -69,4 +68,12 @@ fn take_until_unbalanced(
             Err(error)
         }
     }
+}
+
+#[test]
+fn test_parse_place_holder() {
+    assert_eq!(parse_place_holder("{test}").unwrap().1, "test");
+    assert_eq!(parse_place_holder("{test{test}}").unwrap().1, "test{test}");
+    assert!(parse_place_holder("{test").is_err());
+    assert!(parse_place_holder("test}").is_err());
 }
