@@ -17,6 +17,7 @@ pub enum Expr {
     SelectIndex(Box<Expr>, usize),
     Sequence(Vec<Expr>),
     Record(Vec<(String, Box<Expr>)>),
+    Tuple(Vec<Expr>),
     Literal(String),
     Number(InnerNumber),
     Variable(String),

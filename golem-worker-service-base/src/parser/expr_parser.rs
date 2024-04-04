@@ -9,26 +9,32 @@ use internal::*;
 #[derive(Clone, Debug)]
 pub struct ExprParser {}
 
+// Expr parsing can be done within a context. If unsure what the context should be, select Context::Code
+// Context allows us to handle things such as string-interpolation easily. Ex: if context is Text,
+// `foo>1` will result in Expr::Concat("foo", ">" , "1")
+// and `foo>${user-id}` will be Expr::Concat("foo", ">", Expr::Variable("user-id")). Evaluator will look for values for this variable.
+// Had it Context::Code, it would have been `Expr::GreaterThan(Expr::Variable("foo"), Expr::Variable("user-id"))`
 #[derive(Clone, Debug)]
 enum Context {
     Code,
-    Literal,
+    Text,
 }
 
 impl Context {
     fn is_code(&self) -> bool {
         match self {
             Context::Code => true,
-            Context::Literal => false,
+            Context::Text => false,
         }
     }
 }
 
 impl GolemParser<Expr> for ExprParser {
     fn parse(&self, input: &str) -> Result<Expr, ParseError> {
-        parse_with_context(input, Context::Literal)
+        parse_with_context(input, Context::Text)
     }
 }
+
 
 fn parse_with_context(input: &str, context: Context) -> Result<Expr, ParseError> {
     let mut tokenizer: Tokenizer = tokenise(input);
@@ -171,7 +177,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                         Some(string) => {
                             let mut tokenizer = Tokenizer::new(string.as_str());
 
-                            go(&mut tokenizer, Context::Literal, InternalExprResult::Empty)
+                            go(&mut tokenizer, Context::Text, InternalExprResult::Empty)
                         }
                         None => Err(ParseError::Message(
                             "Expecting a non-empty string between quotes".to_string(),
@@ -509,6 +515,45 @@ mod internal {
     use crate::parser::ParseError;
     use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
     use strum_macros::Display;
+
+    pub(crate) fn create_tuple(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
+        let mut tuple_elements = vec![];
+
+        fn go(tokenizer: &mut Tokenizer, tuple_elements: &mut Vec<Expr>) -> Result<(), ParseError> {
+            let captured_string = tokenizer.capture_string_until(
+                vec![],
+                &Token::Comma, // Wave does this
+            );
+
+            match captured_string {
+                Some(r) => {
+                    let expr = parse_with_context(r.as_str(), Context::Code)?;
+
+                    tuple_elements.push(expr);
+                    tokenizer.next_non_empty_token(); // Skip Comma
+                    go(tokenizer, tuple_elements)
+                }
+
+                None => {
+                    let last_value =
+                        tokenizer.capture_string_until(vec![&Token::LParen], &Token::RParen);
+
+                    match last_value {
+                        Some(last_value) => {
+                            let expr = parse_with_context(last_value.as_str(), Context::Code)?;
+                            tuple_elements.push(expr);
+                            Ok(())
+                        }
+                        None => Ok(()),
+                    }
+                }
+            }
+        }
+
+        go(tokenizer, &mut tuple_elements)?;
+
+        Ok(Expr::Tuple(record))
+    }
 
     pub(crate) fn create_list(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
         let mut record = vec![];
