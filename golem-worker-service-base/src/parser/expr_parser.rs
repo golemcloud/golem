@@ -367,7 +367,10 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                             )),
                         }
                     }
-                    _ => create_list(tokenizer),
+                    _ => {
+                        let expr = create_list(tokenizer)?;
+                        go(tokenizer, context, prev_expression.apply_with(expr)?)
+                    }
                 },
 
                 Token::MultiChar(MultiCharTokens::If) => {
@@ -481,11 +484,19 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                 Token::RParen => go(tokenizer, context, prev_expression),
                 Token::Space => go(tokenizer, context, prev_expression),
                 Token::NewLine => go(tokenizer, context, prev_expression),
-                Token::LCurly => create_record(
-                    tokenizer,
-                    vec![&Token::interpolation_start(), &Token::LCurly],
-                    Some(&Token::RCurly),
-                ),
+                Token::LCurly => {
+                    let expr = if is_flags(tokenizer)  {
+                        create_flags(tokenizer)
+                    } else {
+                        create_record(
+                            tokenizer,
+                            vec![&Token::interpolation_start(), &Token::LCurly],
+                            Some(&Token::RCurly),
+                        )
+                    };
+
+                    go(tokenizer, context, prev_expression.apply_with(expr?)?)
+                }
                 Token::MultiChar(MultiCharTokens::Arrow) => go(tokenizer, context, prev_expression),
                 Token::Comma => go(tokenizer, context, prev_expression),
                 Token::Colon => go(tokenizer, context, prev_expression),
@@ -505,7 +516,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
 
 mod internal {
     use crate::expression::{ConstructorPattern, ConstructorPatternExpr, Expr, InnerNumber};
-    use crate::parser::expr_parser::{parse_with_context, Context};
+    use crate::parser::expr_parser::{parse_with_context, Context, parse_tokens};
     use crate::parser::ParseError;
     use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
     use strum_macros::Display;
@@ -601,6 +612,9 @@ mod internal {
             possible_nested_token_starts: Vec<&Token>,
             capture_until: Option<&Token>,
         ) -> Result<(), ParseError> {
+            // We already consumed first curly brace
+            // Now we either expect a closing brace or a key
+            // followed by a colon and then records being comma separated
             match tokenizer.next_non_empty_token() {
                 Some(Token::RCurly) => Ok(()),
                 Some(Token::MultiChar(MultiCharTokens::Other(key))) => {
@@ -666,6 +680,91 @@ mod internal {
                 .map(|(s, e)| (s.clone(), Box::new(e.clone())))
                 .collect::<Vec<_>>(),
         ))
+    }
+
+    pub(crate) fn is_flags(tokenizer: &mut Tokenizer) -> bool {
+        let colon_index = tokenizer.index_of_future_token(vec![], &Token::Colon);
+        let comma_index = tokenizer.index_of_future_token(vec![], &Token::Comma);
+        match (comma_index, colon_index) {
+            (Some(comma_index), Some(colon_index)) => comma_index < colon_index, // Comma exists before colon
+            (None, Some(_)) => false, // Colon exists but no commas, meaning it can be record
+            (Some(_), None) => true, // Comma exists but no colons, meaning its not a record
+            (None, None) => true // No commas, no colons, but just strings between indicate flags
+        }
+    }
+
+    pub(crate) fn create_flags(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
+        fn go(
+            tokenizer: &mut Tokenizer,
+            flags: &mut Vec<String>
+        ) -> Result<(), ParseError> {
+            // We already skipped the first curly brace
+            // We expect either a flag or curly brace, else fail
+            match tokenizer.next_non_empty_token() {
+                Some(Token::RCurly) => Ok(()), // Nothing more to do
+                Some(Token::MultiChar(MultiCharTokens::Other(next_str))) => {
+                    flags.push(next_str);
+                    // If comma exists again, go again!
+                    match tokenizer.next_non_empty_token() {
+                        Some(Token::Comma) => {
+                            go(tokenizer, flags)
+                        }
+                        // Otherwise it has to be curly brace, and this consumes all flags
+                        Some(Token::RCurly) => Ok(()),
+                        _ => Err(ParseError::Message(
+                            "Expecting a comma or closing curly brace".to_string(),
+                        )),
+                    }
+                }
+                _ => Err(ParseError::Message(
+                    "Expecting a flag or closing curly brace".to_string(),
+                )),
+            }
+        }
+        let mut flags = vec![];
+        go(tokenizer, &mut flags)?;
+        Ok(Expr::Flags(flags))
+    }
+
+    fn accumulate_remaining_flags(tokenizer: &mut Tokenizer, flags: &mut Vec<String>) -> Result<(), ParseError> {
+        match tokenizer.next_non_empty_token() {
+            Some(Token::Comma) => {
+                // Until next comma
+                if let Some(string_until_next_comma) = tokenizer.capture_string_until(
+                    vec![],
+                    &Token::Comma,
+                ) {
+                    flags.push(string_until_next_comma);
+                    accumulate_remaining_flags(tokenizer, flags)
+                } else if let Some(last_string) = tokenizer.capture_string_until(
+                    vec![],
+                    &Token::RCurly,
+                ) {
+                    if !last_string.is_empty() {
+                        flags.push(last_string);
+                    }
+                    Ok(())
+                } else {
+                    match tokenizer.next_non_empty_token() {
+                        // If nothing
+                        Some(Token::RCurly) => Ok(()),
+                        _ => {
+                            Err(ParseError::Message(
+                                "Expecting a value after colon".to_string(),
+                            ))
+                        }
+                    }
+                }
+            }
+            Some(Token::MultiChar(MultiCharTokens::Other(next_str))) => {
+                flags.push(next_str);
+                accumulate_remaining_flags(tokenizer, flags)
+
+            }
+            _ => {
+                Ok(())
+            }
+        }
     }
 
     pub(crate) fn resolve_literal_in_code_context(primitive: &str) -> Expr {

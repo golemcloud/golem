@@ -20,6 +20,7 @@ pub enum Expr {
     Tuple(Vec<Expr>),
     Literal(String),
     Number(InnerNumber),
+    Flags(Vec<String>),
     Variable(String),
     Boolean(bool),
     PathVar(String),
