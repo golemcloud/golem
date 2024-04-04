@@ -266,6 +266,7 @@ impl<'t> Tokenizer<'t> {
     // nested_starts: List of tokens, for which we expect their corresponding closing token to be the same as future_token,
     // to make sure we skip nested tokens and find the correct future token. Example: In `foo { bar { baz } }`, index
     // of token `}` is the one corresponding to the first `{` if we provide nested_starts as [`{`].
+    // Note that we call this function after consuming the opening token`{`.
     // If we don't care nestedness, simply provide empty list for nested_starts.
     // In that case, the index of `:` in `foo:bar:bar` is just 3.
     // Note that, peeking ahead will not consume the tokens.
