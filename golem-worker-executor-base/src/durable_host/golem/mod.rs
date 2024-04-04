@@ -29,7 +29,8 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
 use crate::preview2::golem::api::host::{
-    GetWorkers, HostGetWorkers, OplogIndex, PersistenceLevel, RetryPolicy, WorkerFilter,
+    FilterComparator, GetWorkers, HostGetWorkers, OplogIndex, PersistenceLevel, RetryPolicy,
+    StringFilterComparator, WorkerFilter, WorkerPropertyFilter, WorkerStatus,
     WorkersMetadataResponse,
 };
 use crate::workerctx::WorkerCtx;
@@ -454,6 +455,92 @@ impl From<Uuid> for golem::api::host::Uuid {
         golem::api::host::Uuid {
             high_bits,
             low_bits,
+        }
+    }
+}
+
+impl From<FilterComparator> for golem_common::model::FilterComparator {
+    fn from(value: FilterComparator) -> Self {
+        match value {
+            FilterComparator::Equal => golem_common::model::FilterComparator::Equal,
+            FilterComparator::NotEqual => golem_common::model::FilterComparator::NotEqual,
+            FilterComparator::Less => golem_common::model::FilterComparator::Less,
+            FilterComparator::LessEqual => golem_common::model::FilterComparator::LessEqual,
+            FilterComparator::Greater => golem_common::model::FilterComparator::Greater,
+            FilterComparator::GreaterEqual => golem_common::model::FilterComparator::GreaterEqual,
+        }
+    }
+}
+
+impl From<StringFilterComparator> for golem_common::model::StringFilterComparator {
+    fn from(value: StringFilterComparator) -> Self {
+        match value {
+            StringFilterComparator::Equal => golem_common::model::StringFilterComparator::Equal,
+            StringFilterComparator::NotEqual => {
+                golem_common::model::StringFilterComparator::NotEqual
+            }
+            StringFilterComparator::Like => golem_common::model::StringFilterComparator::Like,
+            StringFilterComparator::NotLike => golem_common::model::StringFilterComparator::NotLike,
+        }
+    }
+}
+
+impl From<WorkerStatus> for golem_common::model::WorkerStatus {
+    fn from(value: WorkerStatus) -> Self {
+        match value {
+            WorkerStatus::Running => golem_common::model::WorkerStatus::Running,
+            WorkerStatus::Idle => golem_common::model::WorkerStatus::Idle,
+            WorkerStatus::Suspended => golem_common::model::WorkerStatus::Suspended,
+            WorkerStatus::Interrupted => golem_common::model::WorkerStatus::Interrupted,
+            WorkerStatus::Retrying => golem_common::model::WorkerStatus::Retrying,
+            WorkerStatus::Failed => golem_common::model::WorkerStatus::Failed,
+            WorkerStatus::Exited => golem_common::model::WorkerStatus::Exited,
+        }
+    }
+}
+
+impl From<WorkerPropertyFilter> for golem_common::model::WorkerFilter {
+    fn from(filter: WorkerPropertyFilter) -> Self {
+        match filter {
+            WorkerPropertyFilter::Name(filter) => {
+                golem_common::model::WorkerFilter::new_name(filter.comparator.into(), filter.value)
+            }
+            WorkerPropertyFilter::Version(filter) => {
+                golem_common::model::WorkerFilter::new_version(
+                    filter.comparator.into(),
+                    filter.value,
+                )
+            }
+            WorkerPropertyFilter::Status(filter) => golem_common::model::WorkerFilter::new_status(
+                filter.comparator.into(),
+                filter.value.into(),
+            ),
+            WorkerPropertyFilter::Env(filter) => golem_common::model::WorkerFilter::new_env(
+                filter.name,
+                filter.comparator.into(),
+                filter.value,
+            ),
+            WorkerPropertyFilter::CreatedAt(filter) => {
+                golem_common::model::WorkerFilter::new_created_at(
+                    filter.comparator.into(),
+                    filter.value.into(),
+                )
+            }
+        }
+    }
+}
+
+impl From<WorkerFilter> for golem_common::model::WorkerFilter {
+    fn from(filter: WorkerFilter) -> Self {
+        match filter {
+            WorkerFilter::And(filters) => {
+                let filters = filters.into_iter().map(|f| f.into()).collect();
+                golem_common::model::WorkerFilter::new_and(filters)
+            }
+            WorkerFilter::Or(filters) => {
+                let filters = filters.into_iter().map(|f| f.into()).collect();
+                golem_common::model::WorkerFilter::new_or(filters)
+            }
         }
     }
 }

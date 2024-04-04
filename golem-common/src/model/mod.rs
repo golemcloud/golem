@@ -202,6 +202,12 @@ impl From<prost_types::Timestamp> for Timestamp {
     }
 }
 
+impl From<u64> for Timestamp {
+    fn from(value: u64) -> Self {
+        Timestamp(iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(value)))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct VersionedWorkerId {
     #[serde(rename = "instance_id")]

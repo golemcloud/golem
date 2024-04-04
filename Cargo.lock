@@ -3158,7 +3158,7 @@ dependencies = [
 [[package]]
 name = "golem-wit"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wit.git?rev=12de0168#12de0168bbfd2a05359c83404dfc4b68630d8695"
+source = "git+https://github.com/golemcloud/golem-wit.git?rev=6d537e1d#6d537e1d7545ab98b6f439dffc18482c7ebea305"
 
 [[package]]
 name = "golem-wit"
