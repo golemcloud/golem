@@ -268,6 +268,7 @@ impl<'t> Tokenizer<'t> {
     // of token `}` is the one corresponding to the first `{` if we provide nested_starts as [`{`].
     // If we don't care nestedness, simply provide empty list for nested_starts.
     // In that case, the index of `:` in `foo:bar:bar` is just 3.
+    // Note that, peeking ahead will not consume the tokens.
     pub fn index_of_future_token(
         &mut self,
         nested_starts: Vec<&Token>,
