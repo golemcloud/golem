@@ -1,35 +1,52 @@
-use super::tokenizer::Token;
+use super::tokenizer::{Token, Tokenizer};
 
-// A better management for traversing through token
-// without worrying about white spaces
-// It is decided that expression language is white space insensitive
-pub struct TokenCursor {
-    pub tokens: Vec<Token>,
-    pub index: usize,
+// A simple wrapper over tokeniser traversing back and forth easily
+pub struct TokenCursor<'a> {
+    pub(crate) current_token: Option<Token>,
+    pub(crate) tokenizer: Tokenizer<'a>,
 }
 
-impl TokenCursor {
-    pub fn new(tokens: Vec<Token>) -> TokenCursor {
-        TokenCursor { tokens, index: 0 }
+impl<'a> TokenCursor<'a> {
+    pub fn new(tokens: &'a str) -> TokenCursor<'a> {
+        let str = Tokenizer::new(tokens);
+
+        TokenCursor {
+            current_token: None,
+            tokenizer: str
+        }
     }
 
-    pub fn peek(&self) -> Option<&Token> {
-        self.tokens.get(self.index)
+    pub fn current_token (&self) -> Option<Token> {
+        self.current_token.clone()
+    }
+
+    pub fn peek(&mut self) -> Option<Token> {
+        if let Some(token) = self.tokenizer.next_token() {
+            self.tokenizer.state.pos -= token.to_string().len();
+            Some(token)
+        } else {
+            None
+        }
+    }
+
+    pub fn peek_at(&mut self, index: usize) -> Option<Token> {
+        let original_state = self.tokenizer.state.pos;
+        self.tokenizer.state.pos = index;
+        if let Some(token) = self.tokenizer.next_token() {
+            self.tokenizer.state.pos = original_state;
+            Some(token)
+        } else {
+            None
+        }
     }
 
     pub fn next_token(&mut self) -> Option<Token> {
-        let token = self.peek().cloned();
-        self.advance();
-        token
+        self.tokenizer.next_token()
     }
 
-    pub fn advance(&mut self) {
-        self.index += 1;
-    }
 
     pub fn next_non_empty_token(&mut self) -> Option<Token> {
-        self.skip_whitespace();
-        self.next_token()
+        self.skip_whitespace()
     }
 
     // Captures the string upto the end token, and advance the cursor further skipping the end token
@@ -41,7 +58,7 @@ impl TokenCursor {
         let captured_string = self.capture_string_until(start, end);
         match captured_string {
             Some(captured_string) => {
-                self.advance();
+                self.next_token();
                 Some(captured_string)
             }
             None => None,
@@ -49,62 +66,28 @@ impl TokenCursor {
     }
     // Captures the string upto the end token, leaving the cursor at the end token (leaving it to the user)
     pub fn capture_string_until(&mut self, start: Vec<&Token>, end: &Token) -> Option<String> {
-        let capture_until = self.index_of_last_end_token(start, end);
+        let capture_until = self.index_of_last_end_token(start, end)?;
 
-        let mut tokens = vec![];
+        let tokens = self.tokenizer.all_tokens_until(capture_until);
 
-        let result = match capture_until {
-            Some(capture_until) => {
-                for index in self.index..capture_until {
-                    let token = self.tokens.get(index);
-
-                    if let Some(token) = token {
-                        tokens.push(token.clone())
-                    }
-                }
-
-                self.index = capture_until + 1;
-
-                Some(
-                    tokens
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect::<Vec<String>>()
-                        .join(""),
-                )
-            }
-
-            None => None,
-        };
-
-        if self.index > 0 {
-            self.index -= 1
-        }; // shift to the end token index instead of forgetting it
-
-        result
+        Some(tokens
+            .iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<String>>()
+            .join("")
+        )
     }
 
     pub fn capture_tail(&mut self) -> Option<String> {
-        self.index += 1;
+        // Skip head
+        self.tokenizer.next_token();
 
-        let mut tokens_after = Vec::new();
+        let str = self.tokenizer.rest().to_string();
 
-        while let Some(token) = self.tokens.get(self.index) {
-            tokens_after.push(token.clone());
-
-            self.index += 1;
-        }
-
-        if tokens_after.is_empty() {
+        if str.is_empty() {
             None
         } else {
-            Some(
-                tokens_after
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<String>>()
-                    .join(""),
-            )
+            Some(str)
         }
     }
 
@@ -122,13 +105,13 @@ impl TokenCursor {
             .iter()
             .map(|x| x.to_string())
             .collect::<Vec<String>>();
-        let mut index: usize = self.index;
+        let mut index: usize = self.tokenizer.state.pos;
 
         let mut start_token_count = 0;
 
         let mut found: bool = false;
 
-        while let Some(current_token) = self.tokens.get(index).map(|x| x.to_string()) {
+        while let Some(current_token) = self.peek_at(index).map(|x| x.to_string()) {
             if starts.contains(&current_token) {
                 // That it finds a start token again
                 start_token_count += 1;
@@ -144,7 +127,7 @@ impl TokenCursor {
                 }
             }
 
-            index += 1;
+            index += current_token.len();
         }
 
         if found {
@@ -154,14 +137,17 @@ impl TokenCursor {
         }
     }
 
-    pub fn skip_whitespace(&mut self) {
-        while let Some(token) = self.peek() {
-            if token.to_string().chars().all(|c| c.is_whitespace()) {
-                self.advance();
+    pub fn skip_whitespace(&mut self) -> Option<Token> {
+        let mut non_empty_token: Option<Token> = None;
+        while let Some(token) = self.next_token() {
+            if token.is_empty() {
             } else {
+                non_empty_token = Some(token);
                 break;
             }
         }
+
+        non_empty_token
     }
 }
 
@@ -171,9 +157,9 @@ mod tests {
 
     #[test]
     fn capture_string_test() {
-        let tokens = vec![Token::LParen, Token::raw_string("afsal"), Token::RParen];
+        let tokens = "(afsal)";
 
-        let mut cursor = TokenCursor::new(tokens.clone());
+        let mut cursor = TokenCursor::new(tokens);
         cursor.next_token();
         let result = cursor
             .capture_string_until(vec![&Token::LParen], &Token::RParen)
@@ -184,15 +170,9 @@ mod tests {
 
     #[test]
     fn capture_string_test_nested() {
-        let tokens = vec![
-            Token::LParen,
-            Token::LParen,
-            Token::raw_string("afsal"),
-            Token::RParen,
-            Token::RParen,
-        ];
+        let tokens = "((afsal))";
 
-        let mut cursor = TokenCursor::new(tokens.clone());
+        let mut cursor = TokenCursor::new(tokens);
         cursor.next_token();
         let result = cursor
             .capture_string_until(vec![&Token::LParen], &Token::RParen)
@@ -203,9 +183,9 @@ mod tests {
 
     #[test]
     fn capture_character_test() {
-        let tokens = vec![Token::RParen];
+        let tokens = ")";
 
-        let mut cursor = TokenCursor::new(tokens.clone());
+        let mut cursor = TokenCursor::new(tokens);
         let result = cursor
             .capture_string_until(vec![&Token::LParen], &Token::RParen)
             .unwrap();
@@ -214,9 +194,9 @@ mod tests {
 
     #[test]
     fn capture_empty_test() {
-        let tokens = vec![];
+        let tokens = "";
 
-        let mut cursor = TokenCursor::new(tokens.clone());
+        let mut cursor = TokenCursor::new(tokens);
         let result = cursor.capture_string_until(vec![&Token::LParen], &Token::RParen);
 
         assert_eq!(result, None)
@@ -224,11 +204,11 @@ mod tests {
 
     #[test]
     fn test_capture_string_from() {
-        let tokens = vec![Token::else_token(), Token::raw_string("foo")];
+        let tokens = "else foo";
 
-        let mut cursor = TokenCursor::new(tokens.clone());
+        let mut cursor = TokenCursor::new(tokens);
         let result = cursor.capture_tail();
 
-        assert_eq!(result, Some("foo".to_string()))
+        assert_eq!(result, Some(" foo".to_string()))
     }
 }

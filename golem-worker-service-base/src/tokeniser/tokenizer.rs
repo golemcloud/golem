@@ -195,18 +195,39 @@ impl Token {
     }
 }
 
-struct State {
-    pos: usize,
+#[derive(Clone)]
+pub(crate) struct State {
+    pub(crate) pos: usize,
 }
 
+#[derive(Clone)]
 pub struct Tokenizer<'a> {
-    text: &'a str,
-    state: State,
+    pub(crate) text: &'a str,
+    pub(crate) state: State,
 }
 
 impl<'t> Tokenizer<'t> {
-    fn next_chars(&self) -> Chars<'t> {
+    pub fn to_cursor(&self) -> TokenCursor<'t> {
+        TokenCursor {
+            current_token: None,
+            tokenizer: self.clone(),
+        }
+    }
+
+    pub fn next_chars(&self) -> Chars<'t> {
         self.text.get(self.state.pos..).unwrap().chars()
+    }
+
+    pub fn all_tokens_until(&mut self, index: usize)  -> Vec<Token> {
+       let mut tokens = vec![];
+            while self.state.pos < index {
+                if let Some(token) = self.next_token() {
+                    tokens.push(token);
+                } else {
+                    break;
+                }
+            }
+            tokens
     }
 
     pub fn eat_while(&mut self, f: impl Fn(char) -> bool) -> Option<&str> {
@@ -240,6 +261,10 @@ impl<'t> Tokenizer<'t> {
         self.state.pos += ch.len_utf8();
     }
 
+    pub fn progress_by_n(&mut self, n: usize) {
+        self.state.pos += n;
+    }
+
     pub fn new(text: &'t str) -> Self {
         Self {
             text,
@@ -247,18 +272,11 @@ impl<'t> Tokenizer<'t> {
         }
     }
 
-    pub fn run(self) -> TokeniserResult {
-        let all_tokens: Vec<Token> = self.collect();
-
-        TokeniserResult {
-            value: all_tokens
-                .into_iter()
-                .flat_map(|x: Token| if x.is_empty() { vec![] } else { vec![x] })
-                .collect(),
-        }
+    pub fn run(self) -> Vec<Token> {
+        self.collect()
     }
 
-    fn next_token(&mut self) -> Option<Token> {
+    pub fn next_token(&mut self) -> Option<Token> {
         self.get_single_char_token()
             .or_else(|| self.get_multi_char_token())
     }
@@ -361,17 +379,6 @@ impl<'t> Tokenizer<'t> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TokeniserResult {
-    pub value: Vec<Token>,
-}
-
-impl TokeniserResult {
-    pub fn to_cursor(&self) -> TokenCursor {
-        TokenCursor::new(self.value.clone())
-    }
-}
-
 impl<'a> Iterator for Tokenizer<'a> {
     type Item = Token;
 
@@ -390,7 +397,7 @@ mod tests {
 
     #[test]
     fn test_raw() {
-        let tokens: Vec<Token> = Tokenizer::new("foo bar").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("foo bar").run();
         assert_eq!(
             tokens,
             vec![
@@ -403,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_open_close_braces() {
-        let tokens: Vec<Token> = Tokenizer::new("(foo bar)").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("(foo bar)").run();
         assert_eq!(
             tokens,
             vec![
@@ -418,7 +425,7 @@ mod tests {
 
     #[test]
     fn test_dot() {
-        let tokens: Vec<Token> = Tokenizer::new("foo . bar").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("foo . bar").run();
         assert_eq!(
             tokens,
             vec![
@@ -433,19 +440,19 @@ mod tests {
 
     #[test]
     fn test_request() {
-        let tokens: Vec<Token> = Tokenizer::new("request .").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("request .").run();
         assert_eq!(tokens, vec![Token::request(), Token::Space, Token::Dot,]);
     }
 
     #[test]
     fn test_worker_response() {
-        let tokens: Vec<Token> = Tokenizer::new("worker.").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("worker.").run();
         assert_eq!(tokens, vec![Token::worker(), Token::Dot]);
     }
 
     #[test]
     fn test_open_close_square_bracket() {
-        let tokens: Vec<Token> = Tokenizer::new("[foo bar]").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("[foo bar]").run();
         assert_eq!(
             tokens,
             vec![
@@ -460,7 +467,7 @@ mod tests {
 
     #[test]
     fn test_if_start() {
-        let tokens: Vec<Token> = Tokenizer::new("if x").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("if x").run();
 
         assert_eq!(
             tokens,
@@ -470,7 +477,7 @@ mod tests {
 
     #[test]
     fn test_false_ifs() {
-        let tokens: Vec<Token> = Tokenizer::new("asif x").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("asif x").run();
 
         assert_eq!(
             tokens,
@@ -484,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_false_ifs2() {
-        let tokens: Vec<Token> = Tokenizer::new("ifis x").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("ifis x").run();
 
         assert_eq!(
             tokens,
@@ -498,7 +505,7 @@ mod tests {
 
     #[test]
     fn test_if_then_else_predicate() {
-        let tokens: Vec<Token> = Tokenizer::new("if ${x > 1} then 1 else 0").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("if ${x > 1} then 1 else 0").run();
 
         assert_eq!(
             tokens,
@@ -531,7 +538,7 @@ if ${x} then ${y}
 else${z}
 "#;
 
-        let tokens: Vec<Token> = Tokenizer::new(string).run().value;
+        let tokens: Vec<Token> = Tokenizer::new(string).run();
 
         assert_eq!(
             tokens,
@@ -560,14 +567,14 @@ else${z}
 
     #[test]
     fn test_if_then_else_false_expr() {
-        let tokens: Vec<Token> = Tokenizer::new("ifxthenyelsez").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("ifxthenyelsez").run();
 
         assert_eq!(tokens, vec![Token::raw_string("ifxthenyelsez"),]);
     }
 
     #[test]
     fn test_greater_than_partial() {
-        let tokens: Vec<Token> = Tokenizer::new("f >").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("f >").run();
 
         assert_eq!(
             tokens,
@@ -577,7 +584,7 @@ else${z}
 
     #[test]
     fn test_greater_than_with_space() {
-        let tokens: Vec<Token> = Tokenizer::new("f  > g").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("f  > g").run();
 
         assert_eq!(
             tokens,
@@ -594,7 +601,7 @@ else${z}
 
     #[test]
     fn test_greater_than_no_spaces() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo}>${bar}").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("${foo}>${bar}").run();
 
         //  let tokens: Vec<Token> = Tokenizer::new("{foo} raw {goo}").collect();
 
@@ -614,7 +621,7 @@ else${z}
 
     #[test]
     fn test_lessthan_partial() {
-        let tokens: Vec<Token> = Tokenizer::new("f <").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("f <").run();
 
         assert_eq!(
             tokens,
@@ -624,7 +631,7 @@ else${z}
 
     #[test]
     fn test_less_than_with_space() {
-        let tokens: Vec<Token> = Tokenizer::new("f < g").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("f < g").run();
 
         assert_eq!(
             tokens,
@@ -640,7 +647,7 @@ else${z}
 
     #[test]
     fn test_less_than_with_no_space() {
-        let tokens: Vec<Token> = Tokenizer::new("f<g").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("f<g").run();
 
         assert_eq!(
             tokens,
@@ -654,7 +661,7 @@ else${z}
 
     #[test]
     fn test_greater_than_with_exprs() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo} > ${bar}").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("${foo} > ${bar}").run();
 
         //  let tokens: Vec<Token> = Tokenizer::new("{foo} raw {goo}").collect();
 
@@ -676,7 +683,7 @@ else${z}
 
     #[test]
     fn test_less_than_with_exprs() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo} < ${bar}").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("${foo} < ${bar}").run();
 
         //  let tokens: Vec<Token> = Tokenizer::new("{foo} raw {goo}").collect();
 
@@ -698,7 +705,7 @@ else${z}
 
     #[test]
     fn test_equal_to_with_exprs() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo} == ${bar}").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("${foo} == ${bar}").run();
 
         //  let tokens: Vec<Token> = Tokenizer::new("{foo} raw {goo}").collect();
 
@@ -720,7 +727,7 @@ else${z}
 
     #[test]
     fn test_with_place_holder_in_beginning_and_end() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo}-raw_${bar}").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("${foo}-raw_${bar}").run();
         assert_eq!(
             tokens,
             vec![
@@ -737,7 +744,7 @@ else${z}
 
     #[test]
     fn test_with_place_holder_in_beginning() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo}-^raw").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("${foo}-^raw").run();
         assert_eq!(
             tokens,
             vec![
@@ -753,7 +760,7 @@ else${z}
 
     #[test]
     fn test_with_place_holder_in_end() {
-        let tokens: Vec<Token> = Tokenizer::new("raw ${foo}").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("raw ${foo}").run();
         assert_eq!(
             tokens,
             vec![
@@ -768,7 +775,7 @@ else${z}
 
     #[test]
     fn test_with_place_holder_anywhere() {
-        let tokens: Vec<Token> = Tokenizer::new("foo ${foo} raw ${bar} bar").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("foo ${foo} raw ${bar} bar").run();
         assert_eq!(
             tokens,
             vec![
@@ -791,7 +798,7 @@ else${z}
 
     #[test]
     fn test_token_processing_with_dollar() {
-        let tokens: Vec<Token> = Tokenizer::new("${foo} raw${hi} bar").run().value;
+        let tokens: Vec<Token> = Tokenizer::new("${foo} raw${hi} bar").run();
         assert_eq!(
             tokens,
             vec![
@@ -814,8 +821,8 @@ else${z}
         let tokens: Vec<Token> = Tokenizer::new(
             "${match worker.response { some(value) => worker.response, none => 'some_value' } }",
         )
-        .run()
-        .value;
+        .run();
+
         assert_eq!(
             tokens,
             vec![
@@ -853,5 +860,18 @@ else${z}
                 Token::RCurly,
             ]
         );
+    }
+
+    #[test]
+    fn test_path_pattern() {
+        let mut cursor = Tokenizer::new("{variable{}}").to_cursor();
+
+        match  cursor.next_token() {
+            Some(Token::LCurly) => {
+                let result = cursor.capture_string_until(vec![&Token::LCurly], &Token::RCurly).unwrap();
+                assert_eq!(result, "variable{}");
+            }
+            _ => panic!("Expected LCurly"),
+        }
     }
 }

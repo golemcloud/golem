@@ -68,7 +68,7 @@ impl<'t> RawString<'t> {
 impl<'t> Evaluator for RawString<'t> {
     fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError> {
         let mut combined_string = String::new();
-        let result: crate::tokeniser::tokenizer::TokeniserResult = Tokenizer::new(self.input).run();
+        let result: Tokenizer = Tokenizer::new(self.input);
 
         let mut cursor = result.to_cursor();
 

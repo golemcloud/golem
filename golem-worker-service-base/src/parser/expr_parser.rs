@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::expression::{ConstructorPattern, Expr};
 use crate::tokeniser::cursor::TokenCursor;
-use crate::tokeniser::tokenizer::{MultiCharTokens, Token, TokeniserResult, Tokenizer};
+use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
 use super::*;
 use internal::*;
@@ -32,12 +32,12 @@ impl GolemParser<Expr> for ExprParser {
 }
 
 fn parse_with_context(input: &str, context: Context) -> Result<Expr, ParseError> {
-    let tokeniser_result: TokeniserResult = tokenise(input);
+    let tokeniser_result: Tokenizer = tokenise(input);
 
     parse_tokens(tokeniser_result, context)
 }
 
-fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<Expr, ParseError> {
+fn parse_tokens(tokeniser_result: Tokenizer, context: Context) -> Result<Expr, ParseError> {
     fn go(
         cursor: &mut TokenCursor,
         context: Context,
@@ -96,7 +96,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                             let constructor = match constructor_var_optional {
                                 Some(constructor_var) => {
                                     let mut cursor =
-                                        Tokenizer::new(constructor_var.as_str()).run().to_cursor();
+                                        Tokenizer::new(constructor_var.as_str()).to_cursor();
 
                                     let constructor_expr =
                                         go(&mut cursor, Context::Code, InternalExprResult::Empty)?;
@@ -164,7 +164,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
 
                     let new_expr = match non_code_string {
                         Some(string) => {
-                            let mut cursor = Tokenizer::new(string.as_str()).run().to_cursor();
+                            let mut cursor = Tokenizer::new(string.as_str()).to_cursor();
 
                             go(&mut cursor, Context::Literal, InternalExprResult::Empty)
                         }
@@ -409,7 +409,6 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
                     let new_expr = match expr_under_evaluation {
                         Some(expr_under_evaluation) => {
                             let mut new_cursor = Tokenizer::new(expr_under_evaluation.as_str())
-                                .run()
                                 .to_cursor();
                             let expression =
                                 go(&mut new_cursor, Context::Code, InternalExprResult::Empty)?;
@@ -496,7 +495,7 @@ fn parse_tokens(tokeniser_result: TokeniserResult, context: Context) -> Result<E
         }
     }
 
-    let mut tokeniser_cursor = tokeniser_result.to_cursor();
+    let mut tokeniser_cursor: TokenCursor<'_> = tokeniser_result.to_cursor();
 
     go(&mut tokeniser_cursor, context, InternalExprResult::Empty)
 }
@@ -506,7 +505,7 @@ mod internal {
     use crate::parser::expr_parser::{parse_with_context, Context};
     use crate::parser::ParseError;
     use crate::tokeniser::cursor::TokenCursor;
-    use crate::tokeniser::tokenizer::{MultiCharTokens, Token, TokeniserResult, Tokenizer};
+    use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
     use strum_macros::Display;
 
     pub(crate) fn create_list(
@@ -657,8 +656,8 @@ mod internal {
         }
     }
 
-    pub(crate) fn tokenise(input: &str) -> TokeniserResult {
-        Tokenizer::new(input).run()
+    pub(crate) fn tokenise(input: &str) -> Tokenizer {
+        Tokenizer::new(input)
     }
 
     // While at every node of Token, we can ideally form a complete expression
@@ -900,7 +899,7 @@ mod internal {
 
         match optional_captured_string {
             Some(captured_string) => {
-                let mut new_cursor = Tokenizer::new(captured_string.as_str()).run().to_cursor();
+                let mut new_cursor = Tokenizer::new(captured_string.as_str()).to_cursor();
 
                 let inner_expr =
                     get_expr(&mut new_cursor, Context::Code, InternalExprResult::Empty)?;
