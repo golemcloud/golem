@@ -293,20 +293,20 @@ mod test {
         let path1 = make_path("/a/b/c");
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        assert_eq!(root.get(&path1), Some(&1),);
+        assert_eq!(root.get(&path1), Some(&1));
 
         let path2 = make_path("/a/b/d");
         root.insert_path(path2.as_slice(), 2).unwrap();
 
-        assert_eq!(root.get(&path1), Some(&1),);
-        assert_eq!(root.get(&path2), Some(&2),);
+        assert_eq!(root.get(&path1), Some(&1));
+        assert_eq!(root.get(&path2), Some(&2));
 
         let path3 = make_path("/a/b/e");
         root.insert_path(path3.as_slice(), 3).unwrap();
 
-        assert_eq!(root.get(&path1), Some(&1),);
-        assert_eq!(root.get(&path2), Some(&2),);
-        assert_eq!(root.get(&path3), Some(&3),);
+        assert_eq!(root.get(&path1), Some(&1));
+        assert_eq!(root.get(&path2), Some(&2));
+        assert_eq!(root.get(&path3), Some(&3));
     }
 
     #[test]
