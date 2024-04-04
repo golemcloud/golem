@@ -219,16 +219,16 @@ impl<'t> Tokenizer<'t> {
         self.text.get(self.state.pos..).unwrap().chars()
     }
 
-    pub fn all_tokens_until(&mut self, index: usize)  -> Vec<Token> {
-       let mut tokens = vec![];
-            while self.state.pos < index {
-                if let Some(token) = self.next_token() {
-                    tokens.push(token);
-                } else {
-                    break;
-                }
+    pub fn all_tokens_until(&mut self, index: usize) -> Vec<Token> {
+        let mut tokens = vec![];
+        while self.state.pos < index {
+            if let Some(token) = self.next_token() {
+                tokens.push(token);
+            } else {
+                break;
             }
-            tokens
+        }
+        tokens
     }
 
     pub fn eat_while(&mut self, f: impl Fn(char) -> bool) -> Option<&str> {
@@ -874,9 +874,11 @@ else${z}
     fn test_path_pattern() {
         let mut cursor = Tokenizer::new("{variable{}}").to_cursor();
 
-        match  cursor.next_token() {
+        match cursor.next_token() {
             Some(Token::LCurly) => {
-                let result = cursor.capture_string_until(vec![&Token::LCurly], &Token::RCurly).unwrap();
+                let result = cursor
+                    .capture_string_until(vec![&Token::LCurly], &Token::RCurly)
+                    .unwrap();
                 assert_eq!(result, "variable{}");
             }
             _ => panic!("Expected LCurly"),

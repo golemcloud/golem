@@ -12,11 +12,11 @@ impl<'a> TokenCursor<'a> {
 
         TokenCursor {
             current_token: None,
-            tokenizer: str
+            tokenizer: str,
         }
     }
 
-    pub fn current_token (&self) -> Option<Token> {
+    pub fn current_token(&self) -> Option<Token> {
         self.current_token.clone()
     }
 
@@ -44,7 +44,6 @@ impl<'a> TokenCursor<'a> {
         self.tokenizer.next_token()
     }
 
-
     pub fn next_non_empty_token(&mut self) -> Option<Token> {
         self.skip_whitespace()
     }
@@ -70,11 +69,12 @@ impl<'a> TokenCursor<'a> {
 
         let tokens = self.tokenizer.all_tokens_until(capture_until);
 
-        Some(tokens
-            .iter()
-            .map(|x| x.to_string())
-            .collect::<Vec<String>>()
-            .join("")
+        Some(
+            tokens
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+                .join(""),
         )
     }
 
@@ -127,7 +127,7 @@ impl<'a> TokenCursor<'a> {
                 }
             }
 
-            index += current_token.len() ;
+            index += current_token.len();
         }
 
         if found {
@@ -212,7 +212,6 @@ mod tests {
         assert_eq!(result, Some(" foo".to_string()))
     }
 
-
     #[test]
     fn test_index_of_last_end_token() {
         let tokens = "else foo }";
@@ -225,7 +224,10 @@ mod tests {
 
         let unchanged_current_toknen = cursor.next_non_empty_token().clone();
 
-        assert_eq!((result, unchanged_current_toknen), (Some(9), Some(Token::else_token())))
+        assert_eq!(
+            (result, unchanged_current_toknen),
+            (Some(9), Some(Token::else_token()))
+        )
     }
 
     #[test]
@@ -238,6 +240,9 @@ mod tests {
         dbg!(cursor.tokenizer.state.pos);
         let unchanged_current_toknen = cursor.next_non_empty_token().clone();
 
-        assert_eq!((result, unchanged_current_toknen), (None, Some(Token::Quote)))
+        assert_eq!(
+            (result, unchanged_current_toknen),
+            (None, Some(Token::Quote))
+        )
     }
 }

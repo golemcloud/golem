@@ -408,8 +408,8 @@ fn parse_tokens(tokeniser_result: Tokenizer, context: Context) -> Result<Expr, P
 
                     let new_expr = match expr_under_evaluation {
                         Some(expr_under_evaluation) => {
-                            let mut new_cursor = Tokenizer::new(expr_under_evaluation.as_str())
-                                .to_cursor();
+                            let mut new_cursor =
+                                Tokenizer::new(expr_under_evaluation.as_str()).to_cursor();
                             let expression =
                                 go(&mut new_cursor, Context::Code, InternalExprResult::Empty)?;
                             match cursor.next_non_empty_token() {
@@ -857,14 +857,17 @@ mod internal {
 
                         match captured_string {
                             Some(captured_string) => {
-                                let individual_expr = parse_with_context(captured_string.as_str(), Context::Code)
-                                    .map(|expr| {
-                                        ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
-                                    })?;
+                                let individual_expr =
+                                    parse_with_context(captured_string.as_str(), Context::Code)
+                                        .map(|expr| {
+                                            ConstructorPatternExpr((
+                                                constructor_pattern,
+                                                Box::new(expr),
+                                            ))
+                                        })?;
                                 collected_exprs.push(individual_expr);
-
                             }
-                            None => {},
+                            None => {}
                         }
                         //
                         // let individual_expr =
@@ -903,9 +906,7 @@ mod internal {
             Some(last_token) => {
                 cursor.capture_string_until(possible_nested_token_starts, last_token)
             }
-            None => {
-                cursor.capture_tail()
-            },
+            None => cursor.capture_tail(),
         };
 
         match optional_captured_string {
