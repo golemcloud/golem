@@ -68,14 +68,12 @@ impl<'t> RawString<'t> {
 impl<'t> Evaluator for RawString<'t> {
     fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError> {
         let mut combined_string = String::new();
-        let result: Tokenizer = Tokenizer::new(self.input);
+        let mut tokenizer: Tokenizer = Tokenizer::new(self.input);
 
-        let mut cursor = result.to_cursor();
-
-        while let Some(token) = cursor.next_token() {
+        while let Some(token) = tokenizer.next_token() {
             match token {
                 Token::MultiChar(MultiCharTokens::InterpolationStart) => {
-                    let place_holder_name = cursor
+                    let place_holder_name = tokenizer
                         .capture_string_until(vec![&Token::interpolation_start()], &Token::RParen);
 
                     if let Some(place_holder_name) = place_holder_name {
@@ -982,7 +980,7 @@ mod tests {
 
         // Intentionally bringing an curly brace
         let expr2 = Expr::from_primitive_string(
-            "${if request.path.id == 'bar' then 'foo' else { match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }} }",
+            "${if request.path.id == 'bar' then 'foo' else match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }}",
 
         ).unwrap();
 
@@ -1001,7 +999,7 @@ mod tests {
             resolved_variables_path.merge(&error_worker_response.result_with_worker_response_key());
 
         let expr3 = Expr::from_primitive_string(
-            "${if request.path.id == 'bar' then 'foo' else { match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }} }",
+            "${if request.path.id == 'bar' then 'foo' else match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }}",
 
         ).unwrap();
 
