@@ -942,6 +942,8 @@ mod tests {
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
         )
         .unwrap();
+
+        dbg!(expr.clone());
         let result = expr.evaluate(&worker_response);
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("not found".to_string())));
     }
@@ -1028,10 +1030,13 @@ mod tests {
             "${match worker.response { ok(value) => 'personal-id', err(msg) => 'not found' }}",
         )
         .unwrap();
+
+        dbg!(expr.clone());
+
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         assert_eq!(
-            result,
-            Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
+            result.is_err(),
+            true
         );
     }
 

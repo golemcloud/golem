@@ -190,6 +190,7 @@ impl Token {
     pub fn is_empty(&self) -> bool {
         match self {
             Self::MultiChar(MultiCharTokens::Other(string)) => string.is_empty(),
+            Self::Space => true,
             _ => false,
         }
     }

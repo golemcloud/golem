@@ -760,9 +760,11 @@ mod internal {
                                         ConstructorPattern::constructor(
                                             token.to_string().as_str(),
                                             vec![cons],
-                                        );
+                                        )?;
 
-                                    accumulate_constructor_pattern_expr(cursor, constructor_pattern?, constructor_patterns, go)
+                                    dbg!(constructor_pattern.clone());
+
+                                    accumulate_constructor_pattern_expr(cursor, constructor_pattern, constructor_patterns, go)
 
                                 }
                                 _ => Err(ParseError::Message(
@@ -852,18 +854,31 @@ mod internal {
                         }
                     }
 
+                    // Last constructor
                     (Some(_), None) => {
                         let captured_string = cursor.capture_string_until(
                             vec![&Token::LCurly, &Token::interpolation_start()],
                             &Token::RCurly,
                         );
 
-                        let individual_expr =
-                            parse_with_context(captured_string.unwrap().as_str(), Context::Code)
-                                .map(|expr| {
-                                    ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
-                                })?;
-                        collected_exprs.push(individual_expr);
+                        match captured_string {
+                            Some(captured_string) => {
+                                let individual_expr = parse_with_context(captured_string.as_str(), Context::Code)
+                                    .map(|expr| {
+                                        ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
+                                    })?;
+                                collected_exprs.push(individual_expr);
+
+                            }
+                            None => {},
+                        }
+                        //
+                        // let individual_expr =
+                        //     parse_with_context(captured_string.unwrap().as_str(), Context::Code)
+                        //         .map(|expr| {
+                        //             ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
+                        //         })?;
+                        // collected_exprs.push(individual_expr);
                         Ok(())
                     }
 

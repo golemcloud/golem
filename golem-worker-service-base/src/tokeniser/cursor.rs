@@ -31,9 +31,12 @@ impl<'a> TokenCursor<'a> {
 
     pub fn peek_at(&mut self, index: usize) -> Option<Token> {
         let original_state = self.tokenizer.state.pos;
+        let original_token = self.current_token.clone();
         self.tokenizer.state.pos = index;
+
         if let Some(token) = self.tokenizer.next_token() {
             self.tokenizer.state.pos = original_state;
+            self.current_token = original_token;
             Some(token)
         } else {
             None
@@ -127,7 +130,7 @@ impl<'a> TokenCursor<'a> {
                 }
             }
 
-            index += current_token.len();
+            index += current_token.len() ;
         }
 
         if found {
@@ -210,5 +213,15 @@ mod tests {
         let result = cursor.capture_tail();
 
         assert_eq!(result, Some(" foo".to_string()))
+    }
+
+    #[test]
+    fn test_index_of_last_end_token() {
+        let tokens = "else foo }";
+
+        let mut cursor = TokenCursor::new(tokens);
+        let result = cursor.index_of_last_end_token(vec![&Token::LCurly], &Token::RCurly );
+
+        assert_eq!(result, Some(10))
     }
 }
