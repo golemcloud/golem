@@ -91,6 +91,7 @@ impl<T> RadixNode<T> {
                     // becomes
                     //
                     // self.path = []
+                    // self.data = None
                     // self.children = {
                     //     "a" => RadixNode { path = ["a, "b"], data = Some(1)}
                     //     "c" => RadixNode { path = ["c", "d"], data = Some(2)}
@@ -289,32 +290,18 @@ mod test {
     fn test_push_and_get() {
         let mut root = RadixNode::default();
 
-        let path1 = vec![
-            Pattern::Static("a".to_string()),
-            Pattern::Static("b".to_string()),
-            Pattern::Static("c".to_string()),
-        ];
-
+        let path1 = make_path("/a/b/c");
         root.insert_path(path1.as_slice(), 1).unwrap();
+
         assert_eq!(root.get(&path1), Some(&1),);
 
-        // a/b/d
-        let path2 = vec![
-            Pattern::Static("a".to_string()),
-            Pattern::Static("b".to_string()),
-            Pattern::Static("d".to_string()),
-        ];
-
+        let path2 = make_path("/a/b/d");
         root.insert_path(path2.as_slice(), 2).unwrap();
 
         assert_eq!(root.get(&path1), Some(&1),);
         assert_eq!(root.get(&path2), Some(&2),);
 
-        let path3 = vec![
-            Pattern::Static("a".to_string()),
-            Pattern::Static("a".to_string()),
-        ];
-
+        let path3 = make_path("/a/b/e");
         root.insert_path(path3.as_slice(), 3).unwrap();
 
         assert_eq!(root.get(&path1), Some(&1),);
