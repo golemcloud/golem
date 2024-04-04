@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
 
 #[derive(Clone, Default)]
-struct RadixNode<T> {
+pub struct RadixNode<T> {
     pattern: Vec<Pattern>,
+    // The key is the first pattern of the child.
+    // Given the paths are perfectly de-duplicated,
+    // we can assume that each child has a unique first pattern.
     children: BTreeMap<Pattern, RadixNode<T>>,
     data: Option<T>,
 }
@@ -21,61 +24,76 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum Pattern {
+pub enum Pattern {
     Static(String),
     Variable,
 }
 
-impl<T: std::fmt::Debug> RadixNode<T> {
-    pub fn new(pattern: Vec<Pattern>) -> Self {
-        Self {
-            pattern,
-            children: BTreeMap::new(),
-            data: None,
+#[derive(Debug, thiserror::Error)]
+pub enum PushError {
+    #[error("Conflict with existing route")]
+    Conflict,
+}
+
+impl<T> RadixNode<T> {
+    pub fn insert(&mut self, path: &[Pattern], data: T) -> Result<(), PushError> {
+        if path.is_empty() {
+            if self.data.is_some() {
+                return Err(PushError::Conflict);
+            } else {
+                self.data = Some(data);
+                Ok(())
+            }
+        } else {
+            let common_prefix_len = self.common_prefix_len(path);
+
+            if common_prefix_len == self.pattern.len() {
+                if common_prefix_len == path.len() {
+                    // The path is fully consumed, update the data of the current node
+                    if self.data.is_some() {
+                        Err(PushError::Conflict)
+                    } else {
+                        self.data = Some(data);
+                        Ok(())
+                    }
+                } else {
+                    // There are remaining patterns in the path, insert into the appropriate child node
+                    if let Some(child) = self.children.get_mut(&path[common_prefix_len]) {
+                        child.insert(&path[common_prefix_len..], data)
+                    } else {
+                        self.insert_new(&path[common_prefix_len..], data);
+                        Ok(())
+                    }
+                }
+            } else {
+                let new_child_pattern = self.pattern.split_off(common_prefix_len);
+                let new_child_data = self.data.take();
+                let new_child_children = std::mem::take(&mut self.children);
+
+                let new_child = RadixNode {
+                    pattern: new_child_pattern,
+                    children: new_child_children,
+                    data: new_child_data,
+                };
+
+                self.children
+                    .insert(new_child.pattern[0].clone(), new_child);
+                self.insert(path, data)
+            }
         }
     }
 
-    pub fn push(&mut self, path: &[Pattern], data: T) {
-        if path.is_empty() {
+    fn insert_new(&mut self, path: &[Pattern], data: T) {
+        if self.pattern.is_empty() && self.data.is_none() {
+            self.pattern = path.to_vec();
             self.data = Some(data);
-            return;
-        }
-
-        if let Some(child) = self.children.get_mut(&path[0]) {
-            let common_prefix_len = child
-                .pattern
-                .iter()
-                .zip(path.iter())
-                .take_while(|(a, b)| a == b)
-                .count();
-
-            if common_prefix_len > 0 {
-                if common_prefix_len == child.pattern.len() {
-                    child.push(&path[common_prefix_len..], data);
-                } else {
-                    let new_child_pattern = child.pattern.split_off(common_prefix_len);
-                    let new_child_data = child.data.take();
-                    let new_child_children = std::mem::take(&mut child.children);
-
-                    let new_child = RadixNode {
-                        pattern: new_child_pattern,
-                        children: new_child_children,
-                        data: new_child_data,
-                    };
-
-                    child
-                        .children
-                        .insert(new_child.pattern[0].clone(), new_child);
-                    child.push(&path[common_prefix_len..], data);
-                }
-                return;
-            }
-        }
-
-        let new_node = RadixNode::new(path.to_vec());
-        self.children.insert(path[0].clone(), new_node);
-        if let Some(child) = self.children.get_mut(&path[0]) {
-            child.data = Some(data);
+        } else {
+            let new_node = RadixNode {
+                pattern: path.to_vec(),
+                children: BTreeMap::new(),
+                data: Some(data),
+            };
+            self.children.insert(path[0].clone(), new_node);
         }
     }
 
@@ -84,70 +102,83 @@ impl<T: std::fmt::Debug> RadixNode<T> {
             return self.data.as_ref();
         }
 
-        if let Some(child) = self.children.get(&path[0]) {
-            if path.starts_with(&child.pattern) {
-                return child.get(&path[child.pattern.len()..]);
+        let common_prefix_len = self.common_prefix_len(path);
+
+        if common_prefix_len == self.pattern.len() {
+            if common_prefix_len == path.len() {
+                // The path fully matches the current node's pattern
+                return self.data.as_ref();
+            } else {
+                // The path partially matches the current node's pattern
+                if let Some(child) = self.children.get(&path[common_prefix_len]) {
+                    return child.get(&path[common_prefix_len..]);
+                }
             }
         }
 
         None
     }
 
-    pub fn matches<'a, 'b>(&'a self, path: &'b str) -> Option<MatchResult<'a, 'b, T>> {
-        let path = path
-            .trim()
-            .trim_start_matches('/')
-            .trim_end_matches('/')
-            .split('/')
-            .collect::<Vec<_>>();
+    pub fn matches_str<'a, 'b>(&'a self, path: &'b str) -> Option<MatchResult<'a, 'b, T>> {
+        // Purposefully not filtering out empty strings.
+        let path = path.trim().trim_matches('/').split('/').collect::<Vec<_>>();
 
+        self.matches(&path)
+    }
+
+    pub fn matches<'a, 'b>(&'a self, path: &[&'b str]) -> Option<MatchResult<'a, 'b, T>> {
         let mut node = self;
-        let mut path_segments = path.as_slice();
+        let mut path_segments = path;
         let mut variables = Vec::new();
 
         loop {
-            if path_segments.is_empty() {
-                let new_values = extract_values(path_segments, &node.pattern);
-                variables.extend(new_values);
-                return node
-                    .data
-                    .as_ref()
-                    .map(|data| MatchResult { data, variables });
-            }
-
-            let current_segment = path_segments[0];
-
-            let next_child = node
-                .children
+            let common_prefix_len = node
+                .pattern
                 .iter()
-                .find(|(pattern, _)| match pattern {
-                    Pattern::Static(s) => s == current_segment,
+                .zip(path_segments.iter())
+                .take_while(|(a, b)| match a {
+                    Pattern::Static(s) => s == *b,
                     Pattern::Variable => true,
                 })
-                .map(|(_, child)| child);
+                .count();
 
-            if let Some(child) = next_child {
-                let common_prefix_len = child
-                    .pattern
-                    .iter()
-                    .zip(path_segments.iter())
-                    .take_while(|(a, b)| match a {
-                        Pattern::Static(s) => s == *b,
-                        Pattern::Variable => true,
-                    })
-                    .count();
+            if common_prefix_len == node.pattern.len() {
+                let path_start = path.len() - path_segments.len();
+                let path_end = path_start + common_prefix_len;
+                let new_variables = extract_values(&path[path_start..path_end], &node.pattern);
+                variables.extend(new_variables);
 
-                if common_prefix_len == child.pattern.len() {
-                    let path_start = path.len() - path_segments.len();
-                    let path_end = path_start + common_prefix_len;
-
-                    let new_variables = extract_values(&path[path_start..path_end], &child.pattern);
-                    variables.extend(new_variables);
-
-                    path_segments = &path_segments[common_prefix_len..];
-                    node = child;
+                if common_prefix_len == path_segments.len() {
+                    // The path fully matches the current node's pattern
+                    return node
+                        .data
+                        .as_ref()
+                        .map(|data| MatchResult { data, variables });
                 } else {
-                    break;
+                    // The path partially matches the current node's pattern
+                    path_segments = &path_segments[common_prefix_len..];
+
+                    match path_segments.first() {
+                        Some(first_segment) => {
+                            let next_child = node
+                                .children
+                                .iter()
+                                .find(|(pattern, _)| match pattern {
+                                    Pattern::Static(s) => s == first_segment,
+                                    Pattern::Variable => true,
+                                })
+                                .map(|(_, child)| child);
+
+                            if let Some(child) = next_child {
+                                node = child;
+                            } else {
+                                break;
+                            }
+                        }
+                        None => {
+                            break;
+                        }
+                    }
                 }
             } else {
                 break;
@@ -155,6 +186,14 @@ impl<T: std::fmt::Debug> RadixNode<T> {
         }
 
         None
+    }
+
+    fn common_prefix_len(&self, path: &[Pattern]) -> usize {
+        self.pattern
+            .iter()
+            .zip(path.iter())
+            .take_while(|(a, b)| a == b)
+            .count()
     }
 }
 
@@ -191,16 +230,17 @@ mod test {
             Pattern::Static("c".to_string()),
         ];
 
-        root.push(path1.as_slice(), 1);
+        root.insert(path1.as_slice(), 1).unwrap();
         assert_eq!(root.get(&path1), Some(&1),);
 
+        // a/b/d
         let path2 = vec![
             Pattern::Static("a".to_string()),
             Pattern::Static("b".to_string()),
             Pattern::Static("d".to_string()),
         ];
 
-        root.push(path2.as_slice(), 2);
+        root.insert(path2.as_slice(), 2).unwrap();
 
         assert_eq!(root.get(&path1), Some(&1),);
         assert_eq!(root.get(&path2), Some(&2),);
@@ -210,11 +250,53 @@ mod test {
             Pattern::Static("a".to_string()),
         ];
 
-        root.push(path3.as_slice(), 3);
+        root.insert(path3.as_slice(), 3).unwrap();
 
         assert_eq!(root.get(&path1), Some(&1),);
         assert_eq!(root.get(&path2), Some(&2),);
         assert_eq!(root.get(&path3), Some(&3),);
+    }
+
+    #[test]
+    fn test_push_subpath() {
+        let mut root = RadixNode::default();
+
+        let path1 = vec![
+            Pattern::Static("a".to_string()),
+            Pattern::Static("b".to_string()),
+            Pattern::Static("c".to_string()),
+        ];
+
+        root.insert(path1.as_slice(), 1).unwrap();
+
+        println!("{:#?}", root);
+
+        let path2 = vec![
+            Pattern::Static("a".to_string()),
+            Pattern::Static("b".to_string()),
+        ];
+
+        root.insert(path2.as_slice(), 2).unwrap();
+
+        println!("{:#?}", root);
+    }
+
+    #[test]
+    fn test_conflict() {
+        let mut root = RadixNode::default();
+
+        let path = vec![
+            Pattern::Static("a".to_string()),
+            Pattern::Static("b".to_string()),
+            Pattern::Static("c".to_string()),
+        ];
+
+        root.insert(path.as_slice(), 1).unwrap();
+
+        assert!(matches!(
+            root.insert(path.as_slice(), 2),
+            Err(PushError::Conflict)
+        ));
     }
 
     #[test]
@@ -227,9 +309,9 @@ mod test {
             Pattern::Static("worker".to_string()),
         ];
 
-        root.push(path1.as_slice(), 1);
+        root.insert(path1.as_slice(), 1).unwrap();
 
-        let result = root.matches("/templates/123/worker");
+        let result = root.matches_str("/templates/123/worker");
 
         assert_eq!(
             result,
@@ -239,8 +321,8 @@ mod test {
             })
         );
 
-        assert_eq!(root.matches("/templates/123/worker/extra"), None);
-        assert_eq!(root.matches("/templates/123"), None);
+        assert_eq!(root.matches_str("/templates/123/worker/extra"), None);
+        assert_eq!(root.matches_str("/templates/123"), None);
     }
 
     #[test]
@@ -253,7 +335,7 @@ mod test {
             Pattern::Static("worker".to_string()),
         ];
 
-        root.push(path1.as_slice(), 1);
+        root.insert(path1.as_slice(), 1).unwrap();
 
         let path2 = vec![
             Pattern::Static("templates".to_string()),
@@ -261,9 +343,9 @@ mod test {
             Pattern::Static("function".to_string()),
         ];
 
-        root.push(path2.as_slice(), 2);
+        root.insert(path2.as_slice(), 2).unwrap();
 
-        let result = root.matches("/templates/123/worker");
+        let result = root.matches_str("/templates/123/worker");
 
         assert_eq!(
             result,
@@ -273,7 +355,7 @@ mod test {
             })
         );
 
-        let result = root.matches("/templates/456/function");
+        let result = root.matches_str("/templates/456/function");
 
         assert_eq!(
             result,
@@ -293,18 +375,18 @@ mod test {
             Pattern::Static("worker".to_string()),
         ];
 
-        root.push(path1.as_slice(), 1);
+        root.insert(path1.as_slice(), 1).unwrap();
 
         let path2 = vec![Pattern::Static("templates".to_string()), Pattern::Variable];
 
-        root.push(path2.as_slice(), 2);
+        root.insert(path2.as_slice(), 2).unwrap();
 
         assert_eq!(
             Some(MatchResult {
                 data: &1,
                 variables: vec![]
             }),
-            root.matches("/templates/worker")
+            root.matches_str("/templates/worker")
         );
 
         assert_eq!(
@@ -312,7 +394,7 @@ mod test {
                 data: &2,
                 variables: vec!["123"]
             }),
-            root.matches("/templates/123")
+            root.matches_str("/templates/123")
         );
     }
 
@@ -327,14 +409,14 @@ mod test {
             Pattern::Variable,
         ];
 
-        root.push(path1.as_slice(), 1);
+        root.insert(path1.as_slice(), 1).unwrap();
 
         assert_eq!(
             Some(MatchResult {
                 data: &1,
                 variables: vec!["v1", "123"]
             }),
-            root.matches("/api/v1/users/123")
+            root.matches_str("/api/v1/users/123")
         );
     }
 
@@ -349,7 +431,7 @@ mod test {
             Pattern::Variable,
         ];
 
-        root.push(path1.as_slice(), 1);
+        root.insert(path1.as_slice(), 1).unwrap();
 
         let path2 = vec![
             Pattern::Static("api".to_string()),
@@ -358,14 +440,14 @@ mod test {
             Pattern::Variable,
         ];
 
-        root.push(path2.as_slice(), 2);
+        root.insert(path2.as_slice(), 2).unwrap();
 
         assert_eq!(
             Some(MatchResult {
                 data: &1,
                 variables: vec!["v1", "123"]
             }),
-            root.matches("/api/v1/users/123")
+            root.matches_str("/api/v1/users/123")
         );
 
         assert_eq!(
@@ -373,7 +455,7 @@ mod test {
                 data: &2,
                 variables: vec!["456", "789"]
             }),
-            root.matches("/api/users/456/789")
+            root.matches_str("/api/users/456/789")
         );
     }
 
@@ -387,7 +469,7 @@ mod test {
             Pattern::Static("users".to_string()),
         ];
 
-        root.push(path1.as_slice(), 1);
+        root.insert(path1.as_slice(), 1).unwrap();
 
         let path2 = vec![
             Pattern::Static("api".to_string()),
@@ -395,14 +477,14 @@ mod test {
             Pattern::Static("users".to_string()),
         ];
 
-        root.push(path2.as_slice(), 2);
+        root.insert(path2.as_slice(), 2).unwrap();
 
         assert_eq!(
             Some(MatchResult {
                 data: &2,
                 variables: vec![]
             }),
-            root.matches("/api/v1/users")
+            root.matches_str("/api/v1/users")
         );
 
         assert_eq!(
@@ -410,7 +492,7 @@ mod test {
                 data: &1,
                 variables: vec!["v2"]
             }),
-            root.matches("/api/v2/users")
+            root.matches_str("/api/v2/users")
         );
     }
 
@@ -424,7 +506,7 @@ mod test {
             Pattern::Static("users".to_string()),
         ];
 
-        root.push(path1.as_slice(), 1);
+        root.insert(path1.as_slice(), 1).unwrap();
 
         let path2 = vec![
             Pattern::Static("api".to_string()),
@@ -433,7 +515,7 @@ mod test {
             Pattern::Variable,
         ];
 
-        root.push(path2.as_slice(), 2);
+        root.insert(path2.as_slice(), 2).unwrap();
 
         let path3 = vec![
             Pattern::Static("api".to_string()),
@@ -442,14 +524,16 @@ mod test {
             Pattern::Static("profile".to_string()),
         ];
 
-        root.push(path3.as_slice(), 3);
+        root.insert(path3.as_slice(), 3).unwrap();
+
+        println!("{:#?}", root);
 
         assert_eq!(
             Some(MatchResult {
                 data: &1,
                 variables: vec!["v2"]
             }),
-            root.matches("/api/v2/users")
+            root.matches_str("/api/v2/users")
         );
 
         assert_eq!(
@@ -457,7 +541,7 @@ mod test {
                 data: &2,
                 variables: vec!["123"]
             }),
-            root.matches("/api/v1/users/123")
+            root.matches_str("/api/v1/users/123")
         );
 
         assert_eq!(
@@ -465,7 +549,7 @@ mod test {
                 data: &3,
                 variables: vec!["456"]
             }),
-            root.matches("/api/456/users/profile")
+            root.matches_str("/api/456/users/profile")
         );
     }
 }
