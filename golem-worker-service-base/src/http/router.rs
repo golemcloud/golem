@@ -36,7 +36,7 @@ pub enum PushError {
 }
 
 impl<T> RadixNode<T> {
-    pub fn insert(&mut self, path: &[Pattern], data: T) -> Result<(), PushError> {
+    pub fn insert_path(&mut self, path: &[Pattern], data: T) -> Result<(), PushError> {
         if path.is_empty() {
             if self.data.is_some() {
                 return Err(PushError::Conflict);
@@ -57,28 +57,78 @@ impl<T> RadixNode<T> {
                         Ok(())
                     }
                 } else {
-                    // There are remaining patterns in the path, insert into the appropriate child node
-                    if let Some(child) = self.children.get_mut(&path[common_prefix_len]) {
-                        child.insert(&path[common_prefix_len..], data)
+                    let new_path = &path[common_prefix_len..];
+                    let new_path_head = &new_path[0];
+
+                    if let Some(child) = self.children.get_mut(new_path_head) {
+                        child.insert_path(new_path, data)
                     } else {
-                        self.insert_new(&path[common_prefix_len..], data);
-                        Ok(())
+                        // If there are no children, we can insert the new path directly
+                        if self.children.is_empty() {
+                            self.insert_new(new_path, data);
+                            Ok(())
+                        } else {
+                            let new_node = RadixNode {
+                                pattern: new_path.to_vec(),
+                                children: BTreeMap::new(),
+                                data: Some(data),
+                            };
+                            self.children.insert(new_path_head.clone(), new_node);
+                            Ok(())
+                        }
                     }
                 }
             } else {
-                let new_child_pattern = self.pattern.split_off(common_prefix_len);
-                let new_child_data = self.data.take();
-                let new_child_children = std::mem::take(&mut self.children);
+                if common_prefix_len == 0 {
+                    // both self and path must become children of the current node.
+                    //
+                    // self.path = ["a", "b"]
+                    // self.data = Some(1)
+                    //
+                    // path = ["c", "d"]
+                    // data = Some(2)
+                    //
+                    // becomes
+                    //
+                    // self.path = []
+                    // self.children = {
+                    //     "a" => RadixNode { path = ["a, "b"], data = Some(1)}
+                    //     "c" => RadixNode { path = ["c", "d"], data = Some(2)}
+                    // }
 
-                let new_child = RadixNode {
-                    pattern: new_child_pattern,
-                    children: new_child_children,
-                    data: new_child_data,
-                };
+                    let self_node = RadixNode {
+                        pattern: std::mem::take(&mut self.pattern),
+                        children: std::mem::take(&mut self.children),
+                        data: self.data.take(),
+                    };
 
-                self.children
-                    .insert(new_child.pattern[0].clone(), new_child);
-                self.insert(path, data)
+                    let path_node = RadixNode {
+                        pattern: path.to_vec(),
+                        children: BTreeMap::new(),
+                        data: Some(data),
+                    };
+
+                    self.children
+                        .insert(self_node.pattern[0].clone(), self_node);
+                    self.children
+                        .insert(path_node.pattern[0].clone(), path_node);
+
+                    Ok(())
+                } else {
+                    let new_child_pattern = self.pattern.split_off(common_prefix_len);
+                    let new_child_data = self.data.take();
+                    let new_child_children = std::mem::take(&mut self.children);
+
+                    let new_child = RadixNode {
+                        pattern: new_child_pattern,
+                        children: new_child_children,
+                        data: new_child_data,
+                    };
+
+                    self.children
+                        .insert(new_child.pattern[0].clone(), new_child);
+                    self.insert_path(path, data)
+                }
             }
         }
     }
@@ -104,6 +154,7 @@ impl<T> RadixNode<T> {
 
         let common_prefix_len = self.common_prefix_len(path);
 
+        // Must match the entire pattern
         if common_prefix_len == self.pattern.len() {
             if common_prefix_len == path.len() {
                 // The path fully matches the current node's pattern
@@ -216,6 +267,20 @@ pub struct MatchResult<'a, 'b, T> {
     pub variables: Vec<&'b str>,
 }
 
+// Is pub so that it can be used in benchmark.
+pub fn make_path(path: &str) -> Vec<Pattern> {
+    path.trim_matches('/')
+        .split('/')
+        .map(|s| {
+            if s.starts_with(':') {
+                Pattern::Variable
+            } else {
+                Pattern::Static(s.to_string())
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -230,7 +295,7 @@ mod test {
             Pattern::Static("c".to_string()),
         ];
 
-        root.insert(path1.as_slice(), 1).unwrap();
+        root.insert_path(path1.as_slice(), 1).unwrap();
         assert_eq!(root.get(&path1), Some(&1),);
 
         // a/b/d
@@ -240,7 +305,7 @@ mod test {
             Pattern::Static("d".to_string()),
         ];
 
-        root.insert(path2.as_slice(), 2).unwrap();
+        root.insert_path(path2.as_slice(), 2).unwrap();
 
         assert_eq!(root.get(&path1), Some(&1),);
         assert_eq!(root.get(&path2), Some(&2),);
@@ -250,11 +315,69 @@ mod test {
             Pattern::Static("a".to_string()),
         ];
 
-        root.insert(path3.as_slice(), 3).unwrap();
+        root.insert_path(path3.as_slice(), 3).unwrap();
 
         assert_eq!(root.get(&path1), Some(&1),);
         assert_eq!(root.get(&path2), Some(&2),);
         assert_eq!(root.get(&path3), Some(&3),);
+    }
+
+    #[test]
+    fn test_shape_no_overlap() {
+        let mut root = RadixNode::default();
+
+        let path1 = make_path("/a/b");
+        root.insert_path(path1.as_slice(), 1).unwrap();
+
+        let path2 = make_path("/d/e");
+        root.insert_path(path2.as_slice(), 2).unwrap();
+
+        let path3 = make_path("/f/g");
+        root.insert_path(path3.as_slice(), 3).unwrap();
+
+        assert_eq!(root.get(&path1), Some(&1));
+        assert_eq!(root.get(&path2), Some(&2));
+
+        assert!(root.pattern.is_empty());
+        assert_eq!(3, root.children.len());
+    }
+
+    #[test]
+    fn test_large_tree_structure() {
+        let paths = [
+            "/activity",
+            "/suggestions",
+            "/feed/trending",
+            "/suggestions/tags",
+            "/analytics/users",
+            "/api/v2/users",
+            "/api/v2/users/:user_id",
+            "/dashboard/analytics",
+            "/posts/:post_id/comments/:comment_id/replies",
+            "/posts/:post_id/comments",
+            "/trending/posts",
+        ];
+
+        let mut root = RadixNode::default();
+
+        for (index, path) in paths.iter().enumerate() {
+            let path = make_path(path);
+            root.insert_path(&path, index).unwrap();
+        }
+
+        assert!(root.matches_str("/activity").is_some());
+        assert!(root.matches_str("/suggestions").is_some());
+        assert!(root.matches_str("/feed/trending").is_some());
+        assert!(root.matches_str("/suggestions/tags").is_some());
+        assert!(root.matches_str("/analytics/users").is_some());
+        assert!(root.matches_str("/api/v2/users").is_some());
+        assert!(root.matches_str("/api/v2/users/nico").is_some());
+        assert!(root.matches_str("/dashboard/analytics").is_some());
+        assert!(root
+            .matches_str("/posts/123/comments/123/replies")
+            .is_some());
+        assert!(root.matches_str("/posts/123/comments").is_some());
+        assert!(root.matches_str("/trending/posts").is_some());
     }
 
     #[test]
@@ -267,34 +390,26 @@ mod test {
             Pattern::Static("c".to_string()),
         ];
 
-        root.insert(path1.as_slice(), 1).unwrap();
-
-        println!("{:#?}", root);
+        root.insert_path(path1.as_slice(), 1).unwrap();
 
         let path2 = vec![
             Pattern::Static("a".to_string()),
             Pattern::Static("b".to_string()),
         ];
 
-        root.insert(path2.as_slice(), 2).unwrap();
-
-        println!("{:#?}", root);
+        root.insert_path(path2.as_slice(), 2).unwrap();
     }
 
     #[test]
     fn test_conflict() {
         let mut root = RadixNode::default();
 
-        let path = vec![
-            Pattern::Static("a".to_string()),
-            Pattern::Static("b".to_string()),
-            Pattern::Static("c".to_string()),
-        ];
+        let path = make_path("/a/b/c");
 
-        root.insert(path.as_slice(), 1).unwrap();
+        root.insert_path(path.as_slice(), 1).unwrap();
 
         assert!(matches!(
-            root.insert(path.as_slice(), 2),
+            root.insert_path(path.as_slice(), 2),
             Err(PushError::Conflict)
         ));
     }
@@ -303,13 +418,9 @@ mod test {
     fn test_matches() {
         let mut root = RadixNode::default();
 
-        let path1 = vec![
-            Pattern::Static("templates".to_string()),
-            Pattern::Variable,
-            Pattern::Static("worker".to_string()),
-        ];
+        let path1 = make_path("/templates/:id/worker");
 
-        root.insert(path1.as_slice(), 1).unwrap();
+        root.insert_path(path1.as_slice(), 1).unwrap();
 
         let result = root.matches_str("/templates/123/worker");
 
@@ -329,21 +440,13 @@ mod test {
     fn test_matches_two_routes() {
         let mut root = RadixNode::default();
 
-        let path1 = vec![
-            Pattern::Static("templates".to_string()),
-            Pattern::Variable,
-            Pattern::Static("worker".to_string()),
-        ];
+        let path1 = make_path("/templates/:id/worker");
 
-        root.insert(path1.as_slice(), 1).unwrap();
+        root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = vec![
-            Pattern::Static("templates".to_string()),
-            Pattern::Variable,
-            Pattern::Static("function".to_string()),
-        ];
+        let path2 = make_path("/templates/:id/function");
 
-        root.insert(path2.as_slice(), 2).unwrap();
+        root.insert_path(path2.as_slice(), 2).unwrap();
 
         let result = root.matches_str("/templates/123/worker");
 
@@ -370,16 +473,13 @@ mod test {
     fn test_conflict_static_variable() {
         let mut root = RadixNode::default();
 
-        let path1 = vec![
-            Pattern::Static("templates".to_string()),
-            Pattern::Static("worker".to_string()),
-        ];
+        let path1 = make_path("/templates/worker");
 
-        root.insert(path1.as_slice(), 1).unwrap();
+        root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = vec![Pattern::Static("templates".to_string()), Pattern::Variable];
+        let path2 = make_path("/templates/:id");
 
-        root.insert(path2.as_slice(), 2).unwrap();
+        root.insert_path(path2.as_slice(), 2).unwrap();
 
         assert_eq!(
             Some(MatchResult {
@@ -402,14 +502,9 @@ mod test {
     fn test_multiple_variables() {
         let mut root = RadixNode::default();
 
-        let path1 = vec![
-            Pattern::Static("api".to_string()),
-            Pattern::Variable,
-            Pattern::Static("users".to_string()),
-            Pattern::Variable,
-        ];
+        let path1 = make_path("/api/:version/users/:id");
 
-        root.insert(path1.as_slice(), 1).unwrap();
+        root.insert_path(path1.as_slice(), 1).unwrap();
 
         assert_eq!(
             Some(MatchResult {
@@ -424,23 +519,13 @@ mod test {
     fn test_multiple_variables_different_order() {
         let mut root = RadixNode::default();
 
-        let path1 = vec![
-            Pattern::Static("api".to_string()),
-            Pattern::Variable,
-            Pattern::Static("users".to_string()),
-            Pattern::Variable,
-        ];
+        let path1 = make_path("/api/:api_id/users/:user_id");
 
-        root.insert(path1.as_slice(), 1).unwrap();
+        root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = vec![
-            Pattern::Static("api".to_string()),
-            Pattern::Static("users".to_string()),
-            Pattern::Variable,
-            Pattern::Variable,
-        ];
+        let path2 = make_path("/api/users/:user_id/:id");
 
-        root.insert(path2.as_slice(), 2).unwrap();
+        root.insert_path(path2.as_slice(), 2).unwrap();
 
         assert_eq!(
             Some(MatchResult {
@@ -463,21 +548,13 @@ mod test {
     fn test_conflict_variable_static() {
         let mut root = RadixNode::default();
 
-        let path1 = vec![
-            Pattern::Static("api".to_string()),
-            Pattern::Variable,
-            Pattern::Static("users".to_string()),
-        ];
+        let path1 = make_path("/api/:version/users");
 
-        root.insert(path1.as_slice(), 1).unwrap();
+        root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = vec![
-            Pattern::Static("api".to_string()),
-            Pattern::Static("v1".to_string()),
-            Pattern::Static("users".to_string()),
-        ];
+        let path2 = make_path("/api/v1/users");
 
-        root.insert(path2.as_slice(), 2).unwrap();
+        root.insert_path(path2.as_slice(), 2).unwrap();
 
         assert_eq!(
             Some(MatchResult {
@@ -500,33 +577,14 @@ mod test {
     fn test_multiple_routes_resolution() {
         let mut root = RadixNode::default();
 
-        let path1 = vec![
-            Pattern::Static("api".to_string()),
-            Pattern::Variable,
-            Pattern::Static("users".to_string()),
-        ];
+        let path1 = make_path("/api/:version/users");
+        root.insert_path(path1.as_slice(), 1).unwrap();
 
-        root.insert(path1.as_slice(), 1).unwrap();
+        let path2 = make_path("/api/v1/users/:id");
+        root.insert_path(path2.as_slice(), 2).unwrap();
 
-        let path2 = vec![
-            Pattern::Static("api".to_string()),
-            Pattern::Static("v1".to_string()),
-            Pattern::Static("users".to_string()),
-            Pattern::Variable,
-        ];
-
-        root.insert(path2.as_slice(), 2).unwrap();
-
-        let path3 = vec![
-            Pattern::Static("api".to_string()),
-            Pattern::Variable,
-            Pattern::Static("users".to_string()),
-            Pattern::Static("profile".to_string()),
-        ];
-
-        root.insert(path3.as_slice(), 3).unwrap();
-
-        println!("{:#?}", root);
+        let path3 = make_path("/api/:api_id/users/profile");
+        root.insert_path(path3.as_slice(), 3).unwrap();
 
         assert_eq!(
             Some(MatchResult {

@@ -55,3 +55,11 @@ futures-util = { workspace = true }
 tap = "1.0.1"
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+divan = "0.1.14"
+fastrand = "2.0.2"
+
+[[bench]]
+name = "router"
+harness = false
