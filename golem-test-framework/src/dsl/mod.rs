@@ -138,16 +138,37 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn store_template(&self, name: &str) -> TemplateId {
         let source_path = self.template_directory().join(format!("{name}.wasm"));
         dump_template_info(&source_path);
-        self.template_service().add_template(&source_path).await
+        self.template_service()
+            .get_or_add_template(&source_path)
+            .await
     }
 
     async fn store_template_unverified(&self, name: &str) -> TemplateId {
         let source_path = self.template_directory().join(format!("{name}.wasm"));
-        self.template_service().add_template(&source_path).await
+        self.template_service()
+            .get_or_add_template(&source_path)
+            .await
+    }
+
+    async fn update_template(&self, template_id: &TemplateId, name: &str) {
+        let source_path = self.template_directory().join(format!("{name}.wasm"));
+        dump_template_info(&source_path);
+        self.template_service()
+            .update_template(template_id, &source_path)
+            .await;
     }
 
     async fn start_worker(&self, template_id: &TemplateId, name: &str) -> WorkerId {
         self.start_worker_with(template_id, name, vec![], HashMap::new())
+            .await
+    }
+
+    async fn try_start_worker(
+        &self,
+        template_id: &TemplateId,
+        name: &str,
+    ) -> Result<WorkerId, Error> {
+        self.try_start_worker_with(template_id, name, vec![], HashMap::new())
             .await
     }
 
@@ -161,15 +182,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         self.try_start_worker_with(template_id, name, args, env)
             .await
             .expect("Failed to start worker")
-    }
-
-    async fn try_start_worker(
-        &self,
-        template_id: &TemplateId,
-        name: &str,
-    ) -> Result<WorkerId, Error> {
-        self.try_start_worker_with(template_id, name, vec![], HashMap::new())
-            .await
     }
 
     async fn try_start_worker_with(
@@ -617,14 +629,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             } => panic!("Failed to crash worker: {error:?}"),
             _ => panic!("Failed to crash worker: unknown error"),
         }
-    }
-
-    async fn update_template(&self, template_id: &TemplateId, name: &str) {
-        let source_path = self.template_directory().join(format!("{name}.wasm"));
-        dump_template_info(&source_path);
-        self.template_service()
-            .update_template(template_id, &source_path)
-            .await;
     }
 }
 

@@ -20,9 +20,10 @@ use async_trait::async_trait;
 use create_template_request::Data;
 use golem_api_grpc::proto::golem::template::{
     create_template_request, create_template_response, get_template_metadata_response,
-    update_template_request, update_template_response, CreateTemplateRequest,
-    CreateTemplateRequestChunk, CreateTemplateRequestHeader, GetLatestTemplateRequest,
-    UpdateTemplateRequest, UpdateTemplateRequestChunk, UpdateTemplateRequestHeader,
+    get_templates_response, update_template_request, update_template_response,
+    CreateTemplateRequest, CreateTemplateRequestChunk, CreateTemplateRequestHeader,
+    GetLatestTemplateRequest, GetTemplatesRequest, UpdateTemplateRequest,
+    UpdateTemplateRequestChunk, UpdateTemplateRequestHeader,
 };
 use tonic::transport::Channel;
 use tracing::{info, Level};
@@ -42,6 +43,44 @@ pub mod spawned;
 pub trait TemplateService {
     async fn client(&self) -> TemplateServiceClient<Channel> {
         new_client(self.public_host(), self.public_grpc_port()).await
+    }
+
+    async fn get_or_add_template(&self, local_path: &Path) -> TemplateId {
+        let file_name = local_path.file_name().unwrap().to_string_lossy();
+        let mut client = self.client().await;
+        let response = client
+            .get_templates(GetTemplatesRequest {
+                project_id: None,
+                template_name: Some(file_name.to_string()),
+            })
+            .await
+            .expect("Failed to call get-templates")
+            .into_inner();
+
+        match response.result {
+            None => {
+                panic!("Missing response from golem-template-service for get-templates")
+            }
+            Some(get_templates_response::Result::Success(result)) => {
+                let latest = result
+                    .templates
+                    .into_iter()
+                    .max_by_key(|t| t.versioned_template_id.as_ref().unwrap().version);
+                match latest {
+                    Some(template) => template
+                        .versioned_template_id
+                        .expect("versioned_template_id field is missing")
+                        .template_id
+                        .expect("template_id field is missing")
+                        .try_into()
+                        .expect("template_id has unexpected format"),
+                    None => self.add_template(local_path).await,
+                }
+            }
+            Some(get_templates_response::Result::Error(error)) => {
+                panic!("Failed to get templates from golem-template-service: {error:?}");
+            }
+        }
     }
 
     async fn add_template(&self, local_path: &Path) -> TemplateId {

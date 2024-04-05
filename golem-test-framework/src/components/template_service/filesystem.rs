@@ -35,6 +35,10 @@ impl FileSystemTemplateService {
 
 #[async_trait]
 impl TemplateService for FileSystemTemplateService {
+    async fn get_or_add_template(&self, local_path: &Path) -> TemplateId {
+        self.add_template(local_path).await
+    }
+
     async fn add_template(&self, local_path: &Path) -> TemplateId {
         let uuid = Uuid::new_v4();
 
