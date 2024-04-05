@@ -202,7 +202,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                     };
 
                     let new_expr = build_with_last_complete_expr(
-                        ExpressionContext::GreaterThanOrEqualTo,
+                        InCompleteExpressionContext::GreaterThanOrEqualTo,
                         prev_expression,
                         |prev, new| {
                             InternalExprResult::complete(Expr::GreaterThanOrEqualTo(
@@ -224,7 +224,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                     };
 
                     let new_expr = build_with_last_complete_expr(
-                        ExpressionContext::GreaterThan,
+                        InCompleteExpressionContext::GreaterThan,
                         prev_expression,
                         |prev, new| {
                             InternalExprResult::complete(Expr::GreaterThan(
@@ -245,7 +245,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                     };
 
                     let new_expr = build_with_last_complete_expr(
-                        ExpressionContext::LessThan,
+                        InCompleteExpressionContext::LessThan,
                         prev_expression,
                         |prev, new| {
                             InternalExprResult::complete(Expr::LessThan(
@@ -267,7 +267,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                     };
 
                     let new_expr = build_with_last_complete_expr(
-                        ExpressionContext::LessThanOrEqualTo,
+                        InCompleteExpressionContext::LessThanOrEqualTo,
                         prev_expression,
                         |prev, new| {
                             InternalExprResult::complete(Expr::LessThanOrEqualTo(
@@ -288,7 +288,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                     };
 
                     let new_expr = build_with_last_complete_expr(
-                        ExpressionContext::EqualTo,
+                        InCompleteExpressionContext::EqualTo,
                         prev_expression,
                         |prev, new| {
                             InternalExprResult::complete(Expr::EqualTo(
@@ -376,15 +376,15 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                 Token::MultiChar(MultiCharTokens::If) => {
                     // We expect to form Expr::Cond given three unknown variables
                     let future_expr = InternalExprResult::incomplete(
-                        ExpressionContext::Condition,
+                        InCompleteExpressionContext::If,
                         move |first_result| {
                             let first_result: Rc<Expr> = Rc::new(first_result);
                             InternalExprResult::incomplete(
-                                ExpressionContext::Condition,
+                                InCompleteExpressionContext::Then,
                                 move |second_result| {
                                     let first_result: Rc<Expr> = Rc::clone(&first_result);
                                     InternalExprResult::incomplete(
-                                        ExpressionContext::Condition,
+                                        InCompleteExpressionContext::Else,
                                         move |else_result| {
                                             let first_result: Expr =
                                                 (*Rc::clone(&first_result)).clone();
@@ -443,7 +443,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                 }
 
                 Token::MultiChar(MultiCharTokens::Then) => match prev_expression {
-                    InternalExprResult::InComplete(ExpressionContext::Condition, _) => {
+                    InternalExprResult::InComplete(InCompleteExpressionContext::Then, _) => {
                         let mew_expr = capture_expression_until(
                             tokenizer,
                             vec![&Token::then()],
@@ -455,14 +455,14 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                         go(tokenizer, context, mew_expr)
                     }
 
-                    _ => Err(ParseError::Message(
-                        "then is a keyword and should be part of a if else condition logic"
+                    _  => Err(ParseError::Message(
+                        "then is a keyword and should be part of a if condition logic"
                             .to_string(),
                     )),
                 },
 
                 Token::MultiChar(MultiCharTokens::Else) => match prev_expression {
-                    InternalExprResult::InComplete(ExpressionContext::Condition, _) => {
+                    InternalExprResult::InComplete(InCompleteExpressionContext::Else, _) => {
                         let expr = capture_expression_until(
                             tokenizer,
                             vec![&Token::else_token()],
@@ -474,7 +474,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                         go(tokenizer, context, expr)
                     }
                     _ => Err(ParseError::Message(
-                        "else is a keyword and should be part of a if else condition logic"
+                        "else is a keyword and should be part of a if-then condition logic"
                             .to_string(),
                     )),
                 },
@@ -523,8 +523,9 @@ mod internal {
 
     pub(crate) fn create_tuple(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
         let mut tuple_elements = vec![];
+        let mut grouped_exprs: Vec<Expr> = vec![];
 
-        fn go(tokenizer: &mut Tokenizer, tuple_elements: &mut Vec<Expr>) -> Result<(), ParseError> {
+        fn go(tokenizer: &mut Tokenizer, tuple_elements: &mut Vec<Expr>, grouped_exprs: &mut Vec<Expr>) -> Result<(), ParseError> {
             let captured_string = tokenizer.capture_string_until(
                 vec![],
                 &Token::Comma, // Wave does this
@@ -536,28 +537,73 @@ mod internal {
 
                     tuple_elements.push(expr);
                     tokenizer.next_non_empty_token(); // Skip Comma
-                    go(tokenizer, tuple_elements)
+                    go(tokenizer, tuple_elements, grouped_exprs)
                 }
 
                 None => {
                     let last_value =
-                        tokenizer.capture_string_until(vec![&Token::LParen], &Token::RParen);
+                        tokenizer.capture_string_until_and_skip_end(vec![&Token::LParen], &Token::RParen);
 
                     match last_value {
-                        Some(last_value) => {
+                        Some(last_value) if !last_value.is_empty() => {
                             let expr = parse_with_context(last_value.as_str(), Context::Code)?;
+                            // If there is only 1 element, and it's an invalid tuple element, then we need to push it to grouped_exprs
+                            if tuple_elements.is_empty()  {
+                                if !is_valid_tuple_element(&expr) {
+                                    grouped_exprs.push(expr.clone());
+                                }
+                            }
+
                             tuple_elements.push(expr);
+
                             Ok(())
                         }
-                        None => Ok(()),
+                        Some(_) => Ok(()),
+                        None => Err(ParseError::Message("Expecting a closing paren (RParen)".to_string()))
                     }
                 }
             }
         }
 
-        go(tokenizer, &mut tuple_elements)?;
+        go(tokenizer, &mut tuple_elements, &mut grouped_exprs)?;
 
-        Ok(Expr::Tuple(tuple_elements))
+        if !grouped_exprs.is_empty() {
+            Ok(grouped_exprs.pop().unwrap())
+        } else {
+            Ok(Expr::Tuple(tuple_elements))
+        }
+    }
+
+    // We allow only WIT types to be part of the tuple
+    // and not expressions such as Expr::Cond, or pattern matching
+    // However complex expressions can be contained within () to
+    // allow grouping of expressions
+    pub(crate) fn is_valid_tuple_element(expr: &Expr) -> bool {
+        match expr {
+            Expr::Variable(_) => true,
+            Expr::Number(_) => true,
+            Expr::Boolean(_) => true,
+            Expr::Flags(_) => true,
+            Expr::Record(_) => true,
+            Expr::Sequence(_) => true,
+            Expr::Concat(_) => true,
+            Expr::Constructor0(_) => true,
+            Expr::Tuple(_) => true,
+            Expr::Literal(_) => true,
+            Expr::Not(_) => false,
+            Expr::Request() => false,
+            Expr::Worker() => false,
+            Expr::PathVar(_) => false,
+            Expr::SelectField(_, _) => false,
+            Expr::SelectIndex(_, _) => false,
+            Expr::Cond(_, _, _) => false, // we disallow if statements within tuple
+            Expr::PatternMatch(_, _) => false,
+            Expr::GreaterThan(_, _) => false,
+            Expr::LessThan(_, _) => false,
+            Expr::EqualTo(_, _) => false,
+            Expr::GreaterThanOrEqualTo(_, _) => false,
+            Expr::LessThanOrEqualTo(_, _) => false,
+        }
     }
 
     pub(crate) fn create_list(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
@@ -755,7 +801,7 @@ mod internal {
     // complete match expression.
     pub(crate) enum InternalExprResult {
         Complete(Expr),
-        InComplete(ExpressionContext, Box<dyn Fn(Expr) -> InternalExprResult>),
+        InComplete(InCompleteExpressionContext, Box<dyn Fn(Expr) -> InternalExprResult>),
         Empty,
     }
 
@@ -789,7 +835,7 @@ mod internal {
             InternalExprResult::Complete(expr)
         }
 
-        pub(crate) fn incomplete<F>(scope: ExpressionContext, f: F) -> InternalExprResult
+        pub(crate) fn incomplete<F>(scope: InCompleteExpressionContext, f: F) -> InternalExprResult
         where
             F: Fn(Expr) -> InternalExprResult + 'static,
         {
@@ -802,9 +848,11 @@ mod internal {
 
     // The errors that happens in a context can make use of more information in
     // its message
-    #[derive(Display)]
-    pub(crate) enum ExpressionContext {
-        Condition,
+    #[derive(Display, Debug)]
+    pub(crate) enum InCompleteExpressionContext {
+        If,
+        Else,
+        Then,
         LessThan,
         GreaterThan,
         EqualTo,
@@ -827,6 +875,7 @@ mod internal {
 
                     match next_non_empty_open_braces {
                         Some(Token::LParen) => {
+
                             let constructor_var_optional = tokenizer
                                 .capture_string_until_and_skip_end(
                                     vec![&Token::LParen],
@@ -1008,7 +1057,7 @@ mod internal {
 
     // Keep building the expression only if previous expression is a complete expression
     pub(crate) fn build_with_last_complete_expr<F>(
-        scope: ExpressionContext,
+        scope: InCompleteExpressionContext,
         last_expression: InternalExprResult,
         complete_expression: F,
     ) -> Result<InternalExprResult, ParseError>
@@ -1206,9 +1255,7 @@ mod tests {
         assert_eq!(result, Ok(expected));
     }
 
-    // We can ignore this since we stopped supporting grouping using paranthesis
     #[test]
-    #[ignore]
     fn test_if_expr_with_paranthesis() {
         let expression_parser = ExprParser {};
 
@@ -1460,7 +1507,6 @@ mod tests {
 
     //  We ignore this test as we stopped supporting using ( for nestedness
     #[test]
-    #[ignore]
     fn test_if_expr_with_nested_code() {
         let expression_parser = ExprParser {};
 
@@ -1501,9 +1547,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    // We  ignore this test as we stopped supporting using ( for nestedness
     #[test]
-    #[ignore]
     fn test_if_expr_with_complex_nested_code() {
         let expression_parser = ExprParser {};
 
@@ -1545,9 +1589,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    // We  ignore this test as we stopped supporting using ( for nestedness
+
     #[test]
-    #[ignore]
     fn test_if_expr_with_grouping_predicate() {
         let expression_parser = ExprParser {};
 

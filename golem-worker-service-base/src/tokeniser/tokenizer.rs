@@ -388,6 +388,13 @@ impl<'t> Tokenizer<'t> {
             .or_else(|| self.get_multi_char_token())
     }
 
+    pub fn peek_next_token(&mut self) -> Option<Token> {
+        let original_state = self.state.clone();
+        let token = self.next_token();
+        self.state = original_state;
+        token
+    }
+
     fn get_single_char_token(&mut self) -> Option<Token> {
         let ch = self.rest().chars().next()?;
         if let Some(token) = match ch {
