@@ -550,8 +550,8 @@ mod tests {
             path_pattern,
             worker_id,
             function_params,
-            "${if (worker.response.user == \"admin\") then 401 else 200}",
-            "hello-${if (worker.response.user == \"admin\") then \"unauthorised\" else ${worker.response.user}}",
+            "${if (worker.response.user == admin) then 401 else 200}",
+            "hello-${if (worker.response.user == admin) then unauthorised else ${worker.response.user}}",
             "hello-${worker.response.user}"
         );
 
