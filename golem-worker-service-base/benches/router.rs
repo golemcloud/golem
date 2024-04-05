@@ -22,7 +22,7 @@ fn radix_tree_all_matches(c: &mut Criterion) {
                     black_box(refs)
                 },
                 |refs| {
-                    let _ = radix_tree.matches(refs.as_slice());
+                    let _ = radix_tree.matches(refs.as_slice()).unwrap();
                 },
             );
         });

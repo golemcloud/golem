@@ -53,10 +53,10 @@ impl<T> OrderedChildren<T> {
 
     fn get_child(&self, pattern: &Pattern) -> Option<&RadixNode<T>> {
         match pattern {
-            Pattern::Literal(static_pattern) => {
+            Pattern::Literal(literal_pattern) => {
                 let index = self
                     .literal_children
-                    .binary_search_by(|(child_pattern, _)| child_pattern.cmp(static_pattern))
+                    .binary_search_by(|(child_pattern, _)| child_pattern.cmp(literal_pattern))
                     .ok()?;
                 Some(&self.literal_children[index].1)
             }
@@ -66,10 +66,10 @@ impl<T> OrderedChildren<T> {
 
     fn get_child_mut(&mut self, pattern: &Pattern) -> Option<&mut RadixNode<T>> {
         match pattern {
-            Pattern::Literal(static_pattern) => {
+            Pattern::Literal(literal_pattern) => {
                 let index = self
                     .literal_children
-                    .binary_search_by(|(child_pattern, _)| child_pattern.cmp(static_pattern))
+                    .binary_search_by(|(child_pattern, _)| child_pattern.cmp(literal_pattern))
                     .ok()?;
                 Some(&mut self.literal_children[index].1)
             }
@@ -79,13 +79,14 @@ impl<T> OrderedChildren<T> {
 
     fn add_child(&mut self, node: RadixNode<T>) {
         match node.pattern.first() {
-            Some(Pattern::Literal(first)) => {
+            Some(Pattern::Literal(literal_pattern)) => {
                 let index = self
                     .literal_children
-                    .binary_search_by(|(pattern, _)| pattern.cmp(&first))
+                    .binary_search_by(|(pattern, _)| pattern.cmp(literal_pattern))
                     .err();
                 if let Some(index) = index {
-                    self.literal_children.insert(index, (first.clone(), node));
+                    self.literal_children
+                        .insert(index, (literal_pattern.clone(), node));
                 } else {
                     debug_assert!(false, "Duplicate static child");
                 }
