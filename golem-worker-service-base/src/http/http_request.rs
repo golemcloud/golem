@@ -6,9 +6,10 @@ use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
 
 use crate::api_definition::http::{HttpApiDefinition, PathPattern, QueryInfo, Route, VarInfo};
-use crate::merge::Merge;
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_binding::{GolemWorkerBinding, ResolvedWorkerBinding, WorkerBindingResolver};
+
+use self::internal::RecordField;
 
 use super::Router;
 
@@ -33,20 +34,20 @@ impl InputHttpRequest {
 
         let request_query_variables = self.input_path.query_components().unwrap_or_default();
 
-        let request_header_values = internal::get_headers(&self.headers)?;
+        let header_value = internal::get_headers(&self.headers)?;
         let body_value = internal::get_request_body(request_body)?;
-
         let path_value = internal::get_request_path_query_values(
             request_query_variables,
             spec_query_variables,
             path_params,
         )?;
 
-        let merged = body_value.merge(&request_header_values).merge(&path_value);
+        let merged = RecordField::merge_all(vec![header_value, body_value, path_value]);
+        let token = Token::request().to_string();
 
         let request_type_annotated_value = TypeAnnotatedValue::Record {
-            value: vec![(Token::request().to_string(), merged.clone())],
-            typ: vec![(Token::request().to_string(), AnalysedType::from(&merged))],
+            typ: vec![(token.clone(), AnalysedType::from(&merged))],
+            value: vec![(token, merged)],
         };
 
         Ok(request_type_annotated_value)
@@ -182,19 +183,39 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_request_body(
-        request_body: &Value,
-    ) -> Result<TypeAnnotatedValue, Vec<String>> {
+    #[derive(Clone, Debug)]
+    pub struct RecordField {
+        pub name: String,
+        pub typ: AnalysedType,
+        pub value: TypeAnnotatedValue,
+    }
+
+    impl RecordField {
+        pub(crate) fn merge_all(records: Vec<RecordField>) -> TypeAnnotatedValue {
+            let mut typ: Vec<(String, AnalysedType)> = vec![];
+            let mut value: Vec<(String, TypeAnnotatedValue)> = vec![];
+
+            for record in records {
+                typ.push((record.name.clone(), record.typ));
+                value.push((record.name, record.value));
+            }
+
+            TypeAnnotatedValue::Record { typ, value }
+        }
+    }
+
+    pub(crate) fn get_request_body(request_body: &Value) -> Result<RecordField, Vec<String>> {
         let inferred_type = infer_analysed_type(request_body);
         let typed_value = get_typed_value_from_json(request_body, &inferred_type)?;
 
-        Ok(TypeAnnotatedValue::Record {
-            value: vec![("body".to_string(), typed_value)],
-            typ: vec![("body".to_string(), inferred_type)],
+        Ok(RecordField {
+            name: "body".into(),
+            typ: inferred_type,
+            value: typed_value,
         })
     }
 
-    pub(crate) fn get_headers(headers: &HeaderMap) -> Result<TypeAnnotatedValue, Vec<String>> {
+    pub(crate) fn get_headers(headers: &HeaderMap) -> Result<RecordField, Vec<String>> {
         let mut headers_map: Vec<(String, TypeAnnotatedValue)> = vec![];
 
         for (header_name, header_value) in headers {
@@ -206,20 +227,16 @@ mod internal {
         }
 
         let type_annotated_value = TypeAnnotatedValue::Record {
-            value: headers_map.clone(),
             typ: headers_map
-                .clone()
                 .iter()
                 .map(|(key, v)| (key.clone(), AnalysedType::from(v)))
                 .collect(),
+            value: headers_map,
         };
-
-        Ok(TypeAnnotatedValue::Record {
-            value: vec![("header".to_string(), type_annotated_value.clone())],
-            typ: vec![(
-                "header".to_string(),
-                AnalysedType::from(&type_annotated_value),
-            )],
+        Ok(RecordField {
+            name: "header".into(),
+            typ: AnalysedType::from(&type_annotated_value),
+            value: type_annotated_value,
         })
     }
 
@@ -227,7 +244,7 @@ mod internal {
         request_query_variables: HashMap<String, String>,
         spec_query_variables: &[QueryInfo],
         path_variables: HashMap<VarInfo, &str>,
-    ) -> Result<TypeAnnotatedValue, Vec<String>> {
+    ) -> Result<RecordField, Vec<String>> {
         let request_query_values =
             get_request_query_values(request_query_variables, spec_query_variables)?;
 
@@ -235,9 +252,10 @@ mod internal {
 
         let path_values = request_query_values.merge(&request_path_values);
 
-        Ok(TypeAnnotatedValue::Record {
-            value: vec![("path".to_string(), path_values.clone())],
-            typ: vec![("path".to_string(), AnalysedType::from(&path_values))],
+        Ok(RecordField {
+            name: "path".into(),
+            typ: AnalysedType::from(&path_values),
+            value: path_values,
         })
     }
 
