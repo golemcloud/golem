@@ -154,6 +154,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 this.promise_service(),
                 this.invocation_key_service(),
                 this.worker_service(),
+                this.worker_enumeration_service(),
                 this.key_value_service(),
                 this.blob_store_service(),
                 pending_worker.event_service.clone(),

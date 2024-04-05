@@ -15,10 +15,12 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::config::RetryConfig;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
+use wasmtime_wasi::preview2::WasiView;
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UriExtensions;
@@ -29,8 +31,8 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
 use crate::preview2::golem::api::host::{
-    FilterComparator, GetWorkers, HostGetWorkers, OplogIndex, PersistenceLevel, RetryPolicy,
-    StringFilterComparator, WorkerFilter, WorkerPropertyFilter, WorkerStatus,
+    FilterComparator, HostGetWorkers, OplogIndex, PersistenceLevel, RetryPolicy,
+    StringFilterComparator, WorkerFilter, WorkerMetadata, WorkerPropertyFilter, WorkerStatus,
     WorkersMetadataResponse,
 };
 use crate::workerctx::WorkerCtx;
@@ -43,23 +45,78 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
         template_id: golem::api::host::TemplateId,
-        filter: WorkerFilter,
+        filter: golem::api::host::WorkerFilter,
         count: u64,
         precise: bool,
-    ) -> anyhow::Result<Resource<GetWorkers>> {
-        todo!()
+    ) -> anyhow::Result<Resource<GetWorkersEntry>> {
+        record_host_function_call("golem::api::get-workers", "new");
+        let entry = GetWorkersEntry::new(template_id.into(), filter.into(), precise);
+        let resource = self.as_wasi_view().table_mut().push(entry)?;
+        Ok(resource)
     }
 
     async fn get(
         &mut self,
-        self_: Resource<GetWorkers>,
+        self_: Resource<GetWorkersEntry>,
         cursor: u64,
     ) -> anyhow::Result<Result<WorkersMetadataResponse, String>> {
+        record_host_function_call("golem::api::get-workers", "get");
+        let (template_id, filter, count, precise, next_cursor) = self
+            .as_wasi_view()
+            .table()
+            .get::<GetWorkersEntry>(&self_)
+            .map(|e| {
+                (
+                    e.template_id.clone(),
+                    e.filter.clone(),
+                    e.count,
+                    e.precise,
+                    e.next_cursor.clone(),
+                )
+            })?;
+
+        let cursor = next_cursor.read().unwrap().clone();
+
+        if let Some(cursor) = cursor {
+            let result = self
+                .state
+                .get_workers(&template_id, Some(filter), cursor, count, precise)
+                .await;
+        } else {
+        }
         todo!()
     }
 
-    fn drop(&mut self, rep: Resource<GetWorkers>) -> anyhow::Result<()> {
-        todo!()
+    fn drop(&mut self, rep: Resource<GetWorkersEntry>) -> anyhow::Result<()> {
+        record_host_function_call("golem::api::get-workers", "drop");
+        self.as_wasi_view()
+            .table_mut()
+            .delete::<GetWorkersEntry>(rep)?;
+        Ok(())
+    }
+}
+
+pub struct GetWorkersEntry {
+    template_id: golem_common::model::TemplateId,
+    filter: golem_common::model::WorkerFilter,
+    precise: bool,
+    count: u64,
+    next_cursor: Arc<RwLock<Option<u64>>>,
+}
+
+impl GetWorkersEntry {
+    pub fn new(
+        template_id: golem_common::model::TemplateId,
+        filter: golem_common::model::WorkerFilter,
+        precise: bool,
+    ) -> Self {
+        Self {
+            template_id,
+            filter,
+            precise,
+            count: 50,
+            next_cursor: Arc::new(RwLock::new(Some(0))),
+        }
     }
 }
 
@@ -499,6 +556,20 @@ impl From<WorkerStatus> for golem_common::model::WorkerStatus {
     }
 }
 
+impl From<golem_common::model::WorkerStatus> for WorkerStatus {
+    fn from(value: golem_common::model::WorkerStatus) -> Self {
+        match value {
+            golem_common::model::WorkerStatus::Running => WorkerStatus::Running,
+            golem_common::model::WorkerStatus::Idle => WorkerStatus::Idle,
+            golem_common::model::WorkerStatus::Suspended => WorkerStatus::Suspended,
+            golem_common::model::WorkerStatus::Interrupted => WorkerStatus::Interrupted,
+            golem_common::model::WorkerStatus::Retrying => WorkerStatus::Retrying,
+            golem_common::model::WorkerStatus::Failed => WorkerStatus::Failed,
+            golem_common::model::WorkerStatus::Exited => WorkerStatus::Exited,
+        }
+    }
+}
+
 impl From<WorkerPropertyFilter> for golem_common::model::WorkerFilter {
     fn from(filter: WorkerPropertyFilter) -> Self {
         match filter {
@@ -544,3 +615,16 @@ impl From<WorkerFilter> for golem_common::model::WorkerFilter {
         }
     }
 }
+
+// impl From<golem_common::model::WorkerMetadata> for WorkerMetadata {
+//     fn from(value: golem_common::model::WorkerMetadata) -> Self {
+//         Self {
+//             worker_id: value.worker_id.into(),
+//             args: value.args,
+//             env: value.env,
+//             status: value.last_known_status.status.into(),
+//             template_version: 0,
+//             retry_count: value.retry_count,
+//         }
+//     }
+// }
