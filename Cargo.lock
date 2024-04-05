@@ -3923,6 +3923,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration-tests"
+version = "0.0.0"
+dependencies = [
+ "assert2",
+ "console-subscriber",
+ "ctor",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-test-framework",
+ "golem-wasm-rpc 0.0.16",
+ "rand 0.8.5",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "warp",
+]
+
+[[package]]
 name = "inventory"
 version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"

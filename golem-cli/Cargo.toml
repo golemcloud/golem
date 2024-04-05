@@ -15,11 +15,6 @@ name = "integration"
 path = "tests/main.rs"
 harness = false
 
-[[test]]
-name = "sharding"
-path = "tests/sharding.rs"
-harness = false
-
 [dependencies]
 golem-client = { path = "../golem-client", version = "0.0.0" }
 

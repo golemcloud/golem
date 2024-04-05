@@ -77,7 +77,7 @@ async fn auction_example_2() {
     let executor = common::start(&context).await.unwrap();
 
     let registry_template_id = executor.store_template("auction_registry_composed").await;
-    let auction_template_id = executor.store_template("auction.wasm").await;
+    let auction_template_id = executor.store_template("auction").await;
 
     let mut env = HashMap::new();
     env.insert(

@@ -22,6 +22,7 @@ pub struct SqliteRdb {
 
 impl SqliteRdb {
     pub fn new(path: &Path) -> Self {
+        info!("Using SQLite at path {path:?}");
         if path.exists() {
             std::fs::remove_file(path).expect("Failed to remove Sqlite database file");
         }

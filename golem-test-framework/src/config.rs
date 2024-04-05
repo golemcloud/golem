@@ -80,6 +80,16 @@ impl EnvBasedTestDependencies {
         }
     }
 
+    pub fn kill_all(&self) {
+        self.worker_executor_cluster().kill_all();
+        self.worker_service().kill();
+        self.template_service().kill();
+        self.shard_manager().kill();
+        self.rdb().kill();
+        self.redis_monitor().kill();
+        self.redis().kill();
+    }
+
     fn db_type() -> DbType {
         let db_type_str = std::env::var("GOLEM_TEST_DB")
             .unwrap_or("".to_string())
