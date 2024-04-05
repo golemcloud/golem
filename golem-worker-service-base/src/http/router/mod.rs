@@ -32,7 +32,7 @@ impl<T> Router<T> {
 
     pub fn check_path(&self, method: &Method, path: &[&str]) -> Option<&T> {
         let node = self.tree.get(method)?;
-        let result = node.matches(&path)?;
+        let result = node.matches(path)?;
         Some(result)
     }
 }

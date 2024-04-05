@@ -573,7 +573,7 @@ mod tests {
 
     use golem_service_base::type_inference::infer_analysed_type;
 
-    use crate::api_definition::http::AllPathPatterns;
+    use crate::api_definition::http::{AllPathPatterns, PathPattern};
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expression::Expr;
@@ -626,21 +626,33 @@ mod tests {
             },
         };
 
+        let base_path: Vec<&str> = crate::http::parse_path(uri.path());
+
+        let path_params = path_pattern
+            .path_patterns
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, pattern)| match pattern {
+                PathPattern::Literal(_) => None,
+                PathPattern::Var(var) => Some((var, base_path[index])),
+            })
+            .collect();
+
         input_http_request
-            .get_type_annotated_value(HashMap::new(), &[])
+            .get_type_annotated_value(path_params, &path_pattern.query_params)
             .unwrap()
     }
 
     #[test]
     fn test_evaluation_with_request_path() {
-        let uri = Uri::builder().path_and_query("/123/items").build().unwrap();
+        let uri = Uri::builder().path_and_query("/pId/items").build().unwrap();
 
         let path_pattern = AllPathPatterns::from_str("/{id}/items").unwrap();
 
         let resolved_variables = resolved_variables_from_request_path(uri, path_pattern);
 
         let expr = Expr::from_primitive_string("${request.path.id}").unwrap();
-        let expected_evaluated_result = TypeAnnotatedValue::Str("123".to_string());
+        let expected_evaluated_result = TypeAnnotatedValue::Str("pId".to_string());
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }

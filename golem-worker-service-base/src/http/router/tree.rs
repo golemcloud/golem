@@ -355,7 +355,7 @@ pub fn make_path(path: &str) -> Vec<Pattern> {
     path.trim_matches('/')
         .split('/')
         .map(|s| {
-            if s.starts_with(':') {
+            if s.starts_with(':') || (s.starts_with('{') && s.ends_with('}')) {
                 Pattern::Variable
             } else {
                 Pattern::literal(s)

@@ -57,11 +57,11 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
     fn resolve(&self, api_definition: &HttpApiDefinition) -> Option<ResolvedWorkerBinding> {
         let api_request = self;
 
-        let router = build_router(api_definition.routes.clone());
+        let router = router::build(api_definition.routes.clone());
 
         let path = super::parse_path(&api_request.input_path.base_path);
 
-        let RouteEntry {
+        let router::RouteEntry {
             path_params,
             query_params,
             binding,
@@ -87,44 +87,6 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
     }
 }
 
-#[derive(Debug, Clone)]
-struct RouteEntry {
-    // size is the index of all path patterns.
-    path_params: Vec<(VarInfo, usize)>,
-    query_params: Vec<QueryInfo>,
-    binding: GolemWorkerBinding,
-}
-
-fn build_router(routes: Vec<Route>) -> Router<RouteEntry> {
-    let mut router = Router::new();
-
-    for route in routes {
-        let method = route.method.into();
-        let path = route.path;
-        let binding = route.binding;
-
-        let path_params = path
-            .path_patterns
-            .iter()
-            .enumerate()
-            .filter_map(|(i, x)| match x {
-                PathPattern::Var(var_info) => Some((var_info.clone(), i)),
-                _ => None,
-            })
-            .collect();
-
-        let entry = RouteEntry {
-            path_params,
-            query_params: path.query_params,
-            binding: binding.clone(),
-        };
-
-        router.add_route(method, path.path_patterns, entry);
-    }
-
-    router
-}
-
 #[derive(Clone)]
 pub struct ApiInputPath {
     pub base_path: String,
@@ -133,8 +95,7 @@ pub struct ApiInputPath {
 
 impl ApiInputPath {
     // Return the value of each query variable in a HashMap
-
-    fn query_components(&self) -> Option<HashMap<String, String>> {
+    pub fn query_components(&self) -> Option<HashMap<String, String>> {
         if let Some(query_path) = self.query_path.clone() {
             let mut query_components: HashMap<String, String> = HashMap::new();
             let query_parts = query_path.split('&').map(|x| x.trim());
@@ -150,6 +111,48 @@ impl ApiInputPath {
         } else {
             None
         }
+    }
+}
+
+pub(crate) mod router {
+    use super::*;
+
+    #[derive(Debug, Clone)]
+    pub struct RouteEntry {
+        // size is the index of all path patterns.
+        pub path_params: Vec<(VarInfo, usize)>,
+        pub query_params: Vec<QueryInfo>,
+        pub binding: GolemWorkerBinding,
+    }
+
+    pub fn build(routes: Vec<Route>) -> Router<RouteEntry> {
+        let mut router = Router::new();
+
+        for route in routes {
+            let method = route.method.into();
+            let path = route.path;
+            let binding = route.binding;
+
+            let path_params = path
+                .path_patterns
+                .iter()
+                .enumerate()
+                .filter_map(|(i, x)| match x {
+                    PathPattern::Var(var_info) => Some((var_info.clone(), i)),
+                    _ => None,
+                })
+                .collect();
+
+            let entry = RouteEntry {
+                path_params,
+                query_params: path.query_params,
+                binding,
+            };
+
+            router.add_route(method, path.path_patterns, entry);
+        }
+
+        router
     }
 }
 
