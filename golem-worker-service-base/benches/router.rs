@@ -8,7 +8,7 @@ fn radix_tree_all_matches(c: &mut Criterion) {
     let num_routes = &[10, 20, 50, 100];
 
     let mut group = c.benchmark_group("matches");
-    for (i, &len) in num_routes.into_iter().enumerate() {
+    for (i, &len) in num_routes.iter().enumerate() {
         group.bench_function(format!("{i}/len={len}"), |b| {
             let (original, routes) = generate_routes(len);
             let radix_tree = build_radix_tree(&routes);
@@ -42,7 +42,7 @@ fn generate_routes(n: usize) -> (Vec<&'static str>, Vec<Vec<Pattern>>) {
         }
     }
 
-    let patterns = original_routes.iter().map(|s| make_path(*s)).collect();
+    let patterns = original_routes.iter().map(|s| make_path(s)).collect();
     (original_routes, patterns)
 }
 
@@ -61,9 +61,7 @@ fn generate_match_route(routes: &[&str]) -> Vec<String> {
         .split('/')
         .map(|segment| {
             if segment.starts_with(':') {
-                match segment {
-                    _ => fastrand::u32(1..1000).to_string(),
-                }
+                fastrand::u32(1..1000).to_string()
             } else {
                 segment.to_string()
             }
