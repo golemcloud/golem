@@ -7,7 +7,7 @@ use nom::multi::{separated_list0, separated_list1};
 use nom::sequence::{delimited, preceded, tuple};
 use nom::IResult;
 
-use crate::api_definition::http::{AllPathPatterns, PathPattern, QueryInfo, VarInfo};
+use crate::api_definition::http::{AllPathPatterns, PathPattern, QueryInfo};
 use crate::parser::{place_holder_parser, ParseError};
 
 use super::*;

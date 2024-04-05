@@ -8,7 +8,7 @@ use self::tree::{MatchResult, Pattern, RadixNode};
 
 pub mod tree;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Router<T> {
     tree: HashMap<Method, RadixNode<T>>,
 }
@@ -20,7 +20,7 @@ impl<T> Router<T> {
         }
     }
     pub fn add_route(&mut self, method: Method, path: Vec<PathPattern>, data: T) -> bool {
-        let node = self.tree.entry(method).or_insert_with(RadixNode::default);
+        let node = self.tree.entry(method).or_default();
         let path: Vec<Pattern> = path
             .into_iter()
             .map(|pattern| match pattern {
@@ -37,7 +37,7 @@ impl<T> Router<T> {
         method: &Method,
         path: &'b str,
     ) -> Option<MatchResult<'a, 'b, T>> {
-        let node = self.tree.get(&method)?;
+        let node = self.tree.get(method)?;
         let result = node.matches_str(path)?;
         Some(result)
     }

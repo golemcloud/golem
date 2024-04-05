@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
-use nom::sequence::tuple;
 use serde_json::Value;
 
 use crate::api_definition::http::{HttpApiDefinition, PathPattern, QueryInfo, Route, VarInfo};
@@ -88,7 +87,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             typed_value_from_input: { request_details },
         };
 
-        return Some(resolved_binding);
+        Some(resolved_binding)
     }
 }
 
