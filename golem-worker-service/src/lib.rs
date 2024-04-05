@@ -4,7 +4,7 @@ pub mod api;
 pub mod config;
 pub mod grpcapi;
 pub mod service;
-pub mod worker_request_to_http_response;
+pub mod worker_bridge_request_executor;
 
 fn empty_worker_metadata() -> WorkerRequestMetadata {
     WorkerRequestMetadata {

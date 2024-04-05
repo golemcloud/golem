@@ -45,6 +45,10 @@ description = """This is the top-level task that builds everything in release mo
 to build for other target than the current one, can be linux/amd64 or linux/arm64. This is used for cross-compiling
 for docker images."""
 dependencies = [
+    "set-golem-template-service-version",
+    "set-golem-worker-service-version",
+    "set-golem-worker-executor-version",
+    "set-golem-shard-manager-version",
     "build-release-default",
     "build-release-override-linux-amd64",
     "build-release-override-linux-arm64"
@@ -210,7 +214,7 @@ dependencies = ["build"]
 script = "./target/debug/golem-template-service --dump-openapi-yaml > ./target/golem-template-service.yaml"
 
 [tasks.merge-openapi]
-install_crate = { crate_name = "golem-openapi-client-generator", version = "0.0.4" }
+install_crate = { crate_name = "golem-openapi-client-generator", version = "0.0.5" }
 dependencies = ["generate-worker-service-openapi", "generate-template-service-openapi"]
 command = "golem-openapi-client-generator"
 args = ["merge", "--spec-yaml", "./target/golem-template-service.yaml", "./target/golem-worker-service.yaml", "--output-yaml", "./target/golem-service.yaml"]
@@ -313,3 +317,48 @@ condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
 env = { "PLATFORM_TARGET" = "aarch64-unknown-linux-gnu" }
 extend = "package-release-base"
 dependencies = ["build-release-override-linux-arm64"]
+
+
+[tasks.set-golem-template-service-version]
+description = "Sets the version in golem-template-service/Cargo.toml to the value of the VERSION environment variable"
+condition = { env_set = ["VERSION"] }
+command = "sed"
+args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-template-service/Cargo.toml"]
+
+[tasks.set-golem-template-service-version.mac]
+condition = { env_set = ["VERSION"] }
+command = "sed"
+args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-template-service/Cargo.toml"]
+
+[tasks.set-golem-worker-service-version]
+description = "Sets the version in golem-worker-service/Cargo.toml to the value of the VERSION environment variable"
+condition = { env_set = ["VERSION"] }
+command = "sed"
+args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-worker-service/Cargo.toml"]
+
+[tasks.set-golem-worker-service-version.mac]
+condition = { env_set = ["VERSION"] }
+command = "sed"
+args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-worker-service/Cargo.toml"]
+
+[tasks.set-golem-worker-executor-version]
+description = "Sets the version in golem-worker-executor/Cargo.toml to the value of the VERSION environment variable"
+condition = { env_set = ["VERSION"] }
+command = "sed"
+args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-worker-executor/Cargo.toml"]
+
+[tasks.set-golem-worker-executor-version.mac]
+condition = { env_set = ["VERSION"] }
+command = "sed"
+args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-worker-executor/Cargo.toml"]
+
+[tasks.set-golem-shard-manager-version]
+description = "Sets the version in golem-shard-manager/Cargo.toml to the value of the VERSION environment variable"
+condition = { env_set = ["VERSION"] }
+command = "sed"
+args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-shard-manager/Cargo.toml"]
+
+[tasks.set-golem-shard-manager-version.mac]
+condition = { env_set = ["VERSION"] }
+command = "sed"
+args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-shard-manager/Cargo.toml"]

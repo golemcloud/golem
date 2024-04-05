@@ -3,6 +3,8 @@ name = "golem-client"
 version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
 description = "Client for Golem Cloud's REST API"
 
 include = [
@@ -27,5 +29,5 @@ tracing = "^0.1"
 uuid = { version = "^1.6", features = ["serde"] }
 
 [build-dependencies]
-golem-openapi-client-generator = "0.0.4"
+golem-openapi-client-generator = "0.0.5"
 relative-path = "1.9.2"

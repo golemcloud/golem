@@ -51,41 +51,30 @@ pub struct UploadPayload {
 type Result<T> = std::result::Result<T, TemplateError>;
 
 impl From<TemplateServiceError> for TemplateError {
-    fn from(value: TemplateServiceError) -> Self {
-        match value {
-            TemplateServiceError::Internal(error) => {
-                TemplateError::InternalError(Json(ErrorBody { error }))
-            }
-            TemplateServiceError::TemplateProcessingError(error) => {
-                TemplateError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error],
-                }))
-            }
-            TemplateServiceError::UnknownTemplateId(_) => {
+    fn from(error: TemplateServiceError) -> Self {
+        match error {
+            TemplateServiceError::UnknownTemplateId(_)
+            | TemplateServiceError::UnknownVersionedTemplateId(_) => {
                 TemplateError::NotFound(Json(ErrorBody {
-                    error: "Template not found".to_string(),
+                    error: error.to_string(),
                 }))
-            }
-            TemplateServiceError::UnknownVersionedTemplateId(_) => {
-                TemplateError::NotFound(Json(ErrorBody {
-                    error: "Template not found".to_string(),
-                }))
-            }
-            TemplateServiceError::IOError(error) => {
-                TemplateError::InternalError(Json(ErrorBody { error }))
             }
             TemplateServiceError::AlreadyExists(_) => {
                 TemplateError::AlreadyExists(Json(ErrorBody {
-                    error: "Template already exists".to_string(),
+                    error: error.to_string(),
+                }))
+            }
+            TemplateServiceError::Internal(error) => {
+                TemplateError::InternalError(Json(ErrorBody {
+                    error: error.to_string(),
+                }))
+            }
+            TemplateServiceError::TemplateProcessingError(error) => {
+                TemplateError::BadRequest(Json(ErrorsBody {
+                    errors: vec![error.to_string()],
                 }))
             }
         }
-    }
-}
-
-impl From<String> for TemplateError {
-    fn from(value: String) -> Self {
-        TemplateError::InternalError(Json(ErrorBody { error: value }))
     }
 }
 

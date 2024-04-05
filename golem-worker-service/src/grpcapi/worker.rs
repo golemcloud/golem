@@ -16,20 +16,22 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::{
     complete_promise_response, delete_worker_response, get_invocation_key_response,
-    get_worker_metadata_response, interrupt_worker_response, invoke_and_await_response,
-    invoke_and_await_response_json, invoke_response, launch_new_worker_response,
-    resume_worker_response, CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest,
-    DeleteWorkerRequest, DeleteWorkerResponse, GetInvocationKeyRequest, GetInvocationKeyResponse,
-    GetWorkerMetadataRequest, GetWorkerMetadataResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitRequestJson,
-    InvokeAndAwaitResponse, InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson,
-    InvokeResponse, InvokeResultJson, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse,
+    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
+    invoke_and_await_response, invoke_and_await_response_json, invoke_response,
+    launch_new_worker_response, resume_worker_response, CompletePromiseRequest,
+    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
+    GetInvocationKeyRequest, GetInvocationKeyResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitRequestJson, InvokeAndAwaitResponse,
+    InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson, InvokeResponse, InvokeResultJson,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::{
     worker_error, worker_execution_error, InvocationKey, InvokeResult, UnknownError,
     VersionedWorkerId, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
 };
+use golem_common::model::WorkerFilter;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::ConnectWorkerStream;
 use tap::TapFallible;
@@ -51,6 +53,7 @@ where
         })),
     }
 }
+
 pub struct WorkerGrpcApi {
     pub template_service: TemplateService,
     pub worker_service: WorkerService,
@@ -112,6 +115,23 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(GetWorkerMetadataResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_workers_metadata(
+        &self,
+        request: Request<GetWorkersMetadataRequest>,
+    ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
+        let response =
+            match self.get_workers_metadata(request.into_inner()).await {
+                Ok((cursor, workers)) => get_workers_metadata_response::Result::Success(
+                    GetWorkersMetadataSuccessResponse { workers, cursor },
+                ),
+                Err(error) => get_workers_metadata_response::Result::Error(error),
+            };
+
+        Ok(Response::new(GetWorkersMetadataResponse {
             result: Some(response),
         }))
     }
@@ -329,6 +349,41 @@ impl WorkerGrpcApi {
             .await?;
 
         Ok(metadata.into())
+    }
+
+    async fn get_workers_metadata(
+        &self,
+        request: GetWorkersMetadataRequest,
+    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GrpcWorkerError> {
+        let template_id: golem_common::model::TemplateId = request
+            .template_id
+            .ok_or_else(|| bad_request_error("Missing template id"))?
+            .try_into()
+            .map_err(|_| bad_request_error("Invalid template id"))?;
+
+        let filter: Option<WorkerFilter> =
+            match request.filter {
+                Some(f) => Some(f.try_into().map_err(|error| {
+                    bad_request_error(format!("Invalid worker filter: {error}"))
+                })?),
+                _ => None,
+            };
+
+        let (new_cursor, workers) = self
+            .worker_service
+            .find_metadata(
+                &template_id,
+                filter,
+                request.cursor,
+                request.count,
+                request.precise,
+                &EmptyAuthCtx {},
+            )
+            .await?;
+
+        let result: Vec<WorkerMetadata> = workers.into_iter().map(|worker| worker.into()).collect();
+
+        Ok((new_cursor, result))
     }
 
     async fn interrupt_worker(

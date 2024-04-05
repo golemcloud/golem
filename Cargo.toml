@@ -8,6 +8,7 @@ members = [
     "golem-common",
     "golem-service-base",
     "golem-template-compilation-service",
+    "golem-template-service-base",
     "golem-template-service",
     "golem-test-framework",
     "golem-shard-manager",
@@ -66,8 +67,9 @@ futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
 golem-wasm-ast = "0.2.1"
-golem-wasm-rpc = { version = "0.0.13", default-features = false, features = ["host"] }
+golem-wasm-rpc = { version = "0.0.16", default-features = false, features = ["host"] }
 http = "1.0.0" # keep in sync with wasmtime
+http_02 = { package = "http", version = "0.2.11" }
 humantime-serde = "1.1.1"
 hyper = { version = "1.0.1", features = ["full"] } # keep in sync with wasmtime
 iso8601-timestamp = "0.2.16"
@@ -90,6 +92,7 @@ proptest = "1.4.0"
 prost = "0.12.3"
 prost-types = "0.12.3"
 rustls = { version = "0.22.2" }
+rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 tempfile = "3.9.0"

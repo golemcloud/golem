@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use golem_common::model::{CallingConvention, InvocationKey, TemplateId};
+use golem_common::model::{CallingConvention, InvocationKey, TemplateId, WorkerFilter};
 use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use poem_openapi::param::{Path, Query};
@@ -9,7 +9,7 @@ use poem_openapi::*;
 use tap::TapFallible;
 
 use golem_service_base::model::*;
-use golem_worker_service_base::api::error::WorkerApiBaseError;
+use golem_worker_service_base::api::WorkerApiBaseError;
 
 use crate::empty_worker_metadata;
 use crate::service::{template::TemplateService, worker::WorkerService};
@@ -246,6 +246,68 @@ impl WorkerApi {
             .await?;
 
         Ok(Json(result))
+    }
+
+    #[oai(
+        path = "/:template_id/workers",
+        method = "get",
+        operation_id = "get_workers_metadata"
+    )]
+    async fn get_workers_metadata(
+        &self,
+        template_id: Path<TemplateId>,
+        filter: Query<Option<Vec<String>>>,
+        cursor: Query<Option<u64>>,
+        count: Query<Option<u64>>,
+        precise: Query<Option<bool>>,
+    ) -> Result<Json<WorkersMetadataResponse>> {
+        let filter = match filter.0 {
+            Some(filters) if !filters.is_empty() => {
+                Some(WorkerFilter::from(filters).map_err(|e| {
+                    WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                })?)
+            }
+            _ => None,
+        };
+
+        let (cursor, workers) = self
+            .worker_service
+            .find_metadata(
+                &template_id.0,
+                filter,
+                cursor.0.unwrap_or(0),
+                count.0.unwrap_or(50),
+                precise.0.unwrap_or(false),
+                &EmptyAuthCtx {},
+            )
+            .await?;
+
+        Ok(Json(WorkersMetadataResponse { workers, cursor }))
+    }
+
+    #[oai(
+        path = "/:template_id/workers/find",
+        method = "post",
+        operation_id = "find_workers_metadata"
+    )]
+    async fn find_workers_metadata(
+        &self,
+        template_id: Path<TemplateId>,
+        params: Json<WorkersMetadataRequest>,
+    ) -> Result<Json<WorkersMetadataResponse>> {
+        let (cursor, workers) = self
+            .worker_service
+            .find_metadata(
+                &template_id.0,
+                params.filter.clone(),
+                params.cursor.unwrap_or(0),
+                params.count.unwrap_or(50),
+                params.precise.unwrap_or(false),
+                &EmptyAuthCtx {},
+            )
+            .await?;
+
+        Ok(Json(WorkersMetadataResponse { workers, cursor }))
     }
 
     #[oai(

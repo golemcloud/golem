@@ -7,19 +7,28 @@ use poem_openapi::*;
 use tracing::{error, info};
 
 use golem_service_base::api_tags::ApiTags;
-use golem_worker_service_base::api::common::ApiEndpointError;
-use golem_worker_service_base::api::register_api_definition_api::ApiDefinition;
-use golem_worker_service_base::api_definition;
-use golem_worker_service_base::api_definition::{ApiDefinitionId, Version};
+use golem_worker_service_base::api::ApiEndpointError;
+use golem_worker_service_base::api::HttpApiDefinition;
+use golem_worker_service_base::api_definition::http::get_api_definition_from_oas;
+use golem_worker_service_base::api_definition::http::HttpApiDefinition as CoreHttpApiDefinition;
+use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
-use golem_worker_service_base::oas_worker_bridge::*;
 use golem_worker_service_base::service::api_definition::ApiDefinitionService;
+use golem_worker_service_base::service::http::http_api_definition_validator::RouteValidationError;
 
 pub struct RegisterApiDefinitionApi {
     pub definition_service: DefinitionService,
 }
 
-type DefinitionService = Arc<dyn ApiDefinitionService<EmptyAuthCtx, CommonNamespace> + Sync + Send>;
+type DefinitionService = Arc<
+    dyn ApiDefinitionService<
+            EmptyAuthCtx,
+            CommonNamespace,
+            CoreHttpApiDefinition,
+            RouteValidationError,
+        > + Sync
+        + Send,
+>;
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
@@ -31,15 +40,15 @@ impl RegisterApiDefinitionApi {
     async fn create_or_update_open_api(
         &self,
         payload: String,
-    ) -> Result<Json<ApiDefinition>, ApiEndpointError> {
-        let definition = get_api_definition(payload.as_str()).map_err(|e| {
+    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
+        let definition = get_api_definition_from_oas(payload.as_str()).map_err(|e| {
             error!("Invalid Spec {}", e);
             ApiEndpointError::bad_request(e)
         })?;
 
         self.register_api(&definition).await?;
 
-        let definition: ApiDefinition =
+        let definition: HttpApiDefinition =
             definition.try_into().map_err(ApiEndpointError::internal)?;
 
         Ok(Json(definition))
@@ -48,18 +57,18 @@ impl RegisterApiDefinitionApi {
     #[oai(path = "/", method = "put")]
     async fn create_or_update(
         &self,
-        payload: Json<ApiDefinition>,
-    ) -> Result<Json<ApiDefinition>, ApiEndpointError> {
+        payload: Json<HttpApiDefinition>,
+    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
         info!("Save API definition - id: {}", &payload.id);
 
-        let definition: api_definition::ApiDefinition = payload
+        let definition: CoreHttpApiDefinition = payload
             .0
             .try_into()
             .map_err(ApiEndpointError::bad_request)?;
 
         self.register_api(&definition).await?;
 
-        let definition: ApiDefinition =
+        let definition: HttpApiDefinition =
             definition.try_into().map_err(ApiEndpointError::internal)?;
 
         Ok(Json(definition))
@@ -69,8 +78,8 @@ impl RegisterApiDefinitionApi {
     async fn get(
         &self,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
-        #[oai(name = "version")] api_definition_id_version: Query<Version>,
-    ) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
+        #[oai(name = "version")] api_definition_id_version: Query<ApiVersion>,
+    ) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
         let api_definition_id = api_definition_id_query.0;
 
         let api_version = api_definition_id_version.0;
@@ -90,9 +99,10 @@ impl RegisterApiDefinitionApi {
             )
             .await?;
 
-        let values: Vec<ApiDefinition> = match data {
+        let values: Vec<HttpApiDefinition> = match data {
             Some(d) => {
-                let definition: ApiDefinition = d.try_into().map_err(ApiEndpointError::internal)?;
+                let definition: HttpApiDefinition =
+                    d.try_into().map_err(ApiEndpointError::internal)?;
                 vec![definition]
             }
             None => vec![],
@@ -105,7 +115,7 @@ impl RegisterApiDefinitionApi {
     async fn delete(
         &self,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
-        #[oai(name = "version")] api_definition_version_query: Query<Version>,
+        #[oai(name = "version")] api_definition_version_query: Query<ApiVersion>,
     ) -> Result<Json<String>, ApiEndpointError> {
         let api_definition_id = api_definition_id_query.0;
         let api_definition_version = api_definition_version_query.0;
@@ -130,7 +140,7 @@ impl RegisterApiDefinitionApi {
     }
 
     #[oai(path = "/all", method = "get")]
-    async fn get_all(&self) -> Result<Json<Vec<ApiDefinition>>, ApiEndpointError> {
+    async fn get_all(&self) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
         let data = self
             .definition_service
             .get_all(CommonNamespace::default(), &EmptyAuthCtx {})
@@ -139,7 +149,7 @@ impl RegisterApiDefinitionApi {
         let values = data
             .into_iter()
             .map(|d| d.try_into())
-            .collect::<Result<Vec<ApiDefinition>, _>>()
+            .collect::<Result<Vec<HttpApiDefinition>, _>>()
             .map_err(ApiEndpointError::internal)?;
 
         Ok(Json(values))
@@ -149,7 +159,7 @@ impl RegisterApiDefinitionApi {
 impl RegisterApiDefinitionApi {
     async fn register_api(
         &self,
-        definition: &api_definition::ApiDefinition,
+        definition: &CoreHttpApiDefinition,
     ) -> Result<(), ApiEndpointError> {
         self.definition_service
             .register(definition, CommonNamespace::default(), &EmptyAuthCtx {})
@@ -169,8 +179,8 @@ mod test {
     use golem_worker_service_base::service::template::TemplateServiceNoop;
     use poem::test::TestClient;
 
-    use golem_worker_service_base::api_definition_repo::InMemoryRegistry;
-    use golem_worker_service_base::service::api_definition::RegisterApiDefinitionDefault;
+    use golem_worker_service_base::repo::api_definition_repo::InMemoryRegistry;
+    use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
 
     use crate::service::template::TemplateService;
 
@@ -178,7 +188,7 @@ mod test {
 
     fn make_route() -> poem::Route {
         let template_service: TemplateService = Arc::new(TemplateServiceNoop {});
-        let definition_service = RegisterApiDefinitionDefault::new(
+        let definition_service = ApiDefinitionServiceDefault::new(
             template_service,
             Arc::new(InMemoryRegistry::default()),
             Arc::new(ApiDefinitionValidatorNoop {}),
@@ -194,9 +204,9 @@ mod test {
         let api = make_route();
         let client = TestClient::new(api);
 
-        let definition = api_definition::ApiDefinition {
+        let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
-            version: Version("1.0".to_string()),
+            version: ApiVersion("1.0".to_string()),
             routes: vec![],
         };
 
@@ -222,9 +232,9 @@ mod test {
         let api = make_route();
         let client = TestClient::new(api);
 
-        let definition = api_definition::ApiDefinition {
+        let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
-            version: Version("1.0".to_string()),
+            version: ApiVersion("1.0".to_string()),
             routes: vec![],
         };
         let response = client
@@ -234,9 +244,9 @@ mod test {
             .await;
         response.assert_status_is_ok();
 
-        let definition = api_definition::ApiDefinition {
+        let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
-            version: Version("2.0".to_string()),
+            version: ApiVersion("2.0".to_string()),
             routes: vec![],
         };
         let response = client

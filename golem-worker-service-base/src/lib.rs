@@ -1,28 +1,25 @@
+use ::http::Uri;
 pub mod api;
 pub mod api_definition;
-pub mod api_definition_repo;
-pub mod api_request_route_resolver;
 pub mod app_config;
 pub mod auth;
-pub mod evaluator;
-pub mod expr;
-pub mod http_request;
+mod evaluator;
+mod expression;
+pub mod http;
+mod merge;
 pub mod metrics;
-pub mod oas_worker_bridge;
-pub mod parser;
-pub mod resolved_variables;
+mod parser;
+mod primitive;
+pub mod repo;
 pub mod service;
 pub mod tokeniser;
-pub mod value_typed;
-pub mod worker_request;
-pub mod worker_request_to_response;
-pub mod worker_response;
-
+mod worker_binding;
+pub mod worker_bridge_execution;
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;
 }
 
-impl UriBackConversion for http::Uri {
+impl UriBackConversion for Uri {
     fn as_http_02(&self) -> http_02::Uri {
         self.to_string().parse().unwrap()
     }
