@@ -607,10 +607,9 @@ mod tests {
             },
         };
 
-        todo!()
-        // input_http_request
-        //     .get_type_annotated_value(vec![], &HashMap::new())
-        //     .unwrap()
+        input_http_request
+            .get_type_annotated_value(HashMap::new(), &[])
+            .unwrap()
     }
 
     fn resolved_variables_from_request_path(
@@ -627,25 +626,21 @@ mod tests {
             },
         };
 
-        todo!()
-        // input_http_request
-        //     .get_type_annotated_value(
-        //         path_pattern.get_query_variables(),
-        //         &path_pattern.get_path_variables(),
-        //     )
-        //     .unwrap()
+        input_http_request
+            .get_type_annotated_value(HashMap::new(), &[])
+            .unwrap()
     }
 
     #[test]
     fn test_evaluation_with_request_path() {
-        let uri = Uri::builder().path_and_query("/pId/items").build().unwrap();
+        let uri = Uri::builder().path_and_query("/123/items").build().unwrap();
 
         let path_pattern = AllPathPatterns::from_str("/{id}/items").unwrap();
 
         let resolved_variables = resolved_variables_from_request_path(uri, path_pattern);
 
         let expr = Expr::from_primitive_string("${request.path.id}").unwrap();
-        let expected_evaluated_result = TypeAnnotatedValue::Str("pId".to_string());
+        let expected_evaluated_result = TypeAnnotatedValue::Str("123".to_string());
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
