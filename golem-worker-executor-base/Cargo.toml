@@ -44,7 +44,7 @@ futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "0.4.3"
 #golem-wit = { version = "0.2.3" }
-golem-wit = { git = "https://github.com/golemcloud/golem-wit.git", rev = "6d537e1d" }
+golem-wit = { git = "https://github.com/golemcloud/golem-wit.git", rev = "04f6d125" }
 http = { workspace = true }
 http_02 = { workspace = true }
 http-body = "1.0.0" # keep in sync with wasmtime
