@@ -2997,9 +2997,9 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.4"
+version = "0.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c34ec5889bca6fbb3e1c747d449744598a345416c8f82fb75b3a3f81a265833a"
+checksum = "e3d95ac39f293640b9ea7a4352c589f4e1c5c9882b7517c8884d003e5fd0b2f8"
 dependencies = [
  "clap 4.5.4",
  "convert_case 0.6.0",
@@ -3030,6 +3030,7 @@ dependencies = [
  "num-traits",
  "poem-openapi",
  "proptest",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "thiserror",

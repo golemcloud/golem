@@ -38,7 +38,10 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
         info!(
             "Get workers for template: {}, filter: {}",
             template_id,
-            filter.is_some()
+            filter
+                .clone()
+                .map(|f| f.to_string())
+                .unwrap_or("N/A".to_string())
         );
 
         let active_workers = self.active_workers.enum_workers();
@@ -219,7 +222,10 @@ impl WorkerEnumerationService
         info!(
             "Get workers for template: {}, filter: {}, cursor: {}, count: {}, precise: {}",
             template_id,
-            filter.is_some(),
+            filter
+                .clone()
+                .map(|f| f.to_string())
+                .unwrap_or("N/A".to_string()),
             cursor,
             count,
             precise
