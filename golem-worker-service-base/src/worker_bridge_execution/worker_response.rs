@@ -144,6 +144,7 @@ mod internal {
             response_mapping: &ResponseMapping,
             input_request: &TypeAnnotatedValue,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
+            let mut input_request = input_request.clone();
             let type_annotated_value =
                 input_request.merge(&worker_response.result_with_worker_response_key());
 

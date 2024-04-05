@@ -34,7 +34,7 @@ impl InputHttpRequest {
         let request_query_variables: HashMap<String, String> = self.input_path.query_components();
 
         let request_header_values = internal::get_headers(&request_header)?;
-        let body_value = internal::get_request_body(request_body)?;
+        let mut body_value = internal::get_request_body(request_body)?;
         let path_value = internal::get_request_path_query_values(
             request_query_variables,
             spec_query_variables,
@@ -46,7 +46,7 @@ impl InputHttpRequest {
 
         let request_type_annotated_value = TypeAnnotatedValue::Record {
             value: vec![(Token::request().to_string(), merged.clone())],
-            typ: vec![(Token::request().to_string(), AnalysedType::from(&merged))],
+            typ: vec![(Token::request().to_string(), AnalysedType::from(&*merged))],
         };
 
         Ok(request_type_annotated_value)
@@ -255,7 +255,7 @@ mod internal {
         request_path_values: &HashMap<usize, String>,
         spec_path_variables: &HashMap<usize, String>,
     ) -> Result<TypeAnnotatedValue, Vec<String>> {
-        let request_query_values =
+        let mut request_query_values =
             get_request_query_values(request_query_variables, spec_query_variables)?;
 
         let request_path_values =
@@ -265,7 +265,7 @@ mod internal {
 
         Ok(TypeAnnotatedValue::Record {
             value: vec![("path".to_string(), path_values.clone())],
-            typ: vec![("path".to_string(), AnalysedType::from(&path_values))],
+            typ: vec![("path".to_string(), AnalysedType::from(&*path_values))],
         })
     }
 

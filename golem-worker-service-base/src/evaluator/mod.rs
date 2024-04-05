@@ -110,7 +110,7 @@ impl Evaluator for Expr {
         // and therefore returns ValueTyped
         fn go(
             expr: &Expr,
-            input: &TypeAnnotatedValue,
+            input: &mut TypeAnnotatedValue,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
             match expr.clone() {
                 Expr::Request() => input
@@ -357,7 +357,8 @@ impl Evaluator for Expr {
             }
         }
 
-        go(expr, input)
+        let mut input = input.clone();
+        go(expr, &mut input)
     }
 }
 
@@ -435,7 +436,7 @@ fn handle_expr_construction(
 fn handle_pattern_match(
     input_expr: &Expr,
     constructors: &Vec<(ConstructorPattern, Expr)>,
-    input: &TypeAnnotatedValue,
+    input: &mut TypeAnnotatedValue,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
     let match_evaluated = input_expr.evaluate(input)?;
 
@@ -992,7 +993,7 @@ mod tests {
 
         let path_pattern = PathPattern::from_str("/shopping-cart/{id}").unwrap();
 
-        let resolved_variables_path = resolved_variables_from_request_path(uri, path_pattern);
+        let mut resolved_variables_path = resolved_variables_from_request_path(uri.clone(), path_pattern.clone());
 
         let success_response_with_input_variables = resolved_variables_path.merge(
             &get_worker_response(
@@ -1030,8 +1031,10 @@ mod tests {
                     }"#,
         );
 
+        let mut new_resolved_variables_from_request_path = resolved_variables_from_request_path(uri, path_pattern);
+
         let error_response_with_request_variables =
-            resolved_variables_path.merge(&error_worker_response.result_with_worker_response_key());
+            new_resolved_variables_from_request_path.merge(&error_worker_response.result_with_worker_response_key());
 
         let expr3 = Expr::from_primitive_string(
             "${if request.path.id == 'bar' then 'foo' else match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }}",
