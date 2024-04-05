@@ -5,6 +5,7 @@ use ctor::{ctor, dtor};
 use golem_wasm_rpc::Value;
 use rand::prelude::*;
 use tokio::sync::oneshot::Receiver;
+use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
@@ -91,7 +92,7 @@ fn reload_shard_manager() {
 }
 
 async fn make_env_unstable(mut stop_rx: Receiver<()>) {
-    println!("!!! Starting Golem Sharding Tester");
+    info!("Starting Golem Sharding Tester");
 
     fn worker() {
         let mut commands = [
@@ -103,19 +104,19 @@ async fn make_env_unstable(mut stop_rx: Receiver<()>) {
         commands.shuffle(&mut rng);
         match commands[0] {
             Command::StartShard => {
-                println!("!!! Golem Sharding Tester starting shard");
+                info!("Golem Sharding Tester starting shard");
                 start_shard();
-                println!("!!! Golem Sharding Tester started shard");
+                info!("Golem Sharding Tester started shard");
             }
             Command::StopShard => {
-                println!("!!! Golem Sharding Tester stopping shard");
+                info!("Golem Sharding Tester stopping shard");
                 stop_shard();
-                println!("!!! Golem Sharding Tester stopped shard");
+                info!("Golem Sharding Tester stopped shard");
             }
             Command::RestartShardManager => {
-                println!("!!! Golem Sharding Tester reloading shard manager");
+                info!("Golem Sharding Tester reloading shard manager");
                 reload_shard_manager();
-                println!("!!! Golem Sharding Tester reloaded shard manager");
+                info!("Golem Sharding Tester reloaded shard manager");
             }
         }
     }
@@ -135,7 +136,7 @@ async fn make_env_unstable(mut stop_rx: Receiver<()>) {
 #[tracing::instrument]
 async fn service_is_responsive_to_shard_changes() {
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-    let chaos = tokio::task::spawn_blocking(|| async {
+    let chaos = tokio::task::spawn(async {
         make_env_unstable(stop_rx).await;
     });
 
@@ -183,7 +184,7 @@ async fn service_is_responsive_to_shard_changes() {
 
     for c in 0..2 {
         if c != 0 {
-            std::thread::sleep(Duration::from_secs(10));
+            tokio::time::sleep(Duration::from_secs(10)).await;
         }
         println!("*** INVOKING WORKERS {c} ***");
         invoke_and_await_workers(&worker_ids)
