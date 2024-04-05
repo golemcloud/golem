@@ -1,4 +1,4 @@
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct RadixNode<T> {
     pattern: Vec<Pattern>,
     children: OrderedChildren<T>,
@@ -15,6 +15,16 @@ where
             .field("children", &self.children)
             .field("data", &self.data)
             .finish()
+    }
+}
+
+impl<T> Default for RadixNode<T> {
+    fn default() -> Self {
+        Self {
+            pattern: Vec::new(),
+            children: OrderedChildren::default(),
+            data: None,
+        }
     }
 }
 
@@ -193,26 +203,35 @@ impl<T> RadixNode<T> {
     }
 
     pub fn get(&self, path: &[Pattern]) -> Option<&T> {
-        if path.is_empty() {
-            return self.data.as_ref();
-        }
+        let mut node = self;
+        let mut remaining_path = path;
 
-        let common_prefix_len = self.common_prefix_len(path);
+        loop {
+            if remaining_path.is_empty() && node.pattern.is_empty() {
+                return node.data.as_ref();
+            }
 
-        // Must match the entire pattern
-        if common_prefix_len == self.pattern.len() {
-            if common_prefix_len == path.len() {
-                // The path fully matches the current node's pattern
-                return self.data.as_ref();
-            } else {
-                // The path partially matches the current node's pattern
-                if let Some(child) = self.children.get_child(&path[common_prefix_len]) {
-                    return child.get(&path[common_prefix_len..]);
+            let common_prefix_len = node.common_prefix_len(remaining_path);
+
+            // Must match the entire pattern
+            if common_prefix_len == node.pattern.len() {
+                if common_prefix_len == remaining_path.len() {
+                    // The path fully matches the current node's pattern
+                    return node.data.as_ref();
+                } else {
+                    // The path partially matches the current node's pattern
+                    remaining_path = &remaining_path[common_prefix_len..];
+
+                    if let Some(child) = node.children.get_child(&remaining_path[0]) {
+                        node = child;
+                    } else {
+                        return None;
+                    }
                 }
+            } else {
+                return None;
             }
         }
-
-        None
     }
 
     pub fn matches_str<'a, 'b>(&'a self, path: &'b str) -> Option<MatchResult<'a, 'b, T>> {
