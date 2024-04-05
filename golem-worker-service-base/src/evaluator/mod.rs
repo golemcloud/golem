@@ -413,9 +413,19 @@ fn handle_expr_construction(
                     })
                 }
             },
-            ConstructorTypeName::CustomConstructor(_) => Err(EvaluationError::Message(
-                "Custom constructors are not supported".to_string(),
-            )),
+            // Considering any custom construction to be variant
+            ConstructorTypeName::CustomConstructor(name) => {
+                let one_constructor = constructors.first().ok_or(EvaluationError::Message(
+                    "Some constructor should have one constructor".to_string(),
+                ))?;
+                let result = handle_expr_construction(one_constructor, input)?;
+                let analysed_type = AnalysedType::from(&result);
+                Ok(TypeAnnotatedValue::Variant {
+                    typ: vec![(name.clone(), Some(analysed_type))],
+                    case_name: name.clone(),
+                    case_value: Some(Box::new(result))
+                })
+            },
         },
         ConstructorPattern::Literal(possible_expr) => possible_expr.evaluate(input),
     }
@@ -1374,7 +1384,6 @@ mod tests {
     fn test_evaluation_with_wave_like_syntax_result_list() {
         let expr = Expr::from_primitive_string("${[ok(1),ok(2)]}").unwrap();
 
-        dbg!(expr.clone());
         let result = expr.evaluate(&TypeAnnotatedValue::Record {
             value: vec![],
             typ: vec![],
@@ -1397,6 +1406,27 @@ mod tests {
                     value: Ok(Some(Box::new(TypeAnnotatedValue::U64(2)))),
                 },
             ],
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_evaluation_with_wave_like_syntax_variant() {
+        let expr = Expr::from_primitive_string("${Foo(some(2))}").unwrap();
+
+        let result = expr.evaluate(&TypeAnnotatedValue::Record {
+            value: vec![],
+            typ: vec![],
+        });
+
+        let expected = Ok(TypeAnnotatedValue::Variant {
+            typ: vec![("Foo".to_string(), Some(AnalysedType::Option(Box::new(AnalysedType::U64))))],
+            case_name: "Foo".to_string(),
+            case_value: Some(Box::new(TypeAnnotatedValue::Option {
+                value: Some(Box::new(TypeAnnotatedValue::U64(2))),
+                typ: AnalysedType::U64
+            }))
         });
 
         assert_eq!(result, expected);

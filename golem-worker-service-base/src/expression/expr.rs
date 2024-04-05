@@ -152,6 +152,8 @@ fn validate_single_variable_constructor(
     }
 }
 
+
+
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum ConstructorTypeName {
     InBuiltConstructor(InBuiltConstructorInner),
