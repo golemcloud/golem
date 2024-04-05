@@ -18,6 +18,8 @@ pub enum Token {
     Comma,
     Quote,
     Colon,
+    LetEqual,
+    SemiColon,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -37,6 +39,7 @@ pub enum MultiCharTokens {
     Then,
     Else,
     Arrow,
+    Let,
     Number(String),
     Other(String),
 }
@@ -110,6 +113,11 @@ impl Token {
         Token::MultiChar(MultiCharTokens::Number(number.to_string()))
     }
 
+    pub fn let_equal() -> Token {
+        Token::LetEqual
+    }
+
+
     // If a token needs to be considered as only a raw string
     pub fn as_raw_string_token(&self) -> Token {
         match self {
@@ -140,6 +148,8 @@ impl Display for Token {
                 Token::Quote => "'",
                 Token::LessThan => "<",
                 Token::Colon => ":",
+                Token::LetEqual => "=",
+                Token::SemiColon => ";",
                 Token::MultiChar(multi_char) => match multi_char {
                     MultiCharTokens::Else => "else",
                     MultiCharTokens::EqualTo => "==",
@@ -158,6 +168,7 @@ impl Display for Token {
                     MultiCharTokens::Arrow => "=>",
                     MultiCharTokens::Other(string) => string.as_str(),
                     MultiCharTokens::Number(number) => number.as_str(),
+                    MultiCharTokens::Let => "let",
                 },
             }
         )
@@ -358,6 +369,10 @@ impl<'t> Tokenizer<'t> {
         &self.text[self.state.pos..]
     }
 
+    pub fn rest_at(&self, index: usize) -> &str {
+        &self.text[self.state.pos + index..]
+    }
+
     pub fn consume_rest(&mut self) -> &str {
         let str = &self.text[self.state.pos..];
         self.progress_by_n(str.len());
@@ -412,6 +427,7 @@ impl<'t> Tokenizer<'t> {
             '>' => Some(Token::GreaterThan),
             '<' => Some(Token::LessThan),
             ':' => Some(Token::Colon),
+            '=' => self.rest_at(1).chars().next().map_or(Some(Token::LetEqual), |_| None),
             _ => None,
         } {
             self.progress();
@@ -438,6 +454,7 @@ impl<'t> Tokenizer<'t> {
                     "if" => Some(Token::MultiChar(MultiCharTokens::If)),
                     "then" => Some(Token::MultiChar(MultiCharTokens::Then)),
                     "else" => Some(Token::MultiChar(MultiCharTokens::Else)),
+                    "let" => Some(Token::MultiChar(MultiCharTokens::Let)),
                     random => Some(Token::MultiChar(MultiCharTokens::Other(random.to_string()))),
                 }
             }

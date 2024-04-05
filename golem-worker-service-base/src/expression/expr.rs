@@ -12,6 +12,7 @@ use crate::primitive::Primitive;
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
     Request(),
+    Let(String, Box<Expr>),
     Worker(),
     SelectField(Box<Expr>, String),
     SelectIndex(Box<Expr>, usize),
@@ -25,6 +26,7 @@ pub enum Expr {
     Boolean(bool),
     PathVar(String),
     Concat(Vec<Expr>),
+    Multiple(Vec<Expr>),
     Not(Box<Expr>),
     GreaterThan(Box<Expr>, Box<Expr>),
     GreaterThanOrEqualTo(Box<Expr>, Box<Expr>),
@@ -525,6 +527,8 @@ impl Expr {
                         match_cases_str.join(", ")
                     )))
                 }
+
+                Expr::Multiple(_) | Expr::Let(_, _) => todo!(),
 
                 Expr::Constructor0(constructor) => Ok(InternalValue::NonInterpolated(
                     convert_constructor_to_string(constructor, &|x| go(x, false))?,

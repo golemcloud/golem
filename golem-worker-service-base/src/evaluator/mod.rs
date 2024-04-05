@@ -238,6 +238,8 @@ impl Evaluator for Expr {
                     }
                 }
 
+                Expr::Let(_, _) | Expr::Multiple(_) => todo!(),
+
                 Expr::Sequence(exprs) => {
                     let mut result: Vec<TypeAnnotatedValue> = vec![];
 

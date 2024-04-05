@@ -170,6 +170,11 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                     go(tokenizer, context, new_expr)
                 }
 
+                Token::MultiChar(MultiCharTokens::Let) => {
+                   let let_expr = create_let_statement(tokenizer)?;
+                   go(tokenizer, context, prev_expression.accumulate_with(let_expr))
+                }
+
                 Token::LessThan => {
                     if prev_expression.is_empty() {
                         return Err(ParseError::Message(
@@ -395,6 +400,8 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                 Token::RParen => go(tokenizer, context, prev_expression),
                 Token::Space => go(tokenizer, context, prev_expression),
                 Token::NewLine => go(tokenizer, context, prev_expression),
+                Token::LetEqual => go(tokenizer, context, prev_expression),
+                Token::SemiColon => go(tokenizer, context, prev_expression),
                 Token::LCurly => {
                     let expr = if is_flags(tokenizer)  {
                         create_flags(tokenizer)
@@ -514,6 +521,8 @@ mod internal {
             Expr::EqualTo(_, _) => false,
             Expr::GreaterThanOrEqualTo(_, _) => false,
             Expr::LessThanOrEqualTo(_, _) => false,
+            Expr::Let(_, _) => false,
+            Expr::Multiple(_) => false
         }
     }
 
@@ -554,6 +563,35 @@ mod internal {
         go(tokenizer, &mut record)?;
 
         Ok(Expr::Sequence(record))
+    }
+
+    pub(crate) fn create_let_statement(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
+        let captured_string = tokenizer.capture_string_until_and_skip_end(
+            vec![],
+            &Token::LetEqual, // Wave does this
+        );
+
+        if let Some(let_variable_str) = captured_string {
+            let expr = parse_with_context(let_variable_str.as_str(), Context::Code)?;
+            match expr {
+                Expr::Variable(variable_name) => {
+                    let captured_string = tokenizer.capture_string_until_and_skip_end(
+                        vec![],
+                        &Token::SemiColon, // Wave does this
+                    );
+                    match captured_string {
+                        Some(captured_string) => {
+                            let expr = parse_with_context(captured_string.as_str(), Context::Code)?;
+                            Ok(Expr::Let(variable_name, Box::new(expr)))
+                        }
+                        None => Err(ParseError::Message("Expecting a value after let variable".to_string())),
+                    }
+                }
+                _ => Err(ParseError::Message("Expecting a variable name after let".to_string())),
+            }
+        } else {
+            Err(ParseError::Message("Expecting a variable name after let".to_string()))
+        }
     }
 
     pub(crate) fn create_record(
@@ -742,6 +780,26 @@ mod internal {
                 InternalExprResult::Empty => InternalExprResult::Complete(expr),
             }
         }
+
+        pub(crate) fn accumulate_with(&self, expr: Expr) -> InternalExprResult {
+            match self {
+                InternalExprResult::Complete(complete_expr) => match complete_expr {
+                    Expr::Multiple(vec) => {
+                        let mut new_expr = vec.clone();
+                        new_expr.push(expr);
+                        InternalExprResult::complete(Expr::Multiple(new_expr))
+                    }
+                    _ => InternalExprResult::complete(Expr::Multiple(vec![
+                        complete_expr.clone(),
+                        expr,
+                    ])),
+                },
+                InternalExprResult::InComplete(_, in_complete) => in_complete(expr),
+                InternalExprResult::Empty => InternalExprResult::Complete(expr),
+            }
+        }
+
+
         pub(crate) fn complete(expr: Expr) -> InternalExprResult {
             InternalExprResult::Complete(expr)
         }
