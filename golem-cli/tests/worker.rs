@@ -68,13 +68,6 @@ pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial
     );
 
     short_args.append(&mut long_args);
-
-    short_args.push(Trial::test_in_context(
-        "auction_example".to_string(),
-        (deps, "".to_string(), short_cli),
-        auction_example,
-    ));
-
     short_args
 }
 

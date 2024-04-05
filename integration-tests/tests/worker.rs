@@ -14,11 +14,11 @@
 
 use crate::DEPS;
 use assert2::check;
-use golem_test_framework::config::TestDependencies;
+
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
+
 use std::time::SystemTime;
 
 #[tokio::test]
