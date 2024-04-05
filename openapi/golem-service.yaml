@@ -2547,7 +2547,7 @@ components:
           $ref: '#/components/schemas/FilterComparator'
         value:
           type: integer
-          format: int32
+          format: uint64
       required:
       - comparator
       - value

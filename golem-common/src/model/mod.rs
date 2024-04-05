@@ -937,11 +937,11 @@ impl Display for WorkerStatusFilter {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
 pub struct WorkerVersionFilter {
     pub comparator: FilterComparator,
-    pub value: i32,
+    pub value: u64,
 }
 
 impl WorkerVersionFilter {
-    pub fn new(comparator: FilterComparator, value: i32) -> Self {
+    pub fn new(comparator: FilterComparator, value: u64) -> Self {
         Self { comparator, value }
     }
 }
@@ -1104,7 +1104,8 @@ impl WorkerFilter {
                 comparator.matches(&metadata.worker_id.worker_id.worker_name, &value)
             }
             WorkerFilter::Version(WorkerVersionFilter { comparator, value }) => {
-                comparator.matches(&metadata.worker_id.template_version, &value)
+                let version: u64 = metadata.worker_id.template_version as u64;
+                comparator.matches(&version, &value)
             }
             WorkerFilter::Env(WorkerEnvFilter {
                 name,
@@ -1175,7 +1176,7 @@ impl WorkerFilter {
         WorkerFilter::Env(WorkerEnvFilter::new(name, comparator, value))
     }
 
-    pub fn new_version(comparator: FilterComparator, value: i32) -> Self {
+    pub fn new_version(comparator: FilterComparator, value: u64) -> Self {
         WorkerFilter::Version(WorkerVersionFilter::new(comparator, value))
     }
 
