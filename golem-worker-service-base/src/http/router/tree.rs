@@ -1,21 +1,8 @@
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RadixNode<T> {
     pattern: Vec<Pattern>,
     children: OrderedChildren<T>,
     data: Option<T>,
-}
-
-impl<T> std::fmt::Debug for RadixNode<T>
-where
-    T: std::fmt::Debug,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RadixNode")
-            .field("pattern", &self.pattern)
-            .field("children", &self.children)
-            .field("data", &self.data)
-            .finish()
-    }
 }
 
 impl<T> Default for RadixNode<T> {
@@ -28,55 +15,97 @@ impl<T> Default for RadixNode<T> {
     }
 }
 
-// Given the paths are perfectly de-duplicated,
-// We can assume that each child has a unique first pattern.
 #[derive(Debug, Clone)]
-struct OrderedChildren<T>(Vec<RadixNode<T>>);
+struct OrderedChildren<T> {
+    // Given the paths are perfectly de-duplicated,
+    // We can assume that each child has a unique first pattern.
+    static_children: Vec<RadixNode<T>>,
+    variable_child: Option<Box<RadixNode<T>>>,
+}
 
 impl<T> Default for OrderedChildren<T> {
     fn default() -> Self {
-        Self(Vec::new())
+        Self {
+            static_children: Vec::new(),
+            variable_child: None,
+        }
     }
 }
 
 impl<T> OrderedChildren<T> {
     #[inline]
     fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.static_children.is_empty() && self.variable_child.is_none()
     }
 
     #[inline]
     fn search_by_str(&self, input: &str) -> Option<&RadixNode<T>> {
-        let next_child_index = self.0.binary_search_by(|child| match &child.pattern[0] {
-            Pattern::Static(s) => s.as_str().cmp(input),
-            Pattern::Variable => std::cmp::Ordering::Equal,
-        });
+        let next_child_index = self
+            .static_children
+            .binary_search_by(|child| match &child.pattern[0] {
+                Pattern::Static(s) => s.as_str().cmp(input),
+                Pattern::Variable => {
+                    debug_assert!(
+                        false,
+                        "Variable child should not be present in the static children list"
+                    );
+                    std::cmp::Ordering::Greater
+                }
+            })
+            .ok();
 
-        next_child_index.ok().map(|index| &self.0[index])
+        next_child_index
+            .map(|index| &self.static_children[index])
+            .or_else(|| self.variable_child.as_ref().map(|c| c.as_ref()))
     }
 
     fn get_child(&self, pattern: &Pattern) -> Option<&RadixNode<T>> {
         let index = self
-            .0
+            .static_children
             .binary_search_by(|c| c.pattern.first().cmp(&Some(pattern)))
-            .ok()?;
-        self.0.get(index)
+            .ok();
+
+        index
+            .map(|index| &self.static_children[index])
+            .or_else(|| self.variable_child.as_ref().map(|c| c.as_ref()))
     }
 
     fn get_child_mut(&mut self, pattern: &Pattern) -> Option<&mut RadixNode<T>> {
         let index = self
-            .0
+            .static_children
             .binary_search_by(|c| c.pattern.first().cmp(&Some(pattern)))
-            .ok()?;
-        self.0.get_mut(index)
+            .ok();
+
+        index
+            .map(|index| &mut self.static_children[index])
+            .or_else(|| self.variable_child.as_mut().map(|c| c.as_mut()))
     }
 
     fn add_child(&mut self, node: RadixNode<T>) {
-        let index = self
-            .0
-            .binary_search_by(|c| c.pattern.cmp(&node.pattern))
-            .unwrap_or_else(|i| i);
-        self.0.insert(index, node);
+        match node.pattern.first() {
+            first @ Some(Pattern::Static(_)) => {
+                let index = self
+                    .static_children
+                    .binary_search_by(|c| c.pattern.first().cmp(&first))
+                    .err();
+                if let Some(index) = index {
+                    self.static_children.insert(index, node);
+                } else {
+                    debug_assert!(false, "Duplicate static child");
+                }
+            }
+            Some(Pattern::Variable) => {
+                debug_assert!(
+                    self.variable_child.is_none(),
+                    "Variable child already exists"
+                );
+
+                self.variable_child = Some(Box::new(node));
+            }
+            None => {
+                panic!("Empty pattern");
+            }
+        }
     }
 }
 
@@ -282,7 +311,7 @@ impl<T> RadixNode<T> {
 
                     match path_segments.first() {
                         Some(first_segment) => {
-                            let next_child = self.children.search_by_str(first_segment);
+                            let next_child = node.children.search_by_str(first_segment);
                             if let Some(child) = next_child {
                                 node = child;
                             } else {
@@ -396,7 +425,7 @@ mod test {
         assert_eq!(root.get(&path2), Some(&2));
 
         assert!(root.pattern.is_empty());
-        assert_eq!(3, root.children.0.len());
+        assert_eq!(3, root.children.static_children.len());
     }
 
     #[test]
@@ -632,39 +661,57 @@ mod test {
 
     #[test]
     fn test_multiple_routes_resolution() {
+        #[track_caller]
+        fn test_one(root: &RadixNode<i32>) {
+            assert_eq!(
+                Some(MatchResult {
+                    data: &1,
+                    path_values: vec!["v2"]
+                }),
+                root.matches_str("/api/v2/users")
+            );
+        }
+
+        #[track_caller]
+        fn test_two(root: &RadixNode<i32>) {
+            assert_eq!(
+                Some(MatchResult {
+                    data: &2,
+                    path_values: vec!["123"]
+                }),
+                root.matches_str("/api/v1/users/123")
+            );
+        }
+
+        #[track_caller]
+        fn test_three(root: &RadixNode<i32>) {
+            assert_eq!(
+                Some(MatchResult {
+                    data: &3,
+                    path_values: vec!["456"]
+                }),
+                root.matches_str("/api/456/users/profile")
+            );
+        }
+
         let mut root = RadixNode::default();
 
         let path1 = make_path("/api/:version/users");
         root.insert_path(path1.as_slice(), 1).unwrap();
 
+        test_one(&root);
+
         let path2 = make_path("/api/v1/users/:id");
         root.insert_path(path2.as_slice(), 2).unwrap();
+
+        test_one(&root);
+        test_two(&root);
 
         let path3 = make_path("/api/:api_id/users/profile");
         root.insert_path(path3.as_slice(), 3).unwrap();
 
-        assert_eq!(
-            Some(MatchResult {
-                data: &1,
-                path_values: vec!["v2"]
-            }),
-            root.matches_str("/api/v2/users")
-        );
-
-        assert_eq!(
-            Some(MatchResult {
-                data: &2,
-                path_values: vec!["123"]
-            }),
-            root.matches_str("/api/v1/users/123")
-        );
-
-        assert_eq!(
-            Some(MatchResult {
-                data: &3,
-                path_values: vec!["456"]
-            }),
-            root.matches_str("/api/456/users/profile")
-        );
+        test_one(&root);
+        test_two(&root);
+        test_three(&root);
     }
 }
