@@ -24,7 +24,7 @@ impl<T> Router<T> {
         let path: Vec<Pattern> = path
             .into_iter()
             .map(|pattern| match pattern {
-                PathPattern::Literal(literal) => Pattern::Static(literal.0),
+                PathPattern::Literal(literal) => Pattern::literal(literal.0),
                 PathPattern::Var(_) => Pattern::Variable,
             })
             .collect();

@@ -19,14 +19,15 @@ impl<T> Default for RadixNode<T> {
 struct OrderedChildren<T> {
     // Given the paths are perfectly de-duplicated,
     // We can assume that each child has a unique first pattern.
-    static_children: Vec<RadixNode<T>>,
+    // Duplicating pattern into tuple for performance.
+    literal_children: Vec<(LiteralPattern, RadixNode<T>)>,
     variable_child: Option<Box<RadixNode<T>>>,
 }
 
 impl<T> Default for OrderedChildren<T> {
     fn default() -> Self {
         Self {
-            static_children: Vec::new(),
+            literal_children: Vec::new(),
             variable_child: None,
         }
     }
@@ -35,61 +36,56 @@ impl<T> Default for OrderedChildren<T> {
 impl<T> OrderedChildren<T> {
     #[inline]
     fn is_empty(&self) -> bool {
-        self.static_children.is_empty() && self.variable_child.is_none()
+        self.literal_children.is_empty() && self.variable_child.is_none()
     }
 
     #[inline]
     fn search_by_str(&self, input: &str) -> Option<&RadixNode<T>> {
         let next_child_index = self
-            .static_children
-            .binary_search_by(|child| match &child.pattern[0] {
-                Pattern::Static(s) => s.as_str().cmp(input),
-                Pattern::Variable => {
-                    debug_assert!(
-                        false,
-                        "Variable child should not be present in the static children list"
-                    );
-                    std::cmp::Ordering::Greater
-                }
-            })
+            .literal_children
+            .binary_search_by(|(pattern, _)| pattern.0.as_str().cmp(input))
             .ok();
 
         next_child_index
-            .map(|index| &self.static_children[index])
+            .map(|index| &self.literal_children[index].1)
             .or_else(|| self.variable_child.as_ref().map(|c| c.as_ref()))
     }
 
     fn get_child(&self, pattern: &Pattern) -> Option<&RadixNode<T>> {
-        let index = self
-            .static_children
-            .binary_search_by(|c| c.pattern.first().cmp(&Some(pattern)))
-            .ok();
-
-        index
-            .map(|index| &self.static_children[index])
-            .or_else(|| self.variable_child.as_ref().map(|c| c.as_ref()))
+        match pattern {
+            Pattern::Literal(static_pattern) => {
+                let index = self
+                    .literal_children
+                    .binary_search_by(|(child_pattern, _)| child_pattern.cmp(static_pattern))
+                    .ok()?;
+                Some(&self.literal_children[index].1)
+            }
+            Pattern::Variable => self.variable_child.as_ref().map(|c| c.as_ref()),
+        }
     }
 
     fn get_child_mut(&mut self, pattern: &Pattern) -> Option<&mut RadixNode<T>> {
-        let index = self
-            .static_children
-            .binary_search_by(|c| c.pattern.first().cmp(&Some(pattern)))
-            .ok();
-
-        index
-            .map(|index| &mut self.static_children[index])
-            .or_else(|| self.variable_child.as_mut().map(|c| c.as_mut()))
+        match pattern {
+            Pattern::Literal(static_pattern) => {
+                let index = self
+                    .literal_children
+                    .binary_search_by(|(child_pattern, _)| child_pattern.cmp(static_pattern))
+                    .ok()?;
+                Some(&mut self.literal_children[index].1)
+            }
+            Pattern::Variable => self.variable_child.as_mut().map(|c| c.as_mut()),
+        }
     }
 
     fn add_child(&mut self, node: RadixNode<T>) {
         match node.pattern.first() {
-            first @ Some(Pattern::Static(_)) => {
+            Some(Pattern::Literal(first)) => {
                 let index = self
-                    .static_children
-                    .binary_search_by(|c| c.pattern.first().cmp(&first))
+                    .literal_children
+                    .binary_search_by(|(pattern, _)| pattern.cmp(&first))
                     .err();
                 if let Some(index) = index {
-                    self.static_children.insert(index, node);
+                    self.literal_children.insert(index, (first.clone(), node));
                 } else {
                     debug_assert!(false, "Duplicate static child");
                 }
@@ -111,9 +107,18 @@ impl<T> OrderedChildren<T> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Pattern {
-    Static(String),
+    Literal(LiteralPattern),
     Variable,
 }
+
+impl Pattern {
+    pub fn literal(literal: impl Into<String>) -> Self {
+        Self::Literal(LiteralPattern(literal.into()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LiteralPattern(pub String);
 
 #[derive(Debug, thiserror::Error)]
 pub enum InsertionError {
@@ -281,7 +286,7 @@ impl<T> RadixNode<T> {
                 .iter()
                 .zip(path_segments.iter())
                 .take_while(|(a, b)| match a {
-                    Pattern::Static(s) => s == *b,
+                    Pattern::Literal(s) => s.0 == **b,
                     Pattern::Variable => true,
                 })
                 .count();
@@ -295,7 +300,7 @@ impl<T> RadixNode<T> {
                     .zip(&node.pattern)
                     .filter_map(|(path, pattern)| match pattern {
                         Pattern::Variable => Some(*path),
-                        Pattern::Static(_) => None,
+                        Pattern::Literal(_) => None,
                     });
                 variables.extend(new_variables);
 
@@ -375,7 +380,7 @@ pub fn make_path(path: &str) -> Vec<Pattern> {
             if s.starts_with(':') {
                 Pattern::Variable
             } else {
-                Pattern::Static(s.to_string())
+                Pattern::Literal(LiteralPattern(s.to_string()))
             }
         })
         .collect()
@@ -425,7 +430,7 @@ mod test {
         assert_eq!(root.get(&path2), Some(&2));
 
         assert!(root.pattern.is_empty());
-        assert_eq!(3, root.children.static_children.len());
+        assert_eq!(3, root.children.literal_children.len());
     }
 
     #[test]
@@ -470,18 +475,11 @@ mod test {
     fn test_push_subpath() {
         let mut root = RadixNode::default();
 
-        let path1 = vec![
-            Pattern::Static("a".to_string()),
-            Pattern::Static("b".to_string()),
-            Pattern::Static("c".to_string()),
-        ];
+        let path1 = make_path("/a/b/c");
 
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = vec![
-            Pattern::Static("a".to_string()),
-            Pattern::Static("b".to_string()),
-        ];
+        let path2 = make_path("/a/b");
 
         root.insert_path(path2.as_slice(), 2).unwrap();
     }
