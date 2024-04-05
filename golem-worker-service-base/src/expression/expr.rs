@@ -154,8 +154,6 @@ fn validate_single_variable_constructor(
     }
 }
 
-
-
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum ConstructorTypeName {
     InBuiltConstructor(InBuiltConstructorInner),
@@ -269,7 +267,6 @@ impl Expr {
                             Err("Invalid selection of field. Example of a valid selection: request.body.users[1]".into())
                     }
                 }
-
 
                 Expr::SelectIndex(expr0, index) => {
                     let expr0: &Expr = expr0;

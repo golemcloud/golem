@@ -29,7 +29,7 @@ impl Merge for TypeAnnotatedValue {
 
                 self
             }
-            _ => self
+            _ => self,
         }
     }
 }

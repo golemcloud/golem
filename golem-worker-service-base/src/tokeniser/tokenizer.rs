@@ -117,7 +117,6 @@ impl Token {
         Token::LetEqual
     }
 
-
     // If a token needs to be considered as only a raw string
     pub fn as_raw_string_token(&self) -> Token {
         match self {
@@ -427,7 +426,11 @@ impl<'t> Tokenizer<'t> {
             '>' => Some(Token::GreaterThan),
             '<' => Some(Token::LessThan),
             ':' => Some(Token::Colon),
-            '=' => self.rest_at(1).chars().next().map_or(Some(Token::LetEqual), |_| None),
+            '=' => self
+                .rest_at(1)
+                .chars()
+                .next()
+                .map_or(Some(Token::LetEqual), |_| None),
             _ => None,
         } {
             self.progress();
