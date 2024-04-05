@@ -1,17 +1,14 @@
 use assert2::{assert, check};
-use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use chrono::Datelike;
+use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use golem_test_framework::dsl::{
-    events_to_lines, log_event_to_string, val_float32, val_i32, val_list, val_record, val_string,
-    val_u32, val_u64, TestDsl,
-};
+use golem_test_framework::dsl::{events_to_lines, log_event_to_string, TestDsl};
 use tonic::transport::Body;
 use warp::Filter;
 
@@ -30,13 +27,13 @@ async fn zig_example_1() {
         .invoke_and_await_stdio(
             &worker_id,
             "wasi:cli/run@0.2.0/run",
-            Value::Number(1234.into()),
+            serde_json::Value::Number(1234.into()),
         )
         .await;
 
     drop(executor);
 
-    assert!(result == Ok(Value::Number(2468.into())))
+    assert!(result == Ok(serde_json::Value::Number(2468.into())))
 }
 
 #[tokio::test]
@@ -53,9 +50,9 @@ async fn zig_example_2() {
         .invoke_and_await_stdio_eventloop(
             &worker_id,
             "wasi:cli/run@0.2.0/run",
-            Value::Object(Map::from_iter([(
+            serde_json::Value::Object(serde_json::Map::from_iter([(
                 "add".to_string(),
-                Value::Number(10.into()),
+                serde_json::Value::Number(10.into()),
             )])),
         )
         .await
@@ -64,9 +61,9 @@ async fn zig_example_2() {
         .invoke_and_await_stdio_eventloop(
             &worker_id,
             "wasi:cli/run@0.2.0/run",
-            Value::Object(Map::from_iter([(
+            serde_json::Value::Object(serde_json::Map::from_iter([(
                 "add".to_string(),
-                Value::Number(1.into()),
+                serde_json::Value::Number(1.into()),
             )])),
         )
         .await
@@ -75,9 +72,9 @@ async fn zig_example_2() {
         .invoke_and_await_stdio_eventloop(
             &worker_id,
             "wasi:cli/run@0.2.0/run",
-            Value::Object(Map::from_iter([(
+            serde_json::Value::Object(serde_json::Map::from_iter([(
                 "get".to_string(),
-                Value::Object(Map::new()),
+                serde_json::Value::Object(serde_json::Map::new()),
             )])),
         )
         .await;
@@ -85,7 +82,7 @@ async fn zig_example_2() {
     drop(executor);
     drop(rx);
 
-    assert!(response == Ok(Value::Number(11.into())))
+    assert!(response == Ok(serde_json::Value::Number(11.into())))
 }
 
 #[tokio::test]
@@ -100,7 +97,11 @@ async fn tinygo_example() {
     let mut rx = executor.capture_output(&worker_id).await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "example1", vec![val_string("Hello Go-lem")])
+        .invoke_and_await(
+            &worker_id,
+            "example1",
+            vec![Value::String("Hello Go-lem".to_string())],
+        )
         .await
         .unwrap();
 
@@ -119,7 +120,7 @@ async fn tinygo_example() {
 
     check!(first_line == "Hello Go-lem\n".to_string());
     check!(second_line.starts_with(&format!("test {year}")));
-    check!(result == vec!(val_i32(last_part.parse::<i32>().unwrap())));
+    check!(result == vec!(Value::S32(last_part.parse::<i32>().unwrap())));
 }
 
 #[tokio::test]
@@ -170,7 +171,11 @@ async fn tinygo_http_client() {
         .await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "example1", vec![val_string("hello tinygo!")])
+        .invoke_and_await(
+            &worker_id,
+            "example1",
+            vec![Value::String("hello tinygo!".to_string())],
+        )
         .await
         .unwrap();
 
@@ -181,8 +186,8 @@ async fn tinygo_http_client() {
 
     check!(
         result
-            == vec![val_string(
-                "200 percentage: 0.250000, message: response message no X-Test header"
+            == vec![Value::String(
+                "200 percentage: 0.250000, message: response message no X-Test header".to_string()
             )]
     );
     check!(
@@ -240,7 +245,11 @@ async fn java_example_1() {
     let mut rx = executor.capture_output(&worker_id).await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "run-example1", vec![val_string("Hello Golem!")])
+        .invoke_and_await(
+            &worker_id,
+            "run-example1",
+            vec![Value::String("Hello Golem!".to_string())],
+        )
         .await
         .unwrap();
 
@@ -253,7 +262,7 @@ async fn java_example_1() {
     let first_line = log_event_to_string(&events[0]);
 
     check!(first_line == "Hello world, input is Hello Golem!\n".to_string());
-    check!(result == vec![val_u32("Hello Golem!".len() as u32)]);
+    check!(result == vec![Value::U32("Hello Golem!".len() as u32)]);
 }
 
 #[tokio::test]
@@ -269,7 +278,7 @@ async fn java_shopping_cart() {
         .invoke_and_await(
             &worker_id,
             "initialize-cart",
-            vec![val_string("test-user-1")],
+            vec![Value::String("test-user-1".to_string())],
         )
         .await;
 
@@ -277,11 +286,11 @@ async fn java_shopping_cart() {
         .invoke_and_await(
             &worker_id,
             "add-item",
-            vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])],
         )
         .await;
@@ -290,11 +299,11 @@ async fn java_shopping_cart() {
         .invoke_and_await(
             &worker_id,
             "add-item",
-            vec![val_record(vec![
-                val_string("G1001"),
-                val_string("Golem Cloud Subscription 1y"),
-                val_float32(999999.0),
-                val_u32(1),
+            vec![Value::Record(vec![
+                Value::String("G1001".to_string()),
+                Value::String("Golem Cloud Subscription 1y".to_string()),
+                Value::F32(999999.0),
+                Value::U32(1),
             ])],
         )
         .await;
@@ -303,11 +312,11 @@ async fn java_shopping_cart() {
         .invoke_and_await(
             &worker_id,
             "add-item",
-            vec![val_record(vec![
-                val_string("G1002"),
-                val_string("Mud Golem"),
-                val_float32(11.0),
-                val_u32(10),
+            vec![Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::F32(11.0),
+                Value::U32(10),
             ])],
         )
         .await;
@@ -316,7 +325,7 @@ async fn java_shopping_cart() {
         .invoke_and_await(
             &worker_id,
             "update-item-quantity",
-            vec![val_string("G1002"), val_u32(20)],
+            vec![Value::String("G1002".to_string()), Value::U32(20)],
         )
         .await;
 
@@ -332,24 +341,24 @@ async fn java_shopping_cart() {
 
     std::assert!(
         contents
-            == Ok(vec![val_list(vec![
-                val_record(vec![
-                    val_string("G1000"),
-                    val_string("Golem T-Shirt M"),
-                    val_float32(100.0),
-                    val_u32(5),
+            == Ok(vec![Value::List(vec![
+                Value::Record(vec![
+                    Value::String("G1000".to_string()),
+                    Value::String("Golem T-Shirt M".to_string()),
+                    Value::F32(100.0),
+                    Value::U32(5),
                 ]),
-                val_record(vec![
-                    val_string("G1001"),
-                    val_string("Golem Cloud Subscription 1y"),
-                    val_float32(999999.0),
-                    val_u32(1),
+                Value::Record(vec![
+                    Value::String("G1001".to_string()),
+                    Value::String("Golem Cloud Subscription 1y".to_string()),
+                    Value::F32(999999.0),
+                    Value::U32(1),
                 ]),
-                val_record(vec![
-                    val_string("G1002"),
-                    val_string("Mud Golem"),
-                    val_float32(11.0),
-                    val_u32(20),
+                Value::Record(vec![
+                    Value::String("G1002".to_string()),
+                    Value::String("Mud Golem".to_string()),
+                    Value::F32(11.0),
+                    Value::U32(20),
                 ])
             ])])
     )
@@ -370,7 +379,7 @@ async fn javascript_example_1() {
         .invoke_and_await(
             &worker_id,
             "hello",
-            vec![val_string("JavaScript component")],
+            vec![Value::String("JavaScript component".to_string())],
         )
         .await
         .unwrap();
@@ -392,7 +401,7 @@ async fn javascript_example_1() {
     check!(parts[4] == "0"); // NOTE: validating that Date.now() is not working
     check!(parts[13] != "0"); // NOTE: validating that directly calling wasi:clocks/wall-clock/now works
     check!(parts[21].to_string() == now.year().to_string());
-    check!(result == vec![val_string(&first_line)]);
+    check!(result == vec![Value::String(first_line)]);
 }
 
 #[tokio::test]
@@ -405,12 +414,12 @@ async fn javascript_example_2() {
     let worker_id = executor.start_worker(&template_id, "js-2").await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![val_u64(5)])
+        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(5)])
         .await
         .unwrap();
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![val_u64(6)])
+        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(6)])
         .await
         .unwrap();
 
@@ -421,7 +430,7 @@ async fn javascript_example_2() {
 
     drop(executor);
 
-    check!(result == vec![val_u64(11)]);
+    check!(result == vec![Value::U64(11)]);
 }
 
 #[tokio::test]
@@ -488,7 +497,7 @@ async fn c_example_1() {
     let first_line = log_event_to_string(&events[0]);
 
     check!(first_line == "Hello World!\n".to_string());
-    check!(result == vec![val_i32(100)]);
+    check!(result == vec![Value::S32(100)]);
 }
 
 #[tokio::test]
@@ -503,7 +512,11 @@ async fn c_example_2() {
     let mut rx = executor.capture_output(&worker_id).await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "print", vec![val_string("Hello C!")])
+        .invoke_and_await(
+            &worker_id,
+            "print",
+            vec![Value::String("Hello C!".to_string())],
+        )
         .await
         .unwrap();
 
@@ -558,12 +571,12 @@ async fn python_example_1() {
     let worker_id = executor.start_worker(&template_id, "python-1").await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![val_u64(3)])
+        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(3)])
         .await
         .unwrap();
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![val_u64(8)])
+        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(8)])
         .await
         .unwrap();
 
@@ -574,5 +587,5 @@ async fn python_example_1() {
 
     drop(executor);
 
-    check!(result == vec![val_u64(11)]);
+    check!(result == vec![Value::U64(11)]);
 }

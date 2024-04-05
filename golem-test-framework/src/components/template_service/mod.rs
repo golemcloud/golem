@@ -50,18 +50,19 @@ pub trait TemplateService {
         let data = std::fs::read(local_path)
             .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
 
-        let mut chunks: Vec<CreateTemplateRequest> = vec![];
-        chunks.push(CreateTemplateRequest {
-            data: Some(Data::Header(CreateTemplateRequestHeader {
-                project_id: None,
-                template_name: file_name.to_string(),
-            })),
-        });
-        chunks.push(CreateTemplateRequest {
-            data: Some(Data::Chunk(CreateTemplateRequestChunk {
-                template_chunk: data,
-            })),
-        });
+        let chunks: Vec<CreateTemplateRequest> = vec![
+            CreateTemplateRequest {
+                data: Some(Data::Header(CreateTemplateRequestHeader {
+                    project_id: None,
+                    template_name: file_name.to_string(),
+                })),
+            },
+            CreateTemplateRequest {
+                data: Some(Data::Chunk(CreateTemplateRequestChunk {
+                    template_chunk: data,
+                })),
+            },
+        ];
         let response = client
             .create_template(tokio_stream::iter(chunks))
             .await
@@ -94,21 +95,22 @@ pub trait TemplateService {
         let data = std::fs::read(local_path)
             .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
 
-        let mut chunks: Vec<UpdateTemplateRequest> = vec![];
-        chunks.push(UpdateTemplateRequest {
-            data: Some(update_template_request::Data::Header(
-                UpdateTemplateRequestHeader {
-                    template_id: Some(template_id.clone().into()),
-                },
-            )),
-        });
-        chunks.push(UpdateTemplateRequest {
-            data: Some(update_template_request::Data::Chunk(
-                UpdateTemplateRequestChunk {
-                    template_chunk: data,
-                },
-            )),
-        });
+        let chunks: Vec<UpdateTemplateRequest> = vec![
+            UpdateTemplateRequest {
+                data: Some(update_template_request::Data::Header(
+                    UpdateTemplateRequestHeader {
+                        template_id: Some(template_id.clone().into()),
+                    },
+                )),
+            },
+            UpdateTemplateRequest {
+                data: Some(update_template_request::Data::Chunk(
+                    UpdateTemplateRequestChunk {
+                        template_chunk: data,
+                    },
+                )),
+            },
+        ];
         let response = client
             .update_template(tokio_stream::iter(chunks))
             .await

@@ -2,9 +2,9 @@ use crate::common::{start, TestContext};
 use assert2::check;
 use bytes::Bytes;
 use golem_test_framework::dsl::{
-    drain_connection, stdout_event, stdout_event_starting_with, val_bool, val_u64, val_u8,
-    worker_error_message, TestDsl,
+    drain_connection, stdout_event, stdout_event_starting_with, worker_error_message, TestDsl,
 };
+use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -119,7 +119,7 @@ async fn jump() {
 
     println!("events: {:?}", events);
 
-    check!(result == vec![val_u64(5)]);
+    check!(result == vec![Value::U64(5)]);
     check!(
         events
             == vec![
@@ -150,7 +150,11 @@ async fn explicit_oplog_commit() {
 
     // Note: we can only test with replicas=0 because we don't have redis slaves in the test environment currently
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/explicit-commit", vec![val_u8(0)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/explicit-commit",
+            vec![Value::U8(0)],
+        )
         .await;
 
     drop(executor);
@@ -175,7 +179,7 @@ async fn set_retry_policy() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/fail-with-custom-max-retries",
-            vec![val_u64(2)],
+            vec![Value::U64(2)],
         )
         .await;
     let elapsed = start.elapsed().unwrap();
@@ -184,7 +188,7 @@ async fn set_retry_policy() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/fail-with-custom-max-retries",
-            vec![val_u64(1)],
+            vec![Value::U64(1)],
         )
         .await;
 
@@ -195,8 +199,7 @@ async fn set_retry_policy() {
     check!(result2.is_err());
     check!(worker_error_message(&result1.clone().err().unwrap())
         .starts_with("Runtime error: error while executing at wasm backtrace:"));
-    check!(worker_error_message(&result2.err().unwrap())
-        .starts_with("Previous invocation failed"));
+    check!(worker_error_message(&result2.err().unwrap()).starts_with("Previous invocation failed"));
 }
 
 #[tokio::test]
@@ -253,7 +256,7 @@ async fn idempotence_on() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/idempotence-flag",
-            vec![val_bool(true)],
+            vec![Value::Bool(true)],
         )
         .await
         .unwrap();
@@ -289,7 +292,7 @@ async fn idempotence_off() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/idempotence-flag",
-            vec![val_bool(false)],
+            vec![Value::Bool(false)],
         )
         .await;
 

@@ -17,15 +17,12 @@ use golem_common::model::{
     AccountId, FilterComparator, InvocationKey, PromiseId, StringFilterComparator, TemplateId,
     WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
 };
-
-use serde_json::Value;
+use golem_wasm_rpc::Value;
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
-    drain_connection, is_worker_execution_error, stdout_event, val_flags, val_float32, val_list,
-    val_option, val_pair, val_record, val_result, val_string, val_u32, val_u64, val_u8,
-    worker_error_message, TestDsl,
+    drain_connection, is_worker_execution_error, stdout_event, worker_error_message, TestDsl,
 };
 use tokio::time::sleep;
 use tonic::transport::Body;
@@ -103,7 +100,7 @@ async fn simulated_crash() {
         result.as_ref().map_err(worker_error_message)
     );
     check!(result.is_ok());
-    check!(result == Ok(vec![val_string("done")]));
+    check!(result == Ok(vec![Value::String("done".to_string())]));
     check!(events == vec![stdout_event("Starting interruption test\n"),]);
     check!(elapsed.as_secs() < 13);
 }
@@ -121,7 +118,7 @@ async fn shopping_cart_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/initialize-cart",
-            vec![val_string("test-user-1")],
+            vec![Value::String("test-user-1".to_string())],
         )
         .await;
 
@@ -129,11 +126,11 @@ async fn shopping_cart_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])],
         )
         .await;
@@ -142,11 +139,11 @@ async fn shopping_cart_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![val_record(vec![
-                val_string("G1001"),
-                val_string("Golem Cloud Subscription 1y"),
-                val_float32(999999.0),
-                val_u32(1),
+            vec![Value::Record(vec![
+                Value::String("G1001".to_string()),
+                Value::String("Golem Cloud Subscription 1y".to_string()),
+                Value::F32(999999.0),
+                Value::U32(1),
             ])],
         )
         .await;
@@ -155,11 +152,11 @@ async fn shopping_cart_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![val_record(vec![
-                val_string("G1002"),
-                val_string("Mud Golem"),
-                val_float32(11.0),
-                val_u32(10),
+            vec![Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::F32(11.0),
+                Value::U32(10),
             ])],
         )
         .await;
@@ -168,7 +165,7 @@ async fn shopping_cart_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/update-item-quantity",
-            vec![val_string("G1002"), val_u32(20)],
+            vec![Value::String("G1002".to_string()), Value::U32(20)],
         )
         .await;
 
@@ -184,24 +181,24 @@ async fn shopping_cart_example() {
 
     assert!(
         contents
-            == Ok(vec![val_list(vec![
-                val_record(vec![
-                    val_string("G1000"),
-                    val_string("Golem T-Shirt M"),
-                    val_float32(100.0),
-                    val_u32(5),
+            == Ok(vec![Value::List(vec![
+                Value::Record(vec![
+                    Value::String("G1000".to_string()),
+                    Value::String("Golem T-Shirt M".to_string()),
+                    Value::F32(100.0),
+                    Value::U32(5),
                 ]),
-                val_record(vec![
-                    val_string("G1001"),
-                    val_string("Golem Cloud Subscription 1y"),
-                    val_float32(999999.0),
-                    val_u32(1),
+                Value::Record(vec![
+                    Value::String("G1001".to_string()),
+                    Value::String("Golem Cloud Subscription 1y".to_string()),
+                    Value::F32(999999.0),
+                    Value::U32(1),
                 ]),
-                val_record(vec![
-                    val_string("G1002"),
-                    val_string("Mud Golem"),
-                    val_float32(11.0),
-                    val_u32(20),
+                Value::Record(vec![
+                    Value::String("G1002".to_string()),
+                    Value::String("Mud Golem".to_string()),
+                    Value::F32(11.0),
+                    Value::U32(20),
                 ]),
             ])])
     )
@@ -217,12 +214,12 @@ async fn stdio_cc() {
     let worker_id = executor.start_worker(&template_id, "stdio-cc-1").await;
 
     let result = executor
-        .invoke_and_await_stdio(&worker_id, "run", Value::Number(1234.into()))
+        .invoke_and_await_stdio(&worker_id, "run", serde_json::Value::Number(1234.into()))
         .await;
 
     drop(executor);
 
-    assert!(result == Ok(Value::Number(2468.into())))
+    assert!(result == Ok(serde_json::Value::Number(2468.into())))
 }
 
 #[tokio::test]
@@ -248,19 +245,22 @@ async fn dynamic_instance_creation() {
 
     drop(executor);
 
-    check!(args == vec![val_result(Ok(val_list(vec![])))]);
+    check!(args == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![])))))]);
     check!(
-        env == vec![val_result(Ok(val_list(vec![
-            val_pair(
-                val_string("GOLEM_WORKER_NAME"),
-                val_string("dynamic-instance-creation-1")
-            ),
-            val_pair(
-                val_string("GOLEM_TEMPLATE_ID"),
-                val_string(&format!("{}", template_id))
-            ),
-            val_pair(val_string("GOLEM_TEMPLATE_VERSION"), val_string("0")),
-        ])))]
+        env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+            Value::Tuple(vec![
+                Value::String("GOLEM_WORKER_NAME".to_string()),
+                Value::String("dynamic-instance-creation-1".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_TEMPLATE_ID".to_string()),
+                Value::String(format!("{}", template_id))
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_TEMPLATE_VERSION".to_string()),
+                Value::String("0".to_string())
+            ]),
+        ])))))]
     );
 }
 
@@ -304,7 +304,7 @@ async fn promise() {
 
     drop(executor);
 
-    check!(result == vec![val_list(vec![val_u8(42)])]);
+    check!(result == vec![Value::List(vec![Value::U8(42)])]);
 }
 
 #[tokio::test]
@@ -322,7 +322,7 @@ async fn get_self_uri() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-self-uri",
-            vec![val_string("function-name")],
+            vec![Value::String("function-name".to_string())],
         )
         .await
         .unwrap();
@@ -331,7 +331,7 @@ async fn get_self_uri() {
 
     check!(
         result
-            == vec![val_string(&format!(
+            == vec![Value::String(format!(
                 "worker://{template_id}/runtime-service-1/function-name"
             ))]
     );
@@ -352,11 +352,11 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
             &worker_id,
             &invocation_key,
             "golem:it/api/add-item",
-            vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])],
         )
         .await
@@ -367,11 +367,11 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
             &worker_id,
             &invocation_key,
             "golem:it/api/add-item",
-            vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])],
         )
         .await
@@ -386,11 +386,11 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
 
     check!(
         contents
-            == vec![val_list(vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            == vec![Value::List(vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])])]
     );
 }
@@ -412,11 +412,11 @@ async fn invoking_with_invalid_invocation_key_is_failure() {
             &worker_id,
             &invocation_key,
             "golem:it/api/add-item",
-            vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])],
         )
         .await;
@@ -441,11 +441,11 @@ async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
             &worker_id,
             &invocation_key,
             "golem:it/api/add-item",
-            vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])],
         )
         .await
@@ -459,11 +459,11 @@ async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
             &worker_id,
             &invocation_key,
             "golem:it/api/add-item",
-            vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])],
         )
         .await
@@ -478,11 +478,11 @@ async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
 
     check!(
         contents
-            == vec![val_list(vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            == vec![Value::List(vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])])]
     );
 }
@@ -502,13 +502,15 @@ async fn optional_parameters() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/echo",
-            vec![val_option(Some(val_string("Hello")))],
+            vec![Value::Option(Some(Box::new(Value::String(
+                "Hello".to_string(),
+            ))))],
         )
         .await
         .unwrap();
 
     let echo_none = executor
-        .invoke_and_await(&worker_id, "golem:it/api/echo", vec![val_option(None)])
+        .invoke_and_await(&worker_id, "golem:it/api/echo", vec![Value::Option(None)])
         .await
         .unwrap();
 
@@ -516,9 +518,9 @@ async fn optional_parameters() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/todo",
-            vec![val_record(vec![
-                val_string("todo"),
-                val_option(Some(val_string("description"))),
+            vec![Value::Record(vec![
+                Value::String("todo".to_string()),
+                Value::Option(Some(Box::new(Value::String("description".to_string())))),
             ])],
         )
         .await
@@ -528,9 +530,9 @@ async fn optional_parameters() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/todo",
-            vec![val_record(vec![
-                val_string("todo"),
-                val_option(Some(val_string("description"))),
+            vec![Value::Record(vec![
+                Value::String("todo".to_string()),
+                Value::Option(Some(Box::new(Value::String("description".to_string())))),
             ])],
         )
         .await
@@ -538,10 +540,15 @@ async fn optional_parameters() {
 
     drop(executor);
 
-    check!(echo_some == vec![val_option(Some(val_string("Hello")))]);
-    check!(echo_none == vec![val_option(None)]);
-    check!(todo_some == vec![val_string("todo")]);
-    check!(todo_none == vec![val_string("todo")]);
+    check!(
+        echo_some
+            == vec![Value::Option(Some(Box::new(Value::String(
+                "Hello".to_string()
+            ))))]
+    );
+    check!(echo_none == vec![Value::Option(None)]);
+    check!(todo_some == vec![Value::String("todo".to_string())]);
+    check!(todo_none == vec![Value::String("todo".to_string())]);
 }
 
 #[tokio::test]
@@ -557,7 +564,10 @@ async fn flags_parameters() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-task",
-            vec![val_record(vec![val_string("t1"), val_flags(4, &[0, 1])])],
+            vec![Value::Record(vec![
+                Value::String("t1".to_string()),
+                Value::Flags(vec![true, true, false, false]),
+            ])],
         )
         .await
         .unwrap();
@@ -569,12 +579,24 @@ async fn flags_parameters() {
 
     drop(executor);
 
-    check!(create_task == vec![val_record(vec![val_string("t1"), val_flags(4, &[0, 1, 2])])]);
+    check!(
+        create_task
+            == vec![Value::Record(vec![
+                Value::String("t1".to_string()),
+                Value::Flags(vec![true, true, true, false])
+            ])]
+    );
     check!(
         get_tasks
-            == vec![val_list(vec![
-                val_record(vec![val_string("t1"), val_flags(4, &[0])]),
-                val_record(vec![val_string("t2"), val_flags(4, &[0, 2, 3])])
+            == vec![Value::List(vec![
+                Value::Record(vec![
+                    Value::String("t1".to_string()),
+                    Value::Flags(vec![true, false, false, false])
+                ]),
+                Value::Record(vec![
+                    Value::String("t2".to_string()),
+                    Value::Flags(vec![true, false, true, true])
+                ])
             ])]
     );
 }
@@ -614,7 +636,9 @@ async fn delete_instance() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/echo",
-            vec![val_option(Some(val_string("Hello")))],
+            vec![Value::Option(Some(Box::new(Value::String(
+                "Hello".to_string(),
+            ))))],
         )
         .await
         .unwrap();
@@ -684,7 +708,9 @@ async fn get_workers() {
             .invoke_and_await(
                 &worker_id,
                 "golem:it/api/echo",
-                vec![val_option(Some(val_string("Hello")))],
+                vec![Value::Option(Some(Box::new(Value::String(
+                    "Hello".to_string(),
+                ))))],
             )
             .await
             .unwrap();
@@ -804,8 +830,8 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
             &worker_id,
             "golem:it/api/echo",
             vec![
-                val_option(Some(val_string("Hello"))),
-                val_string("extra parameter"),
+                Value::Option(Some(Box::new(Value::String("Hello".to_string())))),
+                Value::String("extra parameter".to_string()),
             ],
         )
         .await;
@@ -829,7 +855,7 @@ async fn get_instance_metadata() {
     let executor_clone = executor.clone();
     let fiber = tokio::spawn(async move {
         executor_clone
-            .invoke_and_await(&worker_id_clone, "golem:it/api/sleep", vec![val_u64(10)])
+            .invoke_and_await(&worker_id_clone, "golem:it/api/sleep", vec![Value::U64(10)])
             .await
     });
 
@@ -874,11 +900,11 @@ async fn create_invoke_delete_create_invoke() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])],
         )
         .await;
@@ -893,11 +919,11 @@ async fn create_invoke_delete_create_invoke() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])],
         )
         .await;
@@ -926,11 +952,11 @@ async fn recovering_an_old_instance_after_updating_a_template() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])],
         )
         .await
@@ -953,7 +979,9 @@ async fn recovering_an_old_instance_after_updating_a_template() {
         .invoke_and_await(
             &worker_id2,
             "golem:it/api/echo",
-            vec![val_option(Some(val_string("Hello")))],
+            vec![Value::Option(Some(Box::new(Value::String(
+                "Hello".to_string(),
+            ))))],
         )
         .await
         .unwrap();
@@ -971,13 +999,17 @@ async fn recovering_an_old_instance_after_updating_a_template() {
     drop(executor);
 
     check!(r1 == vec![]);
-    check!(r2 == vec![val_option(Some(val_string("Hello")))]);
     check!(
-        r3 == vec![val_list(vec![val_record(vec![
-            val_string("G1000"),
-            val_string("Golem T-Shirt M"),
-            val_float32(100.0),
-            val_u32(5),
+        r2 == vec![Value::Option(Some(Box::new(Value::String(
+            "Hello".to_string()
+        ))))]
+    );
+    check!(
+        r3 == vec![Value::List(vec![Value::Record(vec![
+            Value::String("G1000".to_string()),
+            Value::String("Golem T-Shirt M".to_string()),
+            Value::F32(100.0),
+            Value::U32(5),
         ])])]
     );
 }
@@ -1000,11 +1032,11 @@ async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() 
         .invoke_and_await(
             &worker_id,
             "golem:it/api/add-item",
-            vec![val_record(vec![
-                val_string("G1000"),
-                val_string("Golem T-Shirt M"),
-                val_float32(100.0),
-                val_u32(5),
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
             ])],
         )
         .await
@@ -1030,7 +1062,9 @@ async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() 
         .invoke_and_await(
             &worker_id,
             "golem:it/api/echo",
-            vec![val_option(Some(val_string("Hello")))],
+            vec![Value::Option(Some(Box::new(Value::String(
+                "Hello".to_string(),
+            ))))],
         )
         .await
         .unwrap();
@@ -1038,7 +1072,11 @@ async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() 
     drop(executor);
 
     check!(r1 == vec![]);
-    check!(r2 == vec![val_option(Some(val_string("Hello")))]);
+    check!(
+        r2 == vec![Value::Option(Some(Box::new(Value::String(
+            "Hello".to_string()
+        ))))]
+    );
 }
 
 #[tokio::test]
@@ -1197,7 +1235,7 @@ async fn long_running_poll_loop_works_as_expected() {
         .invoke(
             &worker_id,
             "golem:it/api/start-polling",
-            vec![val_string("first")],
+            vec![Value::String("first".to_string())],
         )
         .await
         .unwrap();
@@ -1262,7 +1300,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
         .invoke(
             &worker_id,
             "golem:it/api/start-polling",
-            vec![val_string("first")],
+            vec![Value::String("first".to_string())],
         )
         .await
         .unwrap();
@@ -1302,7 +1340,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
             .invoke(
                 &worker_id_clone,
                 "golem:it/api/start-polling",
-                vec![val_string("second")],
+                vec![Value::String("second".to_string())],
             )
             .await
             .unwrap();
@@ -1386,7 +1424,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
         .invoke(
             &worker_id,
             "golem:it/api/start-polling",
-            vec![val_string("first")],
+            vec![Value::String("first".to_string())],
         )
         .await
         .unwrap();
@@ -1446,7 +1484,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
         .invoke(
             &worker_id,
             "golem:it/api/start-polling",
-            vec![val_string("first")],
+            vec![Value::String("first".to_string())],
         )
         .await
         .unwrap();
@@ -1511,7 +1549,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
         .invoke(
             &worker_id,
             "golem:it/api/start-polling",
-            vec![val_string("first")],
+            vec![Value::String("first".to_string())],
         )
         .await
         .unwrap();
@@ -1597,7 +1635,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
         .invoke(
             &worker_id,
             "golem:it/api/start-polling",
-            vec![val_string("first")],
+            vec![Value::String("first".to_string())],
         )
         .await
         .unwrap();
@@ -1632,7 +1670,7 @@ async fn shopping_cart_resource_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/[constructor]cart",
-            vec![val_string("test-user-1")],
+            vec![Value::String("test-user-1".to_string())],
         )
         .await
         .unwrap();
@@ -1644,11 +1682,11 @@ async fn shopping_cart_resource_example() {
             "golem:it/api/[method]cart.add-item",
             vec![
                 cart[0].clone(),
-                val_record(vec![
-                    val_string("G1000"),
-                    val_string("Golem T-Shirt M"),
-                    val_float32(100.0),
-                    val_u32(5),
+                Value::Record(vec![
+                    Value::String("G1000".to_string()),
+                    Value::String("Golem T-Shirt M".to_string()),
+                    Value::F32(100.0),
+                    Value::U32(5),
                 ]),
             ],
         )
@@ -1660,11 +1698,11 @@ async fn shopping_cart_resource_example() {
             "golem:it/api/[method]cart.add-item",
             vec![
                 cart[0].clone(),
-                val_record(vec![
-                    val_string("G1001"),
-                    val_string("Golem Cloud Subscription 1y"),
-                    val_float32(999999.0),
-                    val_u32(1),
+                Value::Record(vec![
+                    Value::String("G1001".to_string()),
+                    Value::String("Golem Cloud Subscription 1y".to_string()),
+                    Value::F32(999999.0),
+                    Value::U32(1),
                 ]),
             ],
         )
@@ -1676,11 +1714,11 @@ async fn shopping_cart_resource_example() {
             "golem:it/api/[method]cart.add-item",
             vec![
                 cart[0].clone(),
-                val_record(vec![
-                    val_string("G1002"),
-                    val_string("Mud Golem"),
-                    val_float32(11.0),
-                    val_u32(10),
+                Value::Record(vec![
+                    Value::String("G1002".to_string()),
+                    Value::String("Mud Golem".to_string()),
+                    Value::F32(11.0),
+                    Value::U32(10),
                 ]),
             ],
         )
@@ -1690,7 +1728,11 @@ async fn shopping_cart_resource_example() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/[method]cart.update-item-quantity",
-            vec![cart[0].clone(), val_string("G1002"), val_u32(20)],
+            vec![
+                cart[0].clone(),
+                Value::String("G1002".to_string()),
+                Value::U32(20),
+            ],
         )
         .await;
 
@@ -1714,24 +1756,24 @@ async fn shopping_cart_resource_example() {
 
     assert!(
         contents
-            == Ok(vec![val_list(vec![
-                val_record(vec![
-                    val_string("G1000"),
-                    val_string("Golem T-Shirt M"),
-                    val_float32(100.0),
-                    val_u32(5),
+            == Ok(vec![Value::List(vec![
+                Value::Record(vec![
+                    Value::String("G1000".to_string()),
+                    Value::String("Golem T-Shirt M".to_string()),
+                    Value::F32(100.0),
+                    Value::U32(5),
                 ]),
-                val_record(vec![
-                    val_string("G1001"),
-                    val_string("Golem Cloud Subscription 1y"),
-                    val_float32(999999.0),
-                    val_u32(1),
+                Value::Record(vec![
+                    Value::String("G1001".to_string()),
+                    Value::String("Golem Cloud Subscription 1y".to_string()),
+                    Value::F32(999999.0),
+                    Value::U32(1),
                 ]),
-                val_record(vec![
-                    val_string("G1002"),
-                    val_string("Mud Golem"),
-                    val_float32(11.0),
-                    val_u32(20),
+                Value::Record(vec![
+                    Value::String("G1002".to_string()),
+                    Value::String("Mud Golem".to_string()),
+                    Value::F32(11.0),
+                    Value::U32(20),
                 ]),
             ])])
     )
@@ -1751,7 +1793,7 @@ async fn counter_resource_test_1() {
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api/[constructor]counter",
-            vec![val_string("counter1")],
+            vec![Value::String("counter1".to_string())],
         )
         .await
         .unwrap();
@@ -1759,7 +1801,7 @@ async fn counter_resource_test_1() {
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api/[method]counter.inc-by",
-            vec![counter1[0].clone(), val_u64(5)],
+            vec![counter1[0].clone(), Value::U64(5)],
         )
         .await;
 
@@ -1785,13 +1827,13 @@ async fn counter_resource_test_1() {
 
     drop(executor);
 
-    check!(result1 == Ok(vec![val_u64(5)]));
+    check!(result1 == Ok(vec![Value::U64(5)]));
     check!(
         result2
-            == Ok(vec![val_list(vec![val_pair(
-                val_string("counter1"),
-                val_u64(5)
-            )])])
+            == Ok(vec![Value::List(vec![Value::Tuple(vec![
+                Value::String("counter1".to_string()),
+                Value::U64(5)
+            ])])])
     );
 }
 

@@ -1,6 +1,7 @@
 use crate::common::{start, TestContext};
 use assert2::check;
-use golem_test_framework::dsl::{val_bool, val_string, TestDsl};
+use golem_test_framework::dsl::TestDsl;
+use golem_wasm_rpc::Value;
 
 #[tokio::test]
 #[tracing::instrument]
@@ -16,7 +17,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-container",
-            vec![val_string(&format!(
+            vec![Value::String(format!(
                 "{template_id}-{worker_name}-container"
             ))],
         )
@@ -27,7 +28,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/container-exists",
-            vec![val_string(&format!(
+            vec![Value::String(format!(
                 "{template_id}-{worker_name}-container"
             ))],
         )
@@ -36,7 +37,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created() {
 
     drop(executor);
 
-    check!(result == vec![val_bool(true)]);
+    check!(result == vec![Value::Bool(true)]);
 }
 
 #[tokio::test]
@@ -53,7 +54,7 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/container-exists",
-            vec![val_string(&format!(
+            vec![Value::String(format!(
                 "{template_id}-{worker_name}-container"
             ))],
         )
@@ -62,5 +63,5 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created() {
 
     drop(executor);
 
-    check!(result == vec![val_bool(false)]);
+    check!(result == vec![Value::Bool(false)]);
 }

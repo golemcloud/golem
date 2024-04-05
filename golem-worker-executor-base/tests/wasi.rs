@@ -7,11 +7,8 @@ use std::time::{Duration, SystemTime};
 use crate::common::{start, TestContext};
 use assert2::{assert, check};
 use golem_common::model::WorkerStatus;
-use golem_test_framework::dsl::{
-    stderr_event, stdout_event, val_bool, val_list, val_option, val_pair, val_result, val_string,
-    val_triple, val_u32, val_u64, worker_error_message, TestDsl,
-};
-use golem_wasm_rpc::protobuf::{val, Val};
+use golem_test_framework::dsl::{stderr_event, stdout_event, worker_error_message, TestDsl};
+use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
 use tokio::spawn;
 use tokio::time::Instant;
@@ -96,30 +93,18 @@ async fn clocks() {
     drop(executor);
 
     check!(result.len() == 1);
-    let Val {
-        val: Some(val::Val::Tuple(tuple)),
-    } = &result[0]
-    else {
+    let Value::Tuple(tuple) = &result[0] else {
         panic!("expected tuple")
     };
-    check!(tuple.values.len() == 3);
+    check!(tuple.len() == 3);
 
-    let Val {
-        val: Some(val::Val::F64(elapsed1)),
-    } = &tuple.values[0]
-    else {
+    let Value::F64(elapsed1) = &tuple[0] else {
         panic!("expected f64")
     };
-    let Val {
-        val: Some(val::Val::F64(elapsed2)),
-    } = &tuple.values[1]
-    else {
+    let Value::F64(elapsed2) = &tuple[1] else {
         panic!("expected f64")
     };
-    let Val {
-        val: Some(val::Val::String(odt)),
-    } = &tuple.values[2]
-    else {
+    let Value::String(odt) = &tuple[2] else {
         panic!("expected string")
     };
 
@@ -159,11 +144,11 @@ async fn file_write_read_delete() {
 
     check!(
         result
-            == vec![val_triple(
-                val_option(None),
-                val_option(Some(val_string("hello world"))),
-                val_option(None)
-            )]
+            == vec![Value::Tuple(vec![
+                Value::Option(None),
+                Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
+                Value::Option(None)
+            ])]
     );
 }
 
@@ -183,33 +168,42 @@ async fn directories() {
 
     drop(executor);
 
-    let Val {
-        val: Some(val::Val::Tuple(tuple)),
-    } = &result[0]
-    else {
+    let Value::Tuple(tuple) = &result[0] else {
         panic!("expected tuple")
     };
-    check!(tuple.values.len() == 4); //  tuple<u32, list<tuple<string, bool>>, list<tuple<string, bool>>, u32>;
+    check!(tuple.len() == 4); //  tuple<u32, list<tuple<string, bool>>, list<tuple<string, bool>>, u32>;
 
-    check!(tuple.values[0] == val_u32(0)); // initial number of entries
-    check!(tuple.values[1] == val_list(vec![val_pair(val_string("/test"), val_bool(true))])); // contents of /
+    check!(tuple[0] == Value::U32(0)); // initial number of entries
+    check!(
+        tuple[1]
+            == Value::List(vec![Value::Tuple(vec![
+                Value::String("/test".to_string()),
+                Value::Bool(true)
+            ])])
+    ); // contents of /
 
     // contents of /test
-    let Val {
-        val: Some(val::Val::List(list)),
-    } = &tuple.values[2]
-    else {
+    let Value::List(list) = &tuple[2] else {
         panic!("expected list")
     };
     check!(
-        list.values
+        *list
             == vec![
-                val_pair(val_string("/test/dir1"), val_bool(true)),
-                val_pair(val_string("/test/dir2"), val_bool(true)),
-                val_pair(val_string("/test/hello.txt"), val_bool(false)),
+                Value::Tuple(vec![
+                    Value::String("/test/dir1".to_string()),
+                    Value::Bool(true)
+                ]),
+                Value::Tuple(vec![
+                    Value::String("/test/dir2".to_string()),
+                    Value::Bool(true)
+                ]),
+                Value::Tuple(vec![
+                    Value::String("/test/hello.txt".to_string()),
+                    Value::Bool(false)
+                ]),
             ]
     );
-    check!(tuple.values[3] == val_u32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+    check!(tuple[3] == Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 }
 
 #[tokio::test]
@@ -236,33 +230,42 @@ async fn directories_replay() {
 
     check!(metadata.last_known_status.status == WorkerStatus::Idle);
 
-    let Val {
-        val: Some(val::Val::Tuple(tuple)),
-    } = &result[0]
-    else {
+    let Value::Tuple(tuple) = &result[0] else {
         panic!("expected tuple")
     };
-    check!(tuple.values.len() == 4); //  tuple<u32, list<tuple<string, bool>>, list<tuple<string, bool>>, u32>;
+    check!(tuple.len() == 4); //  tuple<u32, list<tuple<string, bool>>, list<tuple<string, bool>>, u32>;
 
-    check!(tuple.values[0] == val_u32(0)); // initial number of entries
-    check!(tuple.values[1] == val_list(vec![val_pair(val_string("/test"), val_bool(true))])); // contents of /
+    check!(tuple[0] == Value::U32(0)); // initial number of entries
+    check!(
+        tuple[1]
+            == Value::List(vec![Value::Tuple(vec![
+                Value::String("/test".to_string()),
+                Value::Bool(true)
+            ])])
+    ); // contents of /
 
     // contents of /test
-    let Val {
-        val: Some(val::Val::List(list)),
-    } = &tuple.values[2]
-    else {
+    let Value::List(list) = &tuple[2] else {
         panic!("expected list")
     };
     check!(
-        list.values
+        *list
             == vec![
-                val_pair(val_string("/test/dir1"), val_bool(true)),
-                val_pair(val_string("/test/dir2"), val_bool(true)),
-                val_pair(val_string("/test/hello.txt"), val_bool(false)),
+                Value::Tuple(vec![
+                    Value::String("/test/dir1".to_string()),
+                    Value::Bool(true)
+                ]),
+                Value::Tuple(vec![
+                    Value::String("/test/dir2".to_string()),
+                    Value::Bool(true)
+                ]),
+                Value::Tuple(vec![
+                    Value::String("/test/hello.txt".to_string()),
+                    Value::Bool(false)
+                ]),
             ]
     );
-    check!(tuple.values[3] == val_u32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+    check!(tuple[3] == Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 }
 
 #[tokio::test]
@@ -278,7 +281,10 @@ async fn file_write_read() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file",
-            vec![val_string("/testfile.txt"), val_string("hello world")],
+            vec![
+                Value::String("/testfile.txt".to_string()),
+                Value::String("hello world".to_string()),
+            ],
         )
         .await
         .unwrap();
@@ -290,12 +296,17 @@ async fn file_write_read() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/read-file",
-            vec![val_string("/testfile.txt")],
+            vec![Value::String("/testfile.txt".to_string())],
         )
         .await
         .unwrap();
 
-    check!(result == vec![val_result(Ok(val_string("hello world")))]);
+    check!(
+        result
+            == vec![Value::Result(Ok(Some(Box::new(Value::String(
+                "hello world".to_string()
+            )))))]
+    );
 }
 
 #[tokio::test]
@@ -348,7 +359,12 @@ async fn http_client() {
     drop(rx);
     http_server.abort();
 
-    check!(result == Ok(vec![val_string("200 response is test-header test-body")]));
+    check!(
+        result
+            == Ok(vec![Value::String(
+                "200 response is test-header test-body".to_string()
+            )])
+    );
 }
 
 #[tokio::test]
@@ -405,7 +421,7 @@ async fn http_client_using_reqwest() {
     drop(executor);
     http_server.abort();
 
-    check!(result == vec![val_string("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }")]);
+    check!(result == vec![Value::String("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }".to_string())]);
     check!(
         captured_body
             == "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
@@ -439,21 +455,32 @@ async fn environment_service() {
 
     drop(executor);
 
-    check!(args_result == vec![val_result(Ok(val_list(vec![val_string("test-arg")])))]);
+    check!(
+        args_result
+            == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+                Value::String("test-arg".to_string())
+            ])))))]
+    );
     check!(
         env_result
-            == vec![val_result(Ok(val_list(vec![
-                val_pair(val_string("TEST_ENV"), val_string("test-value")),
-                val_pair(
-                    val_string("GOLEM_WORKER_NAME"),
-                    val_string("environment-service-1")
-                ),
-                val_pair(
-                    val_string("GOLEM_TEMPLATE_ID"),
-                    val_string(&template_id.to_string())
-                ),
-                val_pair(val_string("GOLEM_TEMPLATE_VERSION"), val_string("0")),
-            ])))]
+            == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+                Value::Tuple(vec![
+                    Value::String("TEST_ENV".to_string()),
+                    Value::String("test-value".to_string())
+                ]),
+                Value::Tuple(vec![
+                    Value::String("GOLEM_WORKER_NAME".to_string()),
+                    Value::String("environment-service-1".to_string())
+                ]),
+                Value::Tuple(vec![
+                    Value::String("GOLEM_TEMPLATE_ID".to_string()),
+                    Value::String(template_id.to_string())
+                ]),
+                Value::Tuple(vec![
+                    Value::String("GOLEM_TEMPLATE_VERSION".to_string()),
+                    Value::String("0".to_string())
+                ]),
+            ])))))]
     );
 }
 
@@ -523,7 +550,12 @@ async fn http_client_response_persisted_between_invocations() {
 
     http_server.abort();
 
-    check!(result == Ok(vec![val_string("200 response is test-header test-body")]));
+    check!(
+        result
+            == Ok(vec![Value::String(
+                "200 response is test-header test-body".to_string()
+            )])
+    );
 }
 
 #[tokio::test]
@@ -536,7 +568,7 @@ async fn sleep() {
     let worker_id = executor.start_worker(&template_id, "clock-service-1").await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![val_u64(10)])
+        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![Value::U64(10)])
         .await
         .unwrap();
 
@@ -545,7 +577,7 @@ async fn sleep() {
 
     let start = Instant::now();
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![val_u64(0)])
+        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![Value::U64(0)])
         .await
         .unwrap();
     let duration = start.elapsed();
@@ -566,7 +598,7 @@ async fn resuming_sleep() {
     let worker_id_clone = worker_id.clone();
     let fiber = spawn(async move {
         executor_clone
-            .invoke_and_await(&worker_id_clone, "golem:it/api/sleep", vec![val_u64(10)])
+            .invoke_and_await(&worker_id_clone, "golem:it/api/sleep", vec![Value::U64(10)])
             .await
             .unwrap();
     });
@@ -584,7 +616,7 @@ async fn resuming_sleep() {
 
     let start = Instant::now();
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![val_u64(10)])
+        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![Value::U64(10)])
         .await
         .unwrap();
     let duration = start.elapsed();
@@ -605,11 +637,11 @@ async fn failing_worker() {
         .await;
 
     let result1 = executor
-        .invoke_and_await(&worker_id, "golem:component/api/add", vec![val_u64(5)])
+        .invoke_and_await(&worker_id, "golem:component/api/add", vec![Value::U64(5)])
         .await;
 
     let result2 = executor
-        .invoke_and_await(&worker_id, "golem:component/api/add", vec![val_u64(50)])
+        .invoke_and_await(&worker_id, "golem:component/api/add", vec![Value::U64(50)])
         .await;
 
     let result3 = executor
@@ -626,8 +658,7 @@ async fn failing_worker() {
     check!(
         worker_error_message(&result2.err().unwrap()).contains("<unknown>!golem:component/api#add")
     );
-    check!(worker_error_message(&result3.err().unwrap())
-        .starts_with("Previous invocation failed"));
+    check!(worker_error_message(&result3.err().unwrap()).starts_with("Previous invocation failed"));
 }
 
 #[tokio::test]
@@ -643,7 +674,10 @@ async fn file_service_write_direct() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file-direct",
-            vec![val_string("testfile.txt"), val_string("hello world")],
+            vec![
+                Value::String("testfile.txt".to_string()),
+                Value::String("hello world".to_string()),
+            ],
         )
         .await
         .unwrap();
@@ -655,12 +689,17 @@ async fn file_service_write_direct() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/read-file",
-            vec![val_string("/testfile.txt")],
+            vec![Value::String("/testfile.txt".to_string())],
         )
         .await
         .unwrap();
 
-    check!(result == vec![val_result(Ok(val_string("hello world")))]);
+    check!(
+        result
+            == vec![Value::Result(Ok(Some(Box::new(Value::String(
+                "hello world".to_string()
+            )))))]
+    );
 }
 
 #[tokio::test]
@@ -676,7 +715,10 @@ async fn filesystem_write_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file-direct",
-            vec![val_string("testfile.txt"), val_string("hello world")],
+            vec![
+                Value::String("testfile.txt".to_string()),
+                Value::String("hello world".to_string()),
+            ],
         )
         .await
         .unwrap();
@@ -684,7 +726,7 @@ async fn filesystem_write_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-file-info",
-            vec![val_string("/testfile.txt")],
+            vec![Value::String("/testfile.txt".to_string())],
         )
         .await
         .unwrap();
@@ -696,7 +738,7 @@ async fn filesystem_write_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-file-info",
-            vec![val_string("/testfile.txt")],
+            vec![Value::String("/testfile.txt".to_string())],
         )
         .await
         .unwrap();
@@ -717,12 +759,16 @@ async fn filesystem_create_dir_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![val_string("/test")],
+            vec![Value::String("/test".to_string())],
         )
         .await
         .unwrap();
     let times1 = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get-info", vec![val_string("/")])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![Value::String("/".to_string())],
+        )
         .await
         .unwrap();
 
@@ -730,7 +776,11 @@ async fn filesystem_create_dir_replay_restores_file_times() {
     let executor = start(&context).await.unwrap();
 
     let times2 = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get-info", vec![val_string("/")])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/get-info",
+            vec![Value::String("/".to_string())],
+        )
         .await
         .unwrap();
 
@@ -750,7 +800,10 @@ async fn file_hard_link() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file",
-            vec![val_string("/testfile.txt"), val_string("hello world")],
+            vec![
+                Value::String("/testfile.txt".to_string()),
+                Value::String("hello world".to_string()),
+            ],
         )
         .await
         .unwrap();
@@ -759,7 +812,10 @@ async fn file_hard_link() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-link",
-            vec![val_string("/testfile.txt"), val_string("/link.txt")],
+            vec![
+                Value::String("/testfile.txt".to_string()),
+                Value::String("/link.txt".to_string()),
+            ],
         )
         .await
         .unwrap();
@@ -768,12 +824,17 @@ async fn file_hard_link() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/read-file",
-            vec![val_string("/link.txt")],
+            vec![Value::String("/link.txt".to_string())],
         )
         .await
         .unwrap();
 
-    check!(result == vec![val_result(Ok(val_string("hello world")))]);
+    check!(
+        result
+            == vec![Value::Result(Ok(Some(Box::new(Value::String(
+                "hello world".to_string()
+            )))))]
+    );
 }
 
 #[tokio::test]
@@ -789,7 +850,7 @@ async fn filesystem_link_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![val_string("/test")],
+            vec![Value::String("/test".to_string())],
         )
         .await
         .unwrap();
@@ -797,7 +858,7 @@ async fn filesystem_link_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![val_string("/test2")],
+            vec![Value::String("/test2".to_string())],
         )
         .await
         .unwrap();
@@ -805,7 +866,10 @@ async fn filesystem_link_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file",
-            vec![val_string("/test/testfile.txt"), val_string("hello world")],
+            vec![
+                Value::String("/test/testfile.txt".to_string()),
+                Value::String("hello world".to_string()),
+            ],
         )
         .await
         .unwrap();
@@ -814,8 +878,8 @@ async fn filesystem_link_replay_restores_file_times() {
             &worker_id,
             "golem:it/api/create-link",
             vec![
-                val_string("/test/testfile.txt"),
-                val_string("/test2/link.txt"),
+                Value::String("/test/testfile.txt".to_string()),
+                Value::String("/test2/link.txt".to_string()),
             ],
         )
         .await
@@ -825,7 +889,7 @@ async fn filesystem_link_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test2/link.txt")],
+            vec![Value::String("/test2/link.txt".to_string())],
         )
         .await
         .unwrap();
@@ -833,7 +897,7 @@ async fn filesystem_link_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test2")],
+            vec![Value::String("/test2".to_string())],
         )
         .await
         .unwrap();
@@ -845,7 +909,7 @@ async fn filesystem_link_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test2")],
+            vec![Value::String("/test2".to_string())],
         )
         .await
         .unwrap();
@@ -853,7 +917,7 @@ async fn filesystem_link_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test2/link.txt")],
+            vec![Value::String("/test2/link.txt".to_string())],
         )
         .await
         .unwrap();
@@ -875,7 +939,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![val_string("/test")],
+            vec![Value::String("/test".to_string())],
         )
         .await
         .unwrap();
@@ -883,7 +947,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![val_string("/test/a")],
+            vec![Value::String("/test/a".to_string())],
         )
         .await
         .unwrap();
@@ -891,7 +955,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/remove-directory",
-            vec![val_string("/test/a")],
+            vec![Value::String("/test/a".to_string())],
         )
         .await
         .unwrap();
@@ -899,7 +963,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test")],
+            vec![Value::String("/test".to_string())],
         )
         .await
         .unwrap();
@@ -911,7 +975,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test")],
+            vec![Value::String("/test".to_string())],
         )
         .await
         .unwrap();
@@ -932,7 +996,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![val_string("/test")],
+            vec![Value::String("/test".to_string())],
         )
         .await
         .unwrap();
@@ -940,7 +1004,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![val_string("/test2")],
+            vec![Value::String("/test2".to_string())],
         )
         .await
         .unwrap();
@@ -948,7 +1012,10 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file-direct",
-            vec![val_string("test/testfile.txt"), val_string("hello world")],
+            vec![
+                Value::String("test/testfile.txt".to_string()),
+                Value::String("hello world".to_string()),
+            ],
         )
         .await
         .unwrap();
@@ -957,8 +1024,8 @@ async fn filesystem_symlink_replay_restores_file_times() {
             &worker_id,
             "golem:it/api/create-sym-link",
             vec![
-                val_string("../test/testfile.txt"),
-                val_string("/test2/link.txt"),
+                Value::String("../test/testfile.txt".to_string()),
+                Value::String("/test2/link.txt".to_string()),
             ],
         )
         .await
@@ -968,7 +1035,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test2/link.txt")],
+            vec![Value::String("/test2/link.txt".to_string())],
         )
         .await
         .unwrap();
@@ -976,7 +1043,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test2")],
+            vec![Value::String("/test2".to_string())],
         )
         .await
         .unwrap();
@@ -989,7 +1056,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test2")],
+            vec![Value::String("/test2".to_string())],
         )
         .await
         .unwrap();
@@ -997,7 +1064,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test2/link.txt")],
+            vec![Value::String("/test2/link.txt".to_string())],
         )
         .await
         .unwrap();
@@ -1019,7 +1086,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![val_string("/test")],
+            vec![Value::String("/test".to_string())],
         )
         .await
         .unwrap();
@@ -1027,7 +1094,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![val_string("/test2")],
+            vec![Value::String("/test2".to_string())],
         )
         .await
         .unwrap();
@@ -1035,7 +1102,10 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file",
-            vec![val_string("/test/testfile.txt"), val_string("hello world")],
+            vec![
+                Value::String("/test/testfile.txt".to_string()),
+                Value::String("hello world".to_string()),
+            ],
         )
         .await
         .unwrap();
@@ -1044,8 +1114,8 @@ async fn filesystem_rename_replay_restores_file_times() {
             &worker_id,
             "golem:it/api/rename-file",
             vec![
-                val_string("/test/testfile.txt"),
-                val_string("/test2/link.txt"),
+                Value::String("/test/testfile.txt".to_string()),
+                Value::String("/test2/link.txt".to_string()),
             ],
         )
         .await
@@ -1055,7 +1125,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test")],
+            vec![Value::String("/test".to_string())],
         )
         .await
         .unwrap();
@@ -1063,7 +1133,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test2")],
+            vec![Value::String("/test2".to_string())],
         )
         .await
         .unwrap();
@@ -1071,7 +1141,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test2/link.txt")],
+            vec![Value::String("/test2/link.txt".to_string())],
         )
         .await
         .unwrap();
@@ -1083,7 +1153,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test")],
+            vec![Value::String("/test".to_string())],
         )
         .await
         .unwrap();
@@ -1091,7 +1161,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test2")],
+            vec![Value::String("/test2".to_string())],
         )
         .await
         .unwrap();
@@ -1099,7 +1169,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test2/link.txt")],
+            vec![Value::String("/test2/link.txt".to_string())],
         )
         .await
         .unwrap();
@@ -1122,7 +1192,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/create-directory",
-            vec![val_string("/test")],
+            vec![Value::String("/test".to_string())],
         )
         .await
         .unwrap();
@@ -1130,7 +1200,10 @@ async fn filesystem_remove_file_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file",
-            vec![val_string("/test/testfile.txt"), val_string("hello world")],
+            vec![
+                Value::String("/test/testfile.txt".to_string()),
+                Value::String("hello world".to_string()),
+            ],
         )
         .await
         .unwrap();
@@ -1138,7 +1211,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/remove-file",
-            vec![val_string("/test/testfile.txt")],
+            vec![Value::String("/test/testfile.txt".to_string())],
         )
         .await
         .unwrap();
@@ -1146,7 +1219,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test")],
+            vec![Value::String("/test".to_string())],
         )
         .await
         .unwrap();
@@ -1158,7 +1231,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-info",
-            vec![val_string("/test")],
+            vec![Value::String("/test".to_string())],
         )
         .await
         .unwrap();
@@ -1179,7 +1252,10 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file",
-            vec![val_string("/testfile.txt"), val_string("hello world")],
+            vec![
+                Value::String("/testfile.txt".to_string()),
+                Value::String("hello world".to_string()),
+            ],
         )
         .await
         .unwrap();
@@ -1187,7 +1263,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-file-info",
-            vec![val_string("/testfile.txt")],
+            vec![Value::String("/testfile.txt".to_string())],
         )
         .await
         .unwrap();
@@ -1199,7 +1275,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-file-info",
-            vec![val_string("/testfile.txt")],
+            vec![Value::String("/testfile.txt".to_string())],
         )
         .await
         .unwrap();
@@ -1220,7 +1296,10 @@ async fn filesystem_metadata_hash() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/write-file-direct",
-            vec![val_string("testfile.txt"), val_string("hello world")],
+            vec![
+                Value::String("testfile.txt".to_string()),
+                Value::String("hello world".to_string()),
+            ],
         )
         .await
         .unwrap();
@@ -1228,7 +1307,7 @@ async fn filesystem_metadata_hash() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/hash",
-            vec![val_string("testfile.txt")],
+            vec![Value::String("testfile.txt".to_string())],
         )
         .await
         .unwrap();
@@ -1240,7 +1319,7 @@ async fn filesystem_metadata_hash() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/hash",
-            vec![val_string("testfile.txt")],
+            vec![Value::String("testfile.txt".to_string())],
         )
         .await
         .unwrap();

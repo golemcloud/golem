@@ -19,11 +19,11 @@ use golem_api_grpc::proto::golem::worker::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::{
     get_invocation_key_response, get_worker_metadata_response, interrupt_worker_response,
     invoke_and_await_response, invoke_response, launch_new_worker_response, log_event,
-    resume_worker_response, worker_error, worker_execution_error, CallingConvention,
-    ConnectWorkerRequest, DeleteWorkerRequest, GetInvocationKeyRequest, GetWorkerMetadataRequest,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeParameters,
-    InvokeRequest, LaunchNewWorkerRequest, LogEvent, ResumeWorkerRequest, StdErrLog, StdOutLog,
-    WorkerError, WorkerExecutionError,
+    resume_worker_response, worker_execution_error, CallingConvention, ConnectWorkerRequest,
+    DeleteWorkerRequest, GetInvocationKeyRequest, GetWorkerMetadataRequest, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeParameters, InvokeRequest,
+    LaunchNewWorkerRequest, LogEvent, ResumeWorkerRequest, StdErrLog, StdOutLog, WorkerError,
+    WorkerExecutionError,
 };
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
@@ -33,9 +33,7 @@ use golem_common::model::{
 use golem_wasm_ast::analysis::AnalysisContext;
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
-use golem_wasm_rpc::protobuf::{
-    val, Val, ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple,
-};
+use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use tokio::select;
@@ -53,7 +51,7 @@ pub trait TestDsl {
         &self,
         template_id: &TemplateId,
         name: &str,
-    ) -> Result<WorkerId, worker_error::Error>;
+    ) -> Result<WorkerId, Error>;
     async fn start_worker_with(
         &self,
         template_id: &TemplateId,
@@ -67,7 +65,7 @@ pub trait TestDsl {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
-    ) -> Result<WorkerId, worker_error::Error>;
+    ) -> Result<WorkerId, Error>;
     async fn get_worker_metadata(&self, worker_id: &WorkerId) -> Option<WorkerMetadata>;
     async fn delete_worker(&self, worker_id: &WorkerId);
     async fn get_invocation_key(&self, worker_id: &WorkerId) -> InvocationKey;
@@ -75,48 +73,48 @@ pub trait TestDsl {
         &self,
         worker_id: &WorkerId,
         function_name: &str,
-        params: Vec<Val>,
-    ) -> Result<(), worker_error::Error>;
+        params: Vec<Value>,
+    ) -> Result<(), Error>;
     async fn invoke_and_await(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
-        params: Vec<Val>,
-    ) -> Result<Vec<Val>, worker_error::Error>;
+        params: Vec<Value>,
+    ) -> Result<Vec<Value>, Error>;
     async fn invoke_and_await_with_key(
         &self,
         worker_id: &WorkerId,
         invocation_key: &InvocationKey,
         function_name: &str,
-        params: Vec<Val>,
-    ) -> Result<Vec<Val>, worker_error::Error>;
+        params: Vec<Value>,
+    ) -> Result<Vec<Value>, Error>;
     async fn invoke_and_await_stdio(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
         params: serde_json::Value,
-    ) -> Result<serde_json::Value, worker_error::Error>;
+    ) -> Result<serde_json::Value, Error>;
     async fn invoke_and_await_stdio_eventloop(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
         params: serde_json::Value,
-    ) -> Result<serde_json::Value, worker_error::Error>;
+    ) -> Result<serde_json::Value, Error>;
     async fn invoke_and_await_custom(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
-        params: Vec<Val>,
+        params: Vec<Value>,
         cc: CallingConvention,
-    ) -> Result<Vec<Val>, worker_error::Error>;
+    ) -> Result<Vec<Value>, Error>;
     async fn invoke_and_await_custom_with_key(
         &self,
         worker_id: &WorkerId,
         invocation_key: &InvocationKey,
         function_name: &str,
-        params: Vec<Val>,
+        params: Vec<Value>,
         cc: CallingConvention,
-    ) -> Result<Vec<Val>, worker_error::Error>;
+    ) -> Result<Vec<Value>, Error>;
     async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent>;
     async fn capture_output_forever(
         &self,
@@ -169,7 +167,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         template_id: &TemplateId,
         name: &str,
-    ) -> Result<WorkerId, worker_error::Error> {
+    ) -> Result<WorkerId, Error> {
         self.try_start_worker_with(template_id, name, vec![], HashMap::new())
             .await
     }
@@ -180,7 +178,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
-    ) -> Result<WorkerId, worker_error::Error> {
+    ) -> Result<WorkerId, Error> {
         let response = self
             .worker_service()
             .create_worker(LaunchNewWorkerRequest {
@@ -224,11 +222,11 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 Some(to_worker_metadata(&metadata))
             }
             Some(get_worker_metadata_response::Result::Error(WorkerError {
-                error: Some(worker_error::Error::NotFound { .. }),
+                error: Some(Error::NotFound { .. }),
             })) => None,
             Some(get_worker_metadata_response::Result::Error(WorkerError {
                 error:
-                    Some(worker_error::Error::InternalError(WorkerExecutionError {
+                    Some(Error::InternalError(WorkerExecutionError {
                         error: Some(worker_execution_error::Error::WorkerNotFound(_)),
                     })),
             })) => None,
@@ -267,14 +265,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         worker_id: &WorkerId,
         function_name: &str,
-        params: Vec<Val>,
-    ) -> Result<(), worker_error::Error> {
+        params: Vec<Value>,
+    ) -> Result<(), Error> {
         let invoke_response = self
             .worker_service()
             .invoke(InvokeRequest {
                 worker_id: Some(worker_id.clone().into()),
                 function: function_name.to_string(),
-                invoke_parameters: Some(InvokeParameters { params }),
+                invoke_parameters: Some(InvokeParameters {
+                    params: params.into_iter().map(|v| v.into()).collect(),
+                }),
             })
             .await;
 
@@ -292,8 +292,8 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         worker_id: &WorkerId,
         function_name: &str,
-        params: Vec<Val>,
-    ) -> Result<Vec<Val>, worker_error::Error> {
+        params: Vec<Value>,
+    ) -> Result<Vec<Value>, Error> {
         self.invoke_and_await_custom(
             worker_id,
             function_name,
@@ -308,8 +308,8 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: &WorkerId,
         invocation_key: &InvocationKey,
         function_name: &str,
-        params: Vec<Val>,
-    ) -> Result<Vec<Val>, worker_error::Error> {
+        params: Vec<Value>,
+    ) -> Result<Vec<Value>, Error> {
         self.invoke_and_await_custom_with_key(
             worker_id,
             invocation_key,
@@ -325,21 +325,21 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: &WorkerId,
         function_name: &str,
         params: serde_json::Value,
-    ) -> Result<serde_json::Value, worker_error::Error> {
+    ) -> Result<serde_json::Value, Error> {
         let json_string = params.to_string();
         self.invoke_and_await_custom(
             worker_id,
             function_name,
-            vec![val_string(&json_string)],
+            vec![Value::String(json_string)],
             CallingConvention::Stdio,
         )
             .await
             .and_then(|vals| {
                 if vals.len() == 1 {
-                    let value_opt = &vals[0].val;
+                    let value_opt = &vals[0];
 
                     match value_opt {
-                        Some(val::Val::String(s)) => {
+                        Value::String(s) => {
                             if s.is_empty() {
                                 Ok(serde_json::Value::Null)
                             } else {
@@ -347,12 +347,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                                 Ok(result)
                             }
                         }
-                        _ => Err(worker_error::Error::BadRequest(
+                        _ => Err(Error::BadRequest(
                             ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }
                         )),
                     }
                 } else {
-                    Err(worker_error::Error::BadRequest(
+                    Err(Error::BadRequest(
                         ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }))
                 }
             })
@@ -363,21 +363,21 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: &WorkerId,
         function_name: &str,
         params: serde_json::Value,
-    ) -> Result<serde_json::Value, worker_error::Error> {
+    ) -> Result<serde_json::Value, Error> {
         let json_string = params.to_string();
         self.invoke_and_await_custom(
             worker_id,
             function_name,
-            vec![val_string(&json_string)],
+            vec![Value::String(json_string)],
             CallingConvention::StdioEventloop,
         )
             .await
             .and_then(|vals| {
                 if vals.len() == 1 {
-                    let value_opt = &vals[0].val;
+                    let value_opt = &vals[0];
 
                     match value_opt {
-                        Some(val::Val::String(s)) => {
+                        Value::String(s) => {
                             if s.is_empty() {
                                 Ok(serde_json::Value::Null)
                             } else {
@@ -385,12 +385,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                                 Ok(result)
                             }
                         }
-                        _ => Err(worker_error::Error::BadRequest(
+                        _ => Err(Error::BadRequest(
                             ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }
                         )),
                     }
                 } else {
-                    Err(worker_error::Error::BadRequest(
+                    Err(Error::BadRequest(
                         ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }
                     ))
                 }
@@ -401,9 +401,9 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         worker_id: &WorkerId,
         function_name: &str,
-        params: Vec<Val>,
+        params: Vec<Value>,
         cc: CallingConvention,
-    ) -> Result<Vec<Val>, worker_error::Error> {
+    ) -> Result<Vec<Value>, Error> {
         let invocation_key = self.get_invocation_key(worker_id).await;
         self.invoke_and_await_custom_with_key(worker_id, &invocation_key, function_name, params, cc)
             .await
@@ -414,15 +414,17 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: &WorkerId,
         invocation_key: &InvocationKey,
         function_name: &str,
-        params: Vec<Val>,
+        params: Vec<Value>,
         cc: CallingConvention,
-    ) -> Result<Vec<Val>, worker_error::Error> {
+    ) -> Result<Vec<Value>, Error> {
         let invoke_response = self
             .worker_service()
             .invoke_and_await(InvokeAndAwaitRequest {
                 worker_id: Some(worker_id.clone().into()),
                 function: function_name.to_string(),
-                invoke_parameters: Some(InvokeParameters { params }),
+                invoke_parameters: Some(InvokeParameters {
+                    params: params.into_iter().map(|v| v.into()).collect(),
+                }),
                 invocation_key: Some(invocation_key.clone().into()),
                 calling_convention: cc.into(),
             })
@@ -430,7 +432,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         match invoke_response.result {
             None => panic!("No response from invoke_and_await"),
-            Some(invoke_and_await_response::Result::Success(response)) => Ok(response.result),
+            Some(invoke_and_await_response::Result::Success(response)) => Ok(response
+                .result
+                .into_iter()
+                .map(|v| v.try_into())
+                .collect::<Result<Vec<Value>, String>>()
+                .expect("Invocation result had unexpected format")),
             Some(invoke_and_await_response::Result::Error(WorkerError { error: Some(error) })) => {
                 Err(error)
             }
@@ -621,130 +628,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     }
 }
 
-pub fn val_string(s: &str) -> Val {
-    Val {
-        val: Some(val::Val::String(s.to_string())),
-    }
-}
-
-pub fn val_float32(f: f32) -> Val {
-    Val {
-        val: Some(val::Val::F32(f)),
-    }
-}
-
-pub fn val_float64(f: f64) -> Val {
-    Val {
-        val: Some(val::Val::F64(f)),
-    }
-}
-
-pub fn val_bool(b: bool) -> Val {
-    Val {
-        val: Some(val::Val::Bool(b)),
-    }
-}
-
-pub fn val_u8(i: u8) -> Val {
-    Val {
-        val: Some(val::Val::U8(i as i32)),
-    }
-}
-
-pub fn val_i32(i: i32) -> Val {
-    Val {
-        val: Some(val::Val::S32(i)),
-    }
-}
-
-pub fn val_u32(i: u32) -> Val {
-    Val {
-        val: Some(val::Val::U32(i as i64)),
-    }
-}
-
-pub fn val_u64(i: u64) -> Val {
-    Val {
-        val: Some(val::Val::U64(i as i64)),
-    }
-}
-
-pub fn val_record(items: Vec<Val>) -> Val {
-    Val {
-        val: Some(val::Val::Record(ValRecord { values: items })),
-    }
-}
-
-pub fn val_list(items: Vec<Val>) -> Val {
-    Val {
-        val: Some(val::Val::List(ValList { values: items })),
-    }
-}
-
-pub fn val_flags(count: i32, indexes: &[i32]) -> Val {
-    Val {
-        val: Some(val::Val::Flags(ValFlags {
-            count,
-            value: indexes.to_vec(),
-        })),
-    }
-}
-
-pub fn val_result(value: Result<Val, Val>) -> Val {
-    Val {
-        val: Some(val::Val::Result(Box::new(match value {
-            Ok(ok) => ValResult {
-                discriminant: 0,
-                value: Some(Box::new(ok)),
-            },
-            Err(err) => ValResult {
-                discriminant: 1,
-                value: Some(Box::new(err)),
-            },
-        }))),
-    }
-}
-
-pub fn val_option(value: Option<Val>) -> Val {
-    Val {
-        val: Some(val::Val::Option(Box::new(match value {
-            Some(some) => ValOption {
-                discriminant: 1,
-                value: Some(Box::new(some)),
-            },
-            None => ValOption {
-                discriminant: 0,
-                value: None,
-            },
-        }))),
-    }
-}
-
-// TODO: use wasm_rpc::Value instead of tehse protobuf constructors
-pub fn val_pair(first: Val, second: Val) -> Val {
-    Val {
-        val: Some(val::Val::Tuple(ValTuple {
-            values: vec![first, second],
-        })),
-    }
-}
-
-pub fn val_triple(first: Val, second: Val, third: Val) -> Val {
-    Val {
-        val: Some(val::Val::Tuple(ValTuple {
-            values: vec![first, second, third],
-        })),
-    }
-}
-
-pub fn val_tuple4(first: Val, second: Val, third: Val, fourth: Val) -> Val {
-    Val {
-        val: Some(val::Val::Tuple(ValTuple {
-            values: vec![first, second, third, fourth],
-        })),
-    }
-}
-
 pub fn stdout_event(s: &str) -> LogEvent {
     LogEvent {
         event: Some(log_event::Event::Stdout(StdOutLog {
@@ -813,17 +696,11 @@ pub async fn events_to_lines(rx: &mut UnboundedReceiver<LogEvent>) -> Vec<String
     lines
 }
 
-pub fn is_worker_execution_error(
-    got: &worker_error::Error,
-    expected: &worker_execution_error::Error,
-) -> bool {
-    match got {
-        Error::InternalError(error) if error.error.as_ref() == Some(expected) => true,
-        _ => false,
-    }
+pub fn is_worker_execution_error(got: &Error, expected: &worker_execution_error::Error) -> bool {
+    matches!(got, Error::InternalError(error) if error.error.as_ref() == Some(expected))
 }
 
-pub fn worker_error_message(error: &worker_error::Error) -> String {
+pub fn worker_error_message(error: &Error) -> String {
     match error {
         Error::BadRequest(errors) => errors.errors.join(", "),
         Error::Unauthorized(error) => error.error.clone(),

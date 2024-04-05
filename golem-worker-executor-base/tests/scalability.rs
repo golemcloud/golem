@@ -3,8 +3,8 @@ use assert2::check;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use golem_common::model::TemplateId;
-use golem_test_framework::dsl::{val_float64, TestDsl};
-use golem_wasm_rpc::protobuf::{val, Val};
+use golem_test_framework::dsl::TestDsl;
+use golem_wasm_rpc::Value;
 use std::future::Future;
 use std::time::Duration;
 use tokio::spawn;
@@ -121,7 +121,7 @@ async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
     let executor_clone = executor.clone();
     let warmup_result = timed(async move {
         executor_clone
-            .invoke_and_await(&warmup_worker, "sleep-for", vec![val_float64(15.0)])
+            .invoke_and_await(&warmup_worker, "sleep-for", vec![Value::F64(15.0)])
             .await
             .unwrap()
     })
@@ -145,7 +145,7 @@ async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
                     .await;
                 timed(async move {
                     executor_clone
-                        .invoke_and_await(&worker, "sleep-for", vec![val_float64(15.0)])
+                        .invoke_and_await(&worker, "sleep-for", vec![Value::F64(15.0)])
                         .await
                         .unwrap()
                 })
@@ -167,10 +167,7 @@ async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
         .iter()
         .map(|r| match r {
             Ok((r, _)) => {
-                let Val {
-                    val: Some(val::Val::F64(seconds)),
-                } = r[0]
-                else {
+                let Value::F64(seconds) = r[0] else {
                     panic!("Unexpected result")
                 };
                 (seconds * 1000.0) as u64
