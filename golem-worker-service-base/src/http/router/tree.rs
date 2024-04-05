@@ -272,10 +272,10 @@ impl<T> RadixNode<T> {
 
                 if common_prefix_len == path_segments.len() {
                     // The path fully matches the current node's pattern
-                    return node
-                        .data
-                        .as_ref()
-                        .map(|data| MatchResult { data, variables });
+                    return node.data.as_ref().map(|data| MatchResult {
+                        data,
+                        path_values: variables,
+                    });
                 } else {
                     // The path partially matches the current node's pattern
                     path_segments = &path_segments[common_prefix_len..];
@@ -335,7 +335,7 @@ impl<T> RadixNode<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MatchResult<'a, 'b, T> {
     pub data: &'a T,
-    pub variables: Vec<&'b str>,
+    pub path_values: Vec<&'b str>,
 }
 
 // Is pub so that it can be used in benchmark.
@@ -485,7 +485,7 @@ mod test {
             result,
             Some(MatchResult {
                 data: &1,
-                variables: vec!["123"]
+                path_values: vec!["123"]
             })
         );
 
@@ -511,7 +511,7 @@ mod test {
             result,
             Some(MatchResult {
                 data: &1,
-                variables: vec!["123"]
+                path_values: vec!["123"]
             })
         );
 
@@ -521,7 +521,7 @@ mod test {
             result,
             Some(MatchResult {
                 data: &2,
-                variables: vec!["456"]
+                path_values: vec!["456"]
             })
         );
     }
@@ -541,7 +541,7 @@ mod test {
         assert_eq!(
             Some(MatchResult {
                 data: &1,
-                variables: vec![]
+                path_values: vec![]
             }),
             root.matches_str("/templates/worker")
         );
@@ -549,7 +549,7 @@ mod test {
         assert_eq!(
             Some(MatchResult {
                 data: &2,
-                variables: vec!["123"]
+                path_values: vec!["123"]
             }),
             root.matches_str("/templates/123")
         );
@@ -566,7 +566,7 @@ mod test {
         assert_eq!(
             Some(MatchResult {
                 data: &1,
-                variables: vec!["v1", "123"]
+                path_values: vec!["v1", "123"]
             }),
             root.matches_str("/api/v1/users/123")
         );
@@ -587,7 +587,7 @@ mod test {
         assert_eq!(
             Some(MatchResult {
                 data: &1,
-                variables: vec!["v1", "123"]
+                path_values: vec!["v1", "123"]
             }),
             root.matches_str("/api/v1/users/123")
         );
@@ -595,7 +595,7 @@ mod test {
         assert_eq!(
             Some(MatchResult {
                 data: &2,
-                variables: vec!["456", "789"]
+                path_values: vec!["456", "789"]
             }),
             root.matches_str("/api/users/456/789")
         );
@@ -616,7 +616,7 @@ mod test {
         assert_eq!(
             Some(MatchResult {
                 data: &2,
-                variables: vec![]
+                path_values: vec![]
             }),
             root.matches_str("/api/v1/users")
         );
@@ -624,7 +624,7 @@ mod test {
         assert_eq!(
             Some(MatchResult {
                 data: &1,
-                variables: vec!["v2"]
+                path_values: vec!["v2"]
             }),
             root.matches_str("/api/v2/users")
         );
@@ -646,7 +646,7 @@ mod test {
         assert_eq!(
             Some(MatchResult {
                 data: &1,
-                variables: vec!["v2"]
+                path_values: vec!["v2"]
             }),
             root.matches_str("/api/v2/users")
         );
@@ -654,7 +654,7 @@ mod test {
         assert_eq!(
             Some(MatchResult {
                 data: &2,
-                variables: vec!["123"]
+                path_values: vec!["123"]
             }),
             root.matches_str("/api/v1/users/123")
         );
@@ -662,7 +662,7 @@ mod test {
         assert_eq!(
             Some(MatchResult {
                 data: &3,
-                variables: vec!["456"]
+                path_values: vec!["456"]
             }),
             root.matches_str("/api/456/users/profile")
         );

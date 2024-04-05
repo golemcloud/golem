@@ -97,13 +97,28 @@ impl MethodPattern {
     }
 }
 
+impl From<MethodPattern> for hyper::http::Method {
+    fn from(method: MethodPattern) -> Self {
+        match method {
+            MethodPattern::Get => hyper::http::Method::GET,
+            MethodPattern::Connect => hyper::http::Method::CONNECT,
+            MethodPattern::Post => hyper::http::Method::POST,
+            MethodPattern::Delete => hyper::http::Method::DELETE,
+            MethodPattern::Put => hyper::http::Method::PUT,
+            MethodPattern::Patch => hyper::http::Method::PATCH,
+            MethodPattern::Options => hyper::http::Method::OPTIONS,
+            MethodPattern::Trace => hyper::http::Method::TRACE,
+            MethodPattern::Head => hyper::http::Method::HEAD,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct LiteralInfo(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct VarInfo {
     pub key_name: String,
-    pub index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
@@ -124,48 +139,6 @@ pub struct AllPathPatterns {
 }
 
 impl AllPathPatterns {
-    pub fn get_path_variables(&self) -> HashMap<usize, String> {
-        let mut result: HashMap<usize, String> = HashMap::new();
-
-        for path_pattern in self.path_patterns.iter() {
-            if let PathPattern::Var(var_info) = path_pattern {
-                result.insert(var_info.index, var_info.key_name.clone());
-            }
-        }
-
-        result
-    }
-
-    pub fn get_path_literals(&self) -> HashMap<usize, String> {
-        let mut result: HashMap<usize, String> = HashMap::new();
-
-        for (index, path_pattern) in self.path_patterns.iter().enumerate() {
-            if let PathPattern::Literal(literal_info) = path_pattern {
-                result.insert(index, literal_info.0.clone());
-            }
-        }
-
-        result
-    }
-
-    pub fn get_query_variables(&self) -> Vec<String> {
-        self.query_params
-            .iter()
-            .map(|x| x.key_name.clone())
-            .collect()
-    }
-
-    pub fn get_path_prefixed_variables(&self) -> HashSet<String> {
-        let mut result: HashSet<String> = HashSet::new();
-        for (_, v) in self.get_path_variables() {
-            result.insert(format!("request.path.{}", v.trim()));
-        }
-        for v in self.get_query_variables() {
-            result.insert(format!("request.path.{}", v.trim()));
-        }
-        result
-    }
-
     pub fn parse(input: &str) -> Result<AllPathPatterns, ParseError> {
         input.parse()
     }
@@ -241,10 +214,9 @@ impl PathPattern {
         PathPattern::Literal(LiteralInfo(value.into()))
     }
 
-    pub fn var(value: impl Into<String>, index: usize) -> PathPattern {
+    pub fn var(value: impl Into<String>) -> PathPattern {
         PathPattern::Var(VarInfo {
             key_name: value.into(),
-            index,
         })
     }
 }
@@ -308,7 +280,7 @@ mod tests {
             path_patterns: vec![
                 PathPattern::literal("foo"),
                 PathPattern::literal("bar"),
-                PathPattern::var("var", 2),
+                PathPattern::var("var"),
             ],
             query_params: vec![],
         };
@@ -325,7 +297,7 @@ mod tests {
             path_patterns: vec![
                 PathPattern::literal("foo"),
                 PathPattern::literal("bar"),
-                PathPattern::var("var", 2),
+                PathPattern::var("var"),
             ],
             query_params: vec![
                 QueryInfo {
@@ -338,32 +310,6 @@ mod tests {
         };
 
         assert_eq!(result, Ok(expected));
-    }
-
-    #[test]
-    fn get_path_variables_as_map() {
-        let path_pattern_str = "foo / bar / {var1} / {var2} ? {userid1} & {userid2}";
-        let path_pattern = AllPathPatterns::parse(path_pattern_str).unwrap();
-
-        let path_variables_map = path_pattern.get_path_variables();
-
-        let mut expected: HashMap<usize, String> = HashMap::new();
-        expected.insert(3, "var2".to_string());
-        expected.insert(2, "var1".to_string());
-
-        assert_eq!(path_variables_map, expected);
-    }
-
-    #[test]
-    fn get_query_variables() {
-        let path_pattern_str = "foo/bar/{var1}/{var2}?{userid1}&{userid2}";
-        let path_pattern = AllPathPatterns::parse(path_pattern_str).unwrap();
-
-        let query_variables_map = path_pattern.get_query_variables();
-
-        let expected = vec!["userid1".to_string(), "userid2".to_string()];
-
-        assert_eq!(query_variables_map, expected);
     }
 
     #[track_caller]

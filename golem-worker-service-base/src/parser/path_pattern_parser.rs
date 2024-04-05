@@ -7,7 +7,7 @@ use nom::multi::{separated_list0, separated_list1};
 use nom::sequence::{delimited, preceded, tuple};
 use nom::IResult;
 
-use crate::api_definition::http::{AllPathPatterns, LiteralInfo, PathPattern, QueryInfo, VarInfo};
+use crate::api_definition::http::{AllPathPatterns, PathPattern, QueryInfo, VarInfo};
 use crate::parser::{place_holder_parser, ParseError};
 
 use super::*;
@@ -48,14 +48,9 @@ fn path_parser(input: &str) -> IResult<&str, Vec<PathPattern>> {
     let indexed_patterns = patterns
         .into_iter()
         .enumerate()
-        .map(|(index, pattern)| match pattern {
-            ParsedPattern::Literal(literal) => {
-                PathPattern::Literal(LiteralInfo(literal.to_string()))
-            }
-            ParsedPattern::Var(var) => PathPattern::Var(VarInfo {
-                key_name: var.to_string(),
-                index,
-            }),
+        .map(|(_, pattern)| match pattern {
+            ParsedPattern::Literal(literal) => PathPattern::literal(literal),
+            ParsedPattern::Var(var) => PathPattern::var(var),
         })
         .collect();
 
@@ -98,17 +93,11 @@ fn test_parse() {
     assert_eq!(
         AllPathPatterns {
             path_patterns: vec![
-                PathPattern::Literal(LiteralInfo("api".to_string())),
-                PathPattern::Var(VarInfo {
-                    key_name: "id".to_string(),
-                    index: 1
-                }),
-                PathPattern::Literal(LiteralInfo("test".to_string())),
-                PathPattern::Var(VarInfo {
-                    key_name: "name".to_string(),
-                    index: 3
-                }),
-                PathPattern::Literal(LiteralInfo("test2".to_string())),
+                PathPattern::literal("api"),
+                PathPattern::var("id"),
+                PathPattern::literal("test"),
+                PathPattern::var("name"),
+                PathPattern::literal("test2"),
             ],
             query_params: vec![
                 QueryInfo {
@@ -128,15 +117,9 @@ fn test_parse() {
         AllPathPatterns {
             path_patterns: vec![
                 PathPattern::Literal(LiteralInfo("api".to_string())),
-                PathPattern::Var(VarInfo {
-                    key_name: "id".to_string(),
-                    index: 1
-                }),
+                PathPattern::var("id"),
                 PathPattern::Literal(LiteralInfo("test".to_string())),
-                PathPattern::Var(VarInfo {
-                    key_name: "name".to_string(),
-                    index: 3
-                }),
+                PathPattern::var("name"),
                 PathPattern::Literal(LiteralInfo("test2".to_string())),
             ],
             query_params: vec![]

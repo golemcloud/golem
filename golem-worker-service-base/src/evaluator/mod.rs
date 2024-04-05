@@ -607,9 +607,10 @@ mod tests {
             },
         };
 
-        input_http_request
-            .get_type_annotated_value(vec![], &HashMap::new())
-            .unwrap()
+        todo!()
+        // input_http_request
+        //     .get_type_annotated_value(vec![], &HashMap::new())
+        //     .unwrap()
     }
 
     fn resolved_variables_from_request_path(
@@ -626,12 +627,13 @@ mod tests {
             },
         };
 
-        input_http_request
-            .get_type_annotated_value(
-                path_pattern.get_query_variables(),
-                &path_pattern.get_path_variables(),
-            )
-            .unwrap()
+        todo!()
+        // input_http_request
+        //     .get_type_annotated_value(
+        //         path_pattern.get_query_variables(),
+        //         &path_pattern.get_path_variables(),
+        //     )
+        //     .unwrap()
     }
 
     #[test]
