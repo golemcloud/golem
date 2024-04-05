@@ -269,17 +269,9 @@ impl<T> RadixNode<T> {
         }
     }
 
-    pub fn matches_str<'a, 'b>(&'a self, path: &'b str) -> Option<MatchResult<'a, 'b, T>> {
-        // Purposefully not filtering out empty strings.
-        let path = path.trim().trim_matches('/').split('/').collect::<Vec<_>>();
-
-        self.matches(&path)
-    }
-
-    pub fn matches<'a, 'b>(&'a self, path: &[&'b str]) -> Option<MatchResult<'a, 'b, T>> {
+    pub fn matches(&self, path: &[&str]) -> Option<&T> {
         let mut node = self;
         let mut path_segments = path;
-        let mut variables = Vec::new();
 
         loop {
             let common_prefix_len = node
@@ -293,24 +285,9 @@ impl<T> RadixNode<T> {
                 .count();
 
             if common_prefix_len == node.pattern.len() {
-                let path_start = path.len() - path_segments.len();
-                let path_end = path_start + common_prefix_len;
-
-                let new_variables = path[path_start..path_end]
-                    .iter()
-                    .zip(&node.pattern)
-                    .filter_map(|(path, pattern)| match pattern {
-                        Pattern::Variable => Some(*path),
-                        Pattern::Literal(_) => None,
-                    });
-                variables.extend(new_variables);
-
                 if common_prefix_len == path_segments.len() {
                     // The path fully matches the current node's pattern
-                    return node.data.as_ref().map(|data| MatchResult {
-                        data,
-                        path_values: variables,
-                    });
+                    return node.data.as_ref();
                 } else {
                     // The path partially matches the current node's pattern
                     path_segments = &path_segments[common_prefix_len..];
@@ -335,6 +312,12 @@ impl<T> RadixNode<T> {
         }
 
         None
+    }
+
+    #[cfg(test)]
+    fn matches_str(&self, path: &str) -> Option<&T> {
+        let path = super::parse_path(path);
+        self.matches(&path)
     }
 
     fn insert_new(&mut self, path: &[Pattern], data: T) -> Result<(), InsertionError> {
@@ -365,12 +348,6 @@ impl<T> RadixNode<T> {
             .take_while(|(a, b)| a == b)
             .count()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MatchResult<'a, 'b, T> {
-    pub data: &'a T,
-    pub path_values: Vec<&'b str>,
 }
 
 // Is pub so that it can be used in benchmark.
@@ -509,13 +486,7 @@ mod test {
 
         let result = root.matches_str("/templates/123/worker");
 
-        assert_eq!(
-            result,
-            Some(MatchResult {
-                data: &1,
-                path_values: vec!["123"]
-            })
-        );
+        assert_eq!(result, Some(&1));
 
         assert_eq!(root.matches_str("/templates/123/worker/extra"), None);
         assert_eq!(root.matches_str("/templates/123"), None);
@@ -534,24 +505,10 @@ mod test {
         root.insert_path(path2.as_slice(), 2).unwrap();
 
         let result = root.matches_str("/templates/123/worker");
-
-        assert_eq!(
-            result,
-            Some(MatchResult {
-                data: &1,
-                path_values: vec!["123"]
-            })
-        );
+        assert_eq!(result, Some(&1));
 
         let result = root.matches_str("/templates/456/function");
-
-        assert_eq!(
-            result,
-            Some(MatchResult {
-                data: &2,
-                path_values: vec!["456"]
-            })
-        );
+        assert_eq!(result, Some(&2));
     }
 
     #[test]
@@ -566,21 +523,9 @@ mod test {
 
         root.insert_path(path2.as_slice(), 2).unwrap();
 
-        assert_eq!(
-            Some(MatchResult {
-                data: &1,
-                path_values: vec![]
-            }),
-            root.matches_str("/templates/worker")
-        );
+        assert_eq!(Some(&1), root.matches_str("/templates/worker"));
 
-        assert_eq!(
-            Some(MatchResult {
-                data: &2,
-                path_values: vec!["123"]
-            }),
-            root.matches_str("/templates/123")
-        );
+        assert_eq!(Some(&2), root.matches_str("/templates/123"));
     }
 
     #[test]
@@ -591,13 +536,7 @@ mod test {
 
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        assert_eq!(
-            Some(MatchResult {
-                data: &1,
-                path_values: vec!["v1", "123"]
-            }),
-            root.matches_str("/api/v1/users/123")
-        );
+        assert_eq!(Some(&1), root.matches_str("/api/v1/users/123"));
     }
 
     #[test]
@@ -612,21 +551,9 @@ mod test {
 
         root.insert_path(path2.as_slice(), 2).unwrap();
 
-        assert_eq!(
-            Some(MatchResult {
-                data: &1,
-                path_values: vec!["v1", "123"]
-            }),
-            root.matches_str("/api/v1/users/123")
-        );
+        assert_eq!(Some(&1), root.matches_str("/api/v1/users/123"));
 
-        assert_eq!(
-            Some(MatchResult {
-                data: &2,
-                path_values: vec!["456", "789"]
-            }),
-            root.matches_str("/api/users/456/789")
-        );
+        assert_eq!(Some(&2), root.matches_str("/api/users/456/789"));
     }
 
     #[test]
@@ -641,56 +568,26 @@ mod test {
 
         root.insert_path(path2.as_slice(), 2).unwrap();
 
-        assert_eq!(
-            Some(MatchResult {
-                data: &2,
-                path_values: vec![]
-            }),
-            root.matches_str("/api/v1/users")
-        );
+        assert_eq!(Some(&2), root.matches_str("/api/v1/users"));
 
-        assert_eq!(
-            Some(MatchResult {
-                data: &1,
-                path_values: vec!["v2"]
-            }),
-            root.matches_str("/api/v2/users")
-        );
+        assert_eq!(Some(&1), root.matches_str("/api/v2/users"));
     }
 
     #[test]
     fn test_multiple_routes_resolution() {
         #[track_caller]
         fn test_one(root: &RadixNode<i32>) {
-            assert_eq!(
-                Some(MatchResult {
-                    data: &1,
-                    path_values: vec!["v2"]
-                }),
-                root.matches_str("/api/v2/users")
-            );
+            assert_eq!(Some(&1), root.matches_str("/api/v2/users"));
         }
 
         #[track_caller]
         fn test_two(root: &RadixNode<i32>) {
-            assert_eq!(
-                Some(MatchResult {
-                    data: &2,
-                    path_values: vec!["123"]
-                }),
-                root.matches_str("/api/v1/users/123")
-            );
+            assert_eq!(Some(&2), root.matches_str("/api/v1/users/123"));
         }
 
         #[track_caller]
         fn test_three(root: &RadixNode<i32>) {
-            assert_eq!(
-                Some(MatchResult {
-                    data: &3,
-                    path_values: vec!["456"]
-                }),
-                root.matches_str("/api/456/users/profile")
-            );
+            assert_eq!(Some(&3), root.matches_str("/api/456/users/profile"));
         }
 
         let mut root = RadixNode::default();

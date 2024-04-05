@@ -10,7 +10,6 @@ use crate::merge::Merge;
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_binding::{GolemWorkerBinding, ResolvedWorkerBinding, WorkerBindingResolver};
 
-use super::tree::MatchResult;
 use super::Router;
 
 // An input request from external API gateways, that is then resolved to a worker request, using API definitions
@@ -60,23 +59,20 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 
         let router = build_router(api_definition.routes.clone());
 
-        let MatchResult { data, path_values } =
-            router.check_path(&api_request.req_method, &api_request.input_path.base_path)?;
+        let path = super::parse_path(&api_request.input_path.base_path);
 
         let RouteEntry {
             path_params,
             query_params,
             binding,
-        } = data;
+        } = router.check_path(&api_request.req_method, &path)?;
 
-        assert!(
-            path_params.len() == path_values.len(),
-            "Path params and values should match"
-        );
-
-        // TODO: Replace with a more efficient map.
-        let zipped_path_params: HashMap<VarInfo, &str> =
-            path_params.iter().cloned().zip(path_values).collect();
+        let zipped_path_params: HashMap<VarInfo, &str> = {
+            path_params
+                .iter()
+                .map(|(var, index)| (var.clone(), path[*index]))
+                .collect()
+        };
 
         let request_details = api_request
             .get_type_annotated_value(zipped_path_params, query_params)
@@ -93,7 +89,8 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 
 #[derive(Debug, Clone)]
 struct RouteEntry {
-    path_params: Vec<VarInfo>,
+    // size is the index of all path patterns.
+    path_params: Vec<(VarInfo, usize)>,
     query_params: Vec<QueryInfo>,
     binding: GolemWorkerBinding,
 }
@@ -109,8 +106,9 @@ fn build_router(routes: Vec<Route>) -> Router<RouteEntry> {
         let path_params = path
             .path_patterns
             .iter()
-            .filter_map(|x| match x {
-                PathPattern::Var(var_info) => Some(var_info.clone()),
+            .enumerate()
+            .filter_map(|(i, x)| match x {
+                PathPattern::Var(var_info) => Some((var_info.clone(), i)),
                 _ => None,
             })
             .collect();

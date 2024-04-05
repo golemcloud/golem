@@ -1,10 +1,8 @@
+use hyper::http::Method;
 use std::collections::HashMap;
 
-use hyper::http::Method;
-
 use crate::api_definition::http::PathPattern;
-
-use self::tree::{MatchResult, Pattern, RadixNode};
+use tree::{Pattern, RadixNode};
 
 pub mod tree;
 
@@ -32,13 +30,13 @@ impl<T> Router<T> {
         node.insert_path(&path, data).is_ok()
     }
 
-    pub fn check_path<'a, 'b>(
-        &'a self,
-        method: &Method,
-        path: &'b str,
-    ) -> Option<MatchResult<'a, 'b, T>> {
+    pub fn check_path(&self, method: &Method, path: &[&str]) -> Option<&T> {
         let node = self.tree.get(method)?;
-        let result = node.matches_str(path)?;
+        let result = node.matches(&path)?;
         Some(result)
     }
+}
+
+pub fn parse_path(path: &str) -> Vec<&str> {
+    path.trim().trim_matches('/').split('/').collect::<Vec<_>>()
 }
