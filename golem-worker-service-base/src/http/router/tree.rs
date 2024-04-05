@@ -380,7 +380,7 @@ pub fn make_path(path: &str) -> Vec<Pattern> {
             if s.starts_with(':') {
                 Pattern::Variable
             } else {
-                Pattern::Literal(LiteralPattern(s.to_string()))
+                Pattern::literal(s)
             }
         })
         .collect()
