@@ -1431,4 +1431,46 @@ mod tests {
 
         assert_eq!(result, expected);
     }
+
+    #[test]
+    fn test_evaluation_with_wave_like_syntax_variant_with_if_condition() {
+        let expr = Expr::from_primitive_string("${if 1 == 2 then Foo(some(2)) else Bar(some(3)) }").unwrap();
+
+        let result = expr.evaluate(&TypeAnnotatedValue::Record {
+            value: vec![],
+            typ: vec![],
+        });
+
+        let expected = Ok(TypeAnnotatedValue::Variant {
+            typ: vec![("Bar".to_string(), Some(AnalysedType::Option(Box::new(AnalysedType::U64))))],
+            case_name: "Bar".to_string(),
+            case_value: Some(Box::new(TypeAnnotatedValue::Option {
+                value: Some(Box::new(TypeAnnotatedValue::U64(3))),
+                typ: AnalysedType::U64
+            }))
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_evaluation_with_wave_like_syntax_variant_with_match_expr() {
+        let expr = Expr::from_primitive_string("${match some(1) {some(x) => Foo(some(x)), none => Bar(1) }}").unwrap();
+
+        let result = expr.evaluate(&TypeAnnotatedValue::Record {
+            value: vec![],
+            typ: vec![],
+        });
+
+        let expected = Ok(TypeAnnotatedValue::Variant {
+            typ: vec![("Foo".to_string(), Some(AnalysedType::Option(Box::new(AnalysedType::U64))))],
+            case_name: "Foo".to_string(),
+            case_value: Some(Box::new(TypeAnnotatedValue::Option {
+                value: Some(Box::new(TypeAnnotatedValue::U64(1))),
+                typ: AnalysedType::U64
+            }))
+        });
+
+        assert_eq!(result, expected);
+    }
 }
