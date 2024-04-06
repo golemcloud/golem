@@ -62,9 +62,5 @@ criterion = { version = "0.3", features = ["html_reports"] }
 fastrand = "2.0.2"
 
 [[bench]]
-name = "vecmap"
-harness = false
-
-[[bench]]
 name = "tree"
 harness = false

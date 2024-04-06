@@ -5,7 +5,6 @@ use crate::api_definition::http::PathPattern;
 use tree::{Pattern, RadixNode};
 
 pub mod tree;
-pub mod vecmap;
 
 #[derive(Clone, Debug, Default)]
 pub struct Router<T> {
