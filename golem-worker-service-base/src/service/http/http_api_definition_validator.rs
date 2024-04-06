@@ -9,7 +9,7 @@ use golem_service_base::model::{
 };
 
 use crate::api_definition::http::{HttpApiDefinition, MethodPattern, Route};
-use crate::http::Router;
+use crate::http::router::{Router, RouterPattern};
 use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 
 // Http Api Definition Validator
@@ -84,12 +84,16 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
 
     for route in routes {
         let method: hyper::Method = route.method.clone().into();
-        let path = route.path.path_patterns.clone();
+        let path: Vec<RouterPattern> = route
+            .path
+            .path_patterns
+            .clone()
+            .into_iter()
+            .map(|p| p.into())
+            .collect();
 
-        if !router.add_route(method.clone(), path, route) {
-            let current_route = router
-                .get_route(&method, &route.path.path_patterns)
-                .unwrap();
+        if !router.add_route(method.clone(), path.clone(), route) {
+            let current_route = router.get_route(&method, &path).unwrap();
 
             let detail = format!("Duplicate route with path: {}", current_route.path);
 

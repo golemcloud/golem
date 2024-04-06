@@ -577,6 +577,7 @@ mod tests {
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expression::Expr;
+    use crate::http::router::RouterPattern;
     use crate::http::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
     use crate::worker_bridge_execution::WorkerResponse;
@@ -626,7 +627,7 @@ mod tests {
             },
         };
 
-        let base_path: Vec<&str> = crate::http::parse_path(uri.path());
+        let base_path: Vec<&str> = RouterPattern::split(uri.path()).collect();
 
         let path_params = path_pattern
             .path_patterns

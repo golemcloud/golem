@@ -11,7 +11,7 @@ use crate::worker_binding::{GolemWorkerBinding, ResolvedWorkerBinding, WorkerBin
 
 use self::internal::RecordField;
 
-use super::Router;
+use super::router::RouterPattern;
 
 // An input request from external API gateways, that is then resolved to a worker request, using API definitions
 #[derive(Clone)]
@@ -60,7 +60,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 
         let router = router::build(api_definition.routes.clone());
 
-        let path = super::parse_path(&api_request.input_path.base_path);
+        let path: Vec<&str> = RouterPattern::split(&api_request.input_path.base_path).collect();
 
         let router::RouteEntry {
             path_params,
@@ -116,7 +116,11 @@ impl ApiInputPath {
 }
 
 pub(crate) mod router {
-    use super::*;
+    use crate::{
+        api_definition::http::{PathPattern, QueryInfo, Route, VarInfo},
+        http::router::{Router, RouterPattern},
+        worker_binding::GolemWorkerBinding,
+    };
 
     #[derive(Debug, Clone)]
     pub struct RouteEntry {
@@ -150,7 +154,13 @@ pub(crate) mod router {
                 binding,
             };
 
-            router.add_route(method, path.path_patterns, entry);
+            let path: Vec<RouterPattern> = path
+                .path_patterns
+                .iter()
+                .map(|x| x.clone().into())
+                .collect();
+
+            router.add_route(method, path, entry);
         }
 
         router

@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use golem_worker_service_base::http::tree::{make_path, LiteralPattern, Pattern, RadixNode};
+use golem_worker_service_base::http::router::{RadixNode, RouterPattern};
 
 criterion_group!(benches, radix_tree_all_matches);
 criterion_main!(benches);
@@ -43,14 +43,16 @@ fn radix_tree_all_matches(c: &mut Criterion) {
     group.finish();
 }
 
-fn generate_routes(n: usize) -> Vec<Vec<Pattern>> {
+/// Will choose n unique routes from the list of all possible routes
+fn generate_routes(n: usize) -> Vec<Vec<RouterPattern>> {
     let mut result = Vec::with_capacity(n);
     let mut used_routes = std::collections::HashSet::with_capacity(n);
 
     while result.len() < n {
         let route = *fastrand::choice(ROUTES).unwrap();
         if !used_routes.contains(route) {
-            result.push(make_path(route));
+            let pattern = RouterPattern::parse(route);
+            result.push(pattern);
             used_routes.insert(route);
         }
     }
@@ -58,27 +60,31 @@ fn generate_routes(n: usize) -> Vec<Vec<Pattern>> {
     result
 }
 
-fn build_radix_tree(routes: &[Vec<Pattern>]) -> RadixNode<(usize, String)> {
+/// Build a radix tree from a list of routes
+fn build_radix_tree(routes: &[Vec<RouterPattern>]) -> RadixNode<(usize, String)> {
     let mut radix_tree = RadixNode::default();
     for (index, route) in routes.iter().enumerate() {
         let display_route = route
             .iter()
             .map(|segment| match segment {
-                Pattern::Literal(LiteralPattern(literal)) => literal.clone(),
-                Pattern::Variable => "{var}".to_string(),
-                Pattern::CatchAll => "*".to_string(),
+                RouterPattern::Literal(literal) => literal.0.clone(),
+                RouterPattern::Variable => "{var}".to_string(),
+                RouterPattern::CatchAll => "*".to_string(),
             })
             .collect::<Vec<_>>()
             .join("/");
 
         let data = (index, display_route);
-        radix_tree.insert_path(route, data).unwrap();
+        radix_tree
+            .insert_path(route, data)
+            .expect("Conflict in routes");
     }
     radix_tree
 }
 
+// Generate a list of routes that will match and a list of routes that will not match
 fn build_routes<T>(router: &RadixNode<T>) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
-    let all_patterns = ROUTES.iter().map(|s| make_path(s)).collect::<Vec<_>>();
+    let all_patterns = ROUTES.iter().map(RouterPattern::parse).collect::<Vec<_>>();
 
     let (match_patterns, miss_patterns) =
         all_patterns.into_iter().partition::<Vec<_>, _>(|route| {
@@ -98,13 +104,13 @@ fn build_routes<T>(router: &RadixNode<T>) -> (Vec<Vec<String>>, Vec<Vec<String>>
     (match_routes, miss_routes)
 }
 
-fn generate_match_route(route: &[Pattern]) -> Vec<String> {
+fn generate_match_route(route: &[RouterPattern]) -> Vec<String> {
     route
         .iter()
         .flat_map(|segment| match segment {
-            Pattern::Literal(LiteralPattern(literal)) => vec![literal.clone()],
-            Pattern::Variable => vec![fastrand::u32(1..1000).to_string()],
-            Pattern::CatchAll => (1..10)
+            RouterPattern::Literal(literal) => vec![literal.0.clone()],
+            RouterPattern::Variable => vec![fastrand::u32(1..1000).to_string()],
+            RouterPattern::CatchAll => (1..10)
                 .map(|_| fastrand::u32(1..1000).to_string())
                 .collect::<Vec<_>>(),
         })

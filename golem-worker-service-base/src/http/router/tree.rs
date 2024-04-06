@@ -1,8 +1,10 @@
 use rustc_hash::FxHashMap;
 
+use super::pattern::{LiteralPattern, RouterPattern};
+
 #[derive(Debug, Clone)]
 pub struct RadixNode<T> {
-    pattern: Vec<Pattern>,
+    pattern: Vec<RouterPattern>,
     children: Children<T>,
     data: Option<T>,
 }
@@ -49,30 +51,32 @@ impl<T> Children<T> {
             .or_else(|| self.variable_child.as_ref().map(|c| c.as_ref()))
     }
 
-    fn get_child(&self, pattern: &Pattern) -> Option<&RadixNode<T>> {
+    fn get_child(&self, pattern: &RouterPattern) -> Option<&RadixNode<T>> {
         match pattern {
-            Pattern::Literal(literal_pattern) => self.literal_children.get(literal_pattern),
-            Pattern::Variable => self.variable_child.as_ref().map(|c| c.as_ref()),
-            Pattern::CatchAll => self.catch_all_child.as_ref().map(|c| c.as_ref()),
+            RouterPattern::Literal(literal_pattern) => self.literal_children.get(literal_pattern),
+            RouterPattern::Variable => self.variable_child.as_ref().map(|c| c.as_ref()),
+            RouterPattern::CatchAll => self.catch_all_child.as_ref().map(|c| c.as_ref()),
         }
     }
 
-    fn get_child_mut(&mut self, pattern: &Pattern) -> Option<&mut RadixNode<T>> {
+    fn get_child_mut(&mut self, pattern: &RouterPattern) -> Option<&mut RadixNode<T>> {
         match pattern {
-            Pattern::Literal(literal_pattern) => self.literal_children.get_mut(literal_pattern),
-            Pattern::Variable => self.variable_child.as_mut().map(|c| c.as_mut()),
-            Pattern::CatchAll => self.catch_all_child.as_mut().map(|c| c.as_mut()),
+            RouterPattern::Literal(literal_pattern) => {
+                self.literal_children.get_mut(literal_pattern)
+            }
+            RouterPattern::Variable => self.variable_child.as_mut().map(|c| c.as_mut()),
+            RouterPattern::CatchAll => self.catch_all_child.as_mut().map(|c| c.as_mut()),
         }
     }
 
     fn add_child(&mut self, node: RadixNode<T>) {
         match node.pattern.first() {
-            Some(Pattern::Literal(literal_pattern)) => {
+            Some(RouterPattern::Literal(literal_pattern)) => {
                 let inserted = self.literal_children.insert(literal_pattern.clone(), node);
                 debug_assert!(inserted.is_none(), "Duplicate static child");
                 let _ = inserted;
             }
-            Some(Pattern::Variable) => {
+            Some(RouterPattern::Variable) => {
                 debug_assert!(
                     self.variable_child.is_none(),
                     "Variable child already exists"
@@ -80,7 +84,7 @@ impl<T> Children<T> {
 
                 self.variable_child = Some(Box::new(node));
             }
-            Some(Pattern::CatchAll) => {
+            Some(RouterPattern::CatchAll) => {
                 debug_assert!(
                     self.catch_all_child.is_none(),
                     "Catch all child already exists"
@@ -94,22 +98,6 @@ impl<T> Children<T> {
         }
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Pattern {
-    Literal(LiteralPattern),
-    Variable,
-    CatchAll,
-}
-
-impl Pattern {
-    pub fn literal(literal: impl Into<String>) -> Self {
-        Self::Literal(LiteralPattern(literal.into()))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LiteralPattern(pub String);
 
 // Needed to get value in map by &str
 impl std::borrow::Borrow<str> for LiteralPattern {
@@ -125,7 +113,7 @@ pub enum InsertionError {
 }
 
 impl<T> RadixNode<T> {
-    pub fn insert_path(&mut self, path: &[Pattern], data: T) -> Result<(), InsertionError> {
+    pub fn insert_path(&mut self, path: &[RouterPattern], data: T) -> Result<(), InsertionError> {
         if path.is_empty() {
             if self.data.is_some() {
                 Err(InsertionError::Conflict)
@@ -234,7 +222,7 @@ impl<T> RadixNode<T> {
         }
     }
 
-    pub fn get(&self, path: &[Pattern]) -> Option<&T> {
+    pub fn get(&self, path: &[RouterPattern]) -> Option<&T> {
         let mut node = self;
         let mut remaining_path = path;
 
@@ -277,9 +265,9 @@ impl<T> RadixNode<T> {
                 .iter()
                 .zip(path_segments.iter())
                 .take_while(|(a, b)| match a {
-                    Pattern::Literal(s) => s.0 == **b,
-                    Pattern::Variable => true,
-                    Pattern::CatchAll => {
+                    RouterPattern::Literal(s) => s.0 == **b,
+                    RouterPattern::Variable => true,
+                    RouterPattern::CatchAll => {
                         // Save the last catch all node
                         last_catch_all.replace(node);
                         true
@@ -317,13 +305,7 @@ impl<T> RadixNode<T> {
         last_catch_all.and_then(|node| node.data.as_ref())
     }
 
-    #[cfg(test)]
-    fn matches_str(&self, path: &str) -> Option<&T> {
-        let path = super::parse_path(path);
-        self.matches(&path)
-    }
-
-    fn insert_new(&mut self, path: &[Pattern], data: T) -> Result<(), InsertionError> {
+    fn insert_new(&mut self, path: &[RouterPattern], data: T) -> Result<(), InsertionError> {
         if self.children.is_empty() && self.pattern.is_empty() {
             if self.data.is_some() {
                 Err(InsertionError::Conflict)
@@ -346,36 +328,26 @@ impl<T> RadixNode<T> {
     // Stops iterating when it finds a catch all node.
     // Count includes the catch all node.
     #[inline]
-    fn common_prefix_len(&self, path: &[Pattern]) -> usize {
+    fn common_prefix_len(&self, path: &[RouterPattern]) -> usize {
         let mut catch_all = false;
         self.pattern
             .iter()
             .zip(path.iter())
             .take_while(|(a, b)| {
                 let result = !catch_all && a == b;
-                if let Pattern::CatchAll = b {
+                if let RouterPattern::CatchAll = b {
                     catch_all = true;
                 }
                 result
             })
             .count()
     }
-}
 
-// Is pub so that it can be used in benchmark.
-pub fn make_path(path: &str) -> Vec<Pattern> {
-    path.trim_matches('/')
-        .split('/')
-        .map(|s| {
-            if s.starts_with(':') || (s.starts_with('{') && s.ends_with('}')) {
-                Pattern::Variable
-            } else if s == "*" {
-                Pattern::CatchAll
-            } else {
-                Pattern::literal(s)
-            }
-        })
-        .collect()
+    #[cfg(test)]
+    fn matches_str(&self, path: &str) -> Option<&T> {
+        let path: Vec<&str> = RouterPattern::split(path).collect();
+        self.matches(&path)
+    }
 }
 
 #[cfg(test)]
@@ -386,18 +358,18 @@ mod test {
     fn test_push_and_get() {
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/a/b/c");
+        let path1 = RouterPattern::parse("/a/b/c");
         root.insert_path(path1.as_slice(), 1).unwrap();
 
         assert_eq!(root.get(&path1), Some(&1));
 
-        let path2 = make_path("/a/b/d");
+        let path2 = RouterPattern::parse("/a/b/d");
         root.insert_path(path2.as_slice(), 2).unwrap();
 
         assert_eq!(root.get(&path1), Some(&1));
         assert_eq!(root.get(&path2), Some(&2));
 
-        let path3 = make_path("/a/b/e");
+        let path3 = RouterPattern::parse("/a/b/e");
         root.insert_path(path3.as_slice(), 3).unwrap();
 
         assert_eq!(root.get(&path1), Some(&1));
@@ -409,13 +381,13 @@ mod test {
     fn test_shape_no_overlap() {
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/a/b");
+        let path1 = RouterPattern::parse("/a/b");
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = make_path("/d/e");
+        let path2 = RouterPattern::parse("/d/e");
         root.insert_path(path2.as_slice(), 2).unwrap();
 
-        let path3 = make_path("/f/g");
+        let path3 = RouterPattern::parse("/f/g");
         root.insert_path(path3.as_slice(), 3).unwrap();
 
         assert_eq!(root.get(&path1), Some(&1));
@@ -444,7 +416,7 @@ mod test {
         let mut root = RadixNode::default();
 
         for (index, path) in paths.iter().enumerate() {
-            let path = make_path(path);
+            let path = RouterPattern::parse(path);
             root.insert_path(&path, index).unwrap();
         }
 
@@ -467,11 +439,11 @@ mod test {
     fn test_push_subpath() {
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/a/b/c");
+        let path1 = RouterPattern::parse("/a/b/c");
 
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = make_path("/a/b");
+        let path2 = RouterPattern::parse("/a/b");
 
         root.insert_path(path2.as_slice(), 2).unwrap();
     }
@@ -480,7 +452,7 @@ mod test {
     fn test_conflict() {
         let mut root = RadixNode::default();
 
-        let path = make_path("/a/b/c");
+        let path = RouterPattern::parse("/a/b/c");
 
         root.insert_path(path.as_slice(), 1).unwrap();
 
@@ -494,7 +466,7 @@ mod test {
     fn test_matches() {
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/templates/:id/worker");
+        let path1 = RouterPattern::parse("/templates/:id/worker");
 
         root.insert_path(path1.as_slice(), 1).unwrap();
 
@@ -510,11 +482,11 @@ mod test {
     fn test_matches_two_routes() {
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/templates/:id/worker");
+        let path1 = RouterPattern::parse("/templates/:id/worker");
 
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = make_path("/templates/:id/function");
+        let path2 = RouterPattern::parse("/templates/:id/function");
 
         root.insert_path(path2.as_slice(), 2).unwrap();
 
@@ -529,11 +501,11 @@ mod test {
     fn test_conflict_static_variable() {
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/templates/worker");
+        let path1 = RouterPattern::parse("/templates/worker");
 
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = make_path("/templates/:id");
+        let path2 = RouterPattern::parse("/templates/:id");
 
         root.insert_path(path2.as_slice(), 2).unwrap();
 
@@ -546,7 +518,7 @@ mod test {
     fn test_multiple_variables() {
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/api/:version/users/:id");
+        let path1 = RouterPattern::parse("/api/:version/users/:id");
 
         root.insert_path(path1.as_slice(), 1).unwrap();
 
@@ -557,11 +529,11 @@ mod test {
     fn test_multiple_variables_different_order() {
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/api/:api_id/users/:user_id");
+        let path1 = RouterPattern::parse("/api/:api_id/users/:user_id");
 
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = make_path("/api/users/:user_id/:id");
+        let path2 = RouterPattern::parse("/api/users/:user_id/:id");
 
         root.insert_path(path2.as_slice(), 2).unwrap();
 
@@ -574,11 +546,11 @@ mod test {
     fn test_conflict_variable_static() {
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/api/:version/users");
+        let path1 = RouterPattern::parse("/api/:version/users");
 
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = make_path("/api/v1/users");
+        let path2 = RouterPattern::parse("/api/v1/users");
 
         root.insert_path(path2.as_slice(), 2).unwrap();
 
@@ -606,18 +578,18 @@ mod test {
 
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/api/:version/users");
+        let path1 = RouterPattern::parse("/api/:version/users");
         root.insert_path(path1.as_slice(), 1).unwrap();
 
         test_one(&root);
 
-        let path2 = make_path("/api/v1/users/:id");
+        let path2 = RouterPattern::parse("/api/v1/users/:id");
         root.insert_path(path2.as_slice(), 2).unwrap();
 
         test_one(&root);
         test_two(&root);
 
-        let path3 = make_path("/api/:api_id/users/profile");
+        let path3 = RouterPattern::parse("/api/:api_id/users/profile");
         root.insert_path(path3.as_slice(), 3).unwrap();
 
         test_one(&root);
@@ -629,7 +601,7 @@ mod test {
     fn test_catch_all() {
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/api/*");
+        let path1 = RouterPattern::parse("/api/*");
         root.insert_path(path1.as_slice(), 1).unwrap();
 
         assert_eq!(Some(&1), root.matches_str("/api/v1/users"));
@@ -641,10 +613,10 @@ mod test {
     fn test_catch_all_fallthrough() {
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/api/*");
+        let path1 = RouterPattern::parse("/api/*");
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = make_path("/api/v1/*");
+        let path2 = RouterPattern::parse("/api/v1/*");
         root.insert_path(path2.as_slice(), 2).unwrap();
 
         assert_eq!(Some(&2), root.matches_str("/api/v1/users"));
@@ -660,16 +632,16 @@ mod test {
     fn test_catch_all_fallthrough_complex() {
         let mut root = RadixNode::default();
 
-        let path1 = make_path("/api/*");
+        let path1 = RouterPattern::parse("/api/*");
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = make_path("/api/v1");
+        let path2 = RouterPattern::parse("/api/v1");
         root.insert_path(path2.as_slice(), 2).unwrap();
 
-        let path3 = make_path("/api/v2/user/:user_id");
+        let path3 = RouterPattern::parse("/api/v2/user/:user_id");
         root.insert_path(&path3, 3).unwrap();
 
-        let path4 = make_path("/api/v2/*");
+        let path4 = RouterPattern::parse("/api/v2/*");
         root.insert_path(&path4, 4).unwrap();
 
         assert_eq!(Some(&2), root.matches_str("/api/v1"));
