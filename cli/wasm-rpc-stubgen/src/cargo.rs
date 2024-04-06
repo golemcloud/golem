@@ -232,7 +232,9 @@ pub fn add_workspace_members(path: &Path, members: &[String]) -> anyhow::Result<
 }
 
 pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> anyhow::Result<()> {
-    let mut manifest: Manifest<MetadataRoot> = Manifest::from_path_with_metadata(cargo_path)?;
+    let raw_manifest = std::fs::read_to_string(cargo_path)?;
+    let mut manifest: Manifest<MetadataRoot> =
+        Manifest::from_slice_with_metadata(raw_manifest.as_bytes())?;
     if let Some(ref mut package) = manifest.package {
         if let Some(ref mut metadata) = package.metadata {
             if let Some(ref mut component) = metadata.component {
