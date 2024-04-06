@@ -15,7 +15,6 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::config::RetryConfig;
-use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
@@ -57,7 +56,7 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
         self_: Resource<GetWorkersEntry>,
     ) -> anyhow::Result<Option<Vec<golem::api::host::WorkerMetadata>>> {
         record_host_function_call("golem::api::get-workers", "get_next");
-        let (template_id, filter, count, precise, next_cursor) = self
+        let (template_id, filter, count, precise, cursor) = self
             .as_wasi_view()
             .table()
             .get::<GetWorkersEntry>(&self_)
@@ -67,11 +66,9 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
                     e.filter.clone(),
                     e.count,
                     e.precise,
-                    e.next_cursor.clone(),
+                    e.next_cursor,
                 )
             })?;
-
-        let cursor = *next_cursor.read().unwrap();
 
         if let Some(cursor) = cursor {
             let (new_cursor, workers) = self
@@ -79,7 +76,11 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
                 .get_workers(&template_id, filter, cursor, count, precise)
                 .await?;
 
-            *next_cursor.write().unwrap() = new_cursor;
+            let _ = self
+                .as_wasi_view()
+                .table_mut()
+                .get_mut::<GetWorkersEntry>(&self_)
+                .map(|e| e.set_next_cursor(new_cursor))?;
 
             Ok(Some(workers.into_iter().map(|w| w.into()).collect()))
         } else {
@@ -101,7 +102,7 @@ pub struct GetWorkersEntry {
     filter: Option<golem_common::model::WorkerFilter>,
     precise: bool,
     count: u64,
-    next_cursor: Arc<RwLock<Option<u64>>>,
+    next_cursor: Option<u64>,
 }
 
 impl GetWorkersEntry {
@@ -115,8 +116,12 @@ impl GetWorkersEntry {
             filter,
             precise,
             count: 50,
-            next_cursor: Arc::new(RwLock::new(Some(0))),
+            next_cursor: Some(0),
         }
+    }
+
+    fn set_next_cursor(&mut self, cursor: Option<u64>) {
+        self.next_cursor = cursor;
     }
 }
 
