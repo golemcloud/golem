@@ -16,7 +16,7 @@ pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expression::{Expr, InnerNumber};
+    use crate::expression::{ConstructorPattern, ConstructorPatternExpr, Expr, InnerNumber};
 
     #[test]
     fn test_round_trip_read_write_literal() {
@@ -233,7 +233,43 @@ mod tests {
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
-    // Text based test
+    #[test]
+    fn test_round_trip_match_expr() {
+        let input_expr = Expr::PatternMatch(
+            Box::new(Expr::Request()),
+            vec![
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "ok",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "foo".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Literal("success".to_string())),
+                )),
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "err",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "msg".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Literal("failure".to_string())),
+                )),
+            ],
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        dbg!(expr_str.clone());
+        let expected_str =
+            "${match request {  ok(foo) => 'success', err(msg) => 'failure' } }".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    // A few non-round-trip text based tests
     #[test]
     fn test_sequence_of_records_singleton() {
         let expr_string = "${[{bc: request}]}";

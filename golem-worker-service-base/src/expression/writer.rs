@@ -15,9 +15,6 @@ pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
             writer.write_expr(expr)?;
             writer.write_code_end()?;
         }
-        internal::ExprType::StandAloneVariable() => {
-            writer.write_expr(expr)?;
-        }
     }
 
     Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
@@ -123,9 +120,9 @@ impl<W: Write> Writer<W> {
                 self.write_display(Token::RCurly)
             }
             Expr::Variable(variable) => {
-                self.write_display(Token::MultiChar(MultiCharTokens::InterpolationStart))?;
-                self.write_str(variable)?;
-                self.write_display(Token::RCurly)
+                // self.write_display(Token::MultiChar(MultiCharTokens::InterpolationStart))?;
+                self.write_str(variable)
+                // self.write_display(Token::RCurly)
             }
             Expr::Boolean(bool) => self.write_display(bool),
             Expr::Concat(concatenated) => {
@@ -184,18 +181,17 @@ impl<W: Write> Writer<W> {
                 self.write_str("match ")?;
                 self.write_expr(match_expr)?;
                 self.write_str(" { ")?;
-                self.write_display(Token::NewLine)?;
+                self.write_display(Token::Space)?;
                 for (idx, match_term) in match_terms.iter().enumerate() {
                     if idx != 0 {
-                        self.write_display(Token::NewLine)?;
+                        self.write_str(", ")?;
                     }
                     let (match_case, match_expr) = &match_term.0;
                     internal::write_constructor(match_case, self)?;
                     self.write_str(" => ")?;
                     self.write_expr(match_expr)?;
                 }
-
-                Ok(())
+                self.write_str(" } ")
             }
             Expr::Constructor0(constructor) => internal::write_constructor(constructor, self),
         }
@@ -219,13 +215,11 @@ mod internal {
     pub(crate) enum ExprType<'a> {
         Code(&'a Expr),
         Text(&'a str),
-        StandAloneVariable(),
     }
 
     pub(crate) fn get_expr_type(expr: &Expr) -> ExprType {
         match expr {
             Expr::Literal(str) => ExprType::Text(str),
-            Expr::Variable(_) => ExprType::StandAloneVariable(),
             expr => ExprType::Code(expr),
         }
     }
