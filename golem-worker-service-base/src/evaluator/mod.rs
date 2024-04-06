@@ -313,10 +313,6 @@ impl Evaluator for Expr {
                     InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(f64)),
                 },
 
-                Expr::PathVar(path_var) => input
-                    .get(&Path::from_key(path_var.as_str()))
-                    .map_err(|err| err.into()),
-
                 Expr::Variable(variable) => input
                     .get(&Path::from_key(variable.as_str()))
                     .map_err(|err| err.into()),

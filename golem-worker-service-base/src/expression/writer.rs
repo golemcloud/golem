@@ -31,7 +31,6 @@ pub struct Writer<W> {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum WriterError {
-    /// An error from the underlying writer
     #[error("write failed: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -406,6 +405,24 @@ mod tests {
         let input_expr = Expr::Variable("variable".to_string());
         let expr_str = write_expr(&input_expr).unwrap();
         let expected_str = "${variable}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_boolean() {
+        let input_expr = Expr::Boolean(true);
+        let expr_str = write_expr(&input_expr).unwrap();
+        let expected_str = "${true}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_path_var() {
+        let input_expr = Expr::PathVar("path_var".to_string());
+        let expr_str = write_expr(&input_expr).unwrap();
+        let expected_str = "${path_var}".to_string();
         let output_expr = reader::read_expr(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }

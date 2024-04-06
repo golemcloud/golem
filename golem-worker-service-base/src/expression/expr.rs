@@ -24,7 +24,6 @@ pub enum Expr {
     Flags(Vec<String>),
     Variable(String),
     Boolean(bool),
-    PathVar(String),
     Concat(Vec<Expr>),
     Multiple(Vec<Expr>),
     Not(Box<Expr>),
@@ -386,7 +385,6 @@ impl Expr {
                     Primitive::Bool(bool) => Ok(InternalValue::NonInterpolated(bool.to_string())),
                 },
 
-                Expr::PathVar(value) => Ok(InternalValue::Interpolated(value.clone())),
                 Expr::Concat(values) => {
                     let mut vs: Vec<String> = vec![];
                     for value in values {

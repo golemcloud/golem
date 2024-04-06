@@ -517,7 +517,6 @@ mod internal {
             Expr::Not(_) => false,
             Expr::Request() => false,
             Expr::Worker() => false,
-            Expr::PathVar(_) => false,
             Expr::SelectField(_, _) => false,
             Expr::SelectIndex(_, _) => false,
             Expr::Cond(_, _, _) => false, // we disallow if statements within tuple
