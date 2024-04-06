@@ -297,8 +297,8 @@ pub struct Route {
 
 #[cfg(test)]
 mod tests {
-    use golem_common::serialization;
     use crate::expression;
+    use golem_common::serialization;
 
     use crate::expression::Expr;
 

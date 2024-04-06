@@ -33,8 +33,8 @@ mod internal {
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use serde_json::Value;
 
-    use uuid::Uuid;
     use crate::expression;
+    use uuid::Uuid;
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
@@ -134,19 +134,23 @@ mod internal {
         worker_bridge_info: &Value,
     ) -> Result<Option<ResponseMapping>, String> {
         let response = {
-            let response_mapping_optional =  worker_bridge_info.get("response");
+            let response_mapping_optional = worker_bridge_info.get("response");
 
             match response_mapping_optional {
                 None => Ok(None),
                 Some(Value::Null) => Ok(None),
-                Some(Value::String(expr)) => expression::from_string(expr).map_err(|err| err.to_string()).map(|x| Some(x)),
-                _ => Err("Invalid response mapping type. It should be a string representing expression".to_string())
+                Some(Value::String(expr)) => expression::from_string(expr)
+                    .map_err(|err| err.to_string())
+                    .map(|x| Some(x)),
+                _ => Err(
+                    "Invalid response mapping type. It should be a string representing expression"
+                        .to_string(),
+                ),
             }
         };
 
         match response? {
             Some(response_mapping_expr) => {
-
                 // Validating
                 let _ =
                     HttpResponseMapping::try_from(&ResponseMapping(response_mapping_expr.clone()))
@@ -169,15 +173,16 @@ mod internal {
         let mut exprs = vec![];
         for param in function_params {
             match param {
-                Value::Array(function_params) => {
-                    for function_param_value in function_params {
-                        match funtion_param_value {
-                            Value::String()
-                        }
-                    }
+                Value::String(function_param_expr_str) => {
+                    let function_param_expr = expression::from_string(function_param_expr_str)
+                        .map_err(|err| err.to_string())?;
+                    exprs.push(function_param_expr);
                 }
+                _ => return Err(
+                    "Invalid function param type. It should be a string representing expression"
+                        .to_string(),
+                ),
             }
-            exprs.push(Expr::from_json_value(param).map_err(|err| err.to_string())?);
         }
         Ok(exprs)
     }

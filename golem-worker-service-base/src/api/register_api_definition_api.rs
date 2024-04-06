@@ -7,8 +7,8 @@ use golem_common::model::TemplateId;
 
 use crate::api_definition::http::MethodPattern;
 use crate::api_definition::{ApiDefinitionId, ApiVersion};
-use crate::expression::Expr;
 use crate::expression;
+use crate::expression::Expr;
 
 // Mostly this data structures that represents the actual incoming request
 // exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.
