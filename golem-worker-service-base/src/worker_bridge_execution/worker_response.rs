@@ -150,8 +150,7 @@ mod internal {
 
             let http_response_mapping = HttpResponseMapping::try_from(response_mapping)?;
 
-            let status_code =
-                get_status_code(&http_response_mapping.status, type_annotated_value)?;
+            let status_code = get_status_code(&http_response_mapping.status, type_annotated_value)?;
 
             let headers = ResolvedResponseHeaders::from(
                 &http_response_mapping.headers,

@@ -335,8 +335,7 @@ impl Evaluator for Expr {
                         result.push(type_annotated_value);
                     }
 
-                    let typ: &Vec<AnalysedType> =
-                        &result.iter().map(AnalysedType::from).collect();
+                    let typ: &Vec<AnalysedType> = &result.iter().map(AnalysedType::from).collect();
 
                     Ok(TypeAnnotatedValue::Tuple {
                         value: result,
@@ -548,8 +547,8 @@ fn handle_pattern_match(
                                     if let TypeAnnotatedValue::Result { value: Err(v), .. } =
                                         &match_evaluated
                                     {
-                                        let result = &possible_resolution.evaluate(
-                                            input.merge(&TypeAnnotatedValue::Record {
+                                        let result = &possible_resolution.evaluate(input.merge(
+                                            &TypeAnnotatedValue::Record {
                                                 value: vec![(
                                                     pattern_expr_variable()?.to_string(),
                                                     *v.clone().unwrap(),
@@ -558,8 +557,8 @@ fn handle_pattern_match(
                                                     pattern_expr_variable()?.to_string(),
                                                     AnalysedType::from(v.as_ref().unwrap().deref()),
                                                 )],
-                                            }),
-                                        )?;
+                                            },
+                                        ))?;
 
                                         resolved_result = Some(result.clone());
                                         break;

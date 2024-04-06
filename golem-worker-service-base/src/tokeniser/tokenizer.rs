@@ -225,7 +225,6 @@ impl<'t> Tokenizer<'t> {
 
     pub fn skip_next_non_empty_token(&mut self) {
         self.next_non_empty_token();
-        
     }
 
     pub fn skip_if_next_non_empty_token_is(&mut self, token: &Token) {
