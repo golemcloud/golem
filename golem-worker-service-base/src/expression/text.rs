@@ -99,18 +99,29 @@ mod tests {
 
     #[test]
     fn test_round_trip_read_write_nested_record() {
-        let input_expr = Expr::Record(vec![(
-            "a".to_string(),
-            Box::new(Expr::Record(vec![
-                ("ab".to_string(), Box::new(Expr::Request())),
-                ("ac".to_string(), Box::new(Expr::Request())),
-            ])),
-        )]);
+        let input_expr = Expr::Record(vec![
+            (
+                "a".to_string(),
+                Box::new(Expr::Record(vec![
+                    ("ab".to_string(), Box::new(Expr::Request())),
+                    ("ac".to_string(), Box::new(Expr::Request())),
+                ])),
+            ),
+            (
+                "b".to_string(),
+                Box::new(Expr::Sequence(vec![Expr::Record(vec![
+                    ("bc".to_string(), Box::new(Expr::Request())),
+                    ("bd".to_string(), Box::new(Expr::Request())),
+                ])])),
+            ),
+        ]);
         let expr_str = to_string(&input_expr).unwrap();
         dbg!(expr_str.clone());
-        let expected_str = "${{a: {ab: request, ac: request}}}".to_string();
+        let record_string =
+            "{a: {ab: request, ac: request}, b: {bc: request, bd: request}}".to_string();
+        let expected_record_str = format!("${{{}}}", record_string); // Just wrapping it with interpolation
         let output_expr = from_string(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+        assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
 
     #[test]
@@ -201,5 +212,47 @@ mod tests {
                 .to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    // Text based test
+    #[test]
+    fn test_sequence_of_records_singleton() {
+        let expr_string = "${[{bc: request}]}";
+        let output_expr = from_string(expr_string).unwrap();
+        let expected_expr = Expr::Sequence(vec![Expr::Record(vec![(
+            "bc".to_string(),
+            Box::new(Expr::Request()),
+        )])]);
+        assert_eq!(output_expr, expected_expr);
+    }
+
+    #[test]
+    fn test_sequence_of_records_multiple() {
+        let expr_string = "${[{bc: request}, {cd: request}]}";
+        let output_expr = from_string(expr_string).unwrap();
+        let expected_expr = Expr::Sequence(vec![
+            Expr::Record(vec![("bc".to_string(), Box::new(Expr::Request()))]),
+            Expr::Record(vec![("cd".to_string(), Box::new(Expr::Request()))]),
+        ]);
+        assert_eq!(output_expr, expected_expr);
+    }
+
+    #[test]
+    fn test_sequence_of_sequence_singleton() {
+        let expr_string = "${[[bc]]}";
+        let output_expr = from_string(expr_string).unwrap();
+        let expected_expr = Expr::Sequence(vec![Expr::Sequence(vec![Expr::Variable("bc".to_string())])]);
+        assert_eq!(output_expr, expected_expr);
+    }
+
+    #[test]
+    fn test_sequence_of_sequence_multiple() {
+        let expr_string = "${[[bc], [cd]]}";
+        let output_expr = from_string(expr_string).unwrap();
+        let expected_expr = Expr::Sequence(vec![
+            Expr::Sequence(vec![Expr::Variable("bc".to_string())]),
+            Expr::Sequence(vec![Expr::Variable("cd".to_string())]),
+        ]);
+        assert_eq!(output_expr, expected_expr);
     }
 }

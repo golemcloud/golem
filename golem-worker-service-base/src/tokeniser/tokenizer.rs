@@ -223,6 +223,18 @@ impl<'t> Tokenizer<'t> {
         self.skip_whitespace()
     }
 
+    pub fn skip_next_non_empty_token(&mut self) {
+        self.next_non_empty_token();
+        ()
+    }
+
+    pub fn skip_if_next_non_empty_token_is(&mut self, token: &Token) {
+        if self.peek_next_non_empty_token() == Some(token.clone()) {
+            self.next_non_empty_token();
+        }
+    }
+
+
     // Captures the string upto the end token, and advance the cursor further skipping the end token
     pub fn capture_string_until_and_skip_end(
         &mut self,
@@ -244,7 +256,11 @@ impl<'t> Tokenizer<'t> {
     // Example: For an input "{ a : ["a1", "a2"], b : ["b1", "b2"]], if we need to capture string
     // until the `,` exists just before token `b`, then we call this function as `tokenizer.capture_string_until(vec!["["], ",")`
     // This will skip the comma that exists between a1 and a2.
-    pub fn capture_string_until(&mut self, nested_starts: Vec<&Token>, end: &Token) -> Option<String> {
+    pub fn capture_string_until(
+        &mut self,
+        nested_starts: Vec<&Token>,
+        end: &Token,
+    ) -> Option<String> {
         let capture_until = self.index_of_future_token(nested_starts, end)?;
 
         let tokens = self.all_tokens_until(capture_until);
@@ -410,6 +426,14 @@ impl<'t> Tokenizer<'t> {
     pub fn peek_next_token(&mut self) -> Option<Token> {
         let original_state = self.state.clone();
         let token = self.next_token();
+        self.state = original_state;
+        token
+    }
+
+
+    pub fn peek_next_non_empty_token(&mut self) -> Option<Token> {
+        let original_state = self.state.clone();
+        let token = self.next_non_empty_token();
         self.state = original_state;
         token
     }
