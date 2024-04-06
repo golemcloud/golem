@@ -3,9 +3,7 @@ use std::rc::Rc;
 use crate::expression::{ConstructorPattern, Expr};
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-use crate::parser::expr::{
-    flags, let_statement, pattern_match, record, selection, sequence, tuple,
-};
+use crate::parser::expr::{constructor, flags, let_statement, pattern_match, record, selection, sequence, tuple, util};
 use crate::parser::{GolemParser, ParseError};
 use internal::*;
 #[derive(Clone, Debug)]
@@ -72,7 +70,7 @@ pub(crate) fn parse_tokens(
 
                 Token::MultiChar(MultiCharTokens::Number(number)) => {
                     let new_expr = if context.is_code() {
-                        resolve_literal_in_code_context(number.as_str())
+                        util::get_primitive_expr(number.as_str())
                     } else {
                         Expr::Literal(number)
                     };
@@ -98,7 +96,7 @@ pub(crate) fn parse_tokens(
                 | token @ Token::MultiChar(MultiCharTokens::Ok)
                 | token @ Token::MultiChar(MultiCharTokens::Err) => {
                     let constructor_pattern =
-                        get_constructor_pattern(tokenizer, token.to_string().as_str())?;
+                        constructor::get_constructor_pattern(tokenizer, token.to_string().as_str())?;
                     go(
                         tokenizer,
                         context,
@@ -383,25 +381,12 @@ pub(crate) fn parse_tokens(
 }
 
 mod internal {
-    use crate::expression::{ConstructorPattern, Expr, InnerNumber};
+    use crate::expression::{Expr};
     use crate::parser::expr_parser::{parse_tokens, Context};
     use crate::parser::ParseError;
     use crate::tokeniser::tokenizer::{Token, Tokenizer};
     use strum_macros::Display;
-
-    pub(crate) fn resolve_literal_in_code_context(primitive: &str) -> Expr {
-        if let Ok(u64) = primitive.parse::<u64>() {
-            Expr::Number(InnerNumber::UnsignedInteger(u64))
-        } else if let Ok(i64_value) = primitive.parse::<i64>() {
-            Expr::Number(InnerNumber::Integer(i64_value))
-        } else if let Ok(f64_value) = primitive.parse::<f64>() {
-            Expr::Number(InnerNumber::Float(f64_value))
-        } else if let Ok(boolean) = primitive.parse::<bool>() {
-            Expr::Boolean(boolean)
-        } else {
-            Expr::Variable(primitive.to_string())
-        }
-    }
+    use crate::parser::expr::{constructor, util};
 
     pub(crate) fn tokenise(input: &str) -> Tokenizer {
         Tokenizer::new(input)
@@ -508,10 +493,10 @@ mod internal {
 
         match next_token {
             Some(Token::LParen) => {
-                let constructor_pattern = get_constructor_pattern(tokenizer, custom_string)?;
+                let constructor_pattern = constructor::get_constructor_pattern(tokenizer, custom_string)?;
                 Ok(Expr::Constructor0(constructor_pattern))
             }
-            _ => Ok(resolve_literal_in_code_context(custom_string)),
+            _ => Ok(util::get_primitive_expr(custom_string)),
         }
     }
 
@@ -528,52 +513,6 @@ mod internal {
             None => Err(ParseError::Message(
                 "Expecting a non-empty string between quotes".to_string(),
             )),
-        }
-    }
-
-    // To parse expressions such some(x), foo(bar)
-    pub(crate) fn get_constructor_pattern(
-        tokenizer: &mut Tokenizer,
-        constructor_name: &str,
-    ) -> Result<ConstructorPattern, ParseError> {
-        match tokenizer.next_non_empty_token() {
-            Some(Token::LParen) => {
-                let constructor_var_optional = tokenizer
-                    .capture_string_until_and_skip_end(vec![&Token::LParen], &Token::RParen);
-                match constructor_var_optional {
-                    Some(constructor_var) => {
-                        let mut tokenizer = Tokenizer::new(constructor_var.as_str());
-
-                        let constructor_expr = parse_tokens(&mut tokenizer, Context::Code)?;
-
-                        match constructor_expr {
-                            Expr::Variable(variable) => ConstructorPattern::constructor(
-                                constructor_name.to_string().as_str(),
-                                vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
-                                    variable,
-                                )))],
-                            ),
-                            Expr::Constructor0(pattern) => ConstructorPattern::constructor(
-                                constructor_name.to_string().as_str(),
-                                vec![pattern],
-                            ),
-                            expr => ConstructorPattern::constructor(
-                                constructor_name.to_string().as_str(),
-                                vec![ConstructorPattern::Literal(Box::new(expr))],
-                            ),
-                        }
-                    }
-                    None => Err(ParseError::Message(format!(
-                        "Empty value inside the constructor {}",
-                        constructor_name
-                    ))),
-                }
-            }
-
-            _ => Err(ParseError::Message(format!(
-                "Expecting an open parenthesis '(' after {}",
-                constructor_name
-            ))),
         }
     }
 
