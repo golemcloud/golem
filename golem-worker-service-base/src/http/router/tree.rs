@@ -1,4 +1,4 @@
-use super::vecmap::VecMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone)]
 pub struct RadixNode<T> {
@@ -21,7 +21,7 @@ impl<T> Default for RadixNode<T> {
 struct Children<T> {
     // Given the paths are perfectly de-duplicated,
     // We can assume that each child has a unique first pattern.
-    literal_children: VecMap<LiteralPattern, RadixNode<T>>,
+    literal_children: FxHashMap<LiteralPattern, RadixNode<T>>,
     variable_child: Option<Box<RadixNode<T>>>,
     catch_all_child: Option<Box<RadixNode<T>>>,
 }
@@ -29,7 +29,7 @@ struct Children<T> {
 impl<T> Default for Children<T> {
     fn default() -> Self {
         Self {
-            literal_children: VecMap::new(),
+            literal_children: Default::default(),
             variable_child: None,
             catch_all_child: None,
         }
@@ -69,7 +69,7 @@ impl<T> Children<T> {
         match node.pattern.first() {
             Some(Pattern::Literal(literal_pattern)) => {
                 let inserted = self.literal_children.insert(literal_pattern.clone(), node);
-                debug_assert!(inserted, "Duplicate static child");
+                debug_assert!(inserted.is_none(), "Duplicate static child");
                 let _ = inserted;
             }
             Some(Pattern::Variable) => {
@@ -109,7 +109,7 @@ impl Pattern {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LiteralPattern(String);
+pub struct LiteralPattern(pub String);
 
 // Needed to get value in map by &str
 impl std::borrow::Borrow<str> for LiteralPattern {
