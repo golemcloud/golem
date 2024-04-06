@@ -141,7 +141,7 @@ mod internal {
                 Some(Value::Null) => Ok(None),
                 Some(Value::String(expr)) => expression::from_string(expr)
                     .map_err(|err| err.to_string())
-                    .map(|x| Some(x)),
+                    .map(Some),
                 _ => Err(
                     "Invalid response mapping type. It should be a string representing expression"
                         .to_string(),

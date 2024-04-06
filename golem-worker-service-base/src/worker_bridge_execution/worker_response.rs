@@ -155,7 +155,7 @@ mod internal {
 
             let headers = ResolvedResponseHeaders::from(
                 &http_response_mapping.headers,
-                &type_annotated_value,
+                type_annotated_value,
             )?;
 
             let response_body = http_response_mapping.body.evaluate(type_annotated_value)?;

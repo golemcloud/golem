@@ -16,7 +16,7 @@ pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
             writer.write_code_end()?;
         }
         internal::ExprType::StandAloneVariable() => {
-            writer.write_expr(&expr)?;
+            writer.write_expr(expr)?;
         }
     }
 

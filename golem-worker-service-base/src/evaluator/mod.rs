@@ -336,7 +336,7 @@ impl Evaluator for Expr {
                     }
 
                     let typ: &Vec<AnalysedType> =
-                        &result.iter().map(|x| AnalysedType::from(x)).collect();
+                        &result.iter().map(AnalysedType::from).collect();
 
                     Ok(TypeAnnotatedValue::Tuple {
                         value: result,
@@ -475,7 +475,7 @@ fn handle_pattern_match(
                                         if let Some(v) = value {
                                             let pattern_expr_variable = pattern_expr_variable()?;
                                             let result = possible_resolution.evaluate(
-                                                &input.merge(&TypeAnnotatedValue::Record {
+                                                input.merge(&TypeAnnotatedValue::Record {
                                                     value: vec![(
                                                         pattern_expr_variable.clone(),
                                                         *v.clone(),
@@ -496,7 +496,7 @@ fn handle_pattern_match(
                                     // even if request.body.user-id type is not Option
                                     other_type_annotated_value => {
                                         let pattern_expr_variable = pattern_expr_variable()?;
-                                        let result = possible_resolution.evaluate(&input.merge(
+                                        let result = possible_resolution.evaluate(input.merge(
                                             &TypeAnnotatedValue::Record {
                                                 value: vec![(
                                                     pattern_expr_variable.clone(),
@@ -527,7 +527,7 @@ fn handle_pattern_match(
                                     if let TypeAnnotatedValue::Result { value: Ok(v), .. } =
                                         &match_evaluated
                                     {
-                                        let result = possible_resolution.evaluate(&input.merge(
+                                        let result = possible_resolution.evaluate(input.merge(
                                             &TypeAnnotatedValue::Record {
                                                 value: vec![(
                                                     pattern_expr_variable()?.to_string(),
@@ -549,7 +549,7 @@ fn handle_pattern_match(
                                         &match_evaluated
                                     {
                                         let result = &possible_resolution.evaluate(
-                                            &input.merge(&TypeAnnotatedValue::Record {
+                                            input.merge(&TypeAnnotatedValue::Record {
                                                 value: vec![(
                                                     pattern_expr_variable()?.to_string(),
                                                     *v.clone().unwrap(),

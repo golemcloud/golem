@@ -144,7 +144,7 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     fn try_into(self) -> Result<crate::worker_binding::GolemWorkerBinding, Self::Error> {
         let response: Option<crate::worker_binding::ResponseMapping> = match self.response {
             Some(v) => {
-                let r = expression::from_string(&v).map_err(|e| e.to_string())?;
+                let r = expression::from_string(v).map_err(|e| e.to_string())?;
                 Some(crate::worker_binding::ResponseMapping(r))
             }
             None => None,
