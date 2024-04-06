@@ -53,6 +53,96 @@ interface host {
     smart
   }
 
+  enum filter-comparator {
+    equal,
+    not-equal,
+    greater-equal,
+    greater,
+    less-equal,
+    less
+  }
+
+  enum string-filter-comparator {
+    equal,
+    not-equal,
+    like,
+    not-like
+  }
+
+  enum worker-status {
+    /// The worker is running an invoked function
+    running,
+      /// The worker is ready to run an invoked function
+    idle,
+      /// An invocation is active but waiting for something (sleeping, waiting for a promise)
+    suspended,
+      /// The last invocation was interrupted but will be resumed
+    interrupted,
+      /// The last invocation failed and a retry was scheduled
+    retrying,
+      /// The last invocation failed and the worker can no longer be used
+    failed,
+      /// The worker exited after a successful invocation and can no longer be invoked
+    exited,
+  }
+
+  record worker-name-filter {
+    comparator: string-filter-comparator,
+    value: string
+  }
+
+  record worker-status-filter {
+    comparator: filter-comparator,
+    value: worker-status
+  }
+
+  record worker-version-filter {
+    comparator: filter-comparator,
+    value: u64
+  }
+
+  record worker-created-at-filter {
+    comparator: filter-comparator,
+    value: u64
+  }
+
+  record worker-env-filter {
+    name: string,
+    comparator: string-filter-comparator,
+    value: string
+  }
+
+  variant worker-property-filter {
+    name(worker-name-filter),
+    status(worker-status-filter),
+    version(worker-version-filter),
+    created-at(worker-created-at-filter),
+    env(worker-env-filter)
+  }
+
+  record worker-all-filter {
+    filters: list<worker-property-filter>
+  }
+
+  record worker-any-filter {
+    filters: list<worker-all-filter>
+  }
+
+  record worker-metadata {
+    worker-id: worker-id,
+    args: list<string>,
+    env: list<tuple<string, string>>,
+    status: worker-status,
+    template-version: u64,
+    retry-count: u64
+  }
+
+  resource get-workers {
+    constructor(template-id: template-id, filter: option<worker-any-filter>, precise: bool);
+
+    get-next: func() -> option<list<worker-metadata>>;
+  }
+
   /// Create a new promise
   golem-create-promise: func() -> promise-id;
 
@@ -113,6 +203,11 @@ interface host {
   /// In case of false the executor provides at-most-once semantics, failing the worker in case it is
   /// not known if the side effect was already executed.
   set-idempotence-mode: func(idempotent: bool) -> ();
+
+  /// Generates an idempotency key. This operation will never be replayed —
+  /// i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)
+  /// to introduce idempotence.
+  generate-idempotency-key: func() -> uuid;
 }
 
 world golem-host {

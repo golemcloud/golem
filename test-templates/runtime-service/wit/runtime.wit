@@ -1,6 +1,11 @@
 package golem:it;
 
 interface api {
+  use golem:api/host@0.2.0.{
+           template-id,
+           worker-any-filter,
+           worker-metadata
+  };
   get-self-uri: func(function-name: string) -> string;
   jump: func() -> u64;
   fail-with-custom-max-retries: func(max-retries: u64) -> ();
@@ -8,6 +13,7 @@ interface api {
   atomic-region: func() -> ();
   idempotence-flag: func(enabled: bool) -> ();
   persist-nothing: func() -> ();
+  get-workers: func(template-id: template-id, filter: option<worker-any-filter>, precise: bool) -> list<worker-metadata>;
 }
 
 world runtime-service {
