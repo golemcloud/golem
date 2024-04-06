@@ -46,7 +46,11 @@ impl<W: Write> Writer<W> {
     pub fn write_expr(&mut self, expr: &Expr) -> Result<(), WriterError>
     {
         match expr {
-            Expr::Literal(string) => self.write_str(string),
+            Expr::Literal(string) => {
+                self.write_display(Token::Quote)?;
+                self.write_str(string)?;
+                self.write_display(Token::Quote)
+            }
             Expr::Request() => self.write_display(Token::MultiChar(MultiCharTokens::Request)),
             Expr::Let(let_variable, expr) => {
                 self.write_str("let ")?;
