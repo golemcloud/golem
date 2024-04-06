@@ -269,6 +269,26 @@ mod tests {
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
+    #[test]
+    fn test_round_trip_if_condition() {
+        let input_expr = Expr::Cond(
+            Box::new(Expr::EqualTo(
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::Request()),
+                    "foo".to_string(),
+                )),
+                Box::new(Expr::Literal("bar".to_string())),
+            )),
+            Box::new(Expr::Literal("success".to_string())),
+            Box::new(Expr::Literal("failed".to_string())),
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${if request.foo == 'bar' then 'success' else 'failed'}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
     // A few non-round-trip text based tests
     #[test]
     fn test_sequence_of_records_singleton() {
