@@ -23,7 +23,7 @@ pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
     Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
 }
 
-pub struct Writer<W> {
+struct Writer<W> {
     inner: W,
 }
 
@@ -35,19 +35,19 @@ pub enum WriterError {
 }
 
 impl<W: Write> Writer<W> {
-     pub fn new(w: W) -> Self {
+    fn new(w: W) -> Self {
         Self { inner: w }
     }
 
-     pub(crate) fn write_code_start(&mut self) -> Result<(), WriterError> {
+    fn write_code_start(&mut self) -> Result<(), WriterError> {
         self.write_display(Token::MultiChar(MultiCharTokens::InterpolationStart))
     }
 
-     pub(crate) fn write_code_end(&mut self) -> Result<(), WriterError> {
+    fn write_code_end(&mut self) -> Result<(), WriterError> {
         self.write_display(Token::RCurly)
     }
 
-     pub(crate) fn write_expr(&mut self, expr: &Expr) -> Result<(), WriterError> {
+    fn write_expr(&mut self, expr: &Expr) -> Result<(), WriterError> {
         match expr {
             Expr::Literal(string) => {
                 self.write_display(Token::Quote)?;
@@ -201,12 +201,12 @@ impl<W: Write> Writer<W> {
         }
     }
 
-    pub(crate) fn write_str(&mut self, s: impl AsRef<str>) -> Result<(), WriterError> {
+    fn write_str(&mut self, s: impl AsRef<str>) -> Result<(), WriterError> {
         self.inner.write_all(s.as_ref().as_bytes())?;
         Ok(())
     }
 
-    pub(crate) fn write_display(&mut self, d: impl std::fmt::Display) -> Result<(), WriterError> {
+    fn write_display(&mut self, d: impl std::fmt::Display) -> Result<(), WriterError> {
         write!(self.inner, "{d}")?;
         Ok(())
     }
