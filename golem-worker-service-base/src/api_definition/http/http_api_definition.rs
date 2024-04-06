@@ -298,6 +298,7 @@ pub struct Route {
 #[cfg(test)]
 mod tests {
     use golem_common::serialization;
+    use crate::expression;
 
     use crate::expression::Expr;
 
@@ -436,9 +437,9 @@ mod tests {
     }
 
     fn test_string_expr_parse_and_encode(input: &str) {
-        let parsed_expr1 = Expr::from_str(input).unwrap();
+        let parsed_expr1 = expression::from_string(input).unwrap();
         let encoded_expr = parsed_expr1.to_string().unwrap();
-        let parsed_expr2 = Expr::from_str(encoded_expr.as_str()).unwrap();
+        let parsed_expr2 = expression::from_string(encoded_expr.as_str()).unwrap();
 
         assert_eq!(parsed_expr1, parsed_expr2);
     }

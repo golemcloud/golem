@@ -34,6 +34,7 @@ mod internal {
     use serde_json::Value;
 
     use uuid::Uuid;
+    use crate::expression;
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
@@ -132,12 +133,21 @@ mod internal {
     pub(crate) fn get_response_mapping(
         worker_bridge_info: &Value,
     ) -> Result<Option<ResponseMapping>, String> {
-        let response = worker_bridge_info.get("response");
-        match response {
-            Some(response) => {
-                let response_mapping_expr =
-                    Expr::from_json_value(response).map_err(|err| err.to_string())?;
+        let response = {
+            let response_mapping_optional =  worker_bridge_info.get("response");
 
+            match response_mapping_optional {
+                None => Ok(None),
+                Some(Value::Null) => Ok(None),
+                Some(Value::String(expr)) => expression::from_string(expr).map_err(|err| err.to_string()).map(|x| Some(x)),
+                _ => Err("Invalid response mapping type. It should be a string representing expression".to_string())
+            }
+        };
+
+        match response? {
+            Some(response_mapping_expr) => {
+
+                // Validating
                 let _ =
                     HttpResponseMapping::try_from(&ResponseMapping(response_mapping_expr.clone()))
                         .map_err(|err| err.to_string())?;
@@ -158,6 +168,15 @@ mod internal {
             .ok_or("function-params is not an array")?;
         let mut exprs = vec![];
         for param in function_params {
+            match param {
+                Value::Array(function_params) => {
+                    for function_param_value in function_params {
+                        match funtion_param_value {
+                            Value::String()
+                        }
+                    }
+                }
+            }
             exprs.push(Expr::from_json_value(param).map_err(|err| err.to_string())?);
         }
         Ok(exprs)
