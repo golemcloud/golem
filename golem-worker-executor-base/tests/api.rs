@@ -735,8 +735,9 @@ async fn get_workers() {
         Some(
             WorkerFilter::new_name(StringFilterComparator::Like, "test".to_string())
                 .and(
-                    WorkerFilter::new_status(WorkerStatus::Idle)
-                        .or(WorkerFilter::new_status(WorkerStatus::Running)),
+                    WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Idle).or(
+                        WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
+                    ),
                 )
                 .and(WorkerFilter::new_version(FilterComparator::Equal, 0)),
         ),

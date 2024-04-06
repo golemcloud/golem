@@ -36,7 +36,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
-use crate::services::HasAll;
+use crate::services::{worker_enumeration, HasAll};
 use crate::wasi_host::managed_stdio::ManagedStandardIo;
 use crate::workerctx::{
     ExternalOperations, InvocationHooks, InvocationManagement, IoCapturing, PublicWorkerIo,
@@ -50,8 +50,8 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerFilter,
+    WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -80,7 +80,7 @@ pub mod blobstore;
 mod cli;
 mod clocks;
 mod filesystem;
-mod golem;
+pub mod golem;
 mod http;
 pub mod io;
 pub mod keyvalue;
@@ -113,6 +113,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
@@ -178,6 +181,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         promise_service: promise_service.clone(),
                         scheduler_service,
                         worker_service: worker_service.clone(),
+                        worker_enumeration_service: worker_enumeration_service.clone(),
                         invocation_key_service,
                         key_value_service,
                         blob_store_service,
@@ -773,6 +777,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
     invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
     worker_service: Arc<dyn WorkerService + Send + Sync>,
+    worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
     config: Arc<GolemConfig>,
@@ -1105,6 +1110,19 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             .await
             .map(|last_error| last_error.retry_count)
             .unwrap_or_default()
+    }
+
+    pub async fn get_workers(
+        &self,
+        template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: u64,
+        count: u64,
+        precise: bool,
+    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
+        self.worker_enumeration_service
+            .get(template_id, filter, cursor, count, precise)
+            .await
     }
 }
 

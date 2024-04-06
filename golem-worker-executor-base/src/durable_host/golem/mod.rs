@@ -18,6 +18,8 @@ use golem_common::config::RetryConfig;
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
+use wasmtime::component::Resource;
+use wasmtime_wasi::preview2::WasiView;
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::UriExtensions;
@@ -27,11 +29,101 @@ use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
-use crate::preview2::golem::api::host::{OplogIndex, PersistenceLevel, RetryPolicy};
+use crate::preview2::golem::api::host::{
+    HostGetWorkers, OplogIndex, PersistenceLevel, RetryPolicy,
+};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{PromiseId, TemplateId, WorkerId};
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
+    async fn new(
+        &mut self,
+        template_id: golem::api::host::TemplateId,
+        filter: Option<golem::api::host::WorkerAnyFilter>,
+        precise: bool,
+    ) -> anyhow::Result<Resource<GetWorkersEntry>> {
+        record_host_function_call("golem::api::get-workers", "new");
+        let entry = GetWorkersEntry::new(template_id.into(), filter.map(|f| f.into()), precise);
+        let resource = self.as_wasi_view().table_mut().push(entry)?;
+        Ok(resource)
+    }
+
+    async fn get_next(
+        &mut self,
+        self_: Resource<GetWorkersEntry>,
+    ) -> anyhow::Result<Option<Vec<golem::api::host::WorkerMetadata>>> {
+        record_host_function_call("golem::api::get-workers", "get_next");
+        let (template_id, filter, count, precise, cursor) = self
+            .as_wasi_view()
+            .table()
+            .get::<GetWorkersEntry>(&self_)
+            .map(|e| {
+                (
+                    e.template_id.clone(),
+                    e.filter.clone(),
+                    e.count,
+                    e.precise,
+                    e.next_cursor,
+                )
+            })?;
+
+        if let Some(cursor) = cursor {
+            let (new_cursor, workers) = self
+                .state
+                .get_workers(&template_id, filter, cursor, count, precise)
+                .await?;
+
+            let _ = self
+                .as_wasi_view()
+                .table_mut()
+                .get_mut::<GetWorkersEntry>(&self_)
+                .map(|e| e.set_next_cursor(new_cursor))?;
+
+            Ok(Some(workers.into_iter().map(|w| w.into()).collect()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn drop(&mut self, rep: Resource<GetWorkersEntry>) -> anyhow::Result<()> {
+        record_host_function_call("golem::api::get-workers", "drop");
+        self.as_wasi_view()
+            .table_mut()
+            .delete::<GetWorkersEntry>(rep)?;
+        Ok(())
+    }
+}
+
+pub struct GetWorkersEntry {
+    template_id: golem_common::model::TemplateId,
+    filter: Option<golem_common::model::WorkerFilter>,
+    precise: bool,
+    count: u64,
+    next_cursor: Option<u64>,
+}
+
+impl GetWorkersEntry {
+    pub fn new(
+        template_id: golem_common::model::TemplateId,
+        filter: Option<golem_common::model::WorkerFilter>,
+        precise: bool,
+    ) -> Self {
+        Self {
+            template_id,
+            filter,
+            precise,
+            count: 50,
+            next_cursor: Some(0),
+        }
+    }
+
+    fn set_next_cursor(&mut self, cursor: Option<u64>) {
+        self.next_cursor = cursor;
+    }
+}
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
@@ -425,6 +517,148 @@ impl From<Uuid> for golem::api::host::Uuid {
         golem::api::host::Uuid {
             high_bits,
             low_bits,
+        }
+    }
+}
+
+impl From<golem::api::host::FilterComparator> for golem_common::model::FilterComparator {
+    fn from(value: golem::api::host::FilterComparator) -> Self {
+        match value {
+            golem::api::host::FilterComparator::Equal => {
+                golem_common::model::FilterComparator::Equal
+            }
+            golem::api::host::FilterComparator::NotEqual => {
+                golem_common::model::FilterComparator::NotEqual
+            }
+            golem::api::host::FilterComparator::Less => golem_common::model::FilterComparator::Less,
+            golem::api::host::FilterComparator::LessEqual => {
+                golem_common::model::FilterComparator::LessEqual
+            }
+            golem::api::host::FilterComparator::Greater => {
+                golem_common::model::FilterComparator::Greater
+            }
+            golem::api::host::FilterComparator::GreaterEqual => {
+                golem_common::model::FilterComparator::GreaterEqual
+            }
+        }
+    }
+}
+
+impl From<golem::api::host::StringFilterComparator>
+    for golem_common::model::StringFilterComparator
+{
+    fn from(value: golem::api::host::StringFilterComparator) -> Self {
+        match value {
+            golem::api::host::StringFilterComparator::Equal => {
+                golem_common::model::StringFilterComparator::Equal
+            }
+            golem::api::host::StringFilterComparator::NotEqual => {
+                golem_common::model::StringFilterComparator::NotEqual
+            }
+            golem::api::host::StringFilterComparator::Like => {
+                golem_common::model::StringFilterComparator::Like
+            }
+            golem::api::host::StringFilterComparator::NotLike => {
+                golem_common::model::StringFilterComparator::NotLike
+            }
+        }
+    }
+}
+
+impl From<golem::api::host::WorkerStatus> for golem_common::model::WorkerStatus {
+    fn from(value: golem::api::host::WorkerStatus) -> Self {
+        match value {
+            golem::api::host::WorkerStatus::Running => golem_common::model::WorkerStatus::Running,
+            golem::api::host::WorkerStatus::Idle => golem_common::model::WorkerStatus::Idle,
+            golem::api::host::WorkerStatus::Suspended => {
+                golem_common::model::WorkerStatus::Suspended
+            }
+            golem::api::host::WorkerStatus::Interrupted => {
+                golem_common::model::WorkerStatus::Interrupted
+            }
+            golem::api::host::WorkerStatus::Retrying => golem_common::model::WorkerStatus::Retrying,
+            golem::api::host::WorkerStatus::Failed => golem_common::model::WorkerStatus::Failed,
+            golem::api::host::WorkerStatus::Exited => golem_common::model::WorkerStatus::Exited,
+        }
+    }
+}
+
+impl From<golem_common::model::WorkerStatus> for golem::api::host::WorkerStatus {
+    fn from(value: golem_common::model::WorkerStatus) -> Self {
+        match value {
+            golem_common::model::WorkerStatus::Running => golem::api::host::WorkerStatus::Running,
+            golem_common::model::WorkerStatus::Idle => golem::api::host::WorkerStatus::Idle,
+            golem_common::model::WorkerStatus::Suspended => {
+                golem::api::host::WorkerStatus::Suspended
+            }
+            golem_common::model::WorkerStatus::Interrupted => {
+                golem::api::host::WorkerStatus::Interrupted
+            }
+            golem_common::model::WorkerStatus::Retrying => golem::api::host::WorkerStatus::Retrying,
+            golem_common::model::WorkerStatus::Failed => golem::api::host::WorkerStatus::Failed,
+            golem_common::model::WorkerStatus::Exited => golem::api::host::WorkerStatus::Exited,
+        }
+    }
+}
+
+impl From<golem::api::host::WorkerPropertyFilter> for golem_common::model::WorkerFilter {
+    fn from(filter: golem::api::host::WorkerPropertyFilter) -> Self {
+        match filter {
+            golem::api::host::WorkerPropertyFilter::Name(filter) => {
+                golem_common::model::WorkerFilter::new_name(filter.comparator.into(), filter.value)
+            }
+            golem::api::host::WorkerPropertyFilter::Version(filter) => {
+                golem_common::model::WorkerFilter::new_version(
+                    filter.comparator.into(),
+                    filter.value,
+                )
+            }
+            golem::api::host::WorkerPropertyFilter::Status(filter) => {
+                golem_common::model::WorkerFilter::new_status(
+                    filter.comparator.into(),
+                    filter.value.into(),
+                )
+            }
+            golem::api::host::WorkerPropertyFilter::Env(filter) => {
+                golem_common::model::WorkerFilter::new_env(
+                    filter.name,
+                    filter.comparator.into(),
+                    filter.value,
+                )
+            }
+            golem::api::host::WorkerPropertyFilter::CreatedAt(filter) => {
+                golem_common::model::WorkerFilter::new_created_at(
+                    filter.comparator.into(),
+                    filter.value.into(),
+                )
+            }
+        }
+    }
+}
+
+impl From<golem::api::host::WorkerAllFilter> for golem_common::model::WorkerFilter {
+    fn from(filter: golem::api::host::WorkerAllFilter) -> Self {
+        let filters = filter.filters.into_iter().map(|f| f.into()).collect();
+        golem_common::model::WorkerFilter::new_and(filters)
+    }
+}
+
+impl From<golem::api::host::WorkerAnyFilter> for golem_common::model::WorkerFilter {
+    fn from(filter: golem::api::host::WorkerAnyFilter) -> Self {
+        let filters = filter.filters.into_iter().map(|f| f.into()).collect();
+        golem_common::model::WorkerFilter::new_or(filters)
+    }
+}
+
+impl From<golem_common::model::WorkerMetadata> for golem::api::host::WorkerMetadata {
+    fn from(value: golem_common::model::WorkerMetadata) -> Self {
+        Self {
+            worker_id: value.worker_id.worker_id.into(),
+            args: value.args,
+            env: value.env,
+            status: value.last_known_status.status.into(),
+            template_version: value.worker_id.template_version as u64,
+            retry_count: 0,
         }
     }
 }
