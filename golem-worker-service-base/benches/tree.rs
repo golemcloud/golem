@@ -78,36 +78,27 @@ fn build_radix_tree(routes: &[Vec<Pattern>]) -> RadixNode<(usize, String)> {
 }
 
 fn build_routes<T>(router: &RadixNode<T>) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
-    let mut match_routes = Vec::new();
-    let mut miss_routes = Vec::new();
-
     let all_patterns = ROUTES.iter().map(|s| make_path(s)).collect::<Vec<_>>();
 
-    loop {
-        let need_matches = match_routes.len() < 500;
-        let need_misses = miss_routes.len() < 100;
+    let (match_patterns, miss_patterns) =
+        all_patterns.into_iter().partition::<Vec<_>, _>(|route| {
+            let route_str = generate_match_route(route);
+            let route_str = route_str.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+            router.matches(&route_str).is_some()
+        });
 
-        if !need_matches && !need_misses {
-            break;
-        }
+    let match_routes = (0..500)
+        .map(|_| generate_match_route(fastrand::choice(&match_patterns).unwrap()))
+        .collect::<Vec<_>>();
 
-        let route = generate_match_route(&all_patterns);
-        let route_str = route.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-
-        if router.matches(&route_str).is_some() {
-            if need_matches {
-                match_routes.push(route);
-            }
-        } else if need_misses {
-            miss_routes.push(route);
-        }
-    }
+    let miss_routes = (0..500)
+        .map(|_| generate_match_route(fastrand::choice(&miss_patterns).unwrap()))
+        .collect::<Vec<_>>();
 
     (match_routes, miss_routes)
 }
 
-fn generate_match_route(routes: &[Vec<Pattern>]) -> Vec<String> {
-    let route = fastrand::choice(routes).unwrap();
+fn generate_match_route(route: &[Pattern]) -> Vec<String> {
     route
         .iter()
         .flat_map(|segment| match segment {
