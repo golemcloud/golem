@@ -17,6 +17,9 @@ pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
             writer.write_expr(expr)?;
             writer.write_code_end()?;
         }
+        ExprType::StandAloneVariable(_) => {
+            writer.write_expr(&expr)?;
+        }
     }
 
     Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
@@ -227,16 +230,25 @@ impl<W: Write> Writer<W> {
 mod internal {
     use crate::expression::{ConstructorPattern, Expr};
     use crate::expression::writer::{Writer, WriterError};
-    use crate::expression::writer::internal::ExprType::Text;
 
     pub(crate) enum ExprType<'a> {
         Code(&'a Expr),
-        Text(&'a str)
+        Text(&'a str),
+        StandAloneVariable(&'a str)
     }
+
     pub (crate) fn get_expr_type(expr: &Expr) -> ExprType {
         match expr {
-            Expr::Literal(str) => Text(str),
+            Expr::Literal(str) => ExprType::Text(str),
+            Expr::Variable(variable) => ExprType::StandAloneVariable(variable),
             expr => ExprType::Code(expr),
+        }
+    }
+
+    pub(crate) fn is_standalone_variable(expr: &Expr) -> bool {
+        match expr {
+            Expr::Variable(_) => true,
+            _ => false
         }
     }
 
@@ -283,50 +295,54 @@ mod tests {
     fn test_round_trip_read_write_literal() {
         let input_expr = Expr::Literal("hello".to_string());
         let expr_str = write_expr(&input_expr).unwrap();
-        dbg!(expr_str.clone());
-        let output_expr = reader::read_expr(expr_str).unwrap();
-        assert_eq!(input_expr, output_expr);
+        let expected_str = "hello".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
     #[test]
     fn test_round_trip_read_write_request() {
         let input_expr = Expr::Request();
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str).unwrap();
-        assert_eq!(input_expr, output_expr);
+        let expected_str = "${request}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
     #[test]
     fn test_round_trip_read_write_let() {
         let input_expr = Expr::Let("x".to_string(), Box::new(Expr::Literal("hello".to_string())));
         let expr_str = write_expr(&input_expr).unwrap();
-        dbg!(expr_str.clone());
-        let output_expr = reader::read_expr(expr_str).unwrap();
-        assert_eq!(input_expr, output_expr);
+        let expected_str = "${let x = 'hello';}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
     #[test]
     fn test_round_trip_read_write_worker() {
         let input_expr = Expr::Worker();
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str).unwrap();
-        assert_eq!(input_expr, output_expr);
+        let expected_str = "${worker}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
     #[test]
     fn test_round_trip_read_write_select_field() {
         let input_expr = Expr::SelectField(Box::new(Expr::Request()), "field".to_string());
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str).unwrap();
-        assert_eq!(input_expr, output_expr);
+        let expected_str = "${request.field}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
     #[test]
     fn test_round_trip_read_write_select_index() {
         let input_expr = Expr::SelectIndex(Box::new(Expr::Request()), 1);
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str).unwrap();
-        assert_eq!(input_expr, output_expr);
+        let expected_str = "${request[1]}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
     #[test]
@@ -336,8 +352,9 @@ mod tests {
             Expr::Request(),
         ]);
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str).unwrap();
-        assert_eq!(input_expr, output_expr);
+        let expected_str = "${[request, request]}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
     #[test]
@@ -348,8 +365,9 @@ mod tests {
             ("field".to_string(), Box::new(Expr::Request())),
         ]);
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str).unwrap();
-        assert_eq!(input_expr, output_expr);
+        let expected_str = "${{field: request, field: request, field: request}}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
     #[test]
@@ -360,8 +378,9 @@ mod tests {
            Expr::Request(),
         ]);
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str).unwrap();
-        assert_eq!(input_expr, output_expr);
+        let expected_str = "${(request, request, request)}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
     #[test]
@@ -376,16 +395,18 @@ mod tests {
     fn test_round_trip_read_write_number_u64() {
         let input_expr = Expr::Number(InnerNumber::UnsignedInteger(1));
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str).unwrap();
-        assert_eq!(input_expr, output_expr);
+        let expected_str = "${1}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
     #[test]
     fn test_round_trip_read_write_number_i64() {
         let input_expr = Expr::Number(InnerNumber::Integer(-1));
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str).unwrap();
-        assert_eq!(input_expr, output_expr);
+        let expected_str = "${-1}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
     #[test]
@@ -396,9 +417,18 @@ fn test_round_trip_read_write_flags() {
             "flag3".to_string(),
         ]);
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str).unwrap();
+        let expected_str = "${{flag1, flag2, flag3}}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
 
-        assert_eq!(input_expr, output_expr);
+    #[test]
+    fn test_round_trip_read_write_variable() {
+        let input_expr = Expr::Variable("variable".to_string());
+        let expr_str = write_expr(&input_expr).unwrap();
+        let expected_str = "${variable}".to_string();
+        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
 }
