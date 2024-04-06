@@ -85,14 +85,34 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_read_write_record() {
+    fn test_round_trip_simple_record_single() {
+        let input_expr = Expr::Record(vec![("field".to_string(), Box::new(Expr::Request()))]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${{field: request}}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_record_multiple() {
         let input_expr = Expr::Record(vec![
-            ("field".to_string(), Box::new(Expr::Request())),
             ("field".to_string(), Box::new(Expr::Request())),
             ("field".to_string(), Box::new(Expr::Request())),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${{field: request, field: request, field: request}}".to_string();
+        let expected_str = "${{field: request, field: request}}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_record_of_sequence() {
+        let input_expr = Expr::Record(vec![
+            ("field".to_string(), Box::new(Expr::Request())),
+            ("field".to_string(), Box::new(Expr::Request())),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${{field: request, field: request}}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -116,9 +136,8 @@ mod tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        dbg!(expr_str.clone());
         let record_string =
-            "{a: {ab: request, ac: request}, b: {bc: request, bd: request}}".to_string();
+            "{a: {ab: request, ac: request}, b: [{bc: request, bd: request}]}".to_string();
         let expected_record_str = format!("${{{}}}", record_string); // Just wrapping it with interpolation
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
@@ -191,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_read_write_record_of_sequence() {
+    fn test_round_trip_read_write_record_of_sequence_values() {
         let input_expr = Expr::Record(vec![
             (
                 "field".to_string(),

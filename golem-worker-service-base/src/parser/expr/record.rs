@@ -4,6 +4,7 @@ use crate::parser::expr_parser::{parse_with_context, Context};
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
+// Assuming the tokenizer already consumed `{` token, indicating the start of sequence
 pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
     let mut record: Vec<(String, Expr)> = vec![];
 
@@ -42,8 +43,20 @@ pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseErro
                                             parse_with_context(full_expr.as_str(), Context::Code)?;
                                         //  dbg!(expr.clone());
                                         record.push((key.to_string(), expr.clone()));
-                                        tokenizer.skip_if_next_non_empty_token_is(&Token::Comma); // Skip comma before looping
-                                        go(tokenizer, record)
+                                        match tokenizer.peek_next_non_empty_token() {
+                                            Some(Token::Comma) => {
+                                                tokenizer.skip_next_non_empty_token(); // Skip comma before looping
+                                                go(tokenizer, record)
+                                            }
+                                            Some(Token::RCurly) => {
+                                                tokenizer.skip_next_non_empty_token(); // Skip RSquare before looping
+                                                Ok(())
+                                            }
+                                            _ => Err(ParseError::Message(
+                                                "Expecting a comma or closing square bracket"
+                                                    .to_string(),
+                                            )),
+                                        }
                                     }
                                     None => Err(ParseError::Message(
                                         "Expecting a value after colon in record 1".to_string(),

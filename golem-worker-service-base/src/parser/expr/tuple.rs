@@ -35,10 +35,8 @@ pub(crate) fn create_tuple(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError
                     Some(last_value) if !last_value.is_empty() => {
                         let expr = parse_with_context(last_value.as_str(), Context::Code)?;
                         // If there is only 1 element, and it's an invalid tuple element, then we need to push it to grouped_exprs
-                        if tuple_elements.is_empty() {
-                            if !is_valid_tuple_element(&expr) {
-                                grouped_exprs.push(expr.clone());
-                            }
+                        if tuple_elements.is_empty() && !is_valid_tuple_element(&expr) {
+                            grouped_exprs.push(expr.clone());
                         }
 
                         tuple_elements.push(expr);

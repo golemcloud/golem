@@ -436,25 +436,6 @@ impl<'t> Tokenizer<'t> {
         token
     }
 
-    pub fn peek_next_n_tokens(&mut self, n: usize) -> Vec<Option<Token>> {
-        let original_state = self.state.clone();
-        let mut tokens = vec![];
-        let range = [0..n];
-        for _ in 0..n {
-            tokens.push(self.next_token());
-        }
-
-        self.state = original_state;
-        tokens
-    }
-
-    pub fn peek_next_n_tokens_as_string(&mut self, n: usize) -> Vec<String> {
-        self.peek_next_n_tokens(n)
-            .iter()
-            .map(|t| t.as_ref().map(|x| x.to_string()).unwrap_or("".to_string()))
-            .collect::<Vec<_>>()
-    }
-
     fn get_single_char_token(&mut self) -> Option<Token> {
         let ch = self.rest().chars().next()?;
         if let Some(token) = match ch {

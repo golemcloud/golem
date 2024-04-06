@@ -59,19 +59,19 @@ impl<W: Write> Writer<W> {
                 self.write_str("let ")?;
                 self.write_str(let_variable)?;
                 self.write_str(" = ")?;
-                self.write_expr(&*expr)?;
+                self.write_expr(expr)?;
                 self.write_display(Token::SemiColon)
             }
             Expr::Worker() => self.write_display(Token::MultiChar(MultiCharTokens::Worker)),
             Expr::SelectField(expr, field_name) => {
-                self.write_expr(&*expr)?;
+                self.write_expr(expr)?;
                 self.write_str(".")?;
                 self.write_str(field_name)
             }
             Expr::SelectIndex(expr, index) => {
-                self.write_expr(&*expr)?;
+                self.write_expr(expr)?;
                 self.write_display(Token::LSquare)?;
-                self.write_display(&*index)?;
+                self.write_display(index)?;
                 self.write_display(Token::RSquare)
             }
             Expr::Sequence(sequence) => {
@@ -81,7 +81,7 @@ impl<W: Write> Writer<W> {
                         self.write_display(Token::Comma)?;
                         self.write_display(Token::Space)?;
                     }
-                    self.write_expr(&*expr)?;
+                    self.write_expr(expr)?;
                 }
                 self.write_display(Token::RSquare)
             }
@@ -95,7 +95,7 @@ impl<W: Write> Writer<W> {
                     self.write_str(key)?;
                     self.write_display(Token::Colon)?;
                     self.write_display(Token::Space)?;
-                    self.write_expr(&*value)?;
+                    self.write_expr(value)?;
                 }
                 self.write_display(Token::RCurly)
             }
@@ -106,7 +106,7 @@ impl<W: Write> Writer<W> {
                         self.write_display(Token::Comma)?;
                         self.write_display(Token::Space)?;
                     }
-                    self.write_expr(&*expr)?;
+                    self.write_expr(expr)?;
                 }
                 self.write_display(Token::RParen)
             }
@@ -130,7 +130,7 @@ impl<W: Write> Writer<W> {
             Expr::Boolean(bool) => self.write_display(bool),
             Expr::Concat(concatenated) => {
                 for expr in concatenated.iter() {
-                    self.write_expr(&*expr)?
+                    self.write_expr(expr)?
                 }
                 Ok(())
             }
@@ -139,50 +139,50 @@ impl<W: Write> Writer<W> {
                     if idx != 0 {
                         self.write_display(Token::NewLine)?;
                     }
-                    self.write_expr(&*expr)?;
+                    self.write_expr(expr)?;
                 }
                 Ok(())
             }
             Expr::Not(expr) => {
                 self.write_str("!")?;
-                self.write_expr(&*expr)
+                self.write_expr(expr)
             }
             Expr::GreaterThan(left, right) => {
-                self.write_expr(&*left)?;
+                self.write_expr(left)?;
                 self.write_str(" > ")?;
-                self.write_expr(&*right)
+                self.write_expr(right)
             }
             Expr::GreaterThanOrEqualTo(left, right) => {
-                self.write_expr(&*left)?;
+                self.write_expr(left)?;
                 self.write_str(" >= ")?;
-                self.write_expr(&*right)
+                self.write_expr(right)
             }
             Expr::LessThanOrEqualTo(left, right) => {
-                self.write_expr(&*left)?;
+                self.write_expr(left)?;
                 self.write_str(" <= ")?;
-                self.write_expr(&*right)
+                self.write_expr(right)
             }
             Expr::EqualTo(left, right) => {
-                self.write_expr(&*left)?;
+                self.write_expr(left)?;
                 self.write_str(" == ")?;
-                self.write_expr(&*right)
+                self.write_expr(right)
             }
             Expr::LessThan(left, right) => {
-                self.write_expr(&*left)?;
+                self.write_expr(left)?;
                 self.write_str(" < ")?;
-                self.write_expr(&*right)
+                self.write_expr(right)
             }
             Expr::Cond(if_expr, left, right) => {
                 self.write_str("if ")?;
-                self.write_expr(&*if_expr)?;
+                self.write_expr(if_expr)?;
                 self.write_str(" then ")?;
-                self.write_expr(&*left)?;
+                self.write_expr(left)?;
                 self.write_str(" else ")?;
-                self.write_expr(&*right)
+                self.write_expr(right)
             }
             Expr::PatternMatch(match_expr, match_terms) => {
                 self.write_str("match ")?;
-                self.write_expr(&*match_expr)?;
+                self.write_expr(match_expr)?;
                 self.write_str(" { ")?;
                 self.write_display(Token::NewLine)?;
                 for (idx, match_term) in match_terms.iter().enumerate() {
@@ -192,7 +192,7 @@ impl<W: Write> Writer<W> {
                     let (match_case, match_expr) = &match_term.0;
                     internal::write_constructor(match_case, self)?;
                     self.write_str(" => ")?;
-                    self.write_expr(&*match_expr)?;
+                    self.write_expr(match_expr)?;
                 }
 
                 Ok(())

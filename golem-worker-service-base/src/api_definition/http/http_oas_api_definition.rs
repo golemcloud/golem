@@ -226,11 +226,11 @@ mod tests {
     fn test_get_route_from_path_item() {
         let path_item = PathItem {
             extensions: vec![("x-golem-worker-bridge".to_string(), json!({
-                "worker-id": "${worker}",
+                "worker-id": "worker-${request.body.user}",
                 "function-name": "test",
                 "function-params": ["${request}"],
                 "template-id": "00000000-0000-0000-0000-000000000000",
-                "response": "${{headers : {ContentType: 'json', userid: 'foo'}, body: worker.response, status: 200}}"
+                "response": "${{headers : {ContentType: 'json', user-id: 'foo'}, body: worker.response, status: 200}}"
             }))]
                 .into_iter()
                 .collect(),
@@ -246,7 +246,16 @@ mod tests {
                 path: path_pattern,
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
-                    worker_id: Expr::Worker(),
+                    worker_id: Expr::Concat(vec![
+                        Expr::Literal("worker-".to_string()),
+                        Expr::SelectField(
+                            Box::new(Expr::SelectField(
+                                Box::new(Expr::Request()),
+                                "body".to_string()
+                            )),
+                            "user".to_string()
+                        )
+                    ]),
                     function_name: "test".to_string(),
                     function_params: vec![Expr::Request()],
                     template: TemplateId(Uuid::nil()),
