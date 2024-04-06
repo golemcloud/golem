@@ -21,9 +21,9 @@ impl<T> Default for RadixNode<T> {
 struct Children<T> {
     // Given the paths are perfectly de-duplicated,
     // We can assume that each child has a unique first pattern.
-    // Duplicating pattern into tuple for performance.
     literal_children: VecMap<LiteralPattern, RadixNode<T>>,
     variable_child: Option<Box<RadixNode<T>>>,
+    catch_all_child: Option<Box<RadixNode<T>>>,
 }
 
 impl<T> Default for Children<T> {
@@ -31,6 +31,7 @@ impl<T> Default for Children<T> {
         Self {
             literal_children: VecMap::new(),
             variable_child: None,
+            catch_all_child: None,
         }
     }
 }
@@ -56,6 +57,7 @@ impl<T> Children<T> {
         match pattern {
             Pattern::Literal(literal_pattern) => self.literal_children.get(literal_pattern),
             Pattern::Variable => self.variable_child.as_ref().map(|c| c.as_ref()),
+            Pattern::CatchAll => self.catch_all_child.as_ref().map(|c| c.as_ref()),
         }
     }
 
@@ -63,6 +65,7 @@ impl<T> Children<T> {
         match pattern {
             Pattern::Literal(literal_pattern) => self.literal_children.get_mut(literal_pattern),
             Pattern::Variable => self.variable_child.as_mut().map(|c| c.as_mut()),
+            Pattern::CatchAll => self.catch_all_child.as_mut().map(|c| c.as_mut()),
         }
     }
 
@@ -81,6 +84,14 @@ impl<T> Children<T> {
 
                 self.variable_child = Some(Box::new(node));
             }
+            Some(Pattern::CatchAll) => {
+                debug_assert!(
+                    self.catch_all_child.is_none(),
+                    "Catch all child already exists"
+                );
+
+                self.catch_all_child = Some(Box::new(node));
+            }
             None => {
                 debug_assert!(false, "Empty pattern");
             }
@@ -92,6 +103,7 @@ impl<T> Children<T> {
 pub enum Pattern {
     Literal(LiteralPattern),
     Variable,
+    CatchAll,
 }
 
 impl Pattern {
@@ -254,6 +266,7 @@ impl<T> RadixNode<T> {
     pub fn matches(&self, path: &[&str]) -> Option<&T> {
         let mut node = self;
         let mut path_segments = path;
+        let mut last_catch_all: Option<&RadixNode<T>> = None;
 
         loop {
             let common_prefix_len = node
@@ -263,8 +276,19 @@ impl<T> RadixNode<T> {
                 .take_while(|(a, b)| match a {
                     Pattern::Literal(s) => s.0 == **b,
                     Pattern::Variable => true,
+                    Pattern::CatchAll => {
+                        // Save the last catch all node
+                        last_catch_all.replace(node);
+                        true
+                    }
                 })
                 .count();
+
+            if node.children.catch_all_child.is_some() {
+                if let Some(child) = node.children.catch_all_child.as_ref() {
+                    last_catch_all.replace(child.as_ref());
+                }
+            }
 
             if common_prefix_len == node.pattern.len() {
                 if common_prefix_len == path_segments.len() {
@@ -279,21 +303,18 @@ impl<T> RadixNode<T> {
                             let next_child = node.children.search_by_str(first_segment);
                             if let Some(child) = next_child {
                                 node = child;
-                            } else {
-                                break;
+                                continue;
                             }
                         }
-                        None => {
-                            break;
-                        }
+                        _ => {}
                     }
                 }
-            } else {
-                break;
             }
+
+            break;
         }
 
-        None
+        last_catch_all.and_then(|node| node.data.as_ref())
     }
 
     #[cfg(test)]
@@ -322,12 +343,21 @@ impl<T> RadixNode<T> {
         }
     }
 
+    // Stops iterating when it finds a catch all node.
+    // Count includes the catch all node.
     #[inline]
     fn common_prefix_len(&self, path: &[Pattern]) -> usize {
+        let mut catch_all = false;
         self.pattern
             .iter()
             .zip(path.iter())
-            .take_while(|(a, b)| a == b)
+            .take_while(|(a, b)| {
+                let result = !catch_all && a == b;
+                if let Pattern::CatchAll = b {
+                    catch_all = true;
+                }
+                result
+            })
             .count()
     }
 }
@@ -339,6 +369,8 @@ pub fn make_path(path: &str) -> Vec<Pattern> {
         .map(|s| {
             if s.starts_with(':') || (s.starts_with('{') && s.ends_with('}')) {
                 Pattern::Variable
+            } else if s == "*" {
+                Pattern::CatchAll
             } else {
                 Pattern::literal(s)
             }
@@ -591,5 +623,61 @@ mod test {
         test_one(&root);
         test_two(&root);
         test_three(&root);
+    }
+
+    #[test]
+    fn test_catch_all() {
+        let mut root = RadixNode::default();
+
+        let path1 = make_path("/api/*");
+        root.insert_path(path1.as_slice(), 1).unwrap();
+
+        assert_eq!(Some(&1), root.matches_str("/api/v1/users"));
+        assert_eq!(Some(&1), root.matches_str("/api/v2/users/123"));
+        assert_eq!(Some(&1), root.matches_str("/api/v3/users/123/profile"));
+    }
+
+    #[test]
+    fn test_catch_all_fallthrough() {
+        let mut root = RadixNode::default();
+
+        let path1 = make_path("/api/*");
+        root.insert_path(path1.as_slice(), 1).unwrap();
+
+        let path2 = make_path("/api/v1/*");
+        root.insert_path(path2.as_slice(), 2).unwrap();
+
+        assert_eq!(Some(&2), root.matches_str("/api/v1/users"));
+        assert_eq!(Some(&2), root.matches_str("/api/v1/users/123"));
+        assert_eq!(Some(&2), root.matches_str("/api/v1/users/123/profile"));
+
+        assert_eq!(Some(&1), root.matches_str("/api/v2/users"));
+        assert_eq!(Some(&1), root.matches_str("/api/v3/users/123"));
+        assert_eq!(Some(&1), root.matches_str("/api/v4/users/123/profile"));
+    }
+
+    #[test]
+    fn test_catch_all_fallthrough_complex() {
+        let mut root = RadixNode::default();
+
+        let path1 = make_path("/api/*");
+        root.insert_path(path1.as_slice(), 1).unwrap();
+
+        let path2 = make_path("/api/v1");
+        root.insert_path(path2.as_slice(), 2).unwrap();
+
+        let path3 = make_path("/api/v2/user/:user_id");
+        root.insert_path(&path3, 3).unwrap();
+
+        let path4 = make_path("/api/v2/*");
+        root.insert_path(&path4, 4).unwrap();
+
+        assert_eq!(Some(&2), root.matches_str("/api/v1"));
+        assert_eq!(Some(&3), root.matches_str("/api/v2/user/123"));
+        assert_eq!(Some(&4), root.matches_str("/api/v2/users"));
+
+        assert_eq!(Some(&1), root.matches_str("/api/v3/users"));
+        assert_eq!(Some(&1), root.matches_str("/api/v4/users/123"));
+        assert_eq!(Some(&1), root.matches_str("/api/v5/users/123/profile"));
     }
 }
