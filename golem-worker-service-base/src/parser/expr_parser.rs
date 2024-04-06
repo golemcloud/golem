@@ -611,26 +611,34 @@ mod internal {
         fn go(
             tokenizer: &mut Tokenizer,
             record: &mut Vec<(String, Expr)>,
+
         ) -> Result<(), ParseError> {
+            let possible_nested_starts = vec![&Token::LCurly, &Token::Colon, &Token::LSquare, &Token::LParen];
+
             match tokenizer.next_non_empty_token() {
                 Some(Token::MultiChar(MultiCharTokens::Other(key))) => {
                     match tokenizer.next_non_empty_token() {
                         Some(Token::Colon) => {
                             let captured_value =
-                                tokenizer.capture_string_until(vec![], &Token::Comma);
+                                tokenizer.capture_string_until(possible_nested_starts.clone(), &Token::Comma);
+                            dbg!(captured_value.clone());
 
                             match captured_value {
+
                                 Some(value) => {
+                                    dbg!("bere??? {} {}", key.clone(), value.clone().as_str());
                                     let expr = parse_with_context(value.as_str(), Context::Code)?;
-                                    record.push((key.to_string(), expr));
+                                    record.push((key.to_string(), expr.clone()));
                                     tokenizer.next_non_empty_token(); // Skip next comma
+                                    dbg!(expr.clone());
                                     go(tokenizer, record)
                                 }
 
                                 None => {
-                                    // If comma doesn't exist, try capturing until next curly brace
-                                    let last_value =
-                                        tokenizer.capture_string_until(vec![], &Token::RCurly);
+                                    let last_value = tokenizer
+                                        .capture_string_until(vec![&Token::LCurly], &Token::RCurly);
+
+                                    dbg!(&last_value);
 
                                     match last_value {
                                         Some(last_value) => {

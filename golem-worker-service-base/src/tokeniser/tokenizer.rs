@@ -239,8 +239,13 @@ impl<'t> Tokenizer<'t> {
         }
     }
     // Captures the string upto the end token, leaving the cursor at the end token (leaving it to the user)
-    pub fn capture_string_until(&mut self, start: Vec<&Token>, end: &Token) -> Option<String> {
-        let capture_until = self.index_of_future_token(start, end)?;
+
+    // It will pick the end token that doesn't correspond to nested_starts.
+    // Example: For an input "{ a : ["a1", "a2"], b : ["b1", "b2"]], if we need to capture string
+    // until the `,` exists just before token `b`, then we call this function as `tokenizer.capture_string_until(vec!["["], ",")`
+    // This will skip the comma that exists between a1 and a2.
+    pub fn capture_string_until(&mut self, nested_starts: Vec<&Token>, end: &Token) -> Option<String> {
+        let capture_until = self.index_of_future_token(nested_starts, end)?;
 
         let tokens = self.all_tokens_until(capture_until);
 
@@ -407,6 +412,25 @@ impl<'t> Tokenizer<'t> {
         let token = self.next_token();
         self.state = original_state;
         token
+    }
+
+    pub fn peek_next_n_tokens(&mut self, n: usize) -> Vec<Option<Token>> {
+        let original_state = self.state.clone();
+        let mut tokens = vec![];
+        let range = [0..n];
+        for _ in 0..n {
+            tokens.push(self.next_token());
+        }
+
+        self.state = original_state;
+        tokens
+    }
+
+    pub fn peek_next_n_tokens_as_string(&mut self, n: usize) -> Vec<String> {
+        self.peek_next_n_tokens(n)
+            .iter()
+            .map(|t| t.as_ref().map(|x| x.to_string()).unwrap_or("".to_string()))
+            .collect::<Vec<_>>()
     }
 
     fn get_single_char_token(&mut self) -> Option<Token> {

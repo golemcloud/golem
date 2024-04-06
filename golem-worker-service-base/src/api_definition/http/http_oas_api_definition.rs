@@ -199,11 +199,89 @@ mod internal {
     pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Expr, String> {
         let worker_id = worker_bridge_info
             .get("worker-id")
-            .ok_or("No worker-id found")?;
-        Expr::from_json_value(worker_id).map_err(|err| err.to_string())
+            .ok_or("No worker-id found")?
+            .as_str()
+            .ok_or("worker-id is not a string")?;
+
+        expression::from_string(worker_id).map_err(|err| err.to_string())
     }
 
     pub(crate) fn get_path_pattern(path: &str) -> Result<PathPattern, String> {
         PathPattern::from(path).map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api_definition::http::{MethodPattern, PathPattern, Route};
+    use crate::expression::{Expr, InnerNumber};
+    use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
+    use golem_common::model::TemplateId;
+    use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
+    use serde_json::json;
+    use uuid::Uuid;
+
+    #[test]
+    fn test_get_route_from_path_item() {
+        let path_item = PathItem {
+            extensions: vec![("x-golem-worker-bridge".to_string(), json!({
+                "worker-id": "${worker}",
+                "function-name": "test",
+                "function-params": ["${request}"],
+                "template-id": "00000000-0000-0000-0000-000000000000",
+                "response": "${{headers : {ContentType: 'json', userid: 'foo'}, body: worker.response, status: 200}}"
+            }))]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+
+        let path_pattern = PathPattern::from("/test").unwrap();
+
+        let result = get_route_from_path_item("get", &path_item, &path_pattern);
+        assert_eq!(
+            result,
+            Ok(Route {
+                path: path_pattern,
+                method: MethodPattern::Get,
+                binding: GolemWorkerBinding {
+                    worker_id: Expr::Worker(),
+                    function_name: "test".to_string(),
+                    function_params: vec![Expr::Request()],
+                    template: TemplateId(Uuid::nil()),
+                    response: Some(ResponseMapping(Expr::Record(
+                        vec![
+                            (
+                                "headers".to_string(),
+                                Box::new(Expr::Record(vec![
+                                    (
+                                        "ContentType".to_string(),
+                                        Box::new(Expr::Literal("json".to_string())),
+                                    ),
+                                    (
+                                        "user-id".to_string(),
+                                        Box::new(Expr::Literal("foo".to_string())),
+                                    )
+                                ])),
+                            ),
+                            (
+                                "body".to_string(),
+                                Box::new(Expr::SelectField(
+                                    Box::new(Expr::Worker()),
+                                    "response".to_string(),
+                                )),
+                            ),
+                            (
+                                "status".to_string(),
+                                Box::new(Expr::Number(InnerNumber::UnsignedInteger(200)))
+                            ),
+                        ]
+                        .into_iter()
+                        .collect()
+                    )))
+                }
+            })
+        );
     }
 }
