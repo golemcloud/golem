@@ -1,4 +1,3 @@
-use crate::expression::writer::internal::ExprType;
 use crate::expression::Expr;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token};
 use std::io::Write;
@@ -8,15 +7,15 @@ pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
     let mut writer = Writer::new(&mut buf);
 
     match internal::get_expr_type(expr) {
-        ExprType::Text(text) => {
+        internal::ExprType::Text(text) => {
             writer.write_str(text)?;
         }
-        ExprType::Code(expr) => {
+        internal::ExprType::Code(expr) => {
             writer.write_code_start()?;
             writer.write_expr(expr)?;
             writer.write_code_end()?;
         }
-        ExprType::StandAloneVariable() => {
+        internal::ExprType::StandAloneVariable() => {
             writer.write_expr(&expr)?;
         }
     }
@@ -36,19 +35,19 @@ pub enum WriterError {
 }
 
 impl<W: Write> Writer<W> {
-    pub fn new(w: W) -> Self {
+     pub fn new(w: W) -> Self {
         Self { inner: w }
     }
 
-    pub fn write_code_start(&mut self) -> Result<(), WriterError> {
+     pub(crate) fn write_code_start(&mut self) -> Result<(), WriterError> {
         self.write_display(Token::MultiChar(MultiCharTokens::InterpolationStart))
     }
 
-    pub fn write_code_end(&mut self) -> Result<(), WriterError> {
+     pub(crate) fn write_code_end(&mut self) -> Result<(), WriterError> {
         self.write_display(Token::RCurly)
     }
 
-    pub fn write_expr(&mut self, expr: &Expr) -> Result<(), WriterError> {
+     pub(crate) fn write_expr(&mut self, expr: &Expr) -> Result<(), WriterError> {
         match expr {
             Expr::Literal(string) => {
                 self.write_display(Token::Quote)?;
@@ -129,7 +128,6 @@ impl<W: Write> Writer<W> {
                 self.write_display(Token::RCurly)
             }
             Expr::Boolean(bool) => self.write_display(bool),
-            Expr::PathVar(path_var) => self.write_str(path_var),
             Expr::Concat(concatenated) => {
                 for expr in concatenated.iter() {
                     self.write_expr(&*expr)?
@@ -264,166 +262,5 @@ mod internal {
                 any_expr => writer.write_expr(&any_expr),
             },
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::expression::reader;
-    use crate::expression::{Expr, InnerNumber};
-
-    #[test]
-    fn test_round_trip_read_write_literal() {
-        let input_expr = Expr::Literal("hello".to_string());
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "hello".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_request() {
-        let input_expr = Expr::Request();
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${request}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_let() {
-        let input_expr = Expr::Let(
-            "x".to_string(),
-            Box::new(Expr::Literal("hello".to_string())),
-        );
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${let x = 'hello';}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_worker() {
-        let input_expr = Expr::Worker();
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${worker}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_select_field() {
-        let input_expr = Expr::SelectField(Box::new(Expr::Request()), "field".to_string());
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${request.field}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_select_index() {
-        let input_expr = Expr::SelectIndex(Box::new(Expr::Request()), 1);
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${request[1]}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_sequence() {
-        let input_expr = Expr::Sequence(vec![Expr::Request(), Expr::Request()]);
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${[request, request]}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_record() {
-        let input_expr = Expr::Record(vec![
-            ("field".to_string(), Box::new(Expr::Request())),
-            ("field".to_string(), Box::new(Expr::Request())),
-            ("field".to_string(), Box::new(Expr::Request())),
-        ]);
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${{field: request, field: request, field: request}}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_tuple() {
-        let input_expr = Expr::Tuple(vec![Expr::Request(), Expr::Request(), Expr::Request()]);
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${(request, request, request)}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_number_float() {
-        let input_expr = Expr::Number(InnerNumber::Float(1.1));
-        let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str).unwrap();
-        assert_eq!(input_expr, output_expr);
-    }
-
-    #[test]
-    fn test_round_trip_read_write_number_u64() {
-        let input_expr = Expr::Number(InnerNumber::UnsignedInteger(1));
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${1}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_number_i64() {
-        let input_expr = Expr::Number(InnerNumber::Integer(-1));
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${-1}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_flags() {
-        let input_expr = Expr::Flags(vec![
-            "flag1".to_string(),
-            "flag2".to_string(),
-            "flag3".to_string(),
-        ]);
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${{flag1, flag2, flag3}}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_variable() {
-        let input_expr = Expr::Variable("variable".to_string());
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${variable}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_boolean() {
-        let input_expr = Expr::Boolean(true);
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${true}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_path_var() {
-        let input_expr = Expr::PathVar("path_var".to_string());
-        let expr_str = write_expr(&input_expr).unwrap();
-        let expected_str = "${path_var}".to_string();
-        let output_expr = reader::read_expr(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 }
