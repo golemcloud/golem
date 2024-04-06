@@ -1,18 +1,22 @@
 use std::fmt::Display;
 use std::io::{Error, Write};
-use golem_wasm_rpc::TypeAnnotatedValue;
 use crate::expression::Expr;
+use crate::expression::writer::internal::ExprType;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token};
 
 pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
     let mut buf = vec![];
     let mut writer = Writer::new(&mut buf);
-    if internal::is_code(expr) {
-        writer.write_code_start()?;
-        writer.write_expr(expr)?;
-        writer.write_code_end()?;
-    } else {
-        writer.write_expr(expr)?;
+
+    match internal::get_expr_type(expr) {
+        ExprType::Text(text) => {
+            writer.write_str(text)?;
+        }
+        ExprType::Code(expr) => {
+            writer.write_code_start()?;
+            writer.write_expr(expr)?;
+            writer.write_code_end()?;
+        }
     }
 
     Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
@@ -41,6 +45,10 @@ impl<W: Write> Writer<W> {
 
     pub fn write_code_end(&mut self) -> Result<(), WriterError> {
         self.write_display(Token::RCurly)
+    }
+
+    pub fn write_literal(&mut self, literal: &str) -> Result<(), WriterError> {
+        self.write_str(literal)
     }
 
     pub fn write_expr(&mut self, expr: &Expr) -> Result<(), WriterError>
@@ -219,11 +227,16 @@ impl<W: Write> Writer<W> {
 mod internal {
     use crate::expression::{ConstructorPattern, Expr};
     use crate::expression::writer::{Writer, WriterError};
+    use crate::expression::writer::internal::ExprType::Text;
 
-    pub (crate) fn is_code(expr: &Expr) -> bool {
+    pub(crate) enum ExprType<'a> {
+        Code(&'a Expr),
+        Text(&'a str)
+    }
+    pub (crate) fn get_expr_type(expr: &Expr) -> ExprType {
         match expr {
-            Expr::Literal(_) => false,
-            _ => true
+            Expr::Literal(str) => Text(str),
+            expr => ExprType::Code(expr),
         }
     }
 
@@ -291,4 +304,51 @@ mod tests {
         let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
         assert_eq!(input_expr, output_expr);
     }
+
+    #[test]
+    fn test_round_trip_read_write_worker() {
+        let input_expr = Expr::Worker();
+        let expr_str = write_expr(&input_expr).unwrap();
+        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        assert_eq!(input_expr, output_expr);
+    }
+
+    #[test]
+    fn test_round_trip_read_write_select_field() {
+        let input_expr = Expr::SelectField(Box::new(Expr::Request()), "field".to_string());
+        let expr_str = write_expr(&input_expr).unwrap();
+        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        assert_eq!(input_expr, output_expr);
+    }
+
+    #[test]
+    fn test_round_trip_read_write_select_index() {
+        let input_expr = Expr::SelectIndex(Box::new(Expr::Request()), 1);
+        let expr_str = write_expr(&input_expr).unwrap();
+        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        assert_eq!(input_expr, output_expr);
+    }
+
+    #[test]
+    fn test_round_trip_read_write_sequence() {
+        let input_expr = Expr::Sequence(vec![
+            Expr::Request(),
+            Expr::Request(),
+        ]);
+        let expr_str = write_expr(&input_expr).unwrap();
+        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        assert_eq!(input_expr, output_expr);
+    }
+
+    #[test]
+    fn test_round_trip_read_write_record() {
+        let input_expr = Expr::Record(vec![
+            ("field".to_string(), Box::new(Expr::Request())),
+            ("field".to_string(), Box::new(Expr::Request())),
+        ]);
+        let expr_str = write_expr(&input_expr).unwrap();
+        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        assert_eq!(input_expr, output_expr);
+    }
+
 }
