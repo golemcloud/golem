@@ -198,7 +198,7 @@ impl Expr {
     }
 
     // A primitive string can be converted to Expr. Not that if the string is already as complex as yaml or json, use functions such as Expr::from_yaml_value, Expr::from_json_value
-    pub fn from_primitive_string(input: &str) -> Result<Expr, ParseError> {
+    pub fn from_str(input: &str) -> Result<Expr, ParseError> {
         let expr_parser = ExprParser {};
         expr_parser.parse(input)
     }
@@ -208,7 +208,7 @@ impl Expr {
         match input {
             Value::Bool(bool) => Ok(Expr::Literal(bool.to_string())),
             Value::Number(number) => Ok(Expr::Literal(number.to_string())),
-            Value::String(string) => Expr::from_primitive_string(string),
+            Value::String(string) => Expr::from_str(string),
             Value::Array(sequence) => {
                 let mut exprs: Vec<Expr> = vec![];
 
@@ -726,7 +726,7 @@ mod tests {
     #[test]
     fn test_round_trip_simple_string() {
         let worker_response = "foo";
-        let expr = Expr::from_primitive_string(worker_response).unwrap();
+        let expr = Expr::from_str(worker_response).unwrap();
         let result = expr.to_json_value().unwrap();
 
         assert_eq!(result, Value::String("foo".to_string()));
@@ -737,13 +737,13 @@ mod tests {
         let worker_response = get_ok_worker_response();
 
         let expr1_string = "${match worker.response { ok(x) => '${x.id}-foo', err(msg) => msg }}";
-        let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
+        let expr1 = Expr::from_str(expr1_string).unwrap();
         let value1 = expr1
             .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
-        let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
+        let expr2 = Expr::from_str(expr2_string.as_str()).unwrap();
         let value2 = expr2
             .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
@@ -757,13 +757,13 @@ mod tests {
         let worker_response = get_err_worker_response();
 
         let expr1_string = "${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
-        let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
+        let expr1 = Expr::from_str(expr1_string).unwrap();
         let value1 = expr1
             .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
-        let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
+        let expr2 = Expr::from_str(expr2_string.as_str()).unwrap();
         let value2 = expr2
             .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
@@ -814,13 +814,13 @@ mod tests {
 
         let expr1_string =
             "append-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
-        let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
+        let expr1 = Expr::from_str(expr1_string).unwrap();
         let value1 = expr1
             .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
-        let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
+        let expr2 = Expr::from_str(expr2_string.as_str()).unwrap();
         let value2 = expr2
             .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
@@ -835,13 +835,13 @@ mod tests {
 
         let expr1_string =
             "prefix-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}-suffix";
-        let expr1 = Expr::from_primitive_string(expr1_string).unwrap();
+        let expr1 = Expr::from_str(expr1_string).unwrap();
         let value1 = expr1
             .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
         let expr2_string = expr1.to_string().unwrap();
-        let expr2 = Expr::from_primitive_string(expr2_string.as_str()).unwrap();
+        let expr2 = Expr::from_str(expr2_string.as_str()).unwrap();
         let value2 = expr2
             .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
