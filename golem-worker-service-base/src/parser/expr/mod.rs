@@ -3,4 +3,5 @@ mod let_statement;
 mod record;
 mod sequence;
 mod tuple;
+mod flags;
 mod util;

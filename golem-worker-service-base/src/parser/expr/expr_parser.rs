@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::expression::{ConstructorPattern, Expr};
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-use crate::parser::expr::{let_statement, record, sequence, tuple};
+use crate::parser::expr::{flags, let_statement, record, sequence, tuple};
 use crate::parser::{GolemParser, ParseError};
 use internal::*;
 #[derive(Clone, Debug)]
@@ -402,6 +402,15 @@ pub(crate) fn parse_tokens(
                             .to_string(),
                     )),
                 },
+                Token::LCurly => {
+                    let expr = if flags::is_flags(tokenizer) {
+                        flags::create_flags(tokenizer)
+                    } else {
+                        record::create_record(tokenizer)
+                    };
+
+                    go(tokenizer, context, prev_expression.apply_with(expr?))
+                }
 
                 Token::RCurly => go(tokenizer, context, prev_expression),
                 Token::RSquare => go(tokenizer, context, prev_expression),
@@ -410,15 +419,6 @@ pub(crate) fn parse_tokens(
                 Token::NewLine => go(tokenizer, context, prev_expression),
                 Token::LetEqual => go(tokenizer, context, prev_expression),
                 Token::SemiColon => go(tokenizer, context, prev_expression),
-                Token::LCurly => {
-                    let expr = if is_flags(tokenizer) {
-                        create_flags(tokenizer)
-                    } else {
-                        record::create_record(tokenizer)
-                    };
-
-                    go(tokenizer, context, prev_expression.apply_with(expr?))
-                }
                 Token::MultiChar(MultiCharTokens::Arrow) => go(tokenizer, context, prev_expression),
                 Token::Comma => go(tokenizer, context, prev_expression),
                 Token::Colon => go(tokenizer, context, prev_expression),
@@ -443,44 +443,6 @@ mod internal {
     use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
     use strum_macros::Display;
 
-    pub(crate) fn is_flags(tokenizer: &mut Tokenizer) -> bool {
-        let colon_index = tokenizer.index_of_future_token(vec![], &Token::Colon);
-        let comma_index = tokenizer.index_of_future_token(vec![], &Token::Comma);
-        match (comma_index, colon_index) {
-            (Some(comma_index), Some(colon_index)) => comma_index < colon_index, // Comma exists before colon
-            (None, Some(_)) => false, // Colon exists but no commas, meaning it can be record
-            (Some(_), None) => true,  // Comma exists but no colons, meaning its not a record
-            (None, None) => true, // No commas, no colons, but just strings between indicate flags
-        }
-    }
-
-    pub(crate) fn create_flags(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
-        fn go(tokenizer: &mut Tokenizer, flags: &mut Vec<String>) -> Result<(), ParseError> {
-            // We already skipped the first curly brace
-            // We expect either a flag or curly brace, else fail
-            match tokenizer.next_non_empty_token() {
-                Some(Token::RCurly) => Ok(()), // Nothing more to do
-                Some(Token::MultiChar(MultiCharTokens::Other(next_str))) => {
-                    flags.push(next_str);
-                    // If comma exists again, go again!
-                    match tokenizer.next_non_empty_token() {
-                        Some(Token::Comma) => go(tokenizer, flags),
-                        // Otherwise it has to be curly brace, and this consumes all flags
-                        Some(Token::RCurly) => Ok(()),
-                        _ => Err(ParseError::Message(
-                            "Expecting a comma or closing curly brace".to_string(),
-                        )),
-                    }
-                }
-                _ => Err(ParseError::Message(
-                    "Expecting a flag or closing curly brace".to_string(),
-                )),
-            }
-        }
-        let mut flags = vec![];
-        go(tokenizer, &mut flags)?;
-        Ok(Expr::Flags(flags))
-    }
 
     pub(crate) fn resolve_literal_in_code_context(primitive: &str) -> Expr {
         if let Ok(u64) = primitive.parse::<u64>() {
