@@ -66,7 +66,7 @@ use golem_worker_executor_base::services::template::TemplateService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::{All, HasAll};
+use golem_worker_executor_base::services::{worker_enumeration, All, HasAll};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
@@ -1351,6 +1351,9 @@ impl WorkerCtx for TestWorkerCtx {
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
@@ -1370,6 +1373,7 @@ impl WorkerCtx for TestWorkerCtx {
             promise_service,
             invocation_key_service,
             worker_service,
+            worker_enumeration_service,
             key_value_service,
             blob_store_service,
             event_service,

@@ -589,9 +589,10 @@ mod tests {
     use crate::services::worker::WorkerService;
     use crate::services::worker_event::WorkerEventService;
     use crate::services::{
-        All, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps, HasInvocationKeyService,
-        HasKeyValueService, HasPromiseService, HasRpc, HasRunningWorkerEnumerationService,
-        HasTemplateService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
+        worker_enumeration, All, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps,
+        HasInvocationKeyService, HasKeyValueService, HasPromiseService, HasRpc,
+        HasRunningWorkerEnumerationService, HasTemplateService, HasWasmtimeEngine,
+        HasWorkerEnumerationService, HasWorkerService,
     };
     use crate::workerctx::{
         ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
@@ -823,6 +824,9 @@ mod tests {
             _promise_service: Arc<dyn PromiseService + Send + Sync>,
             _invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
             _worker_service: Arc<dyn WorkerService + Send + Sync>,
+            _worker_enumeration_service: Arc<
+                dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+            >,
             _key_value_service: Arc<dyn KeyValueService + Send + Sync>,
             _blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
             _event_service: Arc<dyn WorkerEventService + Send + Sync>,
