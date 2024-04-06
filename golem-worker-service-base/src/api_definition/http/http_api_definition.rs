@@ -323,10 +323,10 @@ mod tests {
 
     #[test]
     fn test_path_patterns_to_string() {
-        test_path_pattern_to_string("foo/bar/{var1}/{var2}?{userid1}&{userid2}");
-        test_path_pattern_to_string("foo/bar/{var1}/{var2}?{userid1}");
-        test_path_pattern_to_string("foo/bar/{var1}/{var2}");
-        test_path_pattern_to_string("foo/bar");
+        test_path_pattern_to_string("/foo/bar/{var1}/{var2}?{userid1}&{userid2}");
+        test_path_pattern_to_string("/foo/bar/{var1}/{var2}?{userid1}");
+        test_path_pattern_to_string("/foo/bar/{var1}/{var2}");
+        test_path_pattern_to_string("/foo/bar");
     }
 
     #[track_caller]
