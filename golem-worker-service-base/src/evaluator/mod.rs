@@ -742,10 +742,8 @@ mod tests {
             &HeaderMap::new(),
         );
 
-        let expr = Expr::from_str(
-            "${request.body.address.street} ${request.body.address.city}",
-        )
-        .unwrap();
+        let expr =
+            Expr::from_str("${request.body.address.street} ${request.body.address.city}").unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("bStreet bCity".to_string());
         let result = expr.evaluate(&resolved_request);
         assert_eq!(result, Ok(expected_evaluated_result));
@@ -764,10 +762,9 @@ mod tests {
             &header_map,
         );
 
-        let expr = Expr::from_str(
-            "${if request.header.authorisation == 'admin' then 200 else 401}",
-        )
-        .unwrap();
+        let expr =
+            Expr::from_str("${if request.header.authorisation == 'admin' then 200 else 401}")
+                .unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::U64("200".parse().unwrap());
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
@@ -879,9 +876,7 @@ mod tests {
             &header_map,
         );
 
-        let expr =
-            Expr::from_str("${if request.header.authorisation then 200 else 401}")
-                .unwrap();
+        let expr = Expr::from_str("${if request.header.authorisation then 200 else 401}").unwrap();
 
         dbg!(expr.clone());
         let expected_evaluated_result = EvaluationError::Message(format!(
@@ -1172,10 +1167,9 @@ mod tests {
                     }"#,
         );
 
-        let expr = Expr::from_str(
-            "${match worker.response { ok(value) => none, none => 'not found' }}",
-        )
-        .unwrap();
+        let expr =
+            Expr::from_str("${match worker.response { ok(value) => none, none => 'not found' }}")
+                .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         let expected = TypeAnnotatedValue::Option {
             value: None,
@@ -1195,10 +1189,9 @@ mod tests {
                     }"#,
         );
 
-        let expr = Expr::from_str(
-            "${match worker.response { ok(value) => some(none), none => none }}",
-        )
-        .unwrap();
+        let expr =
+            Expr::from_str("${match worker.response { ok(value) => some(none), none => none }}")
+                .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         let expected = TypeAnnotatedValue::Option {
             value: Some(Box::new(TypeAnnotatedValue::Option {
@@ -1221,10 +1214,9 @@ mod tests {
                     }"#,
         );
 
-        let expr = Expr::from_str(
-            "${match worker.response { ok(value) => ok(1), none => err(2) }}",
-        )
-        .unwrap();
+        let expr =
+            Expr::from_str("${match worker.response { ok(value) => ok(1), none => err(2) }}")
+                .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
         let expected = TypeAnnotatedValue::Result {
             value: Ok(Some(Box::new(TypeAnnotatedValue::U64(1)))),
@@ -1245,10 +1237,9 @@ mod tests {
                     }"#,
         );
 
-        let expr = Expr::from_str(
-            "${match worker.response { ok(value) => ok(1), err(msg) => err(2) }}",
-        )
-        .unwrap();
+        let expr =
+            Expr::from_str("${match worker.response { ok(value) => ok(1), err(msg) => err(2) }}")
+                .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
 
         let expected = TypeAnnotatedValue::Result {
@@ -1446,8 +1437,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_wave_like_syntax_variant_with_if_condition() {
-        let expr = Expr::from_str("${if 1 == 2 then Foo(some(2)) else Bar(some(3)) }")
-            .unwrap();
+        let expr = Expr::from_str("${if 1 == 2 then Foo(some(2)) else Bar(some(3)) }").unwrap();
 
         let result = expr.evaluate(&TypeAnnotatedValue::Record {
             value: vec![],
@@ -1471,10 +1461,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_wave_like_syntax_variant_with_match_expr() {
-        let expr = Expr::from_str(
-            "${match some(1) {some(x) => Foo(some(x)), none => Bar(1) }}",
-        )
-        .unwrap();
+        let expr =
+            Expr::from_str("${match some(1) {some(x) => Foo(some(x)), none => Bar(1) }}").unwrap();
 
         let result = expr.evaluate(&TypeAnnotatedValue::Record {
             value: vec![],

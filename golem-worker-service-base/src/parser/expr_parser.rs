@@ -606,10 +606,7 @@ mod internal {
         }
     }
 
-    pub(crate) fn create_record(
-        tokenizer: &mut Tokenizer,
-    ) -> Result<Expr, ParseError> {
-
+    pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
         let mut record: Vec<(String, Expr)> = vec![];
 
         fn go(
@@ -620,31 +617,21 @@ mod internal {
                 Some(Token::MultiChar(MultiCharTokens::Other(key))) => {
                     match tokenizer.next_non_empty_token() {
                         Some(Token::Colon) => {
-                            let captured_value = tokenizer.capture_string_until(
-                                vec![],
-                                &Token::Comma,
-                            );
+                            let captured_value =
+                                tokenizer.capture_string_until(vec![], &Token::Comma);
 
                             match captured_value {
                                 Some(value) => {
-                                    let expr = parse_with_context(
-                                        value.as_str(),
-                                        Context::Code,
-                                    )?;
+                                    let expr = parse_with_context(value.as_str(), Context::Code)?;
                                     record.push((key.to_string(), expr));
                                     tokenizer.next_non_empty_token(); // Skip next comma
-                                    go(
-                                        tokenizer,
-                                        record,
-                                    )
+                                    go(tokenizer, record)
                                 }
 
                                 None => {
                                     // If comma doesn't exist, try capturing until next curly brace
-                                    let last_value = tokenizer.capture_string_until(
-                                        vec![],
-                                        &Token::RCurly,
-                                    );
+                                    let last_value =
+                                        tokenizer.capture_string_until(vec![], &Token::RCurly);
 
                                     match last_value {
                                         Some(last_value) => {
@@ -668,9 +655,7 @@ mod internal {
                     }
                 }
 
-                _ => Err(ParseError::Message(
-                    "Expecting a key in record".to_string(),
-                )),
+                _ => Err(ParseError::Message("Expecting a key in record".to_string())),
             }
         }
 
@@ -853,7 +838,12 @@ mod internal {
         prev_expr: &Expr,
     ) -> Result<Expr, ParseError> {
         match prev_expr {
-            Expr::Sequence(_) | Expr::Record(_) | Expr::Variable(_) | Expr::SelectField(_, _) | Expr::Request() | Expr::Worker() => {
+            Expr::Sequence(_)
+            | Expr::Record(_)
+            | Expr::Variable(_)
+            | Expr::SelectField(_, _)
+            | Expr::Request()
+            | Expr::Worker() => {
                 //
                 let optional_possible_index =
                     tokenizer.capture_string_until(vec![&Token::LSquare], &Token::RSquare);

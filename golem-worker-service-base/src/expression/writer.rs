@@ -1,8 +1,7 @@
-use std::fmt::Display;
-use std::io::{Error, Write};
-use crate::expression::Expr;
 use crate::expression::writer::internal::ExprType;
+use crate::expression::Expr;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token};
+use std::io::Write;
 
 pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
     let mut buf = vec![];
@@ -17,7 +16,7 @@ pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
             writer.write_expr(expr)?;
             writer.write_code_end()?;
         }
-        ExprType::StandAloneVariable(_) => {
+        ExprType::StandAloneVariable() => {
             writer.write_expr(&expr)?;
         }
     }
@@ -50,12 +49,7 @@ impl<W: Write> Writer<W> {
         self.write_display(Token::RCurly)
     }
 
-    pub fn write_literal(&mut self, literal: &str) -> Result<(), WriterError> {
-        self.write_str(literal)
-    }
-
-    pub fn write_expr(&mut self, expr: &Expr) -> Result<(), WriterError>
-    {
+    pub fn write_expr(&mut self, expr: &Expr) -> Result<(), WriterError> {
         match expr {
             Expr::Literal(string) => {
                 self.write_display(Token::Quote)?;
@@ -135,12 +129,8 @@ impl<W: Write> Writer<W> {
                 self.write_str(variable)?;
                 self.write_display(Token::RCurly)
             }
-            Expr::Boolean(bool) => {
-                self.write_display(bool)
-            }
-            Expr::PathVar(path_var) => {
-                self.write_str(path_var)
-            }
+            Expr::Boolean(bool) => self.write_display(bool),
+            Expr::PathVar(path_var) => self.write_str(path_var),
             Expr::Concat(concatenated) => {
                 for expr in concatenated.iter() {
                     self.write_expr(&*expr)?
@@ -210,8 +200,7 @@ impl<W: Write> Writer<W> {
 
                 Ok(())
             }
-            Expr::Constructor0(constructor) =>
-                internal::write_constructor(constructor, self)
+            Expr::Constructor0(constructor) => internal::write_constructor(constructor, self),
         }
     }
 
@@ -224,38 +213,32 @@ impl<W: Write> Writer<W> {
         write!(self.inner, "{d}")?;
         Ok(())
     }
-
 }
 
 mod internal {
-    use crate::expression::{ConstructorPattern, Expr};
     use crate::expression::writer::{Writer, WriterError};
+    use crate::expression::{ConstructorPattern, Expr};
 
     pub(crate) enum ExprType<'a> {
         Code(&'a Expr),
         Text(&'a str),
-        StandAloneVariable(&'a str)
+        StandAloneVariable(),
     }
 
-    pub (crate) fn get_expr_type(expr: &Expr) -> ExprType {
+    pub(crate) fn get_expr_type(expr: &Expr) -> ExprType {
         match expr {
             Expr::Literal(str) => ExprType::Text(str),
-            Expr::Variable(variable) => ExprType::StandAloneVariable(variable),
+            Expr::Variable(_) => ExprType::StandAloneVariable(),
             expr => ExprType::Code(expr),
-        }
-    }
-
-    pub(crate) fn is_standalone_variable(expr: &Expr) -> bool {
-        match expr {
-            Expr::Variable(_) => true,
-            _ => false
         }
     }
 
     pub(crate) fn write_constructor<W>(
         match_case: &ConstructorPattern,
         writer: &mut Writer<W>,
-    ) -> Result<(), WriterError> where W: std::io::Write
+    ) -> Result<(), WriterError>
+    where
+        W: std::io::Write,
     {
         match match_case {
             ConstructorPattern::WildCard => writer.write_str("_"),
@@ -265,6 +248,7 @@ mod internal {
                 write_constructor(pattern, writer)
             }
             ConstructorPattern::Constructor(constructor_type, variables) => {
+                writer.write_display(constructor_type)?;
                 writer.write_str("(")?;
 
                 for (idx, pattern) in variables.iter().enumerate() {
@@ -275,11 +259,10 @@ mod internal {
                 }
 
                 writer.write_str(")")
-
             }
             ConstructorPattern::Literal(expr) => match *expr.clone() {
                 Expr::Variable(s) => writer.write_str(s),
-                any_expr => writer.write_expr(&any_expr)
+                any_expr => writer.write_expr(&any_expr),
             },
         }
     }
@@ -288,8 +271,8 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expression::{Expr, InnerNumber};
     use crate::expression::reader;
+    use crate::expression::{Expr, InnerNumber};
 
     #[test]
     fn test_round_trip_read_write_literal() {
@@ -311,7 +294,10 @@ mod tests {
 
     #[test]
     fn test_round_trip_read_write_let() {
-        let input_expr = Expr::Let("x".to_string(), Box::new(Expr::Literal("hello".to_string())));
+        let input_expr = Expr::Let(
+            "x".to_string(),
+            Box::new(Expr::Literal("hello".to_string())),
+        );
         let expr_str = write_expr(&input_expr).unwrap();
         let expected_str = "${let x = 'hello';}".to_string();
         let output_expr = reader::read_expr(expr_str.clone()).unwrap();
@@ -347,10 +333,7 @@ mod tests {
 
     #[test]
     fn test_round_trip_read_write_sequence() {
-        let input_expr = Expr::Sequence(vec![
-            Expr::Request(),
-            Expr::Request(),
-        ]);
+        let input_expr = Expr::Sequence(vec![Expr::Request(), Expr::Request()]);
         let expr_str = write_expr(&input_expr).unwrap();
         let expected_str = "${[request, request]}".to_string();
         let output_expr = reader::read_expr(expr_str.clone()).unwrap();
@@ -372,11 +355,7 @@ mod tests {
 
     #[test]
     fn test_round_trip_read_write_tuple() {
-        let input_expr = Expr::Tuple(vec![
-           Expr::Request(),
-           Expr::Request(),
-           Expr::Request(),
-        ]);
+        let input_expr = Expr::Tuple(vec![Expr::Request(), Expr::Request(), Expr::Request()]);
         let expr_str = write_expr(&input_expr).unwrap();
         let expected_str = "${(request, request, request)}".to_string();
         let output_expr = reader::read_expr(expr_str.clone()).unwrap();
@@ -410,7 +389,7 @@ mod tests {
     }
 
     #[test]
-fn test_round_trip_read_write_flags() {
+    fn test_round_trip_read_write_flags() {
         let input_expr = Expr::Flags(vec![
             "flag1".to_string(),
             "flag2".to_string(),
@@ -430,5 +409,4 @@ fn test_round_trip_read_write_flags() {
         let output_expr = reader::read_expr(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
-
 }
