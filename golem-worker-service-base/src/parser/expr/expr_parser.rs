@@ -3,7 +3,9 @@ use std::rc::Rc;
 use crate::expression::{ConstructorPattern, Expr};
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-use crate::parser::expr::{flags, let_statement, record, selection, sequence, tuple};
+use crate::parser::expr::{
+    flags, let_statement, pattern_match, record, selection, sequence, tuple,
+};
 use crate::parser::{GolemParser, ParseError};
 use internal::*;
 #[derive(Clone, Debug)]
@@ -306,36 +308,9 @@ pub(crate) fn parse_tokens(
                 }
 
                 Token::MultiChar(MultiCharTokens::Match) => {
-                    let expr_under_evaluation =
-                        tokenizer.capture_string_until(vec![], &Token::LCurly);
+                    let new_expr = pattern_match::get_match_expr(tokenizer)?;
 
-                    let new_expr = match expr_under_evaluation {
-                        Some(expr_under_evaluation) => {
-                            let mut new_tokenizer = Tokenizer::new(expr_under_evaluation.as_str());
-                            let expression =
-                                go(&mut new_tokenizer, Context::Code, InternalExprResult::Empty)?;
-                            match tokenizer.next_non_empty_token() {
-                                Some(Token::LCurly) => {
-                                    let constructors =
-                                        get_match_constructor_patter_exprs(tokenizer)?;
-
-                                    Ok(InternalExprResult::complete(Expr::PatternMatch(
-                                        Box::new(expression),
-                                        constructors,
-                                    )))
-                                }
-                                _ => Err(ParseError::Message(
-                                    "Expecting a curly brace after match expr".to_string(),
-                                )),
-                            }
-                        }
-
-                        None => Err(ParseError::Message(
-                            "Expecting a valid expression after match".to_string(),
-                        )),
-                    };
-
-                    go(tokenizer, context, new_expr?)
+                    go(tokenizer, context, InternalExprResult::complete(new_expr))
                 }
 
                 Token::MultiChar(MultiCharTokens::Then) => match prev_expression {
@@ -408,10 +383,10 @@ pub(crate) fn parse_tokens(
 }
 
 mod internal {
-    use crate::expression::{ConstructorPattern, ConstructorPatternExpr, Expr, InnerNumber};
-    use crate::parser::expr_parser::{parse_tokens, parse_with_context, Context};
+    use crate::expression::{ConstructorPattern, Expr, InnerNumber};
+    use crate::parser::expr_parser::{parse_tokens, Context};
     use crate::parser::ParseError;
-    use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
+    use crate::tokeniser::tokenizer::{Token, Tokenizer};
     use strum_macros::Display;
 
     pub(crate) fn resolve_literal_in_code_context(primitive: &str) -> Expr {
@@ -602,169 +577,6 @@ mod internal {
         }
     }
 
-    // To parse collection of terms under match expression
-    // Ex: some(x) => x
-    // Handles Ok, Err, Some, None
-    pub(crate) fn get_match_constructor_patter_exprs(
-        tokenizer: &mut Tokenizer,
-    ) -> Result<Vec<ConstructorPatternExpr>, ParseError> {
-        let mut constructor_patterns: Vec<ConstructorPatternExpr> = vec![];
-
-        fn go(
-            tokenizer: &mut Tokenizer,
-            constructor_patterns: &mut Vec<ConstructorPatternExpr>,
-        ) -> Result<(), ParseError> {
-            match tokenizer.next_non_empty_token() {
-                Some(token) if token.is_non_empty_constructor() => {
-                    let next_non_empty_open_braces = tokenizer.next_non_empty_token();
-
-                    match next_non_empty_open_braces {
-                        Some(Token::LParen) => {
-                            let constructor_var_optional = tokenizer
-                                .capture_string_until_and_skip_end(
-                                    vec![&Token::LParen],
-                                    &Token::RParen,
-                                );
-
-                            match constructor_var_optional {
-                                Some(constructor_var) => {
-                                    let expr = parse_with_context(constructor_var.as_str(), Context::Code)?;
-
-                                    let cons = match expr {
-                                        Expr::Constructor0(cons) => cons,
-                                        expr => ConstructorPattern::Literal(Box::new(expr))
-                                    };
-
-                                    let constructor_pattern =
-                                        ConstructorPattern::constructor(
-                                            token.to_string().as_str(),
-                                            vec![cons],
-                                        )?;
-
-                                    accumulate_constructor_pattern_expr(tokenizer, constructor_pattern, constructor_patterns, go)
-
-                                }
-                                _ => Err(ParseError::Message(
-                                    format!("Token {} is a non empty constructor. Expecting the following pattern: {}(foo) => bar", token, token),
-                                )),
-                            }
-                        }
-
-                        value => Err(ParseError::Message(format!(
-                            "Expecting an open parenthesis, but found {}",
-                            value.map(|x| x.to_string()).unwrap_or("".to_string())
-                        ))),
-                    }
-                }
-
-                Some(token) if token.is_empty_constructor() => {
-                    let constructor_pattern =
-                        ConstructorPattern::constructor(token.to_string().as_str(), vec![]);
-
-                    accumulate_constructor_pattern_expr(
-                        tokenizer,
-                        constructor_pattern?,
-                        constructor_patterns,
-                        go,
-                    )
-                }
-
-                Some(token) => Err(ParseError::Message(format!(
-                    "Expecting a constructor pattern. But found {}",
-                    token
-                ))),
-
-                None => Err(ParseError::Message(
-                    "Expecting a constructor pattern. But found nothing".to_string(),
-                )),
-            }
-        }
-
-        go(tokenizer, &mut constructor_patterns)?;
-        Ok(constructor_patterns)
-    }
-
-    fn accumulate_constructor_pattern_expr<F>(
-        tokenizer: &mut Tokenizer,
-        constructor_pattern: ConstructorPattern,
-        collected_exprs: &mut Vec<ConstructorPatternExpr>,
-        accumulator: F,
-    ) -> Result<(), ParseError>
-    where
-        F: FnOnce(&mut Tokenizer, &mut Vec<ConstructorPatternExpr>) -> Result<(), ParseError>,
-    {
-        match tokenizer.next_non_empty_token() {
-            Some(Token::MultiChar(MultiCharTokens::Arrow)) => {
-                let index_of_closed_curly_brace = tokenizer.index_of_future_token(
-                    vec![&Token::LCurly, &Token::interpolation_start()],
-                    &Token::RCurly,
-                );
-                let index_of_commaseparator =
-                    tokenizer.index_of_future_token(vec![], &Token::Comma);
-
-                match (index_of_closed_curly_brace, index_of_commaseparator) {
-                    (Some(end_of_constructors), Some(comma)) => {
-                        if end_of_constructors > comma {
-                            let captured_string =
-                                tokenizer.capture_string_until(vec![], &Token::Comma);
-
-                            let individual_expr = parse_with_context(
-                                captured_string.unwrap().as_str(),
-                                Context::Code,
-                            )
-                            .map(|expr| {
-                                ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
-                            })?;
-                            collected_exprs.push(individual_expr);
-                            tokenizer.next_non_empty_token(); // Skip CommaSeparator
-                            accumulator(tokenizer, collected_exprs)
-                        } else {
-                            // End of constructor
-                            let captured_string = tokenizer
-                                .capture_string_until(vec![&Token::LCurly], &Token::RCurly);
-                            let individual_expr = parse_with_context(
-                                captured_string.unwrap().as_str(),
-                                Context::Code,
-                            )
-                            .map(|expr| {
-                                ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
-                            })?;
-                            collected_exprs.push(individual_expr);
-                            Ok(())
-                        }
-                    }
-
-                    // Last constructor
-                    (Some(_), None) => {
-                        let captured_string = tokenizer.capture_string_until(
-                            vec![&Token::LCurly, &Token::interpolation_start()],
-                            &Token::RCurly,
-                        );
-
-                        if let Some(captured_string) = captured_string {
-                            let individual_expr = parse_with_context(
-                                captured_string.as_str(),
-                                Context::Code,
-                            )
-                            .map(|expr| {
-                                ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
-                            })?;
-                            collected_exprs.push(individual_expr);
-                        }
-
-                        Ok(())
-                    }
-
-                    _ => Err(ParseError::Message(
-                        "Invalid constructor pattern".to_string(),
-                    )),
-                }
-            }
-            _ => Err(ParseError::Message(
-                "Expecting an arrow after Some expression".to_string(),
-            )),
-        }
-    }
     // possible_nested_token_starts
     // corresponds to the tokens whose closed end is same as capture_until
     // and we should include those capture_untils
@@ -772,11 +584,15 @@ mod internal {
         tokenizer: &mut Tokenizer,
         possible_nested_token_starts: Vec<&Token>,
         capture_until: Option<&Token>,
-        future_expression: InternalExprResult,
+        future_expression: crate::parser::expr::expr_parser::internal::InternalExprResult,
         get_expr: F,
-    ) -> Result<InternalExprResult, ParseError>
+    ) -> Result<crate::parser::expr::expr_parser::internal::InternalExprResult, ParseError>
     where
-        F: FnOnce(&mut Tokenizer, Context, InternalExprResult) -> Result<Expr, ParseError>,
+        F: FnOnce(
+            &mut Tokenizer,
+            Context,
+            crate::parser::expr::expr_parser::internal::InternalExprResult,
+        ) -> Result<Expr, ParseError>,
     {
         let optional_captured_string = match capture_until {
             Some(last_token) => {
@@ -789,8 +605,11 @@ mod internal {
             Some(captured_string) => {
                 let mut new_tokenizer = Tokenizer::new(captured_string.as_str());
 
-                let inner_expr =
-                    get_expr(&mut new_tokenizer, Context::Code, InternalExprResult::Empty)?;
+                let inner_expr = get_expr(
+                    &mut new_tokenizer,
+                    Context::Code,
+                    crate::parser::expr::expr_parser::internal::InternalExprResult::Empty,
+                )?;
 
                 Ok(future_expression.apply_with(inner_expr))
             }
