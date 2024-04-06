@@ -65,5 +65,5 @@ name = "vecmap"
 harness = false
 
 [[bench]]
-name = "router"
+name = "tree"
 harness = false
