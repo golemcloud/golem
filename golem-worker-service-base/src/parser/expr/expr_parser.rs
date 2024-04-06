@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::expression::{ConstructorPattern, Expr};
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-use crate::parser::expr::{flags, let_statement, record, sequence, tuple};
+use crate::parser::expr::{flags, let_statement, record, selection, sequence, tuple};
 use crate::parser::{GolemParser, ParseError};
 use internal::*;
 #[derive(Clone, Debug)]
@@ -247,50 +247,21 @@ pub(crate) fn parse_tokens(
                     go(tokenizer, context, new_expr)
                 }
 
-                Token::Dot => {
-                    // If a dot appears, then that means next token is probably a "field" selection rather than expression on its own
-                    // and cannot delegate to further loops without peeking ahead using tokenizer and attaching the field to the current expression
-                    let next_token = tokenizer.next_non_empty_token();
-
-                    let possible_field = match next_token {
-                        Some(Token::MultiChar(MultiCharTokens::Other(field))) => field,
-                        Some(token) => {
-                            return Err(ParseError::Message(format!(
-                                "Expecting a valid field selection after dot instead of {}.",
-                                token
-                            )))
-                        }
-                        None => {
-                            return Err(ParseError::Message(
-                                "Expecting a field after dot".to_string(),
-                            ))
-                        }
-                    };
-
-                    match prev_expression {
-                        InternalExprResult::Complete(expr) => go(
-                            tokenizer,
-                            context,
-                            InternalExprResult::complete(Expr::SelectField(
-                                Box::new(expr),
-                                possible_field,
-                            )),
-                        ),
-
-                        _ => Err(ParseError::Message(format!(
-                            "Invalid token field {}. Make sure expression format is correct",
-                            possible_field
-                        ))),
+                Token::Dot => match prev_expression {
+                    InternalExprResult::Complete(expr) => {
+                        let expr = selection::get_select_field(tokenizer, expr)?;
+                        go(tokenizer, context, InternalExprResult::complete(expr))
                     }
-                }
+
+                    _ => Err("Invalid token field. Make sure expression format is correct".into()),
+                },
 
                 Token::LSquare => match prev_expression {
                     InternalExprResult::Complete(prev_expr) => {
-                        let new_expr = get_select_index(tokenizer, &prev_expr)?;
+                        let new_expr = selection::get_select_index(tokenizer, &prev_expr)?;
                         go(tokenizer, context, InternalExprResult::complete(new_expr))
                     }
                     _ => {
-                        dbg!("Found to be list");
                         let expr = sequence::create_sequence(tokenizer)?;
                         go(tokenizer, context, prev_expression.apply_with(expr))
                     }
@@ -566,44 +537,6 @@ mod internal {
                 Ok(Expr::Constructor0(constructor_pattern))
             }
             _ => Ok(resolve_literal_in_code_context(custom_string)),
-        }
-    }
-
-    pub fn get_select_index(
-        tokenizer: &mut Tokenizer,
-        prev_expr: &Expr,
-    ) -> Result<Expr, ParseError> {
-        match prev_expr {
-            Expr::Sequence(_)
-            | Expr::Record(_)
-            | Expr::Variable(_)
-            | Expr::SelectField(_, _)
-            | Expr::Request()
-            | Expr::Worker() => {
-                //
-                let optional_possible_index =
-                    tokenizer.capture_string_until(vec![&Token::LSquare], &Token::RSquare);
-
-                match optional_possible_index {
-                    Some(index) => {
-                        if let Ok(index) = index.trim().parse::<usize>() {
-                            Ok(Expr::SelectIndex(Box::new(prev_expr.clone()), index))
-                        } else {
-                            Err(ParseError::Message(format!(
-                                "Invalid index {} obtained within square brackets",
-                                index
-                            )))
-                        }
-                    }
-                    None => Err(ParseError::Message(
-                        "Expecting a valid index inside square brackets near to field".to_string(),
-                    )),
-                }
-            }
-            other => Err(ParseError::Message(format!(
-                "Selecting index is only allowed on sequence or record types. But found {:?}",
-                other
-            ))),
         }
     }
 
