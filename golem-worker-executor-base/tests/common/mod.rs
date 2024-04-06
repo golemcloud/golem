@@ -5,7 +5,7 @@ use golem_wasm_ast::analysis::AnalysisContext;
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use golem_wasm_rpc::protobuf::{
-    val, Val, ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple,
+    val, Val, ValEnum, ValFlags, ValList, ValOption, ValRecord, ValResult, ValTuple, ValVariant,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -1104,6 +1104,21 @@ pub fn val_tuple4(first: Val, second: Val, third: Val, fourth: Val) -> Val {
         val: Some(val::Val::Tuple(ValTuple {
             values: vec![first, second, third, fourth],
         })),
+    }
+}
+
+pub fn val_enum(discriminant: i32) -> Val {
+    Val {
+        val: Some(val::Val::Enum(ValEnum { discriminant })),
+    }
+}
+
+pub fn val_variant(discriminant: i32, val: Val) -> Val {
+    Val {
+        val: Some(val::Val::Variant(Box::new(ValVariant {
+            discriminant,
+            value: Some(Box::new(val)),
+        }))),
     }
 }
 
