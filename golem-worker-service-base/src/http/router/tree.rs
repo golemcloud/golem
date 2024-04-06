@@ -1,4 +1,4 @@
-use super::vec_map::VecMap;
+use super::vecmap::VecMap;
 
 #[derive(Debug, Clone)]
 pub struct RadixNode<T> {
@@ -43,13 +43,9 @@ impl<T> Children<T> {
     }
 
     #[inline]
-    fn search_by_str(&self, input: &str) -> Option<&RadixNode<T>> {
-        let child = self
-            .literal_children
-            .search_by(|(pattern, _)| pattern.0.as_str().cmp(input));
-
-        child
-            .map(|(_, child)| child)
+    fn get_by_str(&self, input: &str) -> Option<&RadixNode<T>> {
+        self.literal_children
+            .get(input)
             .or_else(|| self.variable_child.as_ref().map(|c| c.as_ref()))
     }
 
@@ -113,7 +109,14 @@ impl Pattern {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LiteralPattern(pub String);
+pub struct LiteralPattern(String);
+
+// Needed to get value in map by &str
+impl std::borrow::Borrow<str> for LiteralPattern {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum InsertionError {
@@ -300,7 +303,7 @@ impl<T> RadixNode<T> {
 
                     match path_segments.first() {
                         Some(first_segment) => {
-                            let next_child = node.children.search_by_str(first_segment);
+                            let next_child = node.children.get_by_str(first_segment);
                             if let Some(child) = next_child {
                                 node = child;
                                 continue;

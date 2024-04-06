@@ -8,8 +8,8 @@ fn radix_tree_all_matches(c: &mut Criterion) {
     let num_routes = &[10, 20, 50, 100];
 
     let mut group = c.benchmark_group("matches");
-    for (i, &len) in num_routes.iter().enumerate() {
-        group.bench_function(format!("{i}/len={len}"), |b| {
+    for &len in num_routes.iter() {
+        group.bench_function(format!("/len={len}"), |b| {
             let (original, routes) = generate_routes(len);
             let radix_tree = build_radix_tree(&routes);
 

@@ -1,6 +1,10 @@
 use std::ops::{Index, IndexMut};
-use std::{borrow::Borrow, cmp::Ordering, fmt::Debug};
+use std::{borrow::Borrow, fmt::Debug};
 
+/// A K,V map implemented as a sorted Vec.
+/// Gives better performance for lookup than a HashMap for small sizes (~10).
+/// Equal performance starting around 20 elements, depending on the cost of the comparator.
+/// For instance, longer String keys will quickly benefit from Hashing.
 #[derive(Clone)]
 pub struct VecMap<K, V> {
     values: Vec<(K, V)>,
@@ -25,26 +29,15 @@ where
     }
 
     #[inline]
-    pub fn search_by<'a>(&'a self, f: impl FnMut(&'a (K, V)) -> Ordering) -> Option<&'a (K, V)> {
-        let index = self.values.binary_search_by(f).ok()?;
-        Some(&self.values[index])
-    }
-
-    #[inline]
-    pub fn search_index_by<'a>(
-        &'a self,
-        f: impl FnMut(&'a (K, V)) -> Ordering,
-    ) -> Result<usize, usize> {
-        self.values.binary_search_by(f)
-    }
-
-    #[inline]
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
-        Q: Borrow<K> + ?Sized,
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
     {
-        let key = key.borrow();
-        let index = self.values.binary_search_by(|(k, _)| k.cmp(key)).ok()?;
+        let index = self
+            .values
+            .binary_search_by(|(k, _)| k.borrow().cmp(key))
+            .ok()?;
 
         Some(&self.values[index].1)
     }
@@ -52,10 +45,13 @@ where
     #[inline]
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
-        Q: Borrow<K> + ?Sized,
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
     {
-        let key = key.borrow();
-        let index = self.values.binary_search_by(|(k, _)| k.cmp(key)).ok()?;
+        let index = self
+            .values
+            .binary_search_by(|(k, _)| k.borrow().cmp(key))
+            .ok()?;
 
         Some(&mut self.values[index].1)
     }
@@ -141,24 +137,6 @@ impl<K, V> IntoIterator for VecMap<K, V> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.values.into_iter()
-    }
-}
-
-impl<'a, K, V> IntoIterator for &'a VecMap<K, V> {
-    type Item = &'a (K, V);
-    type IntoIter = std::slice::Iter<'a, (K, V)>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-impl<'a, K, V> IntoIterator for &'a mut VecMap<K, V> {
-    type Item = &'a mut (K, V);
-    type IntoIter = std::slice::IterMut<'a, (K, V)>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter_mut()
     }
 }
 
