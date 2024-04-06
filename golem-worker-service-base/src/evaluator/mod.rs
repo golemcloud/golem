@@ -604,7 +604,6 @@ mod tests {
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expression;
-    use crate::expression::Expr;
     use crate::http::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
     use crate::worker_bridge_execution::WorkerResponse;

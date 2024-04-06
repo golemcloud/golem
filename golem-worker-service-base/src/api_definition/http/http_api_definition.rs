@@ -300,8 +300,6 @@ mod tests {
     use crate::expression;
     use golem_common::serialization;
 
-    use crate::expression::Expr;
-
     use super::*;
 
     #[test]

@@ -223,6 +223,15 @@ impl<'t> Tokenizer<'t> {
         self.skip_whitespace()
     }
 
+    // Tokenizer progresses, use `peek_next_non_empty_token_is` if only to peek if only to peek
+    pub fn next_non_empty_token_is(&mut self, token: &Token) -> bool {
+        self.next_non_empty_token() == Some(token.clone())
+    }
+
+    pub fn peek_next_non_empty_token_is(&mut self, token: &Token) -> bool {
+        self.peek_next_non_empty_token() == Some(token.clone())
+    }
+
     pub fn skip_next_non_empty_token(&mut self) {
         self.next_non_empty_token();
     }

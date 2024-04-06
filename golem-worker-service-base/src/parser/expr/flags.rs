@@ -38,6 +38,6 @@ pub(crate) fn is_flags(tokenizer: &mut Tokenizer) -> bool {
         (Some(comma_index), Some(colon_index)) => comma_index < colon_index, // Comma exists before colon
         (None, Some(_)) => false, // Colon exists but no commas, meaning it can be record
         (Some(_), None) => true,  // Comma exists but no colons, meaning its not a record
-        (None, None) => true, // No commas, no colons, but just strings between indicate flags
+        (None, None) => true,     // No commas, no colons, but just strings between indicate flags
     }
 }

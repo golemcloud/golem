@@ -218,7 +218,7 @@ mod tests {
     use crate::expression::{Expr, InnerNumber};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::TemplateId;
-    use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
+    use openapiv3::PathItem;
     use serde_json::json;
     use uuid::Uuid;
 
