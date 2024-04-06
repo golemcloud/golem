@@ -255,4 +255,23 @@ mod tests {
         ]);
         assert_eq!(output_expr, expected_expr);
     }
+
+    #[test]
+    fn test_sequence_of_tuple_singleton() {
+        let expr_string = "${[(bc)]}";
+        let output_expr = from_string(expr_string).unwrap();
+        let expected_expr = Expr::Sequence(vec![Expr::Tuple(vec![Expr::Variable("bc".to_string())])]);
+        assert_eq!(output_expr, expected_expr);
+    }
+
+    #[test]
+    fn test_sequence_of_tuple_multiple() {
+        let expr_string = "${[(bc), (cd)]}";
+        let output_expr = from_string(expr_string).unwrap();
+        let expected_expr = Expr::Sequence(vec![
+            Expr::Tuple(vec![Expr::Variable("bc".to_string())]),
+            Expr::Tuple(vec![Expr::Variable("cd".to_string())]),
+        ]);
+        assert_eq!(output_expr, expected_expr);
+    }
 }
