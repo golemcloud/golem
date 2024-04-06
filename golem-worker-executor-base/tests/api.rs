@@ -341,6 +341,60 @@ async fn get_self_uri() {
 
 #[tokio::test]
 #[tracing::instrument]
+async fn get_workers_from_worker() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+
+    let worker_id1 = executor
+        .start_worker(&template_id, "runtime-service-1")
+        .await;
+
+    let worker_id2 = executor
+        .start_worker(&template_id, "runtime-service-2")
+        .await;
+
+    let template_id_val = {
+        let (high, low) = template_id.0.as_u64_pair();
+        common::val_record(vec![common::val_record(vec![
+            common::val_u64(high),
+            common::val_u64(low),
+        ])])
+    };
+
+    let result1 = executor
+        .invoke_and_await(
+            &worker_id1,
+            "golem:it/api/get-workers",
+            vec![
+                template_id_val.clone(),
+                common::val_option(None),
+                common::val_bool(true),
+            ],
+        )
+        .await;
+
+    let result2 = executor
+        .invoke_and_await(
+            &worker_id2,
+            "golem:it/api/get-workers",
+            vec![
+                template_id_val.clone(),
+                common::val_option(None),
+                common::val_bool(true),
+            ],
+        )
+        .await;
+
+    drop(executor);
+
+    println!("result1: {:?}", result1);
+    println!("result2: {:?}", result2);
+}
+
+#[tokio::test]
+#[tracing::instrument]
 async fn invoking_with_same_invocation_key_is_idempotent() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();
