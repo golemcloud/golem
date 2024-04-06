@@ -234,7 +234,6 @@ impl<'t> Tokenizer<'t> {
         }
     }
 
-
     // Captures the string upto the end token, and advance the cursor further skipping the end token
     pub fn capture_string_until_and_skip_end(
         &mut self,
@@ -429,7 +428,6 @@ impl<'t> Tokenizer<'t> {
         self.state = original_state;
         token
     }
-
 
     pub fn peek_next_non_empty_token(&mut self) -> Option<Token> {
         let original_state = self.state.clone();

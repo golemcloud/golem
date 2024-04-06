@@ -3,9 +3,9 @@ use std::rc::Rc;
 use crate::expression::{ConstructorPattern, Expr};
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-use super::*;
+use crate::parser::expr::{let_statement, record, sequence, tuple};
+use crate::parser::{GolemParser, ParseError};
 use internal::*;
-
 #[derive(Clone, Debug)]
 pub struct ExprParser {}
 
@@ -15,7 +15,7 @@ pub struct ExprParser {}
 // and `foo>${user-id}` will be Expr::Concat("foo", ">", Expr::Variable("user-id")). Evaluator will look for values for this variable.
 // Had it Context::Code, it would have been `Expr::GreaterThan(Expr::Variable("foo"), Expr::Variable("user-id"))`
 #[derive(Clone, Debug)]
-enum Context {
+pub(crate) enum Context {
     Code,
     Text,
 }
@@ -35,13 +35,16 @@ impl GolemParser<Expr> for ExprParser {
     }
 }
 
-fn parse_with_context(input: &str, context: Context) -> Result<Expr, ParseError> {
+pub(crate) fn parse_with_context(input: &str, context: Context) -> Result<Expr, ParseError> {
     let mut tokenizer: Tokenizer = tokenise(input);
 
     parse_tokens(&mut tokenizer, context)
 }
 
-fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, ParseError> {
+pub(crate) fn parse_tokens(
+    tokenizer: &mut Tokenizer,
+    context: Context,
+) -> Result<Expr, ParseError> {
     fn go(
         tokenizer: &mut Tokenizer,
         context: Context,
@@ -124,7 +127,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                     go(tokenizer, context, prev_expression.apply_with(new_expr))
                 }
 
-                Token::LParen => create_tuple(tokenizer)
+                Token::LParen => tuple::create_tuple(tokenizer)
                     .and_then(|tuple| go(tokenizer, context, prev_expression.apply_with(tuple))),
 
                 Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo) => {
@@ -172,7 +175,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                 }
 
                 Token::MultiChar(MultiCharTokens::Let) => {
-                    let let_expr = create_let_statement(tokenizer)?;
+                    let let_expr = let_statement::create_let_statement(tokenizer)?;
                     go(
                         tokenizer,
                         context,
@@ -288,7 +291,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                     }
                     _ => {
                         dbg!("Found to be list");
-                        let expr = create_list(tokenizer)?;
+                        let expr = sequence::create_sequence(tokenizer)?;
                         go(tokenizer, context, prev_expression.apply_with(expr))
                     }
                 },
@@ -411,7 +414,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                     let expr = if is_flags(tokenizer) {
                         create_flags(tokenizer)
                     } else {
-                        create_record(tokenizer)
+                        record::create_record(tokenizer)
                     };
 
                     go(tokenizer, context, prev_expression.apply_with(expr?))
@@ -439,347 +442,6 @@ mod internal {
     use crate::parser::ParseError;
     use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
     use strum_macros::Display;
-
-    pub(crate) fn create_tuple(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
-        let mut tuple_elements = vec![];
-        let mut grouped_exprs: Vec<Expr> = vec![];
-
-        fn go(
-            tokenizer: &mut Tokenizer,
-            tuple_elements: &mut Vec<Expr>,
-            grouped_exprs: &mut Vec<Expr>,
-        ) -> Result<(), ParseError> {
-            let captured_string = tokenizer.capture_string_until(
-                vec![],
-                &Token::Comma, // Wave does this
-            );
-
-            match captured_string {
-                Some(r) => {
-                    let expr = parse_with_context(r.as_str(), Context::Code)?;
-
-                    tuple_elements.push(expr);
-                    tokenizer.next_non_empty_token(); // Skip Comma
-                    go(tokenizer, tuple_elements, grouped_exprs)
-                }
-
-                None => {
-                    let last_value = tokenizer
-                        .capture_string_until_and_skip_end(vec![&Token::LParen], &Token::RParen);
-
-                    match last_value {
-                        Some(last_value) if !last_value.is_empty() => {
-                            let expr = parse_with_context(last_value.as_str(), Context::Code)?;
-                            // If there is only 1 element, and it's an invalid tuple element, then we need to push it to grouped_exprs
-                            if tuple_elements.is_empty() {
-                                if !is_valid_tuple_element(&expr) {
-                                    grouped_exprs.push(expr.clone());
-                                }
-                            }
-
-                            tuple_elements.push(expr);
-
-                            Ok(())
-                        }
-                        Some(_) => Ok(()),
-                        None => Err(ParseError::Message(
-                            "Expecting a closing paren (RParen)".to_string(),
-                        )),
-                    }
-                }
-            }
-        }
-
-        go(tokenizer, &mut tuple_elements, &mut grouped_exprs)?;
-
-        if !grouped_exprs.is_empty() {
-            Ok(grouped_exprs.pop().unwrap())
-        } else {
-            Ok(Expr::Tuple(tuple_elements))
-        }
-    }
-
-    // We allow only WIT types to be part of the tuple
-    // and not expressions such as Expr::Cond, or pattern matching
-    // However complex expressions can be contained within () to
-    // allow grouping of expressions
-    pub(crate) fn is_valid_tuple_element(expr: &Expr) -> bool {
-        match expr {
-            Expr::Variable(_) => true,
-            Expr::Number(_) => true,
-            Expr::Boolean(_) => true,
-            Expr::Flags(_) => true,
-            Expr::Record(_) => true,
-            Expr::Sequence(_) => true,
-            Expr::Concat(_) => true,
-            Expr::Constructor0(_) => true,
-            Expr::Tuple(_) => true,
-            Expr::Literal(_) => true,
-            Expr::Not(_) => false,
-            Expr::Request() => false,
-            Expr::Worker() => false,
-            Expr::SelectField(_, _) => false,
-            Expr::SelectIndex(_, _) => false,
-            Expr::Cond(_, _, _) => false, // we disallow if statements within tuple
-            Expr::PatternMatch(_, _) => false,
-            Expr::GreaterThan(_, _) => false,
-            Expr::LessThan(_, _) => false,
-            Expr::EqualTo(_, _) => false,
-            Expr::GreaterThanOrEqualTo(_, _) => false,
-            Expr::LessThanOrEqualTo(_, _) => false,
-            Expr::Let(_, _) => false,
-            Expr::Multiple(_) => false,
-        }
-    }
-
-    pub(crate) fn create_list(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
-        let mut record = vec![];
-
-        fn go(tokenizer: &mut Tokenizer, record: &mut Vec<Expr>) -> Result<(), ParseError> {
-            let next_token = tokenizer.peek_next_non_empty_token();
-
-            dbg!("Next token is {}", next_token.clone());
-            match next_token {
-                Some(token @ Token::LSquare) | Some(token @ Token::LParen) | Some(token @ Token::LCurly) => {
-                    let closing_token= closing_token(&token).ok_or(ParseError::Message(
-                        "Expecting a closing token for nested record".to_string(),
-                    ))?;
-
-                    tokenizer.skip_next_non_empty_token(); // Skipping the first token
-
-                    let captured_string = tokenizer.capture_string_until_and_skip_end(
-                        vec![&token],
-                        &closing_token,
-                    );
-
-                    match captured_string {
-                        Some(captured_string) => {
-                            let full_expr = format!(
-                                "{}{}{}",
-                                &token,
-                                &captured_string,
-                                &closing_token
-                            );
-
-                            dbg!("The fully captured expression is {}", full_expr.clone());
-
-                            let expr = parse_with_context(full_expr.as_str(), Context::Code)?;
-                            dbg!(expr.clone());
-                            record.push(expr);
-
-                            match tokenizer.peek_next_non_empty_token() {
-                                Some(Token::Comma) => {
-                                    tokenizer.skip_next_non_empty_token(); // Skip comma before looping
-                                    go(tokenizer, record)
-                                }
-                                Some(Token::RSquare) => {
-                                    tokenizer.skip_next_non_empty_token(); // Skip RSquare before looping
-                                    Ok(())
-                                }
-                                _ => Err(ParseError::Message(
-                                    "Expecting a comma or closing square bracket".to_string(),
-                                )),
-                            }
-                        }
-                        None => Err(ParseError::Message(
-                            "Expecting a value after colon in record 1".to_string(),
-                        )),
-                    }
-                }
-
-                _ => {
-                    let captured_string = tokenizer.capture_string_until(
-                        vec![],
-                        &Token::Comma, // Wave does this
-                    );
-
-                    match captured_string {
-                        Some(r) => {
-                            let expr = parse_with_context(r.as_str(), Context::Code)?;
-
-                            record.push(expr);
-                            tokenizer.next_non_empty_token();
-                            go(tokenizer, record)
-                        }
-
-                        None => {
-                            let last_value =
-                                tokenizer.capture_string_until(vec![&Token::LSquare], &Token::RSquare);
-
-                            match last_value {
-                                Some(last_value) => {
-                                    let expr = parse_with_context(last_value.as_str(), Context::Code)?;
-                                    record.push(expr);
-                                    Ok(())
-                                }
-                                None => Ok(()),
-                            }
-                        }
-                    }
-                }
-            }
-
-        }
-
-        go(tokenizer, &mut record)?;
-
-        Ok(Expr::Sequence(record))
-    }
-
-    pub(crate) fn create_let_statement(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
-        let captured_string = tokenizer.capture_string_until_and_skip_end(
-            vec![],
-            &Token::LetEqual, // Wave does this
-        );
-
-        if let Some(let_variable_str) = captured_string {
-            let expr = parse_with_context(let_variable_str.as_str(), Context::Code)?;
-            match expr {
-                Expr::Variable(variable_name) => {
-                    let captured_string = tokenizer.capture_string_until_and_skip_end(
-                        vec![],
-                        &Token::SemiColon, // Wave does this
-                    );
-                    match captured_string {
-                        Some(captured_string) => {
-                            let expr = parse_with_context(captured_string.as_str(), Context::Code)?;
-                            Ok(Expr::Let(variable_name, Box::new(expr)))
-                        }
-                        None => Err(ParseError::Message(
-                            "Expecting a value after let variable".to_string(),
-                        )),
-                    }
-                }
-                _ => Err(ParseError::Message(
-                    "Expecting a variable name after let".to_string(),
-                )),
-            }
-        } else {
-            Err(ParseError::Message(
-                "Expecting a variable name after let".to_string(),
-            ))
-        }
-    }
-
-    pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
-        let mut record: Vec<(String, Expr)> = vec![];
-
-        fn go(
-            tokenizer: &mut Tokenizer,
-            record: &mut Vec<(String, Expr)>,
-        ) -> Result<(), ParseError> {
-
-            match tokenizer.next_non_empty_token() {
-                Some(Token::MultiChar(MultiCharTokens::Other(key))) => {
-                    match tokenizer.next_non_empty_token() {
-                        Some(Token::Colon) => {
-                            let possible_nestedness = tokenizer.peek_next_non_empty_token();
-                            match possible_nestedness {
-                                Some(start_token @ Token::LCurly)
-                                | Some(start_token @ Token::LParen)
-                                | Some(start_token @ Token::LSquare) => {
-                                    tokenizer.skip_next_non_empty_token(); // Skip the nested token
-                                    let closing_token = closing_token(&start_token).ok_or(ParseError::Message(
-                                        "Expecting a closing token for nested record".to_string(),
-                                    ))?;
-
-                                    let captured_string = tokenizer
-                                        .capture_string_until_and_skip_end(
-                                            vec![&start_token],
-                                            &closing_token,
-                                        );
-
-                                    match captured_string {
-                                        Some(captured_string) => {
-
-                                            let full_expr = format!(
-                                                "{}{}{}",
-                                                &start_token,
-                                                &captured_string,
-                                                &closing_token
-                                            );
-
-                                           // dbg!(full_expr.clone());
-
-                                            let expr = parse_with_context(
-                                                full_expr.as_str(),
-                                                Context::Code,
-                                            )?;
-                                          //  dbg!(expr.clone());
-                                            record.push((key.to_string(), expr.clone()));
-                                            tokenizer.skip_if_next_non_empty_token_is(&Token::Comma); // Skip comma before looping
-                                            go(tokenizer, record)
-                                        }
-                                        None => Err(ParseError::Message(
-                                            "Expecting a value after colon in record 1".to_string(),
-                                        )),
-                                    }
-                                }
-                                _ => {
-                                    let captured_value =
-                                        tokenizer.capture_string_until(vec![], &Token::Comma);
-                                    match captured_value {
-                                        Some(value) => {
-                                            let expr =
-                                                parse_with_context(value.as_str(), Context::Code)?;
-                                            record.push((key.to_string(), expr.clone()));
-                                            tokenizer.next_non_empty_token(); // Skip next comma
-                                            go(tokenizer, record)
-                                        }
-                                        None => {
-                                            let last_value = tokenizer.capture_string_until(
-                                                vec![&Token::LCurly],
-                                                &Token::RCurly,
-                                            );
-
-                                            dbg!(&last_value);
-
-                                            match last_value {
-                                                Some(last_value) => {
-                                                    let expr = parse_with_context(
-                                                        last_value.as_str(),
-                                                        Context::Code,
-                                                    )?;
-                                                    record.push((key.to_string(), expr));
-                                                    Ok(())
-                                                }
-                                                None => Err(ParseError::Message(
-                                                    "Expecting a value after colon in record"
-                                                        .to_string(),
-                                                )),
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        _ => Err(ParseError::Message(
-                            "Expecting a colon after key in record".to_string(),
-                        )),
-                    }
-                }
-
-                _ => Err(ParseError::Message("Expecting a key in record".to_string())),
-            }
-        }
-
-        go(tokenizer, &mut record)?;
-        Ok(Expr::Record(
-            record
-                .iter()
-                .map(|(s, e)| (s.clone(), Box::new(e.clone())))
-                .collect::<Vec<_>>(),
-        ))
-    }
-
-    fn closing_token(opening_token: &Token) -> Option<Token> {
-        match opening_token {
-            Token::LCurly => Some(Token::RCurly),
-            Token::LSquare => Some(Token::RSquare),
-            Token::LParen => Some(Token::RParen),
-            _ => None,
-        }
-    }
 
     pub(crate) fn is_flags(tokenizer: &mut Tokenizer) -> bool {
         let colon_index = tokenizer.index_of_future_token(vec![], &Token::Colon);
