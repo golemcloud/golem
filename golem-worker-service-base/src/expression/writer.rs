@@ -276,7 +276,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expression::Expr;
+    use crate::expression::{Expr, InnerNumber};
     use crate::expression::reader;
 
     #[test]
@@ -284,7 +284,7 @@ mod tests {
         let input_expr = Expr::Literal("hello".to_string());
         let expr_str = write_expr(&input_expr).unwrap();
         dbg!(expr_str.clone());
-        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
         assert_eq!(input_expr, output_expr);
     }
 
@@ -292,7 +292,7 @@ mod tests {
     fn test_round_trip_read_write_request() {
         let input_expr = Expr::Request();
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
         assert_eq!(input_expr, output_expr);
     }
 
@@ -301,7 +301,7 @@ mod tests {
         let input_expr = Expr::Let("x".to_string(), Box::new(Expr::Literal("hello".to_string())));
         let expr_str = write_expr(&input_expr).unwrap();
         dbg!(expr_str.clone());
-        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
         assert_eq!(input_expr, output_expr);
     }
 
@@ -309,7 +309,7 @@ mod tests {
     fn test_round_trip_read_write_worker() {
         let input_expr = Expr::Worker();
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
         assert_eq!(input_expr, output_expr);
     }
 
@@ -317,7 +317,7 @@ mod tests {
     fn test_round_trip_read_write_select_field() {
         let input_expr = Expr::SelectField(Box::new(Expr::Request()), "field".to_string());
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
         assert_eq!(input_expr, output_expr);
     }
 
@@ -325,7 +325,7 @@ mod tests {
     fn test_round_trip_read_write_select_index() {
         let input_expr = Expr::SelectIndex(Box::new(Expr::Request()), 1);
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
         assert_eq!(input_expr, output_expr);
     }
 
@@ -336,7 +336,7 @@ mod tests {
             Expr::Request(),
         ]);
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
         assert_eq!(input_expr, output_expr);
     }
 
@@ -345,9 +345,59 @@ mod tests {
         let input_expr = Expr::Record(vec![
             ("field".to_string(), Box::new(Expr::Request())),
             ("field".to_string(), Box::new(Expr::Request())),
+            ("field".to_string(), Box::new(Expr::Request())),
         ]);
         let expr_str = write_expr(&input_expr).unwrap();
-        let output_expr = reader::read_expr(expr_str.as_str()).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
+        assert_eq!(input_expr, output_expr);
+    }
+
+    #[test]
+    fn test_round_trip_read_write_tuple() {
+        let input_expr = Expr::Tuple(vec![
+           Expr::Request(),
+           Expr::Request(),
+           Expr::Request(),
+        ]);
+        let expr_str = write_expr(&input_expr).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
+        assert_eq!(input_expr, output_expr);
+    }
+
+    #[test]
+    fn test_round_trip_read_write_number_float() {
+        let input_expr = Expr::Number(InnerNumber::Float(1.1));
+        let expr_str = write_expr(&input_expr).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
+        assert_eq!(input_expr, output_expr);
+    }
+
+    #[test]
+    fn test_round_trip_read_write_number_u64() {
+        let input_expr = Expr::Number(InnerNumber::UnsignedInteger(1));
+        let expr_str = write_expr(&input_expr).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
+        assert_eq!(input_expr, output_expr);
+    }
+
+    #[test]
+    fn test_round_trip_read_write_number_i64() {
+        let input_expr = Expr::Number(InnerNumber::Integer(-1));
+        let expr_str = write_expr(&input_expr).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
+        assert_eq!(input_expr, output_expr);
+    }
+
+    #[test]
+fn test_round_trip_read_write_flags() {
+        let input_expr = Expr::Flags(vec![
+            "flag1".to_string(),
+            "flag2".to_string(),
+            "flag3".to_string(),
+        ]);
+        let expr_str = write_expr(&input_expr).unwrap();
+        let output_expr = reader::read_expr(expr_str).unwrap();
+
         assert_eq!(input_expr, output_expr);
     }
 

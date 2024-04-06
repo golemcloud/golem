@@ -410,11 +410,7 @@ fn parse_tokens(tokenizer: &mut Tokenizer, context: Context) -> Result<Expr, Par
                     let expr = if is_flags(tokenizer) {
                         create_flags(tokenizer)
                     } else {
-                        create_record(
-                            tokenizer,
-                            vec![&Token::interpolation_start(), &Token::LCurly],
-                            Some(&Token::RCurly),
-                        )
+                        create_record(tokenizer)
                     };
 
                     go(tokenizer, context, prev_expression.apply_with(expr?))
@@ -612,79 +608,73 @@ mod internal {
 
     pub(crate) fn create_record(
         tokenizer: &mut Tokenizer,
-        possible_nested_token_starts: Vec<&Token>,
-        capture_until: Option<&Token>,
     ) -> Result<Expr, ParseError> {
-        let mut record = vec![];
+
+        let mut record: Vec<(String, Expr)> = vec![];
 
         fn go(
             tokenizer: &mut Tokenizer,
             record: &mut Vec<(String, Expr)>,
-            possible_nested_token_starts: Vec<&Token>,
-            capture_until: Option<&Token>,
         ) -> Result<(), ParseError> {
-            // We already consumed first curly brace
-            // Now we either expect a closing brace or a key
-            // followed by a colon and then records being comma separated
             match tokenizer.next_non_empty_token() {
-                Some(Token::RCurly) => Ok(()),
                 Some(Token::MultiChar(MultiCharTokens::Other(key))) => {
-                    let key = key.to_string();
-                    let value = match tokenizer.next_non_empty_token() {
+                    match tokenizer.next_non_empty_token() {
                         Some(Token::Colon) => {
-                            let captured_string = tokenizer.capture_string_until(
-                                possible_nested_token_starts.clone(),
-                                capture_until.unwrap_or(&Token::Comma),
+                            let captured_value = tokenizer.capture_string_until(
+                                vec![],
+                                &Token::Comma,
                             );
 
-                            match captured_string {
-                                Some(captured_string) => {
+                            match captured_value {
+                                Some(value) => {
                                     let expr = parse_with_context(
-                                        captured_string.as_str(),
+                                        value.as_str(),
                                         Context::Code,
                                     )?;
-                                    Ok(expr)
+                                    record.push((key.to_string(), expr));
+                                    tokenizer.next_non_empty_token(); // Skip next comma
+                                    go(
+                                        tokenizer,
+                                        record,
+                                    )
                                 }
-                                None => Err(ParseError::Message(
-                                    "Expecting a value after colon".to_string(),
-                                )),
+
+                                None => {
+                                    // If comma doesn't exist, try capturing until next curly brace
+                                    let last_value = tokenizer.capture_string_until(
+                                        vec![],
+                                        &Token::RCurly,
+                                    );
+
+                                    match last_value {
+                                        Some(last_value) => {
+                                            let expr = parse_with_context(
+                                                last_value.as_str(),
+                                                Context::Code,
+                                            )?;
+                                            record.push((key.to_string(), expr));
+                                            Ok(())
+                                        }
+                                        None => Err(ParseError::Message(
+                                            "Expecting a value after colon in record".to_string(),
+                                        )),
+                                    }
+                                }
                             }
                         }
                         _ => Err(ParseError::Message(
                             "Expecting a colon after key in record".to_string(),
                         )),
-                    };
-
-                    match value {
-                        Ok(expr) => {
-                            record.push((key, expr));
-                            go(
-                                tokenizer,
-                                record,
-                                possible_nested_token_starts,
-                                capture_until,
-                            )
-                        }
-                        Err(e) => Err(e),
                     }
                 }
-                Some(token) => Err(ParseError::Message(format!(
-                    "Expecting a key in record. But found {}",
-                    token
-                ))),
-                None => Err(ParseError::Message(
-                    "Expecting a key in record. But found nothing".to_string(),
+
+                _ => Err(ParseError::Message(
+                    "Expecting a key in record".to_string(),
                 )),
             }
         }
 
-        go(
-            tokenizer,
-            &mut record,
-            possible_nested_token_starts,
-            capture_until,
-        )?;
-
+        go(tokenizer, &mut record)?;
         Ok(Expr::Record(
             record
                 .iter()
@@ -863,7 +853,7 @@ mod internal {
         prev_expr: &Expr,
     ) -> Result<Expr, ParseError> {
         match prev_expr {
-            Expr::Sequence(_) | Expr::Record(_) | Expr::Variable(_) | Expr::SelectField(_, _) => {
+            Expr::Sequence(_) | Expr::Record(_) | Expr::Variable(_) | Expr::SelectField(_, _) | Expr::Request() | Expr::Worker() => {
                 //
                 let optional_possible_index =
                     tokenizer.capture_string_until(vec![&Token::LSquare], &Token::RSquare);
