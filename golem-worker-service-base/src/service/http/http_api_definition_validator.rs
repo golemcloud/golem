@@ -162,7 +162,7 @@ fn test_unique_routes() {
         }
     }
 
-    let paths = vec![
+    let paths = &[
         "/users/{id}/posts/{post_id}",
         "/users/{id}/posts/{post_id}/comments/{comment_id}",
         "/users/{id}/posts/{post_id}/comments/{comment_id}/replies/{reply_id}",
