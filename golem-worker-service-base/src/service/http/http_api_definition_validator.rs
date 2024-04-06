@@ -91,10 +91,7 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
                 .get_route(&method, &route.path.path_patterns)
                 .unwrap();
 
-            let detail = format!(
-                "Duplicate route with path: {}",
-                current_route.path.to_string()
-            );
+            let detail = format!("Duplicate route with path: {}", current_route.path);
 
             errors.push(RouteValidationError {
                 method: route.method.clone(),

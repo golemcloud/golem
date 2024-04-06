@@ -301,15 +301,12 @@ impl<T> RadixNode<T> {
                     // The path partially matches the current node's pattern
                     path_segments = &path_segments[common_prefix_len..];
 
-                    match path_segments.first() {
-                        Some(first_segment) => {
-                            let next_child = node.children.get_by_str(first_segment);
-                            if let Some(child) = next_child {
-                                node = child;
-                                continue;
-                            }
+                    if let Some(first_segment) = path_segments.first() {
+                        let next_child = node.children.get_by_str(first_segment);
+                        if let Some(child) = next_child {
+                            node = child;
+                            continue;
                         }
-                        _ => {}
                     }
                 }
             }
