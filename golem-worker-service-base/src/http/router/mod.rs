@@ -20,10 +20,20 @@ impl<T> Router<T> {
         }
     }
 
+    /// Add a route to the router.
+    /// Returns true if the route was added successfully.
+    /// False indicates that there is a conflict.
     pub fn add_route(&mut self, method: Method, path: Vec<PathPattern>, data: T) -> bool {
         let node = self.tree.get_or_default(method::MethodOrd(method));
         let path: Vec<Pattern> = convert_path(path);
         node.insert_path(&path, data).is_ok()
+    }
+
+    pub fn get_route(&self, method: &Method, path: &[PathPattern]) -> Option<&T> {
+        let node = self.tree.get(method)?;
+        let path: Vec<Pattern> = convert_path(path.to_vec());
+        let result = node.get(&path)?;
+        Some(result)
     }
 
     pub fn check_path(&self, method: &Method, path: &[&str]) -> Option<&T> {

@@ -145,10 +145,8 @@ impl AllPathPatterns {
 
 impl Display for AllPathPatterns {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (index, pattern) in self.path_patterns.iter().enumerate() {
-            if index > 0 {
-                write!(f, "/")?;
-            }
+        for pattern in self.path_patterns.iter() {
+            write!(f, "/")?;
             write!(f, "{pattern}")?;
         }
 
