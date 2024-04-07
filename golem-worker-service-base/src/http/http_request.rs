@@ -5,9 +5,9 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
 
-use crate::api_definition::http::{HttpApiDefinition, PathPattern, QueryInfo, Route, VarInfo};
+use crate::api_definition::http::{HttpApiDefinition, QueryInfo, VarInfo};
 use crate::tokeniser::tokenizer::Token;
-use crate::worker_binding::{GolemWorkerBinding, ResolvedWorkerBinding, WorkerBindingResolver};
+use crate::worker_binding::{ResolvedWorkerBinding, WorkerBindingResolver};
 
 use self::internal::RecordField;
 
