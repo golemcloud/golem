@@ -2,7 +2,7 @@ use crate::expression::Expr;
 use crate::parser::expr::util;
 use crate::parser::expr_parser::{parse_with_context, Context};
 use crate::parser::ParseError;
-use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
+use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
 // Assuming the tokenizer already consumed `[` token, indicating the start of sequence
 pub(crate) fn create_sequence(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {

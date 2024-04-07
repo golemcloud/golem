@@ -252,7 +252,7 @@ impl<'t> Tokenizer<'t> {
         let captured_string = self.capture_string_until(end);
         match captured_string {
             Some(captured_string) => {
-                self.next_token();
+                self.next_non_empty_token();
                 Some(captured_string)
             }
             None => None,
@@ -299,6 +299,7 @@ impl<'t> Tokenizer<'t> {
     // Another example: To find the position of `,`, it will skip all `,` that are part of any another nested `{}` or `[]`, or `()`
     // after the first consumed token.
     pub fn index_of_end_token(&mut self, end_token: &Token) -> Option<usize> {
+        dbg!(end_token.clone());
         let token_start_ends = Rules::of_token(end_token);
 
         let nested_starts_to_look_for = token_start_ends.all_token_starts();
@@ -318,6 +319,8 @@ impl<'t> Tokenizer<'t> {
         let mut found: bool = false;
 
         while let Some(current_token) = self.peek_at(index) {
+            dbg!(current_token.clone());
+            dbg!(starts_identified.clone());
             let current_token_cloned = current_token.clone();
 
             if nested_starts_to_look_for.contains(&current_token_cloned) {
@@ -476,11 +479,14 @@ impl<'t> Tokenizer<'t> {
             '>' => Some(Token::GreaterThan),
             '<' => Some(Token::LessThan),
             ':' => Some(Token::Colon),
-            '=' => self
-                .rest_at(1)
-                .chars()
-                .next()
-                .map_or(Some(Token::LetEqual), |_| None),
+            ';' => Some(Token::SemiColon),
+            '=' => {
+                let next_token = self
+                    .rest_at(1)
+                    .chars()
+                    .next();
+                if next_token == Some('=') { None } else { Some(Token::LetEqual) }
+            }
             _ => None,
         } {
             self.progress();
