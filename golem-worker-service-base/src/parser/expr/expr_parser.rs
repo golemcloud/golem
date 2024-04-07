@@ -3,7 +3,9 @@ use std::rc::Rc;
 use crate::expression::{ConstructorPattern, Expr};
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-use crate::parser::expr::{constructor, flags, let_statement, pattern_match, record, selection, sequence, tuple, util};
+use crate::parser::expr::{
+    constructor, flags, let_statement, pattern_match, record, selection, sequence, tuple, util,
+};
 use crate::parser::{GolemParser, ParseError};
 use internal::*;
 #[derive(Clone, Debug)]
@@ -95,8 +97,10 @@ pub(crate) fn parse_tokens(
                 token @ Token::MultiChar(MultiCharTokens::Some)
                 | token @ Token::MultiChar(MultiCharTokens::Ok)
                 | token @ Token::MultiChar(MultiCharTokens::Err) => {
-                    let constructor_pattern =
-                        constructor::get_constructor_pattern(tokenizer, token.to_string().as_str())?;
+                    let constructor_pattern = constructor::get_constructor_pattern(
+                        tokenizer,
+                        token.to_string().as_str(),
+                    )?;
                     go(
                         tokenizer,
                         context,
@@ -381,12 +385,12 @@ pub(crate) fn parse_tokens(
 }
 
 mod internal {
-    use crate::expression::{Expr};
+    use crate::expression::Expr;
+    use crate::parser::expr::{constructor, util};
     use crate::parser::expr_parser::{parse_tokens, Context};
     use crate::parser::ParseError;
     use crate::tokeniser::tokenizer::{Token, Tokenizer};
     use strum_macros::Display;
-    use crate::parser::expr::{constructor, util};
 
     pub(crate) fn tokenise(input: &str) -> Tokenizer {
         Tokenizer::new(input)
@@ -493,7 +497,8 @@ mod internal {
 
         match next_token {
             Some(Token::LParen) => {
-                let constructor_pattern = constructor::get_constructor_pattern(tokenizer, custom_string)?;
+                let constructor_pattern =
+                    constructor::get_constructor_pattern(tokenizer, custom_string)?;
                 Ok(Expr::Constructor0(constructor_pattern))
             }
             _ => Ok(util::get_primitive_expr(custom_string)),
@@ -1329,7 +1334,9 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker.response { some(foo) => if foo > 1 then foo else 0, none => 0 } }")
+            .parse(
+                "${match worker.response { some(foo) => if foo > 1 then foo else 0, none => 0 } }",
+            )
             .unwrap();
 
         let expected = Expr::PatternMatch(
@@ -1373,7 +1380,6 @@ mod tests {
             .parse("${match worker.response { some(foo) => if foo > 1 then { a : 'foo' } else 0, none => { a : 'bar' } } }")
             .unwrap();
 
-
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
                 Box::new(Expr::Worker()),
@@ -1393,13 +1399,19 @@ mod tests {
                             Box::new(Expr::Variable("foo".to_string())),
                             Box::new(Expr::unsigned_integer(1)),
                         )),
-                        Box::new(Expr::Record(vec![("a".to_string(), Box::new(Expr::Literal("foo".to_string())))])),
+                        Box::new(Expr::Record(vec![(
+                            "a".to_string(),
+                            Box::new(Expr::Literal("foo".to_string())),
+                        )])),
                         Box::new(Expr::unsigned_integer(0)),
                     )),
                 )),
                 ConstructorPatternExpr((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
-                    Box::new(Expr::Record(vec![("a".to_string(), Box::new(Expr::Literal("bar".to_string())))])),
+                    Box::new(Expr::Record(vec![(
+                        "a".to_string(),
+                        Box::new(Expr::Literal("bar".to_string())),
+                    )])),
                 )),
             ],
         );

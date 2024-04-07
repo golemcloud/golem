@@ -1,14 +1,13 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
+use crate::expression;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
-use crate::expression;
 
 use crate::parser::expr_parser::ExprParser;
 use crate::parser::{GolemParser, ParseError};
-use crate::primitive::Primitive;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
@@ -205,8 +204,6 @@ impl Expr {
     }
 }
 
-
-
 impl FromStr for Expr {
     type Err = ParseError;
 
@@ -223,12 +220,15 @@ impl<'de> Deserialize<'de> for Expr {
     {
         let value = serde_json::Value::deserialize(deserializer)?;
         match value {
-            Value::String(expr_string) =>   match expression::from_string(expr_string) {
+            Value::String(expr_string) => match expression::from_string(expr_string) {
                 Ok(expr) => Ok(expr),
                 Err(message) => Err(serde::de::Error::custom(message.to_string())),
-            }
+            },
 
-            e => Err(serde::de::Error::custom(format!("Failed to deserialise expression {}", e))),
+            e => Err(serde::de::Error::custom(format!(
+                "Failed to deserialise expression {}",
+                e
+            ))),
         }
     }
 }

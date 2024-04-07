@@ -589,26 +589,19 @@ fn handle_pattern_match(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::str::FromStr;
 
     use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::TypeAnnotatedValue;
-    use http::{HeaderMap, Method, Uri};
+    use http::{HeaderMap, Uri};
     use serde_json::{json, Value};
-
-    use golem_service_base::type_inference::infer_analysed_type;
 
     use crate::api_definition::http::PathPattern;
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, Evaluator};
-    use crate::evaluator::test_utils::*;
     use crate::expression;
-    use crate::http::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
-    use crate::worker_bridge_execution::WorkerResponse;
-
+    use test_utils::*;
 
     #[test]
     fn test_evaluation_with_request_path() {
@@ -1437,172 +1430,151 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-}
+    mod test_utils {
+        use crate::api_definition::http::PathPattern;
+        use crate::evaluator::Evaluator;
+        use crate::expression;
+        use crate::http::{ApiInputPath, InputHttpRequest};
+        use crate::worker_bridge_execution::WorkerResponse;
+        use golem_service_base::type_inference::infer_analysed_type;
+        use golem_wasm_ast::analysis::AnalysedType;
+        use golem_wasm_rpc::json::get_typed_value_from_json;
+        use golem_wasm_rpc::TypeAnnotatedValue;
+        use http::{HeaderMap, Method, Uri};
+        use serde_json::{json, Value};
+        use std::collections::HashMap;
 
-mod test_utils {
-    use std::collections::HashMap;
-    use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::json::get_typed_value_from_json;
-    use golem_wasm_rpc::TypeAnnotatedValue;
-    use http::{HeaderMap, Method, Uri};
-    use serde_json::{json, Value};
-    use golem_service_base::type_inference::infer_analysed_type;
-    use crate::api_definition::http::PathPattern;
-    use crate::expression;
-    use crate::http::{ApiInputPath, InputHttpRequest};
-    use crate::worker_bridge_execution::WorkerResponse;
-    use crate::evaluator::Evaluator;
-
-    pub(crate) fn get_err_worker_response() -> WorkerResponse {
-        let worker_response_value = get_typed_value_from_json(
-            &json!({"err": { "id" : "afsal"} }),
-            &AnalysedType::Result {
-                error: Some(Box::new(AnalysedType::Record(vec![(
-                    "id".to_string(),
-                    AnalysedType::Str,
-                )]))),
-                ok: None,
-            },
-        )
-            .unwrap();
-
-        WorkerResponse {
-            result: worker_response_value,
-        }
-    }
-
-    pub(crate) fn get_ok_worker_response() -> WorkerResponse {
-        let worker_response_value = get_typed_value_from_json(
-            &json!({"ok": { "id" : "afsal"} }),
-            &AnalysedType::Result {
-                ok: Some(Box::new(AnalysedType::Record(vec![(
-                    "id".to_string(),
-                    AnalysedType::Str,
-                )]))),
-                error: None,
-            },
-        )
-            .unwrap();
-
-        WorkerResponse {
-            result: worker_response_value,
-        }
-    }
-
-    pub(crate) fn get_worker_response(input: &str) -> WorkerResponse {
-        let value: Value = serde_json::from_str(input).expect("Failed to parse json");
-
-        let expected_type = infer_analysed_type(&value);
-        let result_as_typed_value = get_typed_value_from_json(&value, &expected_type).unwrap();
-        WorkerResponse {
-            result: result_as_typed_value,
-        }
-    }
-
-    pub(crate) fn resolved_variables_from_request_body(
-        input: &str,
-        header_map: &HeaderMap,
-    ) -> TypeAnnotatedValue {
-        let request_body: Value = serde_json::from_str(input).expect("Failed to parse json");
-
-        let input_http_request = InputHttpRequest {
-            req_body: request_body.clone(),
-            headers: header_map.clone(),
-            req_method: Method::GET,
-            input_path: ApiInputPath {
-                base_path: "/api".to_string(),
-                query_path: None,
-            },
-        };
-
-        input_http_request
-            .get_type_annotated_value(vec![], &HashMap::new())
-            .unwrap()
-    }
-
-    pub(crate) fn resolved_variables_from_request_path(
-        uri: Uri,
-        path_pattern: PathPattern,
-    ) -> TypeAnnotatedValue {
-        let input_http_request = InputHttpRequest {
-            req_body: serde_json::Value::Null,
-            headers: HeaderMap::new(),
-            req_method: Method::GET,
-            input_path: ApiInputPath {
-                base_path: uri.path().to_string(),
-                query_path: uri.query().map(|x| x.to_string()),
-            },
-        };
-
-        input_http_request
-            .get_type_annotated_value(
-                path_pattern.get_query_variables(),
-                &path_pattern.get_path_variables(),
+        pub(crate) fn get_err_worker_response() -> WorkerResponse {
+            let worker_response_value = get_typed_value_from_json(
+                &json!({"err": { "id" : "afsal"} }),
+                &AnalysedType::Result {
+                    error: Some(Box::new(AnalysedType::Record(vec![(
+                        "id".to_string(),
+                        AnalysedType::Str,
+                    )]))),
+                    ok: None,
+                },
             )
-            .unwrap()
-    }
-
-
-    #[test]
-    fn expr_to_string_round_trip_match_expr_err() {
-        let worker_response = get_err_worker_response();
-
-        let expr1_string = "${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
-        let expr1 = expression::from_string(expr1_string).unwrap();
-        let value1 = expr1
-            .evaluate(&worker_response.result_with_worker_response_key())
             .unwrap();
 
-        let expr2_string = expr1.to_string().unwrap();
-        let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
-        let value2 = expr2
-            .evaluate(&worker_response.result_with_worker_response_key())
-            .unwrap();
+            WorkerResponse {
+                result: worker_response_value,
+            }
+        }
 
-        let expected = TypeAnnotatedValue::Str("error".to_string());
-        assert_eq!((&value1, &value2), (&expected, &expected));
-    }
+        pub(crate) fn get_worker_response(input: &str) -> WorkerResponse {
+            let value: Value = serde_json::from_str(input).expect("Failed to parse json");
 
+            let expected_type = infer_analysed_type(&value);
+            let result_as_typed_value = get_typed_value_from_json(&value, &expected_type).unwrap();
+            WorkerResponse {
+                result: result_as_typed_value,
+            }
+        }
 
-    #[test]
-    fn expr_to_string_round_trip_match_expr_append() {
-        let worker_response = get_err_worker_response();
+        pub(crate) fn resolved_variables_from_request_body(
+            input: &str,
+            header_map: &HeaderMap,
+        ) -> TypeAnnotatedValue {
+            let request_body: Value = serde_json::from_str(input).expect("Failed to parse json");
 
-        let expr1_string =
-            "append-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
-        let expr1 = expression::from_string(expr1_string).unwrap();
-        let value1 = expr1
-            .evaluate(&worker_response.result_with_worker_response_key())
-            .unwrap();
+            let input_http_request = InputHttpRequest {
+                req_body: request_body.clone(),
+                headers: header_map.clone(),
+                req_method: Method::GET,
+                input_path: ApiInputPath {
+                    base_path: "/api".to_string(),
+                    query_path: None,
+                },
+            };
 
-        let expr2_string = expr1.to_string().unwrap();
-        let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
-        let value2 = expr2
-            .evaluate(&worker_response.result_with_worker_response_key())
-            .unwrap();
+            input_http_request
+                .get_type_annotated_value(vec![], &HashMap::new())
+                .unwrap()
+        }
 
-        let expected = TypeAnnotatedValue::Str("append-error".to_string());
-        assert_eq!((&value1, &value2), (&expected, &expected));
-    }
+        pub(crate) fn resolved_variables_from_request_path(
+            uri: Uri,
+            path_pattern: PathPattern,
+        ) -> TypeAnnotatedValue {
+            let input_http_request = InputHttpRequest {
+                req_body: serde_json::Value::Null,
+                headers: HeaderMap::new(),
+                req_method: Method::GET,
+                input_path: ApiInputPath {
+                    base_path: uri.path().to_string(),
+                    query_path: uri.query().map(|x| x.to_string()),
+                },
+            };
 
-    #[test]
-    fn expr_to_string_round_trip_match_expr_append_suffix() {
-        let worker_response = get_err_worker_response();
+            input_http_request
+                .get_type_annotated_value(
+                    path_pattern.get_query_variables(),
+                    &path_pattern.get_path_variables(),
+                )
+                .unwrap()
+        }
 
-        let expr1_string =
-            "prefix-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}-suffix";
-        let expr1 = expression::from_string(expr1_string).unwrap();
-        let value1 = expr1
-            .evaluate(&worker_response.result_with_worker_response_key())
-            .unwrap();
+        #[test]
+        fn expr_to_string_round_trip_match_expr_err() {
+            let worker_response = get_err_worker_response();
 
-        let expr2_string = expr1.to_string().unwrap();
-        let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
-        let value2 = expr2
-            .evaluate(&worker_response.result_with_worker_response_key())
-            .unwrap();
+            let expr1_string = "${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
+            let expr1 = expression::from_string(expr1_string).unwrap();
+            let value1 = expr1
+                .evaluate(&worker_response.result_with_worker_response_key())
+                .unwrap();
 
-        let expected = TypeAnnotatedValue::Str("prefix-error-suffix".to_string());
-        assert_eq!((&value1, &value2), (&expected, &expected));
+            let expr2_string = expr1.to_string().unwrap();
+            let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
+            let value2 = expr2
+                .evaluate(&worker_response.result_with_worker_response_key())
+                .unwrap();
+
+            let expected = TypeAnnotatedValue::Str("error".to_string());
+            assert_eq!((&value1, &value2), (&expected, &expected));
+        }
+
+        #[test]
+        fn expr_to_string_round_trip_match_expr_append() {
+            let worker_response = get_err_worker_response();
+
+            let expr1_string =
+                "append-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
+            let expr1 = expression::from_string(expr1_string).unwrap();
+            let value1 = expr1
+                .evaluate(&worker_response.result_with_worker_response_key())
+                .unwrap();
+
+            let expr2_string = expr1.to_string().unwrap();
+            let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
+            let value2 = expr2
+                .evaluate(&worker_response.result_with_worker_response_key())
+                .unwrap();
+
+            let expected = TypeAnnotatedValue::Str("append-error".to_string());
+            assert_eq!((&value1, &value2), (&expected, &expected));
+        }
+
+        #[test]
+        fn expr_to_string_round_trip_match_expr_append_suffix() {
+            let worker_response = get_err_worker_response();
+
+            let expr1_string =
+                "prefix-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}-suffix";
+            let expr1 = expression::from_string(expr1_string).unwrap();
+            let value1 = expr1
+                .evaluate(&worker_response.result_with_worker_response_key())
+                .unwrap();
+
+            let expr2_string = expr1.to_string().unwrap();
+            let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
+            let value2 = expr2
+                .evaluate(&worker_response.result_with_worker_response_key())
+                .unwrap();
+
+            let expected = TypeAnnotatedValue::Str("prefix-error-suffix".to_string());
+            assert_eq!((&value1, &value2), (&expected, &expected));
+        }
     }
 }

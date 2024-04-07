@@ -418,7 +418,7 @@ mod tests {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
-        let function_params = "[{\"x\" : \"${request.path.user-id}\"}]";
+        let function_params = "[\"${{x : request.path.user-id}}\"]";
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
@@ -564,13 +564,19 @@ mod tests {
             serde_json::Value::Object(request_body_amp),
         );
 
-        let function_params =
-            "[{ \"user-id\" : \"${request.path.user-id}\" }, \"${request.path.token-id}\",  \"age-${request.body.age}\", \"user-name\" : \"${request.header.username}\"]";
+        let arg1 = "${{ user-id : request.path.user-id }}";
+        let arg2 = "${request.path.token-id}";
+        let arg3 = "age-${request.body.age}";
+        let arg4 = "${{user-name : request.header.username}}";
+
+        let function_params = format!("[\"{}\", \"{}\", \"{}\", \"{}\"]", arg1, arg2, arg3, arg4);
+
+        dbg!(function_params.clone());
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}?{token-id}",
             "shopping-cart-${request.path.user-id}",
-            function_params,
+            function_params.as_str(),
         );
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();

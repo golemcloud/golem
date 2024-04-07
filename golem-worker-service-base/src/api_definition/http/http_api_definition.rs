@@ -526,7 +526,7 @@ mod tests {
         path_pattern: &str,
         worker_id: &str,
         function_params: &str,
-        response_mapping: &str
+        response_mapping: &str,
     ) -> serde_yaml::Value {
         let yaml_string = format!(
             r#"
@@ -545,10 +545,7 @@ mod tests {
 
 
         "#,
-            path_pattern,
-            worker_id,
-            function_params,
-            response_mapping
+            path_pattern, worker_id, function_params, response_mapping
         );
 
         let de = serde_yaml::Deserializer::from_str(yaml_string.as_str());
@@ -557,7 +554,12 @@ mod tests {
 
     #[test]
     fn test_api_spec_serde() {
-        fn test_serde(path_pattern: &str, worker_id: &str, function_params: &str, response_mapping: &str) {
+        fn test_serde(
+            path_pattern: &str,
+            worker_id: &str,
+            function_params: &str,
+            response_mapping: &str,
+        ) {
             let yaml = get_api_spec(path_pattern, worker_id, function_params, response_mapping);
 
             let result: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
@@ -576,7 +578,6 @@ mod tests {
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.body}\"]",
             "{status: if (worker.response.user == admin) then 401 else 200}",
-
         );
 
         test_serde(
@@ -603,7 +604,12 @@ mod tests {
 
     #[test]
     fn test_api_spec_encode_decode() {
-        fn test_encode_decode(path_pattern: &str, worker_id: &str, function_params: &str, response_mapping: &str) {
+        fn test_encode_decode(
+            path_pattern: &str,
+            worker_id: &str,
+            function_params: &str,
+            response_mapping: &str,
+        ) {
             let yaml = get_api_spec(path_pattern, worker_id, function_params, response_mapping);
             let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
             let encoded = serialization::serialize(&original).unwrap();
@@ -616,39 +622,35 @@ mod tests {
             "foo/{user-id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.body}\"]",
-            "{status : 200}"
+            "{status : 200}",
         );
 
         test_encode_decode(
             "foo/{user-id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.body.foo}\"]",
-            "{status : 200}"
-
+            "{status : 200}",
         );
 
         test_encode_decode(
             "foo/{user-id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.path.user-id}\"]",
-            "{status : 200}"
-
+            "{status : 200}",
         );
 
         test_encode_decode(
             "foo",
             "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
             "[ \"data\"]",
-            "{status : 200}"
-
+            "{status : 200}",
         );
 
         test_encode_decode(
             "foo",
             "match worker.response { ok(value) => 1, error => 0 }",
             "[ \"data\"]",
-            "{status : 200}"
-
+            "{status : 200}",
         );
     }
 }
