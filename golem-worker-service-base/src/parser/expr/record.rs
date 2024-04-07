@@ -7,7 +7,7 @@ use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 // Assuming the tokenizer already consumed `{` token, indicating the start of sequence
 pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
     let mut record: Vec<(String, Expr)> = vec![];
-    
+
     if tokenizer.peek_next_non_empty_token_is(&Token::RCurly) {
         tokenizer.skip_next_non_empty_token();
         return Ok(Expr::Record(vec![]));
@@ -33,14 +33,17 @@ pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseErro
                             Some(value) => {
                                 let expr = parse_with_context(value.as_str(), Context::Code)?;
                                 record.push((key.to_string(), expr.clone()));
-                                tokenizer.next_non_empty_token(); // Skip next comma
+                                tokenizer.skip_if_next_non_empty_token_is(&Token::Comma); // Skip next comma
                                 go(tokenizer, record)
                             }
                             None => {
-                                let last_value = tokenizer
-                                    .capture_string_until(vec![&Token::LCurly], &Token::RCurly);
-
-                                dbg!(&last_value);
+                                let last_value = tokenizer.capture_string_until(
+                                    vec![
+                                        &Token::LCurly,
+                                        &Token::MultiChar(MultiCharTokens::InterpolationStart),
+                                    ],
+                                    &Token::RCurly,
+                                );
 
                                 match last_value {
                                     Some(last_value) => {

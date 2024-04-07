@@ -818,7 +818,6 @@ mod tests {
         let expr = expression::from_string("${if request.header.authorisation then 200 else 401}")
             .unwrap();
 
-        dbg!(expr.clone());
         let expected_evaluated_result = EvaluationError::Message(format!(
             "The predicate expression is evaluated to {} but it is not a boolean value",
             json!("admin")
@@ -912,7 +911,6 @@ mod tests {
         )
         .unwrap();
 
-        dbg!(expr.clone());
         let result = expr.evaluate(&worker_response);
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("not found".to_string())));
     }
@@ -1228,7 +1226,6 @@ mod tests {
     fn test_evaluation_with_wave_like_syntax_err_record() {
         let expr = expression::from_string("${{a : err(1)}}").unwrap();
 
-        dbg!(expr.clone());
         let result = expr.evaluate(&TypeAnnotatedValue::Record {
             value: vec![],
             typ: vec![],
@@ -1259,7 +1256,6 @@ mod tests {
     fn test_evaluation_with_wave_like_syntax_simple_list() {
         let expr = expression::from_string("${[1,2,3]}").unwrap();
 
-        dbg!(expr.clone());
         let result = expr.evaluate(&TypeAnnotatedValue::Record {
             value: vec![],
             typ: vec![],
@@ -1281,7 +1277,6 @@ mod tests {
     fn test_evaluation_with_wave_like_syntax_simple_tuple() {
         let expr = expression::from_string("${(some(1),2,3)}").unwrap();
 
-        dbg!(expr.clone());
         let result = expr.evaluate(&TypeAnnotatedValue::Record {
             value: vec![],
             typ: vec![],
@@ -1310,7 +1305,6 @@ mod tests {
     fn test_evaluation_wave_like_syntax_flag() {
         let expr = expression::from_string("${{A, B, C}}").unwrap();
 
-        dbg!(expr.clone());
         let result = expr.evaluate(&TypeAnnotatedValue::Record {
             value: vec![],
             typ: vec![],

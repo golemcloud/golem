@@ -192,12 +192,17 @@ mod tests {
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
-
     #[test]
     fn test_round_trip_read_write_record_of_sequence() {
         let input_expr = Expr::Record(vec![
-            ("field".to_string(), Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()]))),
-            ("field".to_string(), Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()]))),
+            (
+                "field".to_string(),
+                Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+            ),
+            (
+                "field".to_string(),
+                Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+            ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: [request, request], field: [request, request]}}".to_string();
@@ -244,8 +249,7 @@ mod tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let record_string =
-            "{a: (request, worker), b: (request, worker)}".to_string();
+        let record_string = "{a: (request, worker), b: (request, worker)}".to_string();
         let expected_record_str = format!("${{{}}}", record_string); // Just wrapping it with interpolation
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
@@ -264,8 +268,7 @@ mod tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let record_string =
-            "{a: {flag1, flag2}, b: {flag3, flag4}}".to_string();
+        let record_string = "{a: {flag1, flag2}, b: {flag3, flag4}}".to_string();
         let expected_record_str = format!("${{{}}}", record_string); // Just wrapping it with interpolation
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
@@ -274,18 +277,11 @@ mod tests {
     #[test]
     fn test_round_trip_read_write_record_of_boolean() {
         let input_expr = Expr::Record(vec![
-            (
-                "a".to_string(),
-                Box::new(Expr::Boolean(true)),
-            ),
-            (
-                "b".to_string(),
-                Box::new(Expr::Boolean(false)),
-            ),
+            ("a".to_string(), Box::new(Expr::Boolean(true))),
+            ("b".to_string(), Box::new(Expr::Boolean(false))),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let record_string =
-            "{a: true, b: false}".to_string();
+        let record_string = "{a: true, b: false}".to_string();
         let expected_record_str = format!("${{{}}}", record_string); // Just wrapping it with interpolation
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
@@ -296,17 +292,23 @@ mod tests {
         let input_expr = Expr::Record(vec![
             (
                 "a".to_string(),
-                Box::new(Expr::Concat(vec![Expr::Literal("user-id-1".to_string()), Expr::Request()])),
+                Box::new(Expr::Concat(vec![
+                    Expr::Literal("user-id-1-".to_string()),
+                    Expr::SelectField(Box::new(Expr::Request()), "user-id-1".to_string()),
+                ])),
             ),
             (
                 "b".to_string(),
-                Box::new(Expr::Concat(vec![Expr::Literal("user-id-2".to_string()), Expr::Request()])),
+                Box::new(Expr::Concat(vec![
+                    Expr::Literal("user-id-2-".to_string()),
+                    Expr::SelectField(Box::new(Expr::Request()), "user-id-2".to_string()),
+                ])),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let record_string =
-            "{a: true, b: false}".to_string();
-        let expected_record_str = format!("${{{}}}", record_string); // Just wrapping it with interpolation
+        let expected_record_str =
+            "${{a: 'user-id-1-${request.user-id-1}', b: 'user-id-2-${request.user-id-2}'}}"
+                .to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
@@ -430,7 +432,6 @@ mod tests {
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        dbg!(expr_str.clone());
         let expected_str =
             "${match request {  ok(foo) => 'success', err(msg) => 'failure' } }".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();

@@ -437,7 +437,6 @@ mod tests {
     fn test_string_expr_parse_and_encode(input: &str) {
         let parsed_expr1 = expression::from_string(input).unwrap();
         let encoded_expr = parsed_expr1.to_string().unwrap();
-        dbg!(encoded_expr.clone());
         let parsed_expr2 = expression::from_string(encoded_expr.as_str()).unwrap();
 
         assert_eq!(parsed_expr1, parsed_expr2);
@@ -563,8 +562,6 @@ mod tests {
             let yaml = get_api_spec(path_pattern, worker_id, function_params, response_mapping);
 
             let result: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
-
-            dbg!(result.clone());
 
             let yaml2 = serde_yaml::to_value(result.clone()).unwrap();
 

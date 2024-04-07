@@ -10,7 +10,7 @@ pub(crate) fn get_closing_token(opening_token: &Token) -> Option<Token> {
     }
 }
 
-// Doesn't mutatee the tokenizer
+// Doesn't mutate the tokenizer
 pub(crate) fn is_next_token_complex_type(tokenizer: &mut Tokenizer) -> bool {
     let next_token = tokenizer.peek_next_non_empty_token();
 

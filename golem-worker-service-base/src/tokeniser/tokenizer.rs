@@ -260,9 +260,8 @@ impl<'t> Tokenizer<'t> {
     // Captures the string upto the end token, leaving the cursor at the end token (leaving it to the user)
 
     // It will pick the end token that doesn't correspond to nested_starts.
-    // Example: For an input "{ a : ["a1", "a2"], b : ["b1", "b2"]], if we need to capture string
-    // until the `,` exists just before token `b`, then we call this function as `tokenizer.capture_string_until(vec!["["], ",")`
-    // This will skip the comma that exists between a1 and a2.
+    // Example: For an input "{a: {a1, a2}, b: {b1, b2}}", if we want to capture the string between "a" and last `}`,
+    // then nested_starts is ["{"] and end is `}`. This will make sure that it skips the nested values in between.
     pub fn capture_string_until(
         &mut self,
         nested_starts: Vec<&Token>,

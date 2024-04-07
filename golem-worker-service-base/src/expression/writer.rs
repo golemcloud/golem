@@ -15,8 +15,11 @@ pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
             writer.write_expr(expr)?;
             writer.write_code_end()?;
         }
-        internal::ExprType::StringInterpolated() => {
-            writer.write_expr(expr)?;
+        // If the outer expression is interpolated text, then we don't need quotes outside
+        // If string interpolation happens within complex expression code, then we wrap it
+        // with quotes, and will be handled within the logic of ExprType::Code
+        internal::ExprType::StringInterpolated(concatenated) => {
+            internal::write_concatenated_exprs(&mut writer, concatenated)?;
         }
     }
 
@@ -129,27 +132,9 @@ impl<W: Write> Writer<W> {
             }
             Expr::Boolean(bool) => self.write_display(bool),
             Expr::Concat(concatenated) => {
-                // This is handling string interpolation
-                // Ex: worker-id-${request.user} is parsed as Expr::Concat(literal, selectField(request, user))
-                // The output should a concatenation of worker-id without quotes and rest with interpolations (code start)
-                for expr in concatenated.iter() {
-                    match internal::get_expr_type(expr) {
-                        internal::ExprType::Text(text) => {
-                            self.write_str(text)?;
-                        }
-                        internal::ExprType::Code(expr) => {
-                            self.write_code_start()?;
-                            self.write_expr(expr)?;
-                            self.write_code_end()?;
-                        }
-                        internal::ExprType::StringInterpolated() => {
-                            self.write_code_start()?;
-                            self.write_expr(expr)?;
-                            self.write_code_end()?;
-                        }
-                    }
-                }
-                Ok(())
+                self.write_display(Token::Quote)?;
+                internal::write_concatenated_exprs(self, concatenated)?;
+                self.write_display(Token::Quote)
             }
             Expr::Multiple(expr) => {
                 for (idx, expr) in expr.iter().enumerate() {
@@ -229,21 +214,50 @@ impl<W: Write> Writer<W> {
 }
 
 mod internal {
-    use crate::expression::writer::{Writer, WriterError};
+    use crate::expression::writer::{internal, Writer, WriterError};
     use crate::expression::{ConstructorPattern, Expr};
 
     pub(crate) enum ExprType<'a> {
         Code(&'a Expr),
         Text(&'a str),
-        StringInterpolated(),
+        StringInterpolated(&'a Vec<Expr>),
     }
 
     pub(crate) fn get_expr_type(expr: &Expr) -> ExprType {
         match expr {
             Expr::Literal(str) => ExprType::Text(str),
-            Expr::Concat(_) => ExprType::StringInterpolated(),
+            Expr::Concat(vec) => ExprType::StringInterpolated(vec),
             expr => ExprType::Code(expr),
         }
+    }
+
+    // Only to make sure that we are not wrapping literals with quotes - intercepting
+    // the logic within the writer for ExprType::Code
+    pub(crate) fn write_concatenated_exprs<W>(
+        writer: &mut Writer<W>,
+        exprs: &Vec<Expr>,
+    ) -> Result<(), WriterError>
+    where
+        W: std::io::Write,
+    {
+        for expr in exprs.iter() {
+            match get_expr_type(expr) {
+                ExprType::Text(text) => {
+                    writer.write_str(text)?;
+                }
+                ExprType::Code(expr) => {
+                    writer.write_code_start()?;
+                    writer.write_expr(expr)?;
+                    writer.write_code_end()?;
+                }
+                ExprType::StringInterpolated(_) => {
+                    writer.write_code_start()?;
+                    writer.write_expr(expr)?;
+                    writer.write_code_end()?;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn write_constructor<W>(

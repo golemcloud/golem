@@ -354,7 +354,6 @@ pub(crate) fn parse_tokens(
                     let expr = if flags::is_flags(tokenizer) {
                         flags::create_flags(tokenizer)
                     } else {
-                        dbg!(tokenizer.peek_next_non_empty_token());
                         record::create_record(tokenizer)
                     };
 
