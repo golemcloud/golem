@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token};
 
-// We keep track of this instead of keeping a static map of end -> vec<start>
-// to handle other subtle usecases. Example: For `,` we have a vec<start -> end> (ex:[{ -> }, [ -> ], ( -> )])
-// that it can exist between two tokens. Similarly for `:` it is again vec<start -> end>, that it can exist between `{ -> }`
+// A set of rules that helps to find the start or end of a token, given a token, or the possible block that a token can exist within.
+// We keep track of a flattened set of single pair of token start and end instead of keeping a map of `end -> vec<start>` (or the other way around)
+// to handle other subtle use-cases better.
+// Example: For Token::Comma `,` we have a vec<start -> end> (they are `{  }`, `[  ]`, `( )` )
+// that a comma can exist between each pair.
+// Similarly, for `:` it is again vec<start -> end>, that it can exist between `{ -> }`
 // However for `]`, it is `vec<start>`. This is because `]` can only be an end of `[`.
 // To handle all usecases, we simply keep a set of rules where each rule is a pair of start and end token
 pub struct Rules(Vec<TokenStartEnd>);
