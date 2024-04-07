@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::fmt::Display;
+use serde::{Deserialize, Serialize};
+use crate::expression;
 
 use crate::expression::Expr;
 use crate::worker_binding::ResponseMapping;
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug, Clone, Serialize, Deserialize)]
 pub struct HttpResponseMapping {
     pub body: Expr,   // ${function.return}
     pub status: Expr, // "200" or if ${response.body.id == 1} "200" else "400"
@@ -14,7 +16,7 @@ pub struct HttpResponseMapping {
 impl Display for HttpResponseMapping {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let response_mapping: ResponseMapping = self.clone().into();
-        let expr_json = Expr::to_json_value(&response_mapping.0).unwrap();
+        let expr_json = expression::to_string(&response_mapping.0).unwrap();
 
         write!(f, "{}", expr_json)
     }

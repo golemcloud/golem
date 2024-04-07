@@ -383,7 +383,7 @@ mod tests {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
-        let function_params = "[{\"x\" : \"y\"}]";
+        let function_params = "[\"${{x : 'y'}}\"]";
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",

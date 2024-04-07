@@ -1366,7 +1366,7 @@ mod tests {
     }
 
     #[test]
-    fn test_match_with_if_else() {
+    fn test_match_with_if_else_with_record() {
         let expression_parser = ExprParser {};
 
         let result = expression_parser

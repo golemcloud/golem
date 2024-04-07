@@ -15,6 +15,9 @@ pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
             writer.write_expr(expr)?;
             writer.write_code_end()?;
         }
+        internal::ExprType::StringInterpolated() => {
+            writer.write_expr(expr)?;
+        }
     }
 
     Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
@@ -126,8 +129,25 @@ impl<W: Write> Writer<W> {
             }
             Expr::Boolean(bool) => self.write_display(bool),
             Expr::Concat(concatenated) => {
+                // This is handling string interpolation
+                // Ex: worker-id-${request.user} is parsed as Expr::Concat(literal, selectField(request, user))
+                // The output should a concatenation of worker-id without quotes and rest with interpolations (code start)
                 for expr in concatenated.iter() {
-                    self.write_expr(expr)?
+                    match internal::get_expr_type(expr) {
+                        internal::ExprType::Text(text) => {
+                            self.write_str(text)?;
+                        }
+                        internal::ExprType::Code(expr) => {
+                            self.write_code_start()?;
+                            self.write_expr(expr)?;
+                            self.write_code_end()?;
+                        }
+                        internal::ExprType::StringInterpolated() => {
+                            self.write_code_start()?;
+                            self.write_expr(expr)?;
+                            self.write_code_end()?;
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -215,11 +235,13 @@ mod internal {
     pub(crate) enum ExprType<'a> {
         Code(&'a Expr),
         Text(&'a str),
+        StringInterpolated(),
     }
 
     pub(crate) fn get_expr_type(expr: &Expr) -> ExprType {
         match expr {
             Expr::Literal(str) => ExprType::Text(str),
+            Expr::Concat(_) => ExprType::StringInterpolated(),
             expr => ExprType::Code(expr),
         }
     }
