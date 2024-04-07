@@ -235,7 +235,7 @@ mod internal {
     // the logic within the writer for ExprType::Code
     pub(crate) fn write_concatenated_exprs<W>(
         writer: &mut Writer<W>,
-        exprs: &Vec<Expr>,
+        exprs: &[Expr],
     ) -> Result<(), WriterError>
     where
         W: std::io::Write,

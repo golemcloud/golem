@@ -266,7 +266,6 @@ impl<'t> Tokenizer<'t> {
     // then nested_starts is ["{"] and end is `}`. This will make sure that it skips the nested values in between.
     pub fn capture_string_until(&mut self, end: &Token) -> Option<String> {
         let capture_until = self.index_of_end_token(end)?;
-
         let tokens = self.all_tokens_until(capture_until);
 
         Some(
@@ -299,28 +298,15 @@ impl<'t> Tokenizer<'t> {
     // Another example: To find the position of `,`, it will skip all `,` that are part of any another nested `{}` or `[]`, or `()`
     // after the first consumed token.
     pub fn index_of_end_token(&mut self, end_token: &Token) -> Option<usize> {
-        dbg!(end_token.clone());
         let token_start_ends = Rules::of_token(end_token);
-
         let nested_starts_to_look_for = token_start_ends.all_token_starts();
-
-        dbg!(nested_starts_to_look_for.clone());
-
-        let nested_ends_to_look_for = token_start_ends.token_ends();
-
-        dbg!(nested_ends_to_look_for.clone());
-
+        let nested_ends_to_look_for = token_start_ends.all_token_ends();
         let mut starts_identified = vec![];
 
-        let token_start_ends = Rules::of_token(end_token);
-
         let mut index: usize = self.state.pos;
-
         let mut found: bool = false;
 
         while let Some(current_token) = self.peek_at(index) {
-            dbg!(current_token.clone());
-            dbg!(starts_identified.clone());
             let current_token_cloned = current_token.clone();
 
             if nested_starts_to_look_for.contains(&current_token_cloned) {
@@ -480,13 +466,14 @@ impl<'t> Tokenizer<'t> {
             '<' => Some(Token::LessThan),
             ':' => Some(Token::Colon),
             ';' => Some(Token::SemiColon),
-            '=' => {
-                let next_token = self
-                    .rest_at(1)
-                    .chars()
-                    .next();
-                if next_token == Some('=') { None } else { Some(Token::LetEqual) }
-            }
+            '=' => self
+                .rest()
+                .chars()
+                .nth(1)
+                .map_or(Some(Token::LetEqual), |c| match c {
+                    '=' | '>' => None,
+                    _ => Some(Token::LetEqual),
+                }),
             _ => None,
         } {
             self.progress();

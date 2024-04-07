@@ -40,7 +40,7 @@ impl Rules {
         starts
     }
 
-    pub fn token_ends(&self) -> Vec<Token> {
+    pub fn all_token_ends(&self) -> Vec<Token> {
         let mut ends = vec![];
         for token_start_end in self.0.iter() {
             ends.push(token_start_end.end.clone());
@@ -68,8 +68,7 @@ impl Rules {
             ],
             // A `:` can exist within another `{`
             Token::Colon => vec![TokenStartEnd::of_lcurly()],
-            // A `;` can exist as an end of another let statement
-            Token::SemiColon => vec![TokenStartEnd::of_let()],
+            Token::SemiColon => vec![],
             Token::MultiChar(multi) => {
                 match multi {
                     MultiCharTokens::Worker => vec![],  // hardly act as an end token
