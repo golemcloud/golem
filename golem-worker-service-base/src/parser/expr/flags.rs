@@ -1,4 +1,5 @@
 use crate::expression::Expr;
+use crate::parser::expr::util;
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
@@ -31,13 +32,23 @@ pub(crate) fn create_flags(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError
     Ok(Expr::Flags(flags))
 }
 
+// Assuming the tokenizer already consumed `{` token, indicating the start of flags
 pub(crate) fn is_flags(tokenizer: &mut Tokenizer) -> bool {
-    let colon_index = tokenizer.index_of_future_token(vec![], &Token::Colon);
-    let comma_index = tokenizer.index_of_future_token(vec![], &Token::Comma);
-    match (comma_index, colon_index) {
-        (Some(comma_index), Some(colon_index)) => comma_index < colon_index, // Comma exists before colon
-        (None, Some(_)) => false, // Colon exists but no commas, meaning it can be record
-        (Some(_), None) => true,  // Comma exists but no colons, meaning its not a record
-        (None, None) => true,     // No commas, no colons, but just strings between indicate flags
+    !empty_record(tokenizer) && !util::is_next_token_complex_type(tokenizer) && {
+        let colon_index = tokenizer.index_of_future_token(vec![], &Token::Colon);
+        let comma_index = tokenizer.index_of_future_token(vec![], &Token::Comma);
+        match (comma_index, colon_index) {
+            (Some(comma_index), Some(colon_index)) => comma_index < colon_index, // Comma exists before colon
+            (None, Some(_)) => false, // Colon exists but no commas, meaning it can be record
+            (Some(_), None) => true,  // Comma exists but no colons, meaning its not a record
+            (None, None) => true,     // No commas, no colons, but just strings between indicate flags
+        }
     }
+}
+
+// Assuming the tokenizer already consumed `{` token, indicating the start of flags
+fn empty_record(tokenizer: &mut Tokenizer) -> bool {
+    let x = tokenizer.peek_next_non_empty_token_is(&Token::RCurly);
+    dbg!(x);
+    x
 }

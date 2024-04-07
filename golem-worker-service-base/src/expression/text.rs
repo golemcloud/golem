@@ -85,6 +85,15 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_simple_record_empty() {
+        let input_expr = Expr::Record(vec![]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${{}}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
     fn test_round_trip_simple_record_single() {
         let input_expr = Expr::Record(vec![("field".to_string(), Box::new(Expr::Request()))]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -101,6 +110,84 @@ mod tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: request, field: request}}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_record_of_literal() {
+        let input_expr = Expr::Record(vec![
+            (
+                "field".to_string(),
+                Box::new(Expr::Literal("hello".to_string())),
+            ),
+            (
+                "field".to_string(),
+                Box::new(Expr::Literal("world".to_string())),
+            ),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${{field: 'hello', field: 'world'}}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_record_of_number() {
+        let input_expr = Expr::Record(vec![
+            (
+                "field".to_string(),
+                Box::new(Expr::Number(InnerNumber::UnsignedInteger(1))),
+            ),
+            (
+                "field".to_string(),
+                Box::new(Expr::Number(InnerNumber::UnsignedInteger(2))),
+            ),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${{field: 1, field: 2}}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_record_of_select_field() {
+        let input_expr = Expr::Record(vec![
+            (
+                "field".to_string(),
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::Request()),
+                    "foo".to_string(),
+                )),
+            ),
+            (
+                "field".to_string(),
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::Request()),
+                    "bar".to_string(),
+                )),
+            ),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${{field: request.foo, field: request.bar}}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_record_of_select_index() {
+        let input_expr = Expr::Record(vec![
+            (
+                "field".to_string(),
+                Box::new(Expr::SelectIndex(Box::new(Expr::Request()), 1)),
+            ),
+            (
+                "field".to_string(),
+                Box::new(Expr::SelectIndex(Box::new(Expr::Request()), 2)),
+            ),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${{field: request[1], field: request[2]}}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }

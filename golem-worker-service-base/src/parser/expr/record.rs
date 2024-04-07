@@ -7,6 +7,11 @@ use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 // Assuming the tokenizer already consumed `{` token, indicating the start of sequence
 pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
     let mut record: Vec<(String, Expr)> = vec![];
+    
+    if tokenizer.peek_next_non_empty_token_is(&Token::RCurly) {
+        tokenizer.skip_next_non_empty_token();
+        return Ok(Expr::Record(vec![]));
+    }
 
     fn go(tokenizer: &mut Tokenizer, record: &mut Vec<(String, Expr)>) -> Result<(), ParseError> {
         match tokenizer.next_non_empty_token() {
