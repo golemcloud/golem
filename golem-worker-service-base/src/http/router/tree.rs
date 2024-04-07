@@ -40,12 +40,7 @@ impl<T> Default for Children<T> {
 
 impl<T> Children<T> {
     #[inline]
-    fn is_empty(&self) -> bool {
-        self.literal_children.is_empty() && self.variable_child.is_none()
-    }
-
-    #[inline]
-    fn get_by_str(&self, input: &str) -> Option<&RadixNode<T>> {
+    fn get_child_by_str(&self, input: &str) -> Option<&RadixNode<T>> {
         self.literal_children
             .get(input)
             .or_else(|| self.variable_child.as_ref().map(|c| c.as_ref()))
@@ -99,13 +94,6 @@ impl<T> Children<T> {
     }
 }
 
-// Needed to get value in map by &str
-impl std::borrow::Borrow<str> for LiteralPattern {
-    fn borrow(&self) -> &str {
-        &self.0
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum InsertionError {
     #[error("Conflict with existing route")]
@@ -139,7 +127,13 @@ impl<T> RadixNode<T> {
                     if let Some(child) = self.children.get_child_mut(&new_path[0]) {
                         child.insert_path(new_path, data)
                     } else {
-                        self.insert_new(new_path, data)
+                        let new_node = RadixNode {
+                            pattern: new_path.to_vec(),
+                            children: Children::default(),
+                            data: Some(data),
+                        };
+                        self.children.add_child(new_node);
+                        Ok(())
                     }
                 }
             } else if common_prefix_len == 0 {
@@ -254,33 +248,19 @@ impl<T> RadixNode<T> {
         }
     }
 
+    #[inline]
     pub fn matches(&self, path: &[&str]) -> Option<&T> {
         let mut node = self;
         let mut path_segments = path;
         let mut last_catch_all: Option<&RadixNode<T>> = None;
 
         loop {
-            let common_prefix_len = node
-                .pattern
-                .iter()
-                .zip(path_segments.iter())
-                .take_while(|(a, b)| match a {
-                    RouterPattern::Literal(s) => s.0 == **b,
-                    RouterPattern::Variable => true,
-                    RouterPattern::CatchAll => {
-                        // Save the last catch all node
-                        last_catch_all.replace(node);
-                        true
-                    }
-                })
-                .count();
+            let common_prefix_len =
+                node.interpret_common_prefix_len(path_segments, &mut last_catch_all);
 
-            if node.children.catch_all_child.is_some() {
-                if let Some(child) = node.children.catch_all_child.as_ref() {
-                    last_catch_all.replace(child.as_ref());
-                }
+            if let Some(child) = node.children.catch_all_child.as_ref() {
+                last_catch_all.replace(child.as_ref());
             }
-
             if common_prefix_len == node.pattern.len() {
                 if common_prefix_len == path_segments.len() {
                     // The path fully matches the current node's pattern
@@ -290,7 +270,7 @@ impl<T> RadixNode<T> {
                     path_segments = &path_segments[common_prefix_len..];
 
                     if let Some(first_segment) = path_segments.first() {
-                        let next_child = node.children.get_by_str(first_segment);
+                        let next_child = node.children.get_child_by_str(first_segment);
                         if let Some(child) = next_child {
                             node = child;
                             continue;
@@ -303,26 +283,6 @@ impl<T> RadixNode<T> {
         }
 
         last_catch_all.and_then(|node| node.data.as_ref())
-    }
-
-    fn insert_new(&mut self, path: &[RouterPattern], data: T) -> Result<(), InsertionError> {
-        if self.children.is_empty() && self.pattern.is_empty() {
-            if self.data.is_some() {
-                Err(InsertionError::Conflict)
-            } else {
-                self.pattern = path.to_vec();
-                self.data = Some(data);
-                Ok(())
-            }
-        } else {
-            let new_node = RadixNode {
-                pattern: path.to_vec(),
-                children: Children::default(),
-                data: Some(data),
-            };
-            self.children.add_child(new_node);
-            Ok(())
-        }
     }
 
     // Stops iterating when it finds a catch all node.
@@ -341,6 +301,32 @@ impl<T> RadixNode<T> {
                 result
             })
             .count()
+    }
+
+    #[inline(always)]
+    fn interpret_common_prefix_len<'a>(
+        &'a self,
+        path_segments: &[&str],
+        last_catch_all: &mut Option<&'a RadixNode<T>>,
+    ) -> usize {
+        let mut common_prefix_len = 0;
+
+        for (a, b) in self.pattern.iter().zip(path_segments.iter()) {
+            match a {
+                RouterPattern::Literal(s) => {
+                    if s.0 != **b {
+                        break;
+                    }
+                }
+                RouterPattern::Variable => {}
+                RouterPattern::CatchAll => {
+                    *last_catch_all = Some(self);
+                }
+            }
+            common_prefix_len += 1;
+        }
+
+        common_prefix_len
     }
 
     #[cfg(test)]

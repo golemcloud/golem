@@ -42,3 +42,10 @@ impl From<PathPattern> for RouterPattern {
         }
     }
 }
+
+// Needed to get value in map by &str
+impl std::borrow::Borrow<str> for LiteralPattern {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
