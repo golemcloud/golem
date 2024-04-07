@@ -48,7 +48,5 @@ pub(crate) fn is_flags(tokenizer: &mut Tokenizer) -> bool {
 
 // Assuming the tokenizer already consumed `{` token, indicating the start of flags
 fn empty_record(tokenizer: &mut Tokenizer) -> bool {
-    let x = tokenizer.peek_next_non_empty_token_is(&Token::RCurly);
-    dbg!(x);
-    x
+    tokenizer.peek_next_non_empty_token_is(&Token::RCurly)
 }
