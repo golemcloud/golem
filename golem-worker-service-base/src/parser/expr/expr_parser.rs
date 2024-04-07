@@ -507,7 +507,7 @@ mod internal {
 
     pub(crate) fn get_expr_between_quotes(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
         // We assume the first Quote is already consumed
-        let non_code_string = tokenizer.capture_string_until_and_skip_end(vec![], &Token::Quote);
+        let non_code_string = tokenizer.capture_string_until_and_skip_end(&Token::Quote);
 
         match non_code_string {
             Some(string) => {
@@ -528,19 +528,15 @@ mod internal {
         tokenizer: &mut Tokenizer,
         possible_nested_token_starts: Vec<&Token>,
         capture_until: Option<&Token>,
-        future_expression: crate::parser::expr::expr_parser::internal::InternalExprResult,
+        future_expression: InternalExprResult,
         get_expr: F,
-    ) -> Result<crate::parser::expr::expr_parser::internal::InternalExprResult, ParseError>
+    ) -> Result<InternalExprResult, ParseError>
     where
-        F: FnOnce(
-            &mut Tokenizer,
-            Context,
-            crate::parser::expr::expr_parser::internal::InternalExprResult,
-        ) -> Result<Expr, ParseError>,
+        F: FnOnce(&mut Tokenizer, Context, InternalExprResult) -> Result<Expr, ParseError>,
     {
         let optional_captured_string = match capture_until {
             Some(last_token) => {
-                tokenizer.capture_string_until(possible_nested_token_starts, last_token)
+                tokenizer.capture_string_until(last_token)
             }
             None => tokenizer.capture_tail(),
         };
@@ -549,11 +545,8 @@ mod internal {
             Some(captured_string) => {
                 let mut new_tokenizer = Tokenizer::new(captured_string.as_str());
 
-                let inner_expr = get_expr(
-                    &mut new_tokenizer,
-                    Context::Code,
-                    crate::parser::expr::expr_parser::internal::InternalExprResult::Empty,
-                )?;
+                let inner_expr =
+                    get_expr(&mut new_tokenizer, Context::Code, InternalExprResult::Empty)?;
 
                 Ok(future_expression.apply_with(inner_expr))
             }

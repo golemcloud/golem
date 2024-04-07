@@ -1,7 +1,8 @@
 use std::fmt::Display;
 use std::str::Chars;
+use crate::tokeniser::token_start_end_rules::{Rules};
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub enum Token {
     MultiChar(MultiCharTokens),
     RCurly,
@@ -22,7 +23,7 @@ pub enum Token {
     SemiColon,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub enum MultiCharTokens {
     Worker,
     Request,
@@ -124,6 +125,10 @@ impl Token {
             Token::RCurly => self.clone(),
             token => Token::MultiChar(MultiCharTokens::Other(token.to_string())),
         }
+    }
+
+    pub fn length(&self) -> usize {
+        self.to_string().len()
     }
 }
 
@@ -245,10 +250,9 @@ impl<'t> Tokenizer<'t> {
     // Captures the string upto the end token, and advance the cursor further skipping the end token
     pub fn capture_string_until_and_skip_end(
         &mut self,
-        start: Vec<&Token>,
         end: &Token,
     ) -> Option<String> {
-        let captured_string = self.capture_string_until(start, end);
+        let captured_string = self.capture_string_until(end);
         match captured_string {
             Some(captured_string) => {
                 self.next_token();
@@ -257,17 +261,17 @@ impl<'t> Tokenizer<'t> {
             None => None,
         }
     }
+    // Consider this function to be low level function and use it carefully. Example: use expr::util module functions
+    // if you are calling this as part of `Expr` language parsing.
     // Captures the string upto the end token, leaving the cursor at the end token (leaving it to the user)
-
     // It will pick the end token that doesn't correspond to nested_starts.
     // Example: For an input "{a: {a1, a2}, b: {b1, b2}}", if we want to capture the string between "a" and last `}`,
     // then nested_starts is ["{"] and end is `}`. This will make sure that it skips the nested values in between.
     pub fn capture_string_until(
         &mut self,
-        nested_starts: Vec<&Token>,
         end: &Token,
     ) -> Option<String> {
-        let capture_until = self.index_of_future_token(nested_starts, end)?;
+        let capture_until = self.index_of_end_token(end)?;
 
         let tokens = self.all_tokens_until(capture_until);
 
@@ -279,6 +283,8 @@ impl<'t> Tokenizer<'t> {
                 .join(""),
         )
     }
+
+
 
     pub fn capture_tail(&mut self) -> Option<String> {
         // Skip head
@@ -293,46 +299,65 @@ impl<'t> Tokenizer<'t> {
         }
     }
 
-    // To peak ahead and see the position of the future token, given certain conditions explained below.
-    // nested_starts: List of tokens, for which we expect their corresponding closing token to be the same as future_token,
-    // to make sure we skip nested tokens and find the correct future token. Example: In `foo { bar { baz } }`, index
-    // of token `}` is the one corresponding to the first `{` if we provide nested_starts as [`{`].
-    // Note that we call this function after consuming the opening token`{`.
-    // If we don't care nestedness, simply provide empty list for nested_starts.
-    // In that case, the index of `:` in `foo:bar:bar` is just 3.
-    // Note that, peeking ahead will not consume the tokens.
-    pub fn index_of_future_token(
+    // Low level function, to peek ahead and see the position of the end token
+    // Assumes the first token is already consumed. Example:
+    // It handles nested situation. Example: After consumes `{`, this function helps to the position of corresponding `}`.
+    // It skips all `}` that are part of any another nested `{}` after the first consumed token.
+    // The rules of nesting are defined in `TokenStartEnds`.
+    // Another example: To find the position of `,`, it will skip all `,` that are part of any another nested `{}` or `[]`, or `()`
+    // after the first consumed token.
+    pub fn index_of_end_token(
         &mut self,
-        nested_starts: Vec<&Token>,
-        future_token: &Token,
+        end_token: &Token,
     ) -> Option<usize> {
-        let starts = nested_starts
-            .iter()
-            .map(|x| x.to_string())
-            .collect::<Vec<String>>();
-        let mut index: usize = self.state.pos;
+        let token_start_ends = Rules::of_token(end_token);
 
-        let mut start_token_count = 0;
+        let nested_starts_to_look_for = token_start_ends.all_token_starts();
+
+        dbg!(nested_starts_to_look_for.clone());
+
+        let mut nested_ends_to_look_for = token_start_ends.token_ends();
+
+        dbg!(nested_ends_to_look_for.clone());
+
+        let mut starts_identified = vec![];
+
+        let token_start_ends = Rules::of_token(end_token);
+
+        let mut index: usize = self.state.pos;
 
         let mut found: bool = false;
 
-        while let Some(current_token) = self.peek_at(index).map(|x| x.to_string()) {
-            if starts.contains(&current_token) {
-                // That it finds a start token again
-                start_token_count += 1;
-            } else if current_token == future_token.to_string() {
-                // Making sure any nested start token was closed (making it always a zero) before break
-                if start_token_count == 0 {
+        while let Some(current_token) = self.peek_at(index) {
+            let current_token_cloned = current_token.clone();
+
+            if nested_starts_to_look_for.contains(&current_token_cloned) {
+                starts_identified.push(current_token_cloned);
+            } else if nested_ends_to_look_for.contains(&current_token_cloned) {
+                let possible_starts = token_start_ends.find_starts_of_a_token(&current_token_cloned);
+
+                // If end_tokens already contain the end token
+                if starts_identified.is_empty() && current_token_cloned == end_token.clone() {
                     // Found a matching end token
                     found = true;
                     break;
-                } else {
-                    // Implies end for nested happened
-                    start_token_count -= 1;
                 }
+
+                // Remove the first possible_start from the starts_identified
+                for possible_start in possible_starts {
+                    if let Some(index) = starts_identified.iter().position(|x| x == &possible_start) {
+                        starts_identified.remove(index);
+                        break; // Remove only one element from vec1
+                    }
+                }
+                // If end_tokens doesn't contain the future_token, then we need to find the next one
+            } else if current_token_cloned == end_token.clone() && starts_identified.is_empty() {
+                    // Found a matching end token
+                    found = true;
+                    break;
             }
 
-            index += current_token.len();
+            index += current_token.length();
         }
 
         if found {
@@ -341,6 +366,7 @@ impl<'t> Tokenizer<'t> {
             None
         }
     }
+
 
     pub fn skip_whitespace(&mut self) -> Option<Token> {
         let mut non_empty_token: Option<Token> = None;
@@ -1037,7 +1063,7 @@ else${z}
         let mut tokeniser = Tokenizer::new(tokens);
         tokeniser.next_token();
         let result = tokeniser
-            .capture_string_until(vec![&Token::LParen], &Token::RParen)
+            .capture_string_until(&Token::RParen)
             .unwrap();
 
         assert_eq!(result, "afsal".to_string())
@@ -1050,7 +1076,7 @@ else${z}
         let mut tokeniser = Tokenizer::new(tokens);
         tokeniser.next_token();
         let result = tokeniser
-            .capture_string_until(vec![&Token::LParen], &Token::RParen)
+            .capture_string_until(&Token::RParen)
             .unwrap();
 
         assert_eq!(result, "(afsal)")
@@ -1062,7 +1088,7 @@ else${z}
 
         let mut tokeniser = Tokenizer::new(tokens);
         let result = tokeniser
-            .capture_string_until(vec![&Token::LParen], &Token::RParen)
+            .capture_string_until(&Token::RParen)
             .unwrap();
         assert_eq!(result, "".to_string())
     }
@@ -1072,7 +1098,7 @@ else${z}
         let tokens = "";
 
         let mut tokeniser = Tokenizer::new(tokens);
-        let result = tokeniser.capture_string_until(vec![&Token::LParen], &Token::RParen);
+        let result = tokeniser.capture_string_until(&Token::RParen);
 
         assert_eq!(result, None)
     }
@@ -1093,7 +1119,7 @@ else${z}
 
         let mut tokeniser = Tokenizer::new(tokens);
 
-        let result = tokeniser.index_of_future_token(vec![&Token::LCurly], &Token::RCurly);
+        let result = tokeniser.index_of_end_token(&Token::RCurly);
 
         let unchanged_current_toknen = tokeniser.next_non_empty_token().clone();
 
@@ -1108,7 +1134,7 @@ else${z}
         let tokens = "'not found' }";
 
         let mut tokeniser = Tokenizer::new(tokens);
-        let result = tokeniser.index_of_future_token(vec![], &Token::Comma);
+        let result = tokeniser.index_of_end_token( &Token::Comma);
         let unchanged_current_toknen = tokeniser.next_non_empty_token().clone();
 
         assert_eq!(

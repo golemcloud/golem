@@ -4,7 +4,7 @@ use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
 pub(crate) fn get_match_expr(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
-    let expr_under_evaluation = tokenizer.capture_string_until(vec![], &Token::LCurly);
+    let expr_under_evaluation = tokenizer.capture_string_until(&Token::LCurly);
 
     match expr_under_evaluation {
         Some(expr_under_evaluation) => {
@@ -47,7 +47,6 @@ pub(crate) fn get_match_constructor_patter_exprs(
                 match next_non_empty_open_braces {
                     Some(Token::LParen) => {
                         let constructor_var_optional = tokenizer.capture_string_until_and_skip_end(
-                            vec![&Token::LParen],
                             &Token::RParen,
                         );
 
@@ -120,16 +119,13 @@ where
 {
     match tokenizer.next_non_empty_token() {
         Some(Token::MultiChar(MultiCharTokens::Arrow)) => {
-            let index_of_closed_curly_brace = tokenizer.index_of_future_token(
-                vec![&Token::LCurly, &Token::interpolation_start()],
-                &Token::RCurly,
-            );
-            let index_of_commaseparator = tokenizer.index_of_future_token(vec![], &Token::Comma);
+            let index_of_closed_curly_brace = tokenizer.index_of_end_token(&Token::RCurly);
+            let index_of_commaseparator = tokenizer.index_of_end_token(&Token::Comma);
 
             match (index_of_closed_curly_brace, index_of_commaseparator) {
                 (Some(end_of_constructors), Some(comma)) => {
                     if end_of_constructors > comma {
-                        let captured_string = tokenizer.capture_string_until(vec![], &Token::Comma);
+                        let captured_string = tokenizer.capture_string_until(&Token::Comma);
 
                         let individual_expr =
                             parse_with_context(captured_string.unwrap().as_str(), Context::Code)
@@ -142,7 +138,7 @@ where
                     } else {
                         // End of constructor
                         let captured_string =
-                            tokenizer.capture_string_until(vec![&Token::LCurly], &Token::RCurly);
+                            tokenizer.capture_string_until( &Token::RCurly);
                         let individual_expr =
                             parse_with_context(captured_string.unwrap().as_str(), Context::Code)
                                 .map(|expr| {
@@ -156,7 +152,6 @@ where
                 // Last constructor
                 (Some(_), None) => {
                     let captured_string = tokenizer.capture_string_until(
-                        vec![&Token::LCurly, &Token::interpolation_start()],
                         &Token::RCurly,
                     );
 

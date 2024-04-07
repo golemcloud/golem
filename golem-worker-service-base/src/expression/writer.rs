@@ -214,7 +214,7 @@ impl<W: Write> Writer<W> {
 }
 
 mod internal {
-    use crate::expression::writer::{internal, Writer, WriterError};
+    use crate::expression::writer::{Writer, WriterError};
     use crate::expression::{ConstructorPattern, Expr};
 
     pub(crate) enum ExprType<'a> {

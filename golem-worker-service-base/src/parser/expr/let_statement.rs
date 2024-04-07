@@ -6,7 +6,6 @@ use crate::tokeniser::tokenizer::{Token, Tokenizer};
 // Assuming the tokenizer already consumed `let` token
 pub(crate) fn create_let_statement(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
     let captured_string = tokenizer.capture_string_until_and_skip_end(
-        vec![],
         &Token::LetEqual, // Wave does this
     );
 
@@ -15,7 +14,6 @@ pub(crate) fn create_let_statement(tokenizer: &mut Tokenizer) -> Result<Expr, Pa
         match expr {
             Expr::Variable(variable_name) => {
                 let captured_string = tokenizer.capture_string_until_and_skip_end(
-                    vec![],
                     &Token::SemiColon, // Wave does this
                 );
                 match captured_string {

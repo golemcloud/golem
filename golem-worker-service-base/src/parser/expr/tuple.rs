@@ -14,7 +14,6 @@ pub(crate) fn create_tuple(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError
         grouped_exprs: &mut Vec<Expr>,
     ) -> Result<(), ParseError> {
         let captured_string = tokenizer.capture_string_until(
-            vec![],
             &Token::Comma, // Wave does this
         );
 
@@ -29,7 +28,7 @@ pub(crate) fn create_tuple(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError
 
             None => {
                 let last_value = tokenizer
-                    .capture_string_until_and_skip_end(vec![&Token::LParen], &Token::RParen);
+                    .capture_string_until_and_skip_end(&Token::RParen);
 
                 match last_value {
                     Some(last_value) if !last_value.is_empty() => {

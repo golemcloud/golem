@@ -35,8 +35,8 @@ pub(crate) fn create_flags(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError
 // Assuming the tokenizer already consumed `{` token, indicating the start of flags
 pub(crate) fn is_flags(tokenizer: &mut Tokenizer) -> bool {
     !empty_record(tokenizer) && !util::is_next_token_complex_type(tokenizer) && {
-        let colon_index = tokenizer.index_of_future_token(vec![], &Token::Colon);
-        let comma_index = tokenizer.index_of_future_token(vec![], &Token::Comma);
+        let colon_index = tokenizer.index_of_end_token(&Token::Colon);
+        let comma_index = tokenizer.index_of_end_token(&Token::Comma);
         match (comma_index, colon_index) {
             (Some(comma_index), Some(colon_index)) => comma_index < colon_index, // Comma exists before colon
             (None, Some(_)) => false, // Colon exists but no commas, meaning it can be record

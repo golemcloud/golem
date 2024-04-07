@@ -2,11 +2,16 @@ use crate::expression::Expr;
 use crate::parser::expr::util;
 use crate::parser::expr_parser::{parse_with_context, Context};
 use crate::parser::ParseError;
-use crate::tokeniser::tokenizer::{Token, Tokenizer};
+use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
 // Assuming the tokenizer already consumed `[` token, indicating the start of sequence
 pub(crate) fn create_sequence(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
     let mut record = vec![];
+
+    if tokenizer.peek_next_non_empty_token_is(&Token::RSquare) {
+        tokenizer.skip_next_non_empty_token();
+        return Ok(Expr::Sequence(vec![]));
+    }
 
     fn go(tokenizer: &mut Tokenizer, record: &mut Vec<Expr>) -> Result<(), ParseError> {
         let next_token = tokenizer.peek_next_non_empty_token();
@@ -17,7 +22,6 @@ pub(crate) fn create_sequence(tokenizer: &mut Tokenizer) -> Result<Expr, ParseEr
         } else {
             // Considering the element until the next comma to be primitive/simple values
             let possible_sequence_elem = tokenizer.capture_string_until(
-                vec![],
                 &Token::Comma, // Wave does this
             );
 
@@ -32,7 +36,7 @@ pub(crate) fn create_sequence(tokenizer: &mut Tokenizer) -> Result<Expr, ParseEr
 
                 None => {
                     let last_value =
-                        tokenizer.capture_string_until(vec![&Token::LSquare], &Token::RSquare);
+                        tokenizer.capture_string_until(&Token::RSquare);
 
                     match last_value {
                         Some(last_value) => {
@@ -71,7 +75,7 @@ where
 
     // Capture until the closing token
     let captured_string = tokenizer
-        .capture_string_until_and_skip_end(vec![&complex_value_start_token], &closing_token);
+        .capture_string_until_and_skip_end( &closing_token);
 
     match captured_string {
         Some(captured_string) => {

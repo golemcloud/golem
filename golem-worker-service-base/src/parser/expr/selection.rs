@@ -15,7 +15,7 @@ pub fn get_select_index(
         | Expr::Worker() => {
             //
             let optional_possible_index =
-                tokenizer.capture_string_until(vec![&Token::LSquare], &Token::RSquare);
+                tokenizer.capture_string_until(&Token::RSquare);
 
             match optional_possible_index {
                 Some(index) => {

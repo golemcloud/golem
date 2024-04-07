@@ -11,7 +11,7 @@ pub(crate) fn get_constructor_pattern(
     match tokenizer.next_non_empty_token() {
         Some(Token::LParen) => {
             let constructor_var_optional =
-                tokenizer.capture_string_until_and_skip_end(vec![&Token::LParen], &Token::RParen);
+                tokenizer.capture_string_until_and_skip_end(&Token::RParen);
             match constructor_var_optional {
                 Some(constructor_var) => {
                     let mut tokenizer = Tokenizer::new(constructor_var.as_str());

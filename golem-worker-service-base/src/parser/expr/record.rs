@@ -28,7 +28,7 @@ pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseErro
                             go,
                         )
                     } else {
-                        let captured_value = tokenizer.capture_string_until(vec![], &Token::Comma);
+                        let captured_value = tokenizer.capture_string_until(&Token::Comma);
                         match captured_value {
                             Some(value) => {
                                 let expr = parse_with_context(value.as_str(), Context::Code)?;
@@ -38,10 +38,6 @@ pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseErro
                             }
                             None => {
                                 let last_value = tokenizer.capture_string_until(
-                                    vec![
-                                        &Token::LCurly,
-                                        &Token::MultiChar(MultiCharTokens::InterpolationStart),
-                                    ],
                                     &Token::RCurly,
                                 );
 
@@ -95,7 +91,7 @@ where
     )?;
 
     let captured_string = tokenizer
-        .capture_string_until_and_skip_end(vec![&complex_value_start_token], &closing_token);
+        .capture_string_until_and_skip_end( &closing_token);
 
     match captured_string {
         Some(captured_string) => {
