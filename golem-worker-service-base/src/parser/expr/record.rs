@@ -37,9 +37,7 @@ pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseErro
                                 go(tokenizer, record)
                             }
                             None => {
-                                let last_value = tokenizer.capture_string_until(
-                                    &Token::RCurly,
-                                );
+                                let last_value = tokenizer.capture_string_until(&Token::RCurly);
 
                                 match last_value {
                                     Some(last_value) => {
@@ -90,8 +88,7 @@ where
         ParseError::Message("Expecting a closing token for nested record".to_string()),
     )?;
 
-    let captured_string = tokenizer
-        .capture_string_until_and_skip_end( &closing_token);
+    let captured_string = tokenizer.capture_string_until_and_skip_end(&closing_token);
 
     match captured_string {
         Some(captured_string) => {

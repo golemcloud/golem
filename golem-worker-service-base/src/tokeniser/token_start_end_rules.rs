@@ -1,14 +1,14 @@
-use std::collections::HashMap;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token};
+use std::collections::HashMap;
 
 // A set of rules that helps to find the start or end of a token, given a token, or the possible block that a token can exist within.
-// We keep track of a flattened set of single pair of token start and end instead of keeping a map of `end -> vec<start>` (or the other way around)
+// To handle all use-cases, we simply keep a set of rules where each rule is a pair of start and end token.
+// We are going with the the most granular approach instead of keeping a map of `end -> vec<start>` (or the other way around, may be for negligible performance benefits)
 // to handle other subtle use-cases better.
 // Example: For Token::Comma `,` we have a vec<start -> end> (they are `{  }`, `[  ]`, `( )` )
 // that a comma can exist between each pair.
 // Similarly, for `:` it is again vec<start -> end>, that it can exist between `{ -> }`
 // However for `]`, it is `vec<start>`. This is because `]` can only be an end of `[`.
-// To handle all usecases, we simply keep a set of rules where each rule is a pair of start and end token
 pub struct Rules(Vec<TokenStartEnd>);
 
 impl Rules {
@@ -50,35 +50,43 @@ impl Rules {
     pub fn of_token(end_token: &Token) -> Rules {
         let vec = match end_token {
             // `}` can exist as an end of another `{` or `${`
-            Token::RCurly => vec![TokenStartEnd::of_lcurly(), TokenStartEnd::of_code_interpolation()],
+            Token::RCurly => vec![
+                TokenStartEnd::of_lcurly(),
+                TokenStartEnd::of_code_interpolation(),
+            ],
             // `]` can exist as an end of another `[`
             Token::RSquare => vec![TokenStartEnd::of_lsquare()],
             // `)` can exist as an end of another `(`
             Token::RParen => vec![TokenStartEnd::of_lparen()],
             // A `,` can exist within another `[`, or `{`, or `(`
-            Token::Comma => vec![TokenStartEnd::of_lparen(), TokenStartEnd::of_lcurly(), TokenStartEnd::of_lsquare(), TokenStartEnd::of_code_interpolation()],
+            Token::Comma => vec![
+                TokenStartEnd::of_lparen(),
+                TokenStartEnd::of_lcurly(),
+                TokenStartEnd::of_lsquare(),
+                TokenStartEnd::of_code_interpolation(),
+            ],
             // A `:` can exist within another `{`
             Token::Colon => vec![TokenStartEnd::of_lcurly()],
             // A `;` can exist as an end of another let statement
             Token::SemiColon => vec![TokenStartEnd::of_let()],
             Token::MultiChar(multi) => {
                 match multi {
-                    MultiCharTokens::Worker => vec![], // hardly act as an end token
+                    MultiCharTokens::Worker => vec![],  // hardly act as an end token
                     MultiCharTokens::Request => vec![], // shardly act as an end token
-                    MultiCharTokens::Ok => vec![], // hardly act as an end token
-                    MultiCharTokens::Err => vec![], // hardly act as an end token
-                    MultiCharTokens::Some => vec![], // hardly act as an end token
-                    MultiCharTokens::None =>  vec![], // hardly act as an end token
-                    MultiCharTokens::Match => vec![], // hardly act as an end token
+                    MultiCharTokens::Ok => vec![],      // hardly act as an end token
+                    MultiCharTokens::Err => vec![],     // hardly act as an end token
+                    MultiCharTokens::Some => vec![],    // hardly act as an end token
+                    MultiCharTokens::None => vec![],    // hardly act as an end token
+                    MultiCharTokens::Match => vec![],   // hardly act as an end token
                     MultiCharTokens::InterpolationStart => vec![], // hardly act as an end token
                     MultiCharTokens::GreaterThanOrEqualTo => vec![], // hardly act as an end token
                     MultiCharTokens::LessThanOrEqualTo => vec![], // hardly act as an end token
                     MultiCharTokens::EqualTo => vec![], // hardly act as an end token
-                    MultiCharTokens::If => vec![], // hardly act as an end token
+                    MultiCharTokens::If => vec![],      // hardly act as an end token
                     MultiCharTokens::Then => vec![TokenStartEnd::of_if()],
                     MultiCharTokens::Else => vec![TokenStartEnd::of_then()],
                     MultiCharTokens::Arrow => vec![], // hardly act as an end token
-                    MultiCharTokens::Let => vec![], // hardly act as an end token
+                    MultiCharTokens::Let => vec![],   // hardly act as an end token
                     MultiCharTokens::Number(_) => vec![], // hardly act as an end token
                     MultiCharTokens::Other(_) => vec![], // hardly act as an end token
                 }
@@ -104,17 +112,19 @@ impl Rules {
 #[derive(Debug, Clone)]
 pub struct TokenStartEnd {
     pub start: Token,
-    pub end: Token
+    pub end: Token,
 }
 
 impl TokenStartEnd {
-
-    pub fn new(start:  Token, ends: Token) -> Self {
+    pub fn new(start: Token, ends: Token) -> Self {
         TokenStartEnd { start, end: ends }
     }
 
     pub fn of_code_interpolation() -> TokenStartEnd {
-        TokenStartEnd::new(Token::MultiChar(MultiCharTokens::InterpolationStart), Token::RCurly)
+        TokenStartEnd::new(
+            Token::MultiChar(MultiCharTokens::InterpolationStart),
+            Token::RCurly,
+        )
     }
 
     pub fn of_lcurly() -> TokenStartEnd {
@@ -134,11 +144,16 @@ impl TokenStartEnd {
     }
 
     pub fn of_if() -> TokenStartEnd {
-        TokenStartEnd::new(Token::MultiChar(MultiCharTokens::If), Token::MultiChar(MultiCharTokens::Then))
+        TokenStartEnd::new(
+            Token::MultiChar(MultiCharTokens::If),
+            Token::MultiChar(MultiCharTokens::Then),
+        )
     }
 
     pub fn of_then() -> TokenStartEnd {
-        TokenStartEnd::new(Token::MultiChar(MultiCharTokens::Then), Token::MultiChar(MultiCharTokens::Else))
+        TokenStartEnd::new(
+            Token::MultiChar(MultiCharTokens::Then),
+            Token::MultiChar(MultiCharTokens::Else),
+        )
     }
-
 }

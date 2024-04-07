@@ -46,9 +46,8 @@ pub(crate) fn get_match_constructor_patter_exprs(
 
                 match next_non_empty_open_braces {
                     Some(Token::LParen) => {
-                        let constructor_var_optional = tokenizer.capture_string_until_and_skip_end(
-                            &Token::RParen,
-                        );
+                        let constructor_var_optional =
+                            tokenizer.capture_string_until_and_skip_end(&Token::RParen);
 
                         match constructor_var_optional {
                             Some(constructor_var) => {
@@ -137,8 +136,7 @@ where
                         accumulator(tokenizer, collected_exprs)
                     } else {
                         // End of constructor
-                        let captured_string =
-                            tokenizer.capture_string_until( &Token::RCurly);
+                        let captured_string = tokenizer.capture_string_until(&Token::RCurly);
                         let individual_expr =
                             parse_with_context(captured_string.unwrap().as_str(), Context::Code)
                                 .map(|expr| {
@@ -151,9 +149,7 @@ where
 
                 // Last constructor
                 (Some(_), None) => {
-                    let captured_string = tokenizer.capture_string_until(
-                        &Token::RCurly,
-                    );
+                    let captured_string = tokenizer.capture_string_until(&Token::RCurly);
 
                     if let Some(captured_string) = captured_string {
                         let individual_expr =

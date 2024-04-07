@@ -14,8 +14,7 @@ pub fn get_select_index(
         | Expr::Request()
         | Expr::Worker() => {
             //
-            let optional_possible_index =
-                tokenizer.capture_string_until(&Token::RSquare);
+            let optional_possible_index = tokenizer.capture_string_until(&Token::RSquare);
 
             match optional_possible_index {
                 Some(index) => {

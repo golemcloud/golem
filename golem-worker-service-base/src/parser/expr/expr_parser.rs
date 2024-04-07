@@ -535,9 +535,7 @@ mod internal {
         F: FnOnce(&mut Tokenizer, Context, InternalExprResult) -> Result<Expr, ParseError>,
     {
         let optional_captured_string = match capture_until {
-            Some(last_token) => {
-                tokenizer.capture_string_until(last_token)
-            }
+            Some(last_token) => tokenizer.capture_string_until(last_token),
             None => tokenizer.capture_tail(),
         };
 

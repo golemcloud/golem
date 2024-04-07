@@ -35,8 +35,7 @@ pub(crate) fn create_sequence(tokenizer: &mut Tokenizer) -> Result<Expr, ParseEr
                 }
 
                 None => {
-                    let last_value =
-                        tokenizer.capture_string_until(&Token::RSquare);
+                    let last_value = tokenizer.capture_string_until(&Token::RSquare);
 
                     match last_value {
                         Some(last_value) => {
@@ -74,8 +73,7 @@ where
     tokenizer.skip_next_non_empty_token();
 
     // Capture until the closing token
-    let captured_string = tokenizer
-        .capture_string_until_and_skip_end( &closing_token);
+    let captured_string = tokenizer.capture_string_until_and_skip_end(&closing_token);
 
     match captured_string {
         Some(captured_string) => {
