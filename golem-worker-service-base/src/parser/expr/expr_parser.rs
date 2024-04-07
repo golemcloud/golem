@@ -1323,4 +1323,45 @@ mod tests {
 
         assert_eq!(result, expected);
     }
+
+    #[test]
+    fn test_match_with_if_else() {
+        let expression_parser = ExprParser {};
+
+        let result = expression_parser
+            .parse("${match worker.response { some(foo) => if foo > 1 then foo else 0, none => 0 } }")
+            .unwrap();
+
+        let expected = Expr::PatternMatch(
+            Box::new(Expr::SelectField(
+                Box::new(Expr::Worker()),
+                "response".to_string(),
+            )),
+            vec![
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "some",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "foo".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Cond(
+                        Box::new(Expr::GreaterThan(
+                            Box::new(Expr::Variable("foo".to_string())),
+                            Box::new(Expr::unsigned_integer(1)),
+                        )),
+                        Box::new(Expr::Variable("foo".to_string())),
+                        Box::new(Expr::unsigned_integer(0)),
+                    )),
+                )),
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor("none", vec![]).unwrap(),
+                    Box::new(Expr::unsigned_integer(0)),
+                )),
+            ],
+        );
+
+        assert_eq!(result, expected);
+    }
 }
