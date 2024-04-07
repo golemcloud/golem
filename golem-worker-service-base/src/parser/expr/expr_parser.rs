@@ -14,8 +14,8 @@ pub struct ExprParser {}
 // Expr parsing can be done within a context. If unsure what the context should be, select Context::Code
 // Context allows us to handle things such as string-interpolation easily. Ex: if context is Text,
 // `foo>1` will result in Expr::Concat("foo", ">" , "1")
-// and `foo>${user-id}` will be Expr::Concat("foo", ">", Expr::Variable("user-id")). Evaluator will look for values for this variable.
-// Had it Context::Code, it would have been `Expr::GreaterThan(Expr::Variable("foo"), Expr::Variable("user-id"))`
+// and `foo>${user-id}` will be Expr::Concat("foo", ">", Expr::Variable("user-id")).
+// if context was Context::Code, it would be `Expr::GreaterThan(Expr::Variable("foo"), Expr::Variable("user-id"))`
 #[derive(Clone, Debug)]
 pub(crate) enum Context {
     Code,

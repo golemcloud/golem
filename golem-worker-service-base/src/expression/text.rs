@@ -740,7 +740,7 @@ mod sequence_tests {
 
 #[cfg(test)]
 mod tuple_tests {
-    use crate::expression::{from_string, to_string, Expr, InnerNumber};
+    use crate::expression::{from_string, to_string, Expr, InnerNumber, ConstructorPattern};
 
     #[test]
     fn test_round_trip_read_write_tuple_empty() {
@@ -790,6 +790,18 @@ mod tuple_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${(request[1], request[2])}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_tuple_of_tuple() {
+        let input_expr = Expr::Tuple(vec![
+            Expr::Tuple(vec![Expr::Request(), Expr::Request()]),
+            Expr::Tuple(vec![Expr::Request(), Expr::Request()]),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${((request, request), (request, request))}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -866,12 +878,39 @@ mod tuple_tests {
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
+
+    #[test]
+    fn test_round_trip_read_write_tuple_of_constructor() {
+        let input_expr = Expr::Tuple(vec![
+            Expr::Constructor0(
+                ConstructorPattern::constructor(
+                    "ok",
+                    vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                        "foo".to_string(),
+                    )))],
+                )
+                .unwrap(),
+            ),
+            Expr::Constructor0(
+                ConstructorPattern::constructor(
+                    "err",
+                    vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                        "msg".to_string(),
+                    )))],
+                )
+                .unwrap(),
+            ),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${(ok(foo), err(msg))}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::expression::{ConstructorPattern, ConstructorPatternExpr, Expr, InnerNumber};
+mod simple_values_test {
+    use crate::expression::{Expr, from_string, InnerNumber, to_string};
 
     #[test]
     fn test_round_trip_read_write_literal() {
@@ -918,18 +957,6 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_read_write_let() {
-        let input_expr = Expr::Let(
-            "x".to_string(),
-            Box::new(Expr::Literal("hello".to_string())),
-        );
-        let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${let x = 'hello';}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
     fn test_round_trip_read_write_worker() {
         let input_expr = Expr::Worker();
         let expr_str = to_string(&input_expr).unwrap();
@@ -938,47 +965,6 @@ mod tests {
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
-    #[test]
-    fn test_round_trip_read_write_select_field() {
-        let input_expr = Expr::SelectField(Box::new(Expr::Request()), "field".to_string());
-        let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${request.field}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_select_index() {
-        let input_expr = Expr::SelectIndex(Box::new(Expr::Request()), 1);
-        let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${request[1]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_tuple() {
-        let input_expr = Expr::Tuple(vec![Expr::Request(), Expr::Request(), Expr::Request()]);
-        let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${(request, request, request)}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    ///
-
-    #[test]
-    fn test_round_trip_read_write_flags() {
-        let input_expr = Expr::Flags(vec![
-            "flag1".to_string(),
-            "flag2".to_string(),
-            "flag3".to_string(),
-        ]);
-        let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${{flag1, flag2, flag3}}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
 
     #[test]
     fn test_round_trip_read_write_variable() {
@@ -997,6 +983,106 @@ mod tests {
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
+}
+
+#[cfg(test)]
+mod let_tests {
+    use crate::expression::{Expr, from_string, to_string};
+
+    #[test]
+    fn test_round_trip_read_write_let() {
+        let input_expr = Expr::Let(
+            "x".to_string(),
+            Box::new(Expr::Literal("hello".to_string())),
+        );
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${let x = 'hello';}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use crate::expression::{Expr, from_string, to_string};
+
+    #[test]
+    fn test_round_trip_read_write_select_field_from_request() {
+        let input_expr = Expr::SelectField(Box::new(Expr::Request()), "field".to_string());
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${request.field}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_select_index_from_request() {
+        let input_expr = Expr::SelectIndex(Box::new(Expr::Request()), 1);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${request[1]}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_select_field_from_record() {
+        let input_expr = Expr::SelectField(Box::new(Expr::Record(vec![("field".to_string(), Box::new(Expr::Request()))])), "field".to_string());
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${{field: request}.field}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_select_index_from_record() {
+        let input_expr = Expr::SelectIndex(Box::new(Expr::Record(vec![("field".to_string(), Box::new(Expr::Request()))])), 1);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${{field: request}[1]}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+
+}
+
+#[cfg(test)]
+mod flag_tests {
+    use crate::expression::{Expr, from_string, to_string};
+
+    #[test]
+    fn test_round_trip_read_write_flags_single() {
+        let input_expr = Expr::Flags(vec!["flag1".to_string()]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${{flag1}}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_flags() {
+        let input_expr = Expr::Flags(vec![
+            "flag1".to_string(),
+            "flag2".to_string(),
+            "flag3".to_string(),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${{flag1, flag2, flag3}}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+}
+
+#[cfg(test)]
+mod match_tests {
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expression::{ConstructorPattern, ConstructorPatternExpr, Expr, InnerNumber};
+
+
 
     #[test]
     fn test_round_trip_match_expr() {
