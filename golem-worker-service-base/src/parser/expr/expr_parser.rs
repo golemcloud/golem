@@ -526,7 +526,7 @@ mod internal {
     // and we should include those capture_untils
     pub(crate) fn capture_expression_until<F>(
         tokenizer: &mut Tokenizer,
-        possible_nested_token_starts: Vec<&Token>,
+        _possible_nested_token_starts: Vec<&Token>,
         capture_until: Option<&Token>,
         future_expression: InternalExprResult,
         get_expr: F,

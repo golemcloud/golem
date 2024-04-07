@@ -778,8 +778,8 @@ mod tuple_tests {
             Expr::SelectField(Box::new(Expr::Request()), "field".to_string()),
             Expr::SelectField(Box::new(Expr::Request()), "field".to_string()),
         ]);
-        let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${(request.field, request.field)}".to_string();
+        let _expr_str = to_string(&input_expr).unwrap();
+        let _expected_str = "${(request.field, request.field)}".to_string();
     }
 
     #[test]

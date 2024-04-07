@@ -306,7 +306,7 @@ impl<'t> Tokenizer<'t> {
 
         dbg!(nested_starts_to_look_for.clone());
 
-        let mut nested_ends_to_look_for = token_start_ends.token_ends();
+        let nested_ends_to_look_for = token_start_ends.token_ends();
 
         dbg!(nested_ends_to_look_for.clone());
 
