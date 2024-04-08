@@ -740,7 +740,7 @@ mod sequence_tests {
 
 #[cfg(test)]
 mod tuple_tests {
-    use crate::expression::{from_string, to_string, Expr, InnerNumber, ConstructorPattern};
+    use crate::expression::{from_string, to_string, ConstructorPattern, Expr, InnerNumber};
 
     #[test]
     fn test_round_trip_read_write_tuple_empty() {
@@ -910,7 +910,7 @@ mod tuple_tests {
 
 #[cfg(test)]
 mod simple_values_test {
-    use crate::expression::{Expr, from_string, InnerNumber, to_string};
+    use crate::expression::{from_string, to_string, Expr, InnerNumber};
 
     #[test]
     fn test_round_trip_read_write_literal() {
@@ -965,7 +965,6 @@ mod simple_values_test {
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
-
     #[test]
     fn test_round_trip_read_write_variable() {
         let input_expr = Expr::Variable("variable".to_string());
@@ -987,7 +986,7 @@ mod simple_values_test {
 
 #[cfg(test)]
 mod let_tests {
-    use crate::expression::{Expr, from_string, to_string};
+    use crate::expression::{from_string, to_string, Expr};
 
     #[test]
     fn test_round_trip_read_write_let() {
@@ -1004,7 +1003,7 @@ mod let_tests {
 
 #[cfg(test)]
 mod selection_tests {
-    use crate::expression::{Expr, from_string, to_string};
+    use crate::expression::{from_string, to_string, Expr};
 
     #[test]
     fn test_round_trip_read_write_select_field_from_request() {
@@ -1026,7 +1025,13 @@ mod selection_tests {
 
     #[test]
     fn test_round_trip_read_write_select_field_from_record() {
-        let input_expr = Expr::SelectField(Box::new(Expr::Record(vec![("field".to_string(), Box::new(Expr::Request()))])), "field".to_string());
+        let input_expr = Expr::SelectField(
+            Box::new(Expr::Record(vec![(
+                "field".to_string(),
+                Box::new(Expr::Request()),
+            )])),
+            "field".to_string(),
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: request}.field}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -1035,19 +1040,59 @@ mod selection_tests {
 
     #[test]
     fn test_round_trip_read_write_select_index_from_record() {
-        let input_expr = Expr::SelectIndex(Box::new(Expr::Record(vec![("field".to_string(), Box::new(Expr::Request()))])), 1);
+        let input_expr = Expr::SelectIndex(
+            Box::new(Expr::Record(vec![(
+                "field".to_string(),
+                Box::new(Expr::Request()),
+            )])),
+            1,
+        );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: request}[1]}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
+    #[test]
+    fn test_round_trip_read_write_select_field_from_sequence() {
+        let input_expr = Expr::SelectField(
+            Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+            "field".to_string(),
+        );
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${[request, request].field}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
 
+    #[test]
+    fn test_round_trip_read_write_select_index_from_sequence() {
+        let input_expr = Expr::SelectIndex(
+            Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+            1,
+        );
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${[request, request][1]}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_select_field_from_tuple() {
+        let input_expr = Expr::SelectField(
+            Box::new(Expr::Tuple(vec![Expr::Request(), Expr::Request()])),
+            "field".to_string(),
+        );
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${(request, request).field}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
 }
 
 #[cfg(test)]
 mod flag_tests {
-    use crate::expression::{Expr, from_string, to_string};
+    use crate::expression::{from_string, to_string, Expr};
 
     #[test]
     fn test_round_trip_read_write_flags_single() {
@@ -1073,16 +1118,12 @@ mod flag_tests {
 }
 
 #[cfg(test)]
-mod match_tests {
-
-}
+mod match_tests {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::expression::{ConstructorPattern, ConstructorPatternExpr, Expr, InnerNumber};
-
-
 
     #[test]
     fn test_round_trip_match_expr() {
