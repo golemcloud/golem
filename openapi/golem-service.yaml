@@ -864,6 +864,11 @@ paths:
     put:
       tags:
       - ApiDefinition
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema: {}
+        required: true
       responses:
         '200':
           description: ''

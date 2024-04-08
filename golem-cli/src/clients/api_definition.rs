@@ -19,10 +19,7 @@ use golem_client::model::HttpApiDefinition;
 use tokio::fs::read_to_string;
 use tracing::info;
 
-use crate::{
-    clients::oas_api_definition::get_api_definition_from_oas,
-    model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, PathBufOrStdin},
-};
+use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, PathBufOrStdin};
 
 #[async_trait]
 pub trait ApiDefinitionClient {
@@ -83,17 +80,10 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
             }
         };
 
-        let api_definition = get_api_definition_from_oas(definition_str.as_str())
-            .map_err(|e| GolemError(format!("Failed to parse api definition: {e:?}")))?;
+        let value: serde_json::Value = serde_json::from_str(definition_str.as_str())
+            .map_err(|e| GolemError(format!("Failed to parse json: {e:?}")))?;
 
-        Ok(self
-            .client
-            .put(&HttpApiDefinition {
-                id: api_definition.id,
-                version: api_definition.version,
-                routes: api_definition.routes,
-            })
-            .await?)
+        Ok(self.client.oas_put(&value).await?)
     }
 
     async fn delete(
