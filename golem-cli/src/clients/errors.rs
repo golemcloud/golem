@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_client::api::{HealthCheckError, TemplateError, WorkerError};
+use golem_client::api::{ApiDefinitionError, HealthCheckError, TemplateError, WorkerError};
 use golem_client::model::{
     GolemError, GolemErrorFailedToResumeWorker, GolemErrorGetLatestVersionOfTemplateFailed,
     GolemErrorInterrupted, GolemErrorInvalidRequest, GolemErrorInvalidShardId,
@@ -20,7 +20,7 @@ use golem_client::model::{
     GolemErrorRuntimeError, GolemErrorTemplateDownloadFailed, GolemErrorTemplateParseFailed,
     GolemErrorUnexpectedOplogEntry, GolemErrorUnknown, GolemErrorValueMismatch,
     GolemErrorWorkerAlreadyExists, GolemErrorWorkerCreationFailed, GolemErrorWorkerNotFound,
-    PromiseId, WorkerId,
+    PromiseId, WorkerId, WorkerServiceErrorsBody,
 };
 use itertools::Itertools;
 
@@ -57,6 +57,19 @@ impl ResponseContentErrorMapper for WorkerError {
 impl ResponseContentErrorMapper for HealthCheckError {
     fn map(self) -> String {
         "Invalid request".to_string()
+    }
+}
+
+impl ResponseContentErrorMapper for ApiDefinitionError {
+    fn map(self) -> String {
+        match self {
+            ApiDefinitionError::Error400(error) => display_worker_service_errors_body(error),
+            ApiDefinitionError::Error401(error) => error.error,
+            ApiDefinitionError::Error403(error) => error.error,
+            ApiDefinitionError::Error404(error) => error.message,
+            ApiDefinitionError::Error409(error) => error.to_string(),
+            ApiDefinitionError::Error500(error) => error.error,
+        }
     }
 }
 
@@ -175,4 +188,107 @@ fn display_promise_id(promise_id: PromiseId) -> String {
         display_worker_id(promise_id.worker_id),
         promise_id.oplog_idx
     )
+}
+
+fn display_worker_service_errors_body(error: WorkerServiceErrorsBody) -> String {
+    match error {
+        WorkerServiceErrorsBody::Messages(messages) => messages.errors.iter().join(", "),
+        WorkerServiceErrorsBody::Validation(validation) => validation
+            .errors
+            .iter()
+            .map(|e| {
+                format!(
+                    "{}/{}/{}/{}",
+                    e.method.to_string(),
+                    e.path,
+                    e.template,
+                    e.detail
+                )
+            })
+            .join("\n"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use golem_client::{
+        api::ApiDefinitionError,
+        model::{
+            MessageBody, MessagesErrorsBody, MethodPattern, RouteValidationError,
+            ValidationErrorsBody, WorkerServiceErrorBody, WorkerServiceErrorsBody,
+        },
+    };
+    use uuid::Uuid;
+
+    use crate::clients::errors::ResponseContentErrorMapper;
+
+    #[test]
+    fn api_definition_error_409() {
+        let error = ApiDefinitionError::Error409("409".to_string());
+        assert_eq!(error.map(), "409".to_string())
+    }
+
+    #[test]
+    fn api_definition_error_401() {
+        let error = ApiDefinitionError::Error401(WorkerServiceErrorBody {
+            error: "401".to_string(),
+        });
+        assert_eq!(error.map(), "401".to_string())
+    }
+
+    #[test]
+    fn api_definition_error_403() {
+        let error = ApiDefinitionError::Error403(WorkerServiceErrorBody {
+            error: "403".to_string(),
+        });
+        assert_eq!(error.map(), "403".to_string())
+    }
+
+    #[test]
+    fn api_definition_error_404() {
+        let error = ApiDefinitionError::Error404(MessageBody {
+            message: "404".to_string(),
+        });
+        assert_eq!(error.map(), "404".to_string())
+    }
+
+    #[test]
+    fn api_definition_error_500() {
+        let error = ApiDefinitionError::Error500(WorkerServiceErrorBody {
+            error: "500".to_string(),
+        });
+        assert_eq!(error.map(), "500".to_string())
+    }
+
+    #[test]
+    fn api_definition_error_400_messages() {
+        let error =
+            ApiDefinitionError::Error400(WorkerServiceErrorsBody::Messages(MessagesErrorsBody {
+                errors: vec!["400_1".to_string(), "400_2".to_string()],
+            }));
+        assert_eq!(error.map(), "400_1, 400_2".to_string())
+    }
+
+    #[test]
+    fn api_definition_error_400_validation() {
+        let error = ApiDefinitionError::Error400(WorkerServiceErrorsBody::Validation(
+            ValidationErrorsBody {
+                errors: vec![
+                    RouteValidationError {
+                        method: MethodPattern::Get,
+                        path: "path".to_string(),
+                        template: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708208").unwrap(),
+                        detail: "Duplicate route".to_string(),
+                    },
+                    RouteValidationError {
+                        method: MethodPattern::Post,
+                        path: "path2".to_string(),
+                        template: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708209").unwrap(),
+                        detail: "Other route".to_string(),
+                    },
+                ],
+            },
+        ));
+        assert_eq!(error.map(), "Get/path/02f09a3f-1624-3b1d-8409-44eff7708208/Duplicate route\nPost/path2/02f09a3f-1624-3b1d-8409-44eff7708209/Other route".to_string())
+    }
 }
