@@ -499,7 +499,7 @@ fn worker_status_from_str(s: &str) -> Result<WorkerStatus, String> {
 }
 
 fn worker_filter_from_str(s: &str) -> Result<WorkerFilter, String> {
-    let elements = s.trim().split_whitespace().collect::<Vec<&str>>();
+    let elements = s.split_whitespace().collect::<Vec<&str>>();
 
     if elements.len() == 3 {
         let arg = elements[0];

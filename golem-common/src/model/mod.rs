@@ -1232,7 +1232,7 @@ impl FromStr for WorkerFilter {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let elements = s.trim().split_whitespace().collect::<Vec<&str>>();
+        let elements = s.split_whitespace().collect::<Vec<&str>>();
 
         if elements.len() == 3 {
             let arg = elements[0];
