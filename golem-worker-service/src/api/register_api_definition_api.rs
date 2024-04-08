@@ -1,6 +1,7 @@
 use std::result::Result;
 use std::sync::Arc;
 
+use golem_worker_service_base::api_definition::http::JsonOpenApiDefinition;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -9,7 +10,7 @@ use tracing::{error, info};
 use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::HttpApiDefinition;
-use golem_worker_service_base::api_definition::http::get_api_definition_from_oas;
+use golem_worker_service_base::api_definition::http::get_api_definition;
 use golem_worker_service_base::api_definition::http::HttpApiDefinition as CoreHttpApiDefinition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
@@ -39,9 +40,9 @@ impl RegisterApiDefinitionApi {
     #[oai(path = "/oas", method = "put")]
     async fn create_or_update_open_api(
         &self,
-        payload: String,
+        Json(openapi): Json<JsonOpenApiDefinition>,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
-        let definition = get_api_definition_from_oas(payload.as_str()).map_err(|e| {
+        let definition = get_api_definition(openapi.0).map_err(|e| {
             error!("Invalid Spec {}", e);
             ApiEndpointError::bad_request(e)
         })?;
@@ -177,6 +178,7 @@ impl RegisterApiDefinitionApi {
 mod test {
     use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
     use golem_worker_service_base::service::template::TemplateServiceNoop;
+    use http::StatusCode;
     use poem::test::TestClient;
 
     use golem_worker_service_base::repo::api_definition_repo::InMemoryRegistry;
@@ -260,5 +262,117 @@ mod test {
         response.assert_status_is_ok();
         let body = response.json().await;
         body.value().array().assert_len(2)
+    }
+
+    #[tokio::test]
+    async fn decode_openapi_json() {
+        let api = make_route();
+        let client = TestClient::new(api);
+
+        let response = client
+            .put("/v1/api/definitions/oas")
+            .content_type("application/json")
+            .body("Invalid JSON")
+            .send()
+            .await;
+
+        response.assert_status(StatusCode::BAD_REQUEST);
+
+        let response = client
+            .put("/v1/api/definitions/oas")
+            .body_json(&serde_json::json!({
+                "some": "json"
+            }))
+            .send()
+            .await;
+
+        response.assert_status(StatusCode::BAD_REQUEST);
+
+        let openapi = r###"
+        {
+            "openapi": "3.0.0",
+            "info": {
+              "title": "Sample API",
+              "version": "1.0.2"
+            },
+            "x-golem-api-definition-id": "shopping-cart-test-api",
+            "x-golem-api-definition-version": "0.1.0",
+            "paths": {
+              "/{user-id}/get-cart-contents": {
+                "x-golem-worker-bridge": {
+                  "worker-id": "worker-${request.path.user-id}",
+                  "function-name": "golem:it/api/get-cart-contents",
+                  "function-params": [],
+                  "template-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
+                  "response" : {
+                    "status": "200",
+                    "body": {
+                      "name" : "${worker.response[0][0].name}",
+                      "price" : "${worker.response[0][0].price}",
+                      "quantity" : "${worker.response[0][0].quantity}"
+                    },
+                    "headers": {}
+                  }
+                },
+                "get": {
+                  "summary": "Get Cart Contents",
+                  "description": "Get the contents of a user's cart",
+                  "parameters": [
+                    {
+                      "name": "user-id",
+                      "in": "path",
+                      "required": true,
+                      "schema": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "responses": {
+                    "200": {
+                      "description": "OK",
+                      "content":{
+                        "application/json": {
+                          "schema": {
+                            "$ref": "#/components/schemas/CartItem"
+                          }
+                        }
+                      }
+                    },
+                    "404": {
+                      "description": "Contents not found"
+                    }
+                  }
+                }
+              }
+            },
+            "components": {
+              "schemas": {
+                "CartItem": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "price": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        "###;
+
+        let response = client
+            .put("/v1/api/definitions/oas")
+            .content_type("application/json")
+            .body(openapi)
+            .send()
+            .await;
+
+        response.assert_status_is_ok();
     }
 }

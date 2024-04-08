@@ -1,13 +1,13 @@
+use async_trait::async_trait;
 use openapiv3::OpenAPI;
-use serde_json;
+use poem_openapi::types::ParseFromJSON;
+use poem_openapi::{registry, types};
 
 use crate::api_definition::http::HttpApiDefinition;
 use crate::api_definition::{ApiDefinitionId, ApiVersion};
 use internal::*;
 
-pub fn get_api_definition_from_oas(open_api: &str) -> Result<HttpApiDefinition, String> {
-    let openapi: OpenAPI = serde_json::from_str(open_api).map_err(|e| e.to_string())?;
-
+pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinition, String> {
     let api_definition_id = ApiDefinitionId(get_root_extension(
         &openapi,
         GOLEM_API_DEFINITION_ID_EXTENSION,
@@ -23,6 +23,54 @@ pub fn get_api_definition_from_oas(open_api: &str) -> Result<HttpApiDefinition, 
         version: api_definition_version,
         routes,
     })
+}
+
+// Used to extract the OpenAPI spec from JSON Body in Poem OpenAPI endpoints.
+pub struct JsonOpenApiDefinition(pub openapiv3::OpenAPI);
+
+impl types::Type for JsonOpenApiDefinition {
+    const IS_REQUIRED: bool = true;
+
+    type RawValueType = Self;
+
+    type RawElementValueType = Self;
+
+    fn name() -> std::borrow::Cow<'static, str> {
+        "OpenApiDefinition".into()
+    }
+
+    fn schema_ref() -> registry::MetaSchemaRef {
+        registry::MetaSchemaRef::Inline(Box::new(registry::MetaSchema::ANY))
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+#[async_trait]
+impl ParseFromJSON for JsonOpenApiDefinition {
+    fn parse_from_json(value: Option<serde_json::Value>) -> types::ParseResult<Self> {
+        match value {
+            Some(value) => match serde_json::from_value::<openapiv3::OpenAPI>(value) {
+                Ok(openapi) => Ok(JsonOpenApiDefinition(openapi)),
+                Err(e) => Err(types::ParseError::<Self>::custom(format!(
+                    "Failed to parse OpenAPI: {}",
+                    e
+                ))),
+            },
+
+            _ => Err(poem_openapi::types::ParseError::<Self>::custom(
+                "OpenAPI spec missing".to_string(),
+            )),
+        }
+    }
 }
 
 mod internal {

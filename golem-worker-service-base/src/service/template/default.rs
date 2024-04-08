@@ -186,6 +186,36 @@ fn is_retriable(error: &TemplateServiceError) -> bool {
 #[derive(Clone, Debug)]
 pub struct TemplateServiceNoop {}
 
+impl TemplateServiceNoop {
+    pub fn test_template() -> Template {
+        use golem_service_base::model::{
+            ProtectedTemplateId, TemplateMetadata, TemplateName, UserTemplateId,
+            VersionedTemplateId,
+        };
+
+        let id = VersionedTemplateId {
+            template_id: TemplateId::new_v4(),
+            version: 1,
+        };
+
+        Template {
+            versioned_template_id: id.clone(),
+            user_template_id: UserTemplateId {
+                versioned_template_id: id.clone(),
+            },
+            protected_template_id: ProtectedTemplateId {
+                versioned_template_id: id.clone(),
+            },
+            template_name: TemplateName("test".to_string()),
+            template_size: 0,
+            metadata: TemplateMetadata {
+                exports: vec![],
+                producers: vec![],
+            },
+        }
+    }
+}
+
 #[async_trait]
 impl<AuthCtx> TemplateService<AuthCtx> for TemplateServiceNoop {
     async fn get_by_version(
@@ -194,7 +224,7 @@ impl<AuthCtx> TemplateService<AuthCtx> for TemplateServiceNoop {
         _version: i32,
         _auth_ctx: &AuthCtx,
     ) -> TemplateResult<Template> {
-        Err(TemplateServiceError::internal("Not implemented"))
+        Ok(Self::test_template())
     }
 
     async fn get_latest(
@@ -202,6 +232,6 @@ impl<AuthCtx> TemplateService<AuthCtx> for TemplateServiceNoop {
         _template_id: &TemplateId,
         _auth_ctx: &AuthCtx,
     ) -> TemplateResult<Template> {
-        Err(TemplateServiceError::internal("Not implemented"))
+        Ok(Self::test_template())
     }
 }
