@@ -24,6 +24,10 @@ use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, Packa
 use reqwest::Url;
 use tracing_subscriber::FmtSubscriber;
 
+use golem_cli::api_definition::{
+    ApiDefinitionHandler, ApiDefinitionHandlerLive, ApiDefinitionSubcommand,
+};
+use golem_cli::clients::api_definition::ApiDefinitionClientLive;
 use golem_cli::clients::health_check::HealthCheckClientLive;
 use golem_cli::clients::template::TemplateClientLive;
 use golem_cli::clients::worker::WorkerClientLive;
@@ -82,6 +86,13 @@ enum Command {
     Stubgen {
         #[command(subcommand)]
         subcommand: golem_wasm_rpc_stubgen::Command,
+    },
+
+    /// Manage Golem api definitions
+    #[command()]
+    ApiDefinition {
+        #[command(subcommand)]
+        subcommand: ApiDefinitionSubcommand,
     },
 }
 
@@ -189,6 +200,16 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         templates: &template_srv,
     };
 
+    let api_definition_client = ApiDefinitionClientLive {
+        client: golem_client::api::ApiDefinitionClientLive {
+            context: worker_context.clone(),
+        },
+    };
+
+    let api_definition_srv = ApiDefinitionHandlerLive {
+        client: api_definition_client,
+    };
+
     let health_check_client_for_template = HealthCheckClientLive {
         client: golem_client::api::HealthCheckClientLive {
             context: template_context.clone(),
@@ -251,6 +272,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
                     .map(|_| GolemResult::Ok(Box::new("Done")))
             }
         },
+        Command::ApiDefinition { subcommand } => api_definition_srv.handle(subcommand).await,
     };
 
     match res {
