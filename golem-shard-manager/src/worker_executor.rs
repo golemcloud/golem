@@ -26,7 +26,7 @@ use tonic_health::pb::HealthCheckRequest;
 use tracing::{debug, info, warn};
 
 use crate::error::ShardManagerError;
-use crate::model::{Assignments, Pod, Unassignments};
+use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
 use crate::shard_manager_config::WorkerExecutorServiceConfig;
 
 #[async_trait]
@@ -107,7 +107,10 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
-        info!("Assigning shards {:?} to pod {:?}", shard_ids, pod);
+        info!(
+            "Assigning shards: {}",
+            pod_shard_assignments_to_string(pod, shard_ids.iter())
+        );
 
         let retry_max_attempts = self.config.retries.max_attempts;
         let retry_min_delay = self.config.retries.min_delay;
@@ -137,7 +140,10 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
-        info!("Revoking shards {:?} from pod {:?}", shard_ids, pod);
+        info!(
+            "Revoking shards: {}",
+            pod_shard_assignments_to_string(pod, shard_ids.iter())
+        );
 
         let retry_max_attempts = self.config.retries.max_attempts;
         let retry_min_delay = self.config.retries.min_delay;

@@ -24,12 +24,12 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
-    create_worker_response, get_invocation_key_response, get_running_worker_metadatas_response,
-    get_worker_metadata_response, get_worker_metadatas_response, interrupt_worker_response,
+    create_worker_response, get_invocation_key_response, get_running_workers_metadata_response,
+    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
     invoke_and_await_worker_response, invoke_worker_response, resume_worker_response,
     ConnectWorkerRequest, CreateWorkerRequest, GetInvocationKeyRequest,
-    GetRunningWorkerMetadatasRequest, GetRunningWorkerMetadatasSuccessResponse,
-    GetWorkerMetadatasRequest, GetWorkerMetadatasSuccessResponse, InterruptWorkerRequest,
+    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
     InterruptWorkerResponse, InvokeAndAwaitWorkerRequest, InvokeWorkerRequest, ResumeWorkerRequest,
 };
 use golem_common::model::{
@@ -66,7 +66,7 @@ use golem_worker_executor_base::services::template::TemplateService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::{All, HasAll};
+use golem_worker_executor_base::services::{worker_enumeration, All, HasAll};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
@@ -263,7 +263,7 @@ impl TestWorkerExecutor {
         }
     }
 
-    pub async fn get_running_worker_metadatas(
+    pub async fn get_running_workers_metadata(
         &mut self,
         template_id: &TemplateId,
         filter: Option<WorkerFilter>,
@@ -272,27 +272,27 @@ impl TestWorkerExecutor {
             template_id.clone().into();
         let response = self
             .client
-            .get_running_worker_metadatas(GetRunningWorkerMetadatasRequest {
+            .get_running_workers_metadata(GetRunningWorkersMetadataRequest {
                 template_id: Some(template_id),
                 filter: filter.map(|f| f.into()),
             })
             .await
-            .expect("Failed to get running worker metadatas")
+            .expect("Failed to get running workers metadata")
             .into_inner();
 
         match response.result {
-            None => panic!("No response from get_running_worker_metadatas"),
-            Some(get_running_worker_metadatas_response::Result::Success(
-                GetRunningWorkerMetadatasSuccessResponse { workers },
+            None => panic!("No response from get_running_workers_metadata"),
+            Some(get_running_workers_metadata_response::Result::Success(
+                GetRunningWorkersMetadataSuccessResponse { workers },
             )) => workers.iter().map(to_worker_metadata).collect(),
 
-            Some(get_running_worker_metadatas_response::Result::Failure(error)) => {
+            Some(get_running_workers_metadata_response::Result::Failure(error)) => {
                 panic!("Failed to get worker metadata: {error:?}")
             }
         }
     }
 
-    pub async fn get_worker_metadatas(
+    pub async fn get_workers_metadata(
         &mut self,
         template_id: &TemplateId,
         filter: Option<WorkerFilter>,
@@ -304,7 +304,7 @@ impl TestWorkerExecutor {
             template_id.clone().into();
         let response = self
             .client
-            .get_worker_metadatas(GetWorkerMetadatasRequest {
+            .get_workers_metadata(GetWorkersMetadataRequest {
                 template_id: Some(template_id),
                 filter: filter.map(|f| f.into()),
                 cursor,
@@ -312,20 +312,16 @@ impl TestWorkerExecutor {
                 precise,
             })
             .await
-            .expect("Failed to get worker metadatas")
+            .expect("Failed to get workers metadata")
             .into_inner();
 
         match response.result {
-            None => panic!("No response from get_worker_metadatas"),
-            Some(get_worker_metadatas_response::Result::Success(
-                GetWorkerMetadatasSuccessResponse { workers, cursor },
-            )) => {
-                let cursor: Option<u64> = if cursor == 0 { None } else { Some(cursor) };
-
-                (cursor, workers.iter().map(to_worker_metadata).collect())
-            }
-            Some(get_worker_metadatas_response::Result::Failure(error)) => {
-                panic!("Failed to get worker metadatas: {error:?}")
+            None => panic!("No response from get_workers_metadata"),
+            Some(get_workers_metadata_response::Result::Success(
+                GetWorkersMetadataSuccessResponse { workers, cursor },
+            )) => (cursor, workers.iter().map(to_worker_metadata).collect()),
+            Some(get_workers_metadata_response::Result::Failure(error)) => {
+                panic!("Failed to get workers metadata: {error:?}")
             }
         }
     }
@@ -1355,6 +1351,9 @@ impl WorkerCtx for TestWorkerCtx {
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
@@ -1374,6 +1373,7 @@ impl WorkerCtx for TestWorkerCtx {
             promise_service,
             invocation_key_service,
             worker_service,
+            worker_enumeration_service,
             key_value_service,
             blob_store_service,
             event_service,
