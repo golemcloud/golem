@@ -1,10 +1,10 @@
 mod bindings;
 
-use reqwest::{Client, Response};
 use crate::bindings::exports::golem::it::api::Guest;
 use crate::bindings::golem::api::host::*;
 use crate::bindings::wasi;
 use crate::bindings::wasi::io::streams::StreamError;
+use reqwest::{Client, Response};
 
 struct Component;
 
@@ -128,7 +128,11 @@ impl Guest for Component {
         let incoming_response = get_incoming_response(&future_response);
         let body = read_body(&incoming_response);
 
-        println!("Received response from remote side-effect: {} {}", incoming_response.status(), String::from_utf8(body).unwrap());
+        println!(
+            "Received response from remote side-effect: {} {}",
+            incoming_response.status(),
+            String::from_utf8(body).unwrap()
+        );
     }
 
     fn persist_nothing() {
@@ -152,6 +156,27 @@ impl Guest for Component {
 
         remote_side_effect("4"); // only performed once
     }
+
+    fn get_workers(
+        template_id: TemplateId,
+        filter: Option<WorkerAnyFilter>,
+        precise: bool,
+    ) -> Vec<WorkerMetadata> {
+        println!(
+            "Get workers template id: {template_id:?}, filter: {filter:?}, precise: {precise}"
+        );
+        let mut workers: Vec<WorkerMetadata> = Vec::new();
+        let getter = GetWorkers::new(template_id, filter.as_ref(), precise);
+        loop {
+            match getter.get_next() {
+                Some(values) => {
+                    workers.extend(values);
+                }
+                None => break,
+            }
+        }
+        workers
+    }
 }
 
 fn remote_call(param: u64) -> bool {
@@ -163,9 +188,7 @@ fn remote_call(param: u64) -> bool {
 
     println!("Sending GET {url}");
 
-    let response: Response = client.get(&url)
-        .send()
-        .expect("Request failed");
+    let response: Response = client.get(&url).send().expect("Request failed");
 
     let status = response.status();
     let body = response.json::<bool>().expect("Invalid response");
@@ -183,7 +206,8 @@ fn remote_side_effect(message: &str) {
 
     println!("Sending POST {url}");
 
-    let response: Response = client.post(&url)
+    let response: Response = client
+        .post(&url)
         .body(message.to_string())
         .send()
         .expect("Request failed");
@@ -200,10 +224,16 @@ fn send_remote_side_effect(message: &str) -> wasi::http::types::FutureIncomingRe
 
     let headers = wasi::http::types::Fields::new();
     let request = wasi::http::types::OutgoingRequest::new(headers);
-    request.set_method(&wasi::http::types::Method::Post).unwrap();
+    request
+        .set_method(&wasi::http::types::Method::Post)
+        .unwrap();
     request.set_path_with_query(Some("/side-effect")).unwrap();
-    request.set_scheme(Some(&wasi::http::types::Scheme::Http)).unwrap();
-    request.set_authority(Some(&format!("localhost:{port}"))).unwrap();
+    request
+        .set_scheme(Some(&wasi::http::types::Scheme::Http))
+        .unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
 
     let request_body = request.body().unwrap();
     let request_body_stream = request_body.write().unwrap();
@@ -216,7 +246,8 @@ fn send_remote_side_effect(message: &str) -> wasi::http::types::FutureIncomingRe
     options.set_first_byte_timeout(Some(5000000000)).unwrap(); // 5s
     options.set_between_bytes_timeout(Some(5000000000)).unwrap(); // 5s
 
-    let future_incoming_response = wasi::http::outgoing_handler::handle(request, Some(options)).unwrap();
+    let future_incoming_response =
+        wasi::http::outgoing_handler::handle(request, Some(options)).unwrap();
 
     future_incoming_response
 }

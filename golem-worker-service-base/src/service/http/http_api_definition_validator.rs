@@ -8,7 +8,8 @@ use golem_service_base::model::{
     Export, ExportFunction, ExportInstance, Template, TemplateMetadata,
 };
 
-use crate::api_definition::http::{HttpApiDefinition, MethodPattern, PathPattern, Route};
+use crate::api_definition::http::{HttpApiDefinition, MethodPattern, Route};
+use crate::http::router::{Router, RouterPattern};
 use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 
 // Http Api Definition Validator
@@ -77,34 +78,35 @@ impl ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
 }
 
 fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    pub struct RouteKey<'a> {
-        pub method: &'a MethodPattern,
-        pub path: &'a PathPattern,
+    let mut router = Router::<&Route>::new();
+
+    let mut errors = vec![];
+
+    for route in routes {
+        let method: hyper::Method = route.method.clone().into();
+        let path: Vec<RouterPattern> = route
+            .path
+            .path_patterns
+            .clone()
+            .into_iter()
+            .map(|p| p.into())
+            .collect();
+
+        if !router.add_route(method.clone(), path.clone(), route) {
+            let current_route = router.get_route(&method, &path).unwrap();
+
+            let detail = format!("Duplicate route with path: {}", current_route.path);
+
+            errors.push(RouteValidationError {
+                method: route.method.clone(),
+                path: route.path.to_string(),
+                template: route.binding.template.clone(),
+                detail,
+            });
+        }
     }
 
-    let mut seen = std::collections::HashSet::new();
-
-    routes
-        .iter()
-        .flat_map(|route| {
-            let route_key = RouteKey {
-                method: &route.method,
-                path: &route.path,
-            };
-            if seen.contains(&route_key) {
-                Some(RouteValidationError {
-                    method: route_key.method.clone(),
-                    path: route_key.path.to_string(),
-                    template: route.binding.template.clone(),
-                    detail: "Duplicate route".to_string(),
-                })
-            } else {
-                seen.insert(route_key);
-                None
-            }
-        })
-        .collect()
+    errors
 }
 
 fn validate_route(
@@ -146,4 +148,50 @@ fn find_function(name: &str, template: &TemplateMetadata) -> Option<ExportFuncti
             }
         }
     })
+}
+
+#[test]
+fn test_unique_routes() {
+    fn make_route(method: MethodPattern, path: &str) -> Route {
+        Route {
+            method,
+            path: crate::api_definition::http::AllPathPatterns::parse(path).unwrap(),
+            binding: crate::worker_binding::GolemWorkerBinding {
+                template: TemplateId::new_v4(),
+                worker_id: crate::expression::Expr::Request(),
+                function_name: "test".into(),
+                function_params: vec![],
+                response: None,
+            },
+        }
+    }
+
+    let paths = &[
+        "/users/{id}/posts/{post_id}",
+        "/users/{id}/posts/{post_id}/comments/{comment_id}",
+        "/users/{id}/posts/{post_id}/comments/{comment_id}/replies/{reply_id}",
+    ];
+
+    let get_paths: Vec<Route> = paths
+        .iter()
+        .map(|s| make_route(MethodPattern::Get, s))
+        .collect();
+
+    let post_paths: Vec<Route> = paths
+        .iter()
+        .map(|s| make_route(MethodPattern::Post, s))
+        .collect();
+
+    let all_paths = [&get_paths[..], &post_paths[..]].concat();
+
+    let errors = unique_routes(&all_paths);
+    assert!(errors.is_empty());
+
+    let conflict_route = make_route(MethodPattern::Get, "/users/{a}/posts/{b}");
+
+    let with_conflict = [&get_paths[..], &[conflict_route]].concat();
+
+    let errors = unique_routes(&with_conflict);
+    assert!(errors.len() == 1);
+    assert!(errors[0].detail.contains(paths[0]), "Received: {errors:?}");
 }

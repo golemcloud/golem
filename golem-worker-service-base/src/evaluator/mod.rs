@@ -595,7 +595,7 @@ mod tests {
     use http::{HeaderMap, Uri};
     use serde_json::{json, Value};
 
-    use crate::api_definition::http::PathPattern;
+    use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expression;
@@ -606,7 +606,7 @@ mod tests {
     fn test_evaluation_with_request_path() {
         let uri = Uri::builder().path_and_query("/pId/items").build().unwrap();
 
-        let path_pattern = PathPattern::from_str("/{id}/items").unwrap();
+        let path_pattern = AllPathPatterns::from_str("/{id}/items").unwrap();
 
         let resolved_variables = resolved_variables_from_request_path(uri, path_pattern);
 
@@ -921,7 +921,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let path_pattern = PathPattern::from_str("/shopping-cart/{id}").unwrap();
+        let path_pattern = AllPathPatterns::from_str("/shopping-cart/{id}").unwrap();
 
         let mut resolved_variables_path =
             resolved_variables_from_request_path(uri.clone(), path_pattern.clone());
@@ -1424,9 +1424,10 @@ mod tests {
     }
 
     mod test_utils {
-        use crate::api_definition::http::PathPattern;
+        use crate::api_definition::http::{AllPathPatterns, PathPattern};
         use crate::evaluator::Evaluator;
         use crate::expression;
+        use crate::http::router::RouterPattern;
         use crate::http::{ApiInputPath, InputHttpRequest};
         use crate::worker_bridge_execution::WorkerResponse;
         use golem_service_base::type_inference::infer_analysed_type;
@@ -1482,13 +1483,13 @@ mod tests {
             };
 
             input_http_request
-                .get_type_annotated_value(vec![], &HashMap::new())
+                .get_type_annotated_value(HashMap::new(), &[])
                 .unwrap()
         }
 
         pub(crate) fn resolved_variables_from_request_path(
             uri: Uri,
-            path_pattern: PathPattern,
+            path_pattern: AllPathPatterns,
         ) -> TypeAnnotatedValue {
             let input_http_request = InputHttpRequest {
                 req_body: serde_json::Value::Null,
@@ -1500,11 +1501,20 @@ mod tests {
                 },
             };
 
+            let base_path: Vec<&str> = RouterPattern::split(uri.path()).collect();
+
+            let path_params = path_pattern
+                .path_patterns
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, pattern)| match pattern {
+                    PathPattern::Literal(_) => None,
+                    PathPattern::Var(var) => Some((var, base_path[index])),
+                })
+                .collect();
+
             input_http_request
-                .get_type_annotated_value(
-                    path_pattern.get_query_variables(),
-                    &path_pattern.get_path_variables(),
-                )
+                .get_type_annotated_value(path_params, &path_pattern.query_params)
                 .unwrap()
         }
 

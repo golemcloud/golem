@@ -341,6 +341,84 @@ async fn get_self_uri() {
 
 #[tokio::test]
 #[tracing::instrument]
+async fn get_workers_from_worker() {
+    let context = common::TestContext::new();
+    let mut executor = common::start(&context).await.unwrap();
+
+    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+
+    let worker_id1 = executor
+        .start_worker(&template_id, "runtime-service-1")
+        .await;
+
+    let worker_id2 = executor
+        .start_worker(&template_id, "runtime-service-2")
+        .await;
+
+    async fn get_check(
+        worker_id: &WorkerId,
+        name_filter: Option<String>,
+        expected_count: usize,
+        executor: &mut TestWorkerExecutor,
+    ) {
+        let template_id_val = {
+            let (high, low) = worker_id.template_id.0.as_u64_pair();
+            common::val_record(vec![common::val_record(vec![
+                common::val_u64(high),
+                common::val_u64(low),
+            ])])
+        };
+
+        let filter_val = name_filter.map(|name| {
+            common::val_record(vec![common::val_list(vec![common::val_record(vec![
+                common::val_list(vec![common::val_variant(
+                    0,
+                    common::val_record(vec![common::val_enum(0), common::val_string(&name)]),
+                )]),
+            ])])])
+        });
+
+        let result = executor
+            .invoke_and_await(
+                worker_id,
+                "golem:it/api/get-workers",
+                vec![
+                    template_id_val,
+                    common::val_option(filter_val),
+                    common::val_bool(true),
+                ],
+            )
+            .await
+            .unwrap();
+
+        println!("result: {:?}", result.clone());
+
+        match result.first() {
+            Some(golem_wasm_rpc::protobuf::Val {
+                val: Some(golem_wasm_rpc::protobuf::val::Val::List(list)),
+            }) => {
+                check!(list.values.len() == expected_count);
+            }
+            _ => {
+                check!(false);
+            }
+        }
+    }
+
+    get_check(&worker_id1, None, 2, &mut executor).await;
+    get_check(
+        &worker_id2,
+        Some("runtime-service-1".to_string()),
+        1,
+        &mut executor,
+    )
+    .await;
+
+    drop(executor);
+}
+
+#[tokio::test]
+#[tracing::instrument]
 async fn invoking_with_same_invocation_key_is_idempotent() {
     let context = common::TestContext::new();
     let mut executor = common::start(&context).await.unwrap();

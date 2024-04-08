@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use Iterator;
@@ -97,13 +96,28 @@ impl MethodPattern {
     }
 }
 
+impl From<MethodPattern> for hyper::http::Method {
+    fn from(method: MethodPattern) -> Self {
+        match method {
+            MethodPattern::Get => hyper::http::Method::GET,
+            MethodPattern::Connect => hyper::http::Method::CONNECT,
+            MethodPattern::Post => hyper::http::Method::POST,
+            MethodPattern::Delete => hyper::http::Method::DELETE,
+            MethodPattern::Put => hyper::http::Method::PUT,
+            MethodPattern::Patch => hyper::http::Method::PATCH,
+            MethodPattern::Options => hyper::http::Method::OPTIONS,
+            MethodPattern::Trace => hyper::http::Method::TRACE,
+            MethodPattern::Head => hyper::http::Method::HEAD,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct LiteralInfo(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct VarInfo {
     pub key_name: String,
-    pub index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
@@ -111,156 +125,54 @@ pub struct QueryInfo {
     pub key_name: String,
 }
 
+impl Display for QueryInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{{}}}", self.key_name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
-pub enum PathPattern {
-    Literal(LiteralInfo),
-    Var(VarInfo),
-    Query(QueryInfo),
-    Zip(Vec<PathPattern>),
+pub struct AllPathPatterns {
+    pub path_patterns: Vec<PathPattern>,
+    pub query_params: Vec<QueryInfo>,
 }
 
-impl PathPattern {
-    pub fn get_path_variables(&self) -> HashMap<usize, String> {
-        let mut result: HashMap<usize, String> = HashMap::new();
-
-        for path_pattern in self.clone() {
-            if let PathPattern::Var(var_info) = path_pattern {
-                result.insert(var_info.index, var_info.key_name);
-            }
-        }
-
-        result
-    }
-
-    pub fn get_path_literals(&self) -> HashMap<usize, String> {
-        let mut result: HashMap<usize, String> = HashMap::new();
-
-        for (index, path_pattern) in self.clone().enumerate() {
-            if let PathPattern::Literal(literal_info) = path_pattern {
-                result.insert(index, literal_info.0);
-            }
-        }
-
-        result
-    }
-
-    pub fn get_query_variables(&self) -> Vec<String> {
-        let mut result: Vec<String> = vec![];
-
-        for path_pattern in self.clone() {
-            if let PathPattern::Query(query_info) = path_pattern {
-                result.push(query_info.key_name);
-            }
-        }
-
-        result
-    }
-
-    pub fn get_path_prefixed_variables(&self) -> HashSet<String> {
-        let mut result: HashSet<String> = HashSet::new();
-        for (_, v) in self.get_path_variables() {
-            result.insert(format!("request.path.{}", v.trim()));
-        }
-        for v in self.get_query_variables() {
-            result.insert(format!("request.path.{}", v.trim()));
-        }
-        result
-    }
-
-    pub fn literal(value: &str) -> PathPattern {
-        PathPattern::Literal(LiteralInfo(value.to_string()))
-    }
-
-    pub fn var(value: &str, index: usize) -> PathPattern {
-        PathPattern::Var(VarInfo {
-            key_name: value.to_string(),
-            index,
-        })
-    }
-
-    pub fn query(value: &str) -> PathPattern {
-        PathPattern::Query(QueryInfo {
-            key_name: value.to_string(),
-        })
-    }
-
-    pub fn from(input: &str) -> Result<PathPattern, ParseError> {
-        let path_pattern_parser = PathPatternParser;
-        path_pattern_parser.parse(input)
+impl AllPathPatterns {
+    pub fn parse(input: &str) -> Result<AllPathPatterns, ParseError> {
+        input.parse()
     }
 }
 
-impl FromStr for PathPattern {
+impl Display for AllPathPatterns {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for pattern in self.path_patterns.iter() {
+            write!(f, "/")?;
+            write!(f, "{pattern}")?;
+        }
+
+        if !self.query_params.is_empty() {
+            write!(f, "?")?;
+            for (index, query) in self.query_params.iter().enumerate() {
+                if index > 0 {
+                    write!(f, "&")?;
+                }
+                write!(f, "{query}")?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl FromStr for AllPathPatterns {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let path_pattern_parser = PathPatternParser;
-        path_pattern_parser.parse(s)
+        PathPatternParser.parse(s)
     }
 }
 
-impl Display for PathPattern {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PathPattern::Literal(info) => write!(f, "{}", info.0),
-            PathPattern::Var(info) => write!(f, "{{{}}}", info.key_name),
-            PathPattern::Query(info) => write!(f, "{{{}}}", info.key_name),
-            PathPattern::Zip(patterns) => {
-                let mut query_params = false;
-                for (index, pattern) in patterns.iter().enumerate() {
-                    let mut sep = '/';
-                    if let PathPattern::Query(_) = pattern {
-                        if query_params {
-                            sep = '&';
-                        } else {
-                            query_params = true;
-                            sep = '?';
-                        }
-                    }
-                    if index > 0 {
-                        write!(f, "{}", sep)?;
-                    }
-                    write!(f, "{}", pattern)?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-impl Iterator for PathPattern {
-    type Item = PathPattern;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            PathPattern::Zip(collections) => {
-                if collections.is_empty() {
-                    None
-                } else if collections.len() == 1 {
-                    collections.pop()
-                } else {
-                    Some(collections.remove(0))
-                }
-            }
-            PathPattern::Var(_) => {
-                let original_variant = std::mem::replace(self, PathPattern::Zip(vec![]));
-                Some(original_variant)
-            }
-            PathPattern::Query(_) => {
-                let original_variant = std::mem::replace(self, PathPattern::Zip(vec![]));
-
-                Some(original_variant)
-            }
-            PathPattern::Literal(_) => {
-                let original_variant = std::mem::replace(self, PathPattern::Zip(vec![]));
-
-                Some(original_variant)
-            }
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for PathPattern {
+impl<'de> Deserialize<'de> for AllPathPatterns {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -268,7 +180,7 @@ impl<'de> Deserialize<'de> for PathPattern {
         let value = Value::deserialize(deserializer)?;
 
         match value {
-            Value::String(value) => match PathPattern::from(value.as_str()) {
+            Value::String(value) => match AllPathPatterns::parse(value.as_str()) {
                 Ok(path_pattern) => Ok(path_pattern),
                 Err(message) => Err(serde::de::Error::custom(message.to_string())),
             },
@@ -278,7 +190,7 @@ impl<'de> Deserialize<'de> for PathPattern {
     }
 }
 
-impl Serialize for PathPattern {
+impl Serialize for AllPathPatterns {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -288,10 +200,37 @@ impl Serialize for PathPattern {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+pub enum PathPattern {
+    Literal(LiteralInfo),
+    Var(VarInfo),
+}
+
+impl PathPattern {
+    pub fn literal(value: impl Into<String>) -> PathPattern {
+        PathPattern::Literal(LiteralInfo(value.into()))
+    }
+
+    pub fn var(value: impl Into<String>) -> PathPattern {
+        PathPattern::Var(VarInfo {
+            key_name: value.into(),
+        })
+    }
+}
+
+impl Display for PathPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PathPattern::Literal(info) => write!(f, "{}", info.0),
+            PathPattern::Var(info) => write!(f, "{{{}}}", info.key_name),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub struct Route {
     pub method: MethodPattern,
-    pub path: PathPattern,
+    pub path: AllPathPatterns,
     pub binding: GolemWorkerBinding,
 }
 
@@ -305,141 +244,102 @@ mod tests {
     #[test]
     fn split_path_works_with_single_value() {
         let path_pattern = "foo";
-        let result = PathPattern::from(path_pattern);
+        let result = AllPathPatterns::parse(path_pattern);
 
-        let expected = PathPattern::Zip(vec![PathPattern::literal("foo")]);
+        let expected = AllPathPatterns {
+            path_patterns: vec![PathPattern::literal("foo")],
+            query_params: vec![],
+        };
 
         assert_eq!(result, Ok(expected));
     }
 
     #[test]
     fn split_path_works_with_multiple_values() {
-        let path_pattern = "foo /  bar";
-        let result = PathPattern::from(path_pattern);
+        let path_pattern = "foo/bar";
+        let result = AllPathPatterns::parse(path_pattern);
 
-        let expected = vec![PathPattern::literal("foo"), PathPattern::literal("bar")];
+        let expected = AllPathPatterns {
+            path_patterns: vec![PathPattern::literal("foo"), PathPattern::literal("bar")],
+            query_params: vec![],
+        };
 
-        assert_eq!(result, Ok(PathPattern::Zip(expected)));
+        assert_eq!(result, Ok(expected));
     }
 
     #[test]
     fn split_path_works_with_variables() {
-        let path_pattern = "foo / bar / {var}";
-        let result = PathPattern::from(path_pattern);
+        let path_pattern = "foo/bar/{var}";
+        let result = AllPathPatterns::parse(path_pattern);
 
-        let expected = vec![
-            PathPattern::literal("foo"),
-            PathPattern::literal("bar"),
-            PathPattern::var("var", 2),
-        ];
+        let expected = AllPathPatterns {
+            path_patterns: vec![
+                PathPattern::literal("foo"),
+                PathPattern::literal("bar"),
+                PathPattern::var("var"),
+            ],
+            query_params: vec![],
+        };
 
-        assert_eq!(result, Ok(PathPattern::Zip(expected)));
+        assert_eq!(result, Ok(expected));
     }
 
     #[test]
     fn split_path_works_with_variables_and_queries() {
-        let path_pattern = "foo / bar / {var} ? {userid1} & {userid2}";
-        let result = PathPattern::from(path_pattern);
+        let path_pattern = "foo/bar/{var}?{userid1}&{userid2}";
+        let result = AllPathPatterns::parse(path_pattern);
 
-        let expected = vec![
-            PathPattern::literal("foo"),
-            PathPattern::literal("bar"),
-            PathPattern::var("var", 2),
-            PathPattern::query("userid1"),
-            PathPattern::query("userid2"),
-        ];
+        let expected = AllPathPatterns {
+            path_patterns: vec![
+                PathPattern::literal("foo"),
+                PathPattern::literal("bar"),
+                PathPattern::var("var"),
+            ],
+            query_params: vec![
+                QueryInfo {
+                    key_name: "userid1".to_string(),
+                },
+                QueryInfo {
+                    key_name: "userid2".to_string(),
+                },
+            ],
+        };
 
-        assert_eq!(result, Ok(PathPattern::Zip(expected)));
+        assert_eq!(result, Ok(expected));
     }
 
-    #[test]
-    fn get_path_variables_as_map() {
-        let path_pattern_str = "foo / bar / {var1} / {var2} ? {userid1} & {userid2}";
-        let path_pattern = PathPattern::from(path_pattern_str).unwrap();
-
-        let path_variables_map = path_pattern.get_path_variables();
-
-        let mut expected: HashMap<usize, String> = HashMap::new();
-        expected.insert(3, "var2".to_string());
-        expected.insert(2, "var1".to_string());
-
-        assert_eq!(path_variables_map, expected);
-    }
-
-    #[test]
-    fn get_query_variables() {
-        let path_pattern_str = "foo / bar / {var1} / {var2} ? {userid1} & {userid2}";
-        let path_pattern = PathPattern::from(path_pattern_str).unwrap();
-
-        let query_variables_map = path_pattern.get_query_variables();
-
-        let expected = vec!["userid1".to_string(), "userid2".to_string()];
-
-        assert_eq!(query_variables_map, expected);
-    }
-
-    #[test]
-    fn test_iterator_of_path_pattern_simple() {
-        let path1 = PathPattern::literal("foo");
-
-        let result: Vec<PathPattern> = path1.into_iter().collect();
-
-        assert_eq!(result, vec![PathPattern::literal("foo")]);
-    }
-
-    #[test]
-    fn test_iterator_of_path_pattern() {
-        let path1 = PathPattern::literal("foo");
-        let path2 = PathPattern::literal("bar");
-        let path4: PathPattern = PathPattern::var("component", 2);
-        let path3: PathPattern = PathPattern::query("user-id");
-
-        let mut vector = PathPattern::Zip(vec![path1, path2, path3, path4]);
-
-        let result = vector.next();
-
-        assert_eq!(result, Some(PathPattern::literal("foo")));
-    }
-
-    #[test]
-    fn test_full_iteration_of_path_pattern() {
-        let path1 = PathPattern::literal("foo");
-        let path2 = PathPattern::literal("bar");
-        let path4: PathPattern = PathPattern::var("component", 2);
-        let path3: PathPattern = PathPattern::query("user-id");
-        let original_vec = vec![path1, path2, path3, path4];
-
-        let vector = PathPattern::Zip(original_vec.clone());
-
-        let mut collections = vec![];
-
-        for i in vector.into_iter() {
-            collections.push(i);
-        }
-
-        assert_eq!(collections, original_vec);
-    }
-
+    #[track_caller]
     fn test_path_pattern_to_string(path_pattern_str: &str) {
-        let path_pattern = PathPattern::from(path_pattern_str).unwrap();
+        let path_pattern = AllPathPatterns::parse(path_pattern_str).unwrap();
         let path_pattern_str_result = path_pattern.to_string();
-        assert_eq!(path_pattern_str_result, path_pattern_str);
+        assert_eq!(
+            path_pattern_str_result,
+            path_pattern_str,
+            "Assertion failed for test case at {}",
+            std::panic::Location::caller()
+        );
     }
 
     #[test]
     fn test_path_patterns_to_string() {
-        test_path_pattern_to_string("foo/bar/{var1}/{var2}?{userid1}&{userid2}");
-        test_path_pattern_to_string("foo/bar/{var1}/{var2}?{userid1}");
-        test_path_pattern_to_string("foo/bar/{var1}/{var2}");
-        test_path_pattern_to_string("foo/bar");
+        test_path_pattern_to_string("/foo/bar/{var1}/{var2}?{userid1}&{userid2}");
+        test_path_pattern_to_string("/foo/bar/{var1}/{var2}?{userid1}");
+        test_path_pattern_to_string("/foo/bar/{var1}/{var2}");
+        test_path_pattern_to_string("/foo/bar");
     }
 
+    #[track_caller]
     fn test_string_expr_parse_and_encode(input: &str) {
         let parsed_expr1 = expression::from_string(input).unwrap();
         let encoded_expr = parsed_expr1.to_string().unwrap();
         let parsed_expr2 = expression::from_string(encoded_expr.as_str()).unwrap();
 
-        assert_eq!(parsed_expr1, parsed_expr2);
+        assert_eq!(
+            parsed_expr1,
+            parsed_expr2,
+            "Assertion failed for test case at {}",
+            std::panic::Location::caller()
+        );
     }
 
     #[test]
@@ -553,25 +453,8 @@ mod tests {
 
     #[test]
     fn test_api_spec_serde() {
-        fn test_serde(
-            path_pattern: &str,
-            worker_id: &str,
-            function_params: &str,
-            response_mapping: &str,
-        ) {
-            let yaml = get_api_spec(path_pattern, worker_id, function_params, response_mapping);
-
-            let result: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
-
-            let yaml2 = serde_yaml::to_value(result.clone()).unwrap();
-
-            let result2: HttpApiDefinition = serde_yaml::from_value(yaml2.clone()).unwrap();
-
-            assert_eq!(result, result2);
-        }
-
         test_serde(
-            "foo/{user-id}",
+            "foo/{user-id}?{id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.body}\"]",
             "{status: if (worker.response.user == admin) then 401 else 200}",
@@ -596,6 +479,29 @@ mod tests {
             "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
             "[ \"data\"]",
             "{status: if (worker.response.user == admin) then 401 else 200}",
+        );
+    }
+
+    #[track_caller]
+    fn test_serde(
+        path_pattern: &str,
+        worker_id: &str,
+        function_params: &str,
+        response_mapping: &str,
+    ) {
+        let yaml = get_api_spec(path_pattern, worker_id, function_params, response_mapping);
+
+        let result: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
+
+        let yaml2 = serde_yaml::to_value(result.clone()).unwrap();
+
+        let result2: HttpApiDefinition = serde_yaml::from_value(yaml2.clone()).unwrap();
+
+        assert_eq!(
+            result,
+            result2,
+            "Assertion failed for test case at {}",
+            std::panic::Location::caller()
         );
     }
 
