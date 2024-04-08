@@ -514,7 +514,7 @@ fn worker_list((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> Res
         &cfg.arg('T', "template-id"),
         &template_id,
     ])?;
-    let result: WorkersMetadataResponse = cli.run(&[
+    let result1: WorkersMetadataResponse = cli.run(&[
         "worker",
         "list",
         &cfg.arg('T', "template-id"),
@@ -522,12 +522,26 @@ fn worker_list((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> Res
         &cfg.arg('f', "filter"),
         format!("name == {}", worker_name1).as_str(),
         &cfg.arg('f', "filter"),
-        format!("version == 0").as_str(),
+        "version == 0",
     ])?;
 
-    assert_eq!(result.workers.len(), 1);
-    assert_eq!(result.workers[0].worker_id.worker_name, worker_name1);
-    assert!(result.cursor.is_none());
+    let result2: WorkersMetadataResponse = cli.run(&[
+        "worker",
+        "list",
+        &cfg.arg('T', "template-id"),
+        &template_id,
+        &cfg.arg('f', "filter"),
+        format!("name == {}", worker_name1).as_str(),
+        &cfg.arg('f', "filter"),
+        "version > 1",
+    ])?;
+
+    assert_eq!(result1.workers.len(), 1);
+    assert_eq!(result1.workers[0].worker_id.worker_name, worker_name1);
+    assert!(result1.cursor.is_none());
+
+    assert_eq!(result2.workers.len(), 0);
+    assert!(result2.cursor.is_none());
 
     Ok(())
 }
