@@ -525,6 +525,8 @@ fn worker_list((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> Res
             format!("name = {}", worker_id.worker_id.worker_name).as_str(),
             &cfg.arg('f', "filter"),
             "version >= 0",
+            &cfg.arg('p', "precise"),
+            "true",
         ])?;
 
         assert_eq!(result.workers.len(), 1);
@@ -563,7 +565,24 @@ fn worker_list((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> Res
     ])?;
 
     assert_eq!(result2.workers.len(), workers_count - result.workers.len());
-    assert!(result2.cursor.is_none());
+
+    if let Some(cursor2) = result2.cursor {
+        let result3: WorkersMetadataResponse = cli.run(&[
+            "worker",
+            "list",
+            &cfg.arg('T', "template-id"),
+            &template_id,
+            &cfg.arg('f', "filter"),
+            "version >= 0",
+            &cfg.arg('f', "filter"),
+            format!("name like {}_worker", name).as_str(),
+            &cfg.arg('s', "count"),
+            workers_count.to_string().as_str(),
+            &cfg.arg('c', "cursor"),
+            cursor2.to_string().as_str(),
+        ])?;
+        assert_eq!(result3.workers.len(), 0);
+    }
 
     Ok(())
 }
