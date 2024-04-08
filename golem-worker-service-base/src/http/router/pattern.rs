@@ -13,14 +13,17 @@ impl RouterPattern {
         Self::Literal(LiteralPattern(literal.into()))
     }
 
+    #[inline]
     pub fn parse(s: impl AsRef<str>) -> Vec<RouterPattern> {
         Self::split(s.as_ref()).map(Self::parse_single).collect()
     }
 
+    #[inline]
     pub fn split(s: &str) -> impl Iterator<Item = &str> {
         s.trim_matches('/').split('/')
     }
 
+    #[inline]
     fn parse_single(s: &str) -> RouterPattern {
         if s.starts_with(':') || (s.starts_with('{') && s.ends_with('}')) {
             RouterPattern::Variable
