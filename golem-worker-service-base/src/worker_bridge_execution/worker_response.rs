@@ -148,7 +148,8 @@ mod internal {
             let type_annotated_value =
                 input_request.merge(&worker_response.result_with_worker_response_key());
 
-            let http_response_mapping = HttpResponseMapping::try_from(response_mapping)?;
+            let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
+                .map_err(EvaluationError::Message)?;
 
             let status_code = get_status_code(&http_response_mapping.status, type_annotated_value)?;
 

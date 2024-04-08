@@ -245,7 +245,7 @@ impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for Temp
                 let mut bytes = Vec::new();
 
                 let _ = std::io::stdin()
-                    .read_to_end(&mut bytes) // TODO: steaming request from stdin
+                    .read_to_end(&mut bytes)
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
                 self.client.update_template(&id.0, bytes).await?

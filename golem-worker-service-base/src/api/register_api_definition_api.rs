@@ -98,7 +98,7 @@ impl TryInto<crate::api_definition::http::Route> for Route {
     type Error = String;
 
     fn try_into(self) -> Result<crate::api_definition::http::Route, Self::Error> {
-        let path = crate::api_definition::http::PathPattern::from(self.path.as_str())
+        let path = crate::api_definition::http::AllPathPatterns::parse(self.path.as_str())
             .map_err(|e| e.to_string())?;
         let binding = self.binding.try_into()?;
 

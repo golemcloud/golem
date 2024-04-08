@@ -257,7 +257,9 @@ pub(crate) fn parse_tokens(
                         go(tokenizer, context, InternalExprResult::complete(expr))
                     }
 
-                    _ => Err("Invalid token field. Make sure expression format is correct".into()),
+                    _ => Err(ParseError::message(
+                        "Invalid token field. Make sure expression format is correct",
+                    )),
                 },
 
                 Token::LSquare => match prev_expression {

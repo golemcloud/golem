@@ -1,4 +1,3 @@
-use std::fmt::Display;
 use std::ops::Deref;
 
 use golem_wasm_ast::analysis::AnalysedType;
@@ -24,31 +23,12 @@ pub trait Evaluator {
     fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum EvaluationError {
-    InvalidReference { get_error: GetError },
+    #[error(transparent)]
+    InvalidReference(#[from] GetError),
+    #[error("{0}")]
     Message(String),
-}
-
-impl From<String> for EvaluationError {
-    fn from(string: String) -> Self {
-        EvaluationError::Message(string)
-    }
-}
-
-impl Display for EvaluationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EvaluationError::Message(string) => write!(f, "{}", string),
-            EvaluationError::InvalidReference { get_error } => write!(f, "{}", get_error),
-        }
-    }
-}
-
-impl From<GetError> for EvaluationError {
-    fn from(get_error: GetError) -> Self {
-        EvaluationError::InvalidReference { get_error }
-    }
 }
 
 pub struct RawString<'t> {
@@ -595,7 +575,7 @@ mod tests {
     use http::{HeaderMap, Uri};
     use serde_json::{json, Value};
 
-    use crate::api_definition::http::PathPattern;
+    use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expression;
@@ -606,7 +586,7 @@ mod tests {
     fn test_evaluation_with_request_path() {
         let uri = Uri::builder().path_and_query("/pId/items").build().unwrap();
 
-        let path_pattern = PathPattern::from_str("/{id}/items").unwrap();
+        let path_pattern = AllPathPatterns::from_str("/{id}/items").unwrap();
 
         let resolved_variables = resolved_variables_from_request_path(uri, path_pattern);
 
@@ -729,9 +709,8 @@ mod tests {
         );
 
         let expr = expression::from_string("${request.body.address.street2}").unwrap();
-        let expected_evaluated_result = EvaluationError::InvalidReference {
-            get_error: GetError::KeyNotFound("street2".to_string()),
-        };
+        let expected_evaluated_result =
+            EvaluationError::InvalidReference(GetError::KeyNotFound("street2".to_string()));
 
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
@@ -755,9 +734,8 @@ mod tests {
         );
 
         let expr = expression::from_string("${request.body.titles[4]}").unwrap();
-        let expected_evaluated_result = EvaluationError::InvalidReference {
-            get_error: GetError::IndexNotFound(4),
-        };
+        let expected_evaluated_result =
+            EvaluationError::InvalidReference(GetError::IndexNotFound(4));
 
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
@@ -778,18 +756,16 @@ mod tests {
         );
 
         let expr = expression::from_string("${request.body.address[4]}").unwrap();
-        let expected_evaluated_result = EvaluationError::InvalidReference {
-            get_error: GetError::NotArray {
-                index: 4,
-                found: json!(
-                    {
-                        "street": "bStreet",
-                        "city": "bCity"
-                    }
-                )
-                .to_string(),
-            },
-        };
+        let expected_evaluated_result = EvaluationError::InvalidReference(GetError::NotArray {
+            index: 4,
+            found: json!(
+                {
+                    "street": "bStreet",
+                    "city": "bCity"
+                }
+            )
+            .to_string(),
+        });
 
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
@@ -847,12 +823,10 @@ mod tests {
         );
 
         let expr = expression::from_string("${request.body.address.street.name}").unwrap();
-        let expected_evaluated_result = EvaluationError::InvalidReference {
-            get_error: GetError::NotRecord {
-                key_name: "name".to_string(),
-                found: json!("bStreet").to_string(),
-            },
-        };
+        let expected_evaluated_result = EvaluationError::InvalidReference(GetError::NotRecord {
+            key_name: "name".to_string(),
+            found: json!("bStreet").to_string(),
+        });
 
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
@@ -871,9 +845,8 @@ mod tests {
         );
 
         let expr = expression::from_string("${worker.response.address.street}").unwrap();
-        let expected_evaluated_result = EvaluationError::InvalidReference {
-            get_error: GetError::KeyNotFound("worker".to_string()),
-        };
+        let expected_evaluated_result =
+            EvaluationError::InvalidReference(GetError::KeyNotFound("worker".to_string()));
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
@@ -921,7 +894,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let path_pattern = PathPattern::from_str("/shopping-cart/{id}").unwrap();
+        let path_pattern = AllPathPatterns::from_str("/shopping-cart/{id}").unwrap();
 
         let mut resolved_variables_path =
             resolved_variables_from_request_path(uri.clone(), path_pattern.clone());
@@ -1424,9 +1397,10 @@ mod tests {
     }
 
     mod test_utils {
-        use crate::api_definition::http::PathPattern;
+        use crate::api_definition::http::{AllPathPatterns, PathPattern};
         use crate::evaluator::Evaluator;
         use crate::expression;
+        use crate::http::router::RouterPattern;
         use crate::http::{ApiInputPath, InputHttpRequest};
         use crate::worker_bridge_execution::WorkerResponse;
         use golem_service_base::type_inference::infer_analysed_type;
@@ -1482,13 +1456,13 @@ mod tests {
             };
 
             input_http_request
-                .get_type_annotated_value(vec![], &HashMap::new())
+                .get_type_annotated_value(HashMap::new(), &[])
                 .unwrap()
         }
 
         pub(crate) fn resolved_variables_from_request_path(
             uri: Uri,
-            path_pattern: PathPattern,
+            path_pattern: AllPathPatterns,
         ) -> TypeAnnotatedValue {
             let input_http_request = InputHttpRequest {
                 req_body: serde_json::Value::Null,
@@ -1500,11 +1474,20 @@ mod tests {
                 },
             };
 
+            let base_path: Vec<&str> = RouterPattern::split(uri.path()).collect();
+
+            let path_params = path_pattern
+                .path_patterns
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, pattern)| match pattern {
+                    PathPattern::Literal(_) => None,
+                    PathPattern::Var(var) => Some((var, base_path[index])),
+                })
+                .collect();
+
             input_http_request
-                .get_type_annotated_value(
-                    path_pattern.get_query_variables(),
-                    &path_pattern.get_path_variables(),
-                )
+                .get_type_annotated_value(path_params, &path_pattern.query_params)
                 .unwrap()
         }
 
