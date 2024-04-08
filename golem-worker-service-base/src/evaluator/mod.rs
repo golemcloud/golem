@@ -943,7 +943,7 @@ mod tests {
         )
             .unwrap();
 
-        let result1 = expr1.evaluate(&success_response_with_input_variables);
+        let result1 = expr1.evaluate(success_response_with_input_variables);
 
         // Intentionally bringing an curly brace
         let expr2 = expression::from_string(
@@ -951,7 +951,7 @@ mod tests {
 
         ).unwrap();
 
-        let result2 = expr2.evaluate(&success_response_with_input_variables);
+        let result2 = expr2.evaluate(success_response_with_input_variables);
 
         let error_worker_response = get_worker_response(
             r#"
@@ -973,7 +973,7 @@ mod tests {
 
         ).unwrap();
 
-        let result3 = expr3.evaluate(&error_response_with_request_variables);
+        let result3 = expr3.evaluate(error_response_with_request_variables);
 
         assert_eq!(
             (result1, result2, result3),
