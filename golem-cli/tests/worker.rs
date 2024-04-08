@@ -495,35 +495,57 @@ fn auction_example(
 
 fn worker_list((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> Result<(), Failed> {
     let template_id = make_template(&context, &format!("{name} worker_list"), &cli)?.template_id;
-    let worker_name1 = format!("{name}_worker-1");
-    let worker_name2 = format!("{name}_worker-2");
+
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
-        "worker",
-        "add",
-        &cfg.arg('w', "worker-name"),
-        &worker_name1,
-        &cfg.arg('T', "template-id"),
-        &template_id,
-    ])?;
-    let _: VersionedWorkerId = cli.run(&[
-        "worker",
-        "add",
-        &cfg.arg('w', "worker-name"),
-        &worker_name2,
-        &cfg.arg('T', "template-id"),
-        &template_id,
-    ])?;
-    let result1: WorkersMetadataResponse = cli.run(&[
+
+    let workers_count = 10;
+    let mut worker_ids = vec![];
+
+    for i in 0..workers_count {
+        let worker_name = format!("{name}_worker-{i}");
+        let worker_id: VersionedWorkerId = cli.run(&[
+            "worker",
+            "add",
+            &cfg.arg('w', "worker-name"),
+            &worker_name,
+            &cfg.arg('T', "template-id"),
+            &template_id,
+        ])?;
+
+        worker_ids.push(worker_id);
+    }
+
+    for worker_id in worker_ids {
+        let result: WorkersMetadataResponse = cli.run(&[
+            "worker",
+            "list",
+            &cfg.arg('T', "template-id"),
+            &template_id,
+            &cfg.arg('f', "filter"),
+            format!("name = {}", worker_id.worker_id.worker_name).as_str(),
+            &cfg.arg('f', "filter"),
+            "version >= 0",
+        ])?;
+
+        assert_eq!(result.workers.len(), 1);
+        assert!(result.cursor.is_none());
+    }
+
+    let result: WorkersMetadataResponse = cli.run(&[
         "worker",
         "list",
         &cfg.arg('T', "template-id"),
         &template_id,
         &cfg.arg('f', "filter"),
-        format!("name == {}", worker_name1).as_str(),
+        "version >= 0",
         &cfg.arg('f', "filter"),
-        "version == 0",
+        format!("name like {}_worker", name).as_str(),
+        &cfg.arg('s', "count"),
+        (workers_count / 2).to_string().as_str(),
     ])?;
+
+    assert!(result.workers.len() >= workers_count / 2);
+    assert!(result.cursor.is_some());
 
     let result2: WorkersMetadataResponse = cli.run(&[
         "worker",
@@ -531,16 +553,16 @@ fn worker_list((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> Res
         &cfg.arg('T', "template-id"),
         &template_id,
         &cfg.arg('f', "filter"),
-        format!("name == {}", worker_name1).as_str(),
+        "version >= 0",
         &cfg.arg('f', "filter"),
-        "version > 1",
+        format!("name like {}_worker", name).as_str(),
+        &cfg.arg('s', "count"),
+        (workers_count - result.workers.len()).to_string().as_str(),
+        &cfg.arg('c', "cursor"),
+        result.cursor.unwrap().to_string().as_str(),
     ])?;
 
-    assert_eq!(result1.workers.len(), 1);
-    assert_eq!(result1.workers[0].worker_id.worker_name, worker_name1);
-    assert!(result1.cursor.is_none());
-
-    assert_eq!(result2.workers.len(), 0);
+    assert_eq!(result2.workers.len(), workers_count - result.workers.len());
     assert!(result2.cursor.is_none());
 
     Ok(())
