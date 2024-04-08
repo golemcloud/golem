@@ -175,12 +175,16 @@ pub enum WorkerSubcommand {
         #[command(flatten)]
         template_id_or_name: TemplateIdOrName,
 
-        // cursor
+        // Filter
+        #[arg(short, long)]
+        filter: Option<Vec<String>>,
+
+        // Cursor
         #[arg(short, long)]
         cursor: Option<u64>,
 
-        // count
-        #[arg(short, long)]
+        // Count
+        #[arg(short = 's', long)]
         count: Option<u64>,
 
         // Precise
@@ -342,6 +346,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
             }
             WorkerSubcommand::List {
                 template_id_or_name,
+                filter,
                 count,
                 cursor,
                 precise,
@@ -350,7 +355,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
 
                 let response = self
                     .client
-                    .find_metadata(template_id, None, cursor, count, precise)
+                    .find_metadata(template_id, filter, cursor, count, precise)
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(response)))

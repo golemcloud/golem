@@ -1253,7 +1253,7 @@ impl FromStr for WorkerFilter {
                     comparator.parse()?,
                     value.parse()?,
                 )),
-                "created_at" => Ok(WorkerFilter::new_created_at(
+                "created_at" | "createdAt" => Ok(WorkerFilter::new_created_at(
                     comparator.parse()?,
                     value.parse()?,
                 )),

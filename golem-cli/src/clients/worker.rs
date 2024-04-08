@@ -15,10 +15,13 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::DateTime;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::model::{
-    CallingConvention, InvokeParameters, InvokeResult, VersionedWorkerId, WorkerCreationRequest,
-    WorkerFilter, WorkerMetadata, WorkersMetadataRequest, WorkersMetadataResponse,
+    CallingConvention, FilterComparator, InvokeParameters, InvokeResult, StringFilterComparator,
+    VersionedWorkerId, WorkerAndFilter, WorkerCreatedAtFilter, WorkerCreationRequest,
+    WorkerEnvFilter, WorkerFilter, WorkerMetadata, WorkerNameFilter, WorkerStatus,
+    WorkerStatusFilter, WorkerVersionFilter, WorkersMetadataRequest, WorkersMetadataResponse,
 };
 use golem_client::Context;
 use native_tls::TlsConnector;
@@ -83,7 +86,7 @@ pub trait WorkerClient {
     async fn find_metadata(
         &self,
         template_id: RawTemplateId,
-        filter: Option<WorkerFilter>,
+        filter: Option<Vec<String>>,
         cursor: Option<u64>,
         count: Option<u64>,
         precise: Option<bool>,
@@ -238,12 +241,21 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
     async fn find_metadata(
         &self,
         template_id: RawTemplateId,
-        filter: Option<WorkerFilter>,
+        filter: Option<Vec<String>>,
         cursor: Option<u64>,
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<WorkersMetadataResponse, GolemError> {
-        info!("Getting template {} workers metadata", template_id.0);
+        info!(
+            "Getting workers metadata for template: {}, filter: {}",
+            template_id.0,
+            filter.is_some()
+        );
+
+        let filter = match filter {
+            Some(filters) => Some(worker_filter_from(filters).map_err(GolemError)?),
+            None => None,
+        };
 
         Ok(self
             .client
@@ -449,4 +461,92 @@ struct Log {
 
 fn key_api_to_cli(key: golem_client::model::InvocationKey) -> InvocationKey {
     InvocationKey(key.value)
+}
+
+fn str_filter_comparator_from_str(s: &str) -> Result<StringFilterComparator, String> {
+    match s.to_lowercase().as_str() {
+        "==" | "=" | "equal" | "eq" => Ok(StringFilterComparator::Equal),
+        "!=" | "notequal" | "ne" => Ok(StringFilterComparator::NotEqual),
+        "like" => Ok(StringFilterComparator::Like),
+        "notlike" => Ok(StringFilterComparator::NotLike),
+        _ => Err(format!("Unknown String Filter Comparator: {}", s)),
+    }
+}
+
+fn filter_comparator_from_str(s: &str) -> Result<FilterComparator, String> {
+    match s.to_lowercase().as_str() {
+        "==" | "=" | "equal" | "eq" => Ok(FilterComparator::Equal),
+        "!=" | "notequal" | "ne" => Ok(FilterComparator::NotEqual),
+        ">=" | "greaterequal" | "ge" => Ok(FilterComparator::GreaterEqual),
+        ">" | "greater" | "gt" => Ok(FilterComparator::Greater),
+        "<=" | "lessequal" | "le" => Ok(FilterComparator::LessEqual),
+        "<" | "less" | "lt" => Ok(FilterComparator::Less),
+        _ => Err(format!("Unknown Filter Comparator: {}", s)),
+    }
+}
+
+fn worker_status_from_str(s: &str) -> Result<WorkerStatus, String> {
+    match s {
+        "Running" => Ok(WorkerStatus::Running),
+        "Idle" => Ok(WorkerStatus::Idle),
+        "Suspended" => Ok(WorkerStatus::Suspended),
+        "Interrupted" => Ok(WorkerStatus::Interrupted),
+        "Retrying" => Ok(WorkerStatus::Retrying),
+        "Failed" => Ok(WorkerStatus::Failed),
+        "Exited" => Ok(WorkerStatus::Exited),
+        _ => Err(format!("Unknown Worker Status: {}", s)),
+    }
+}
+
+fn worker_filter_from_str(s: &str) -> Result<WorkerFilter, String> {
+    let elements = s.split(' ').collect::<Vec<&str>>();
+
+    if elements.len() == 3 {
+        let arg = elements[0];
+        let comparator = elements[1];
+        let value = elements[2];
+        match arg {
+            "name" => Ok(WorkerFilter::Name(WorkerNameFilter {
+                comparator: str_filter_comparator_from_str(comparator)?,
+                value: value.to_string(),
+            })),
+            "version" => Ok(WorkerFilter::Version(WorkerVersionFilter {
+                comparator: filter_comparator_from_str(comparator)?,
+                value: value
+                    .parse()
+                    .map_err(|e| format!("Invalid filter value: {}", e))?,
+            })),
+            "status" => Ok(WorkerFilter::Status(WorkerStatusFilter {
+                comparator: filter_comparator_from_str(comparator)?,
+                value: worker_status_from_str(value)?,
+            })),
+            "created_at" | "createdAt" => Ok(WorkerFilter::CreatedAt(WorkerCreatedAtFilter {
+                comparator: filter_comparator_from_str(comparator)?,
+                value: DateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%SZ")
+                    .map(|ts| ts.into())
+                    .map_err(|e| format!("Invalid filter value: {}", e))?,
+            })),
+            _ if arg.starts_with("env.") => {
+                let name = &arg[4..];
+                Ok(WorkerFilter::Env(WorkerEnvFilter {
+                    name: name.to_string(),
+                    comparator: str_filter_comparator_from_str(comparator)?,
+                    value: value.to_string(),
+                }))
+            }
+            _ => Err(format!("Invalid filter: {}", s)),
+        }
+    } else {
+        Err(format!("Invalid filter: {}", s))
+    }
+}
+
+fn worker_filter_from(values: Vec<String>) -> Result<WorkerFilter, String> {
+    let mut filters = vec![];
+
+    for value in values {
+        filters.push(worker_filter_from_str(&value)?);
+    }
+
+    Ok(WorkerFilter::And(WorkerAndFilter { filters }))
 }
