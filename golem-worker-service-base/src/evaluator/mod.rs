@@ -91,7 +91,7 @@ impl Evaluator for Expr {
             expr: &Expr,
             input: &mut TypeAnnotatedValue,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
-            match expr.clone() {
+            match expr {
                 Expr::Request() => input
                     .get(&Path::from_key(Token::request().to_string().as_str()))
                     .map_err(|err| err.into()),
@@ -102,7 +102,7 @@ impl Evaluator for Expr {
                 Expr::SelectIndex(expr, index) => {
                     let evaluation_result = go(&expr, input)?;
                     evaluation_result
-                        .get(&Path::from_index(index))
+                        .get(&Path::from_index(*index))
                         .map_err(|err| err.into())
                 }
 
@@ -246,7 +246,7 @@ impl Evaluator for Expr {
                     for (key, expr) in tuples {
                         match go(&expr, input) {
                             Ok(value) => {
-                                values.push((key, value));
+                                values.push((key.to_string(), value));
                             }
 
                             Err(result) => return Err(result),
@@ -284,19 +284,19 @@ impl Evaluator for Expr {
                     Ok(TypeAnnotatedValue::Str(result))
                 }
 
-                Expr::Literal(literal) => Ok(TypeAnnotatedValue::Str(literal)),
+                Expr::Literal(literal) => Ok(TypeAnnotatedValue::Str(literal.clone())),
 
                 Expr::Number(number) => match number {
-                    InnerNumber::UnsignedInteger(u64) => Ok(TypeAnnotatedValue::U64(u64)),
-                    InnerNumber::Integer(i64) => Ok(TypeAnnotatedValue::S64(i64)),
-                    InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(f64)),
+                    InnerNumber::UnsignedInteger(u64) => Ok(TypeAnnotatedValue::U64(*u64)),
+                    InnerNumber::Integer(i64) => Ok(TypeAnnotatedValue::S64(*i64)),
+                    InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(*f64)),
                 },
 
                 Expr::Variable(variable) => input
                     .get(&Path::from_key(variable.as_str()))
                     .map_err(|err| err.into()),
 
-                Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(bool)),
+                Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(*bool)),
                 Expr::PatternMatch(input_expr, constructors) => {
                     let constructors: &Vec<(ConstructorPattern, Expr)> = &constructors
                         .iter()
@@ -324,7 +324,7 @@ impl Evaluator for Expr {
 
                 Expr::Flags(flags) => Ok(TypeAnnotatedValue::Flags {
                     values: flags.clone(),
-                    typ: flags,
+                    typ: flags.clone(),
                 }),
             }
         }
