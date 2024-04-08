@@ -1120,7 +1120,7 @@ mod flag_tests {
 #[cfg(test)]
 mod match_tests {
     use crate::expression::{
-        from_string, to_string, ConstructorPattern, ConstructorPatternExpr, Expr,
+        from_string, to_string, ConstructorPattern, ConstructorPatternExpr, Expr, InnerNumber,
     };
 
     #[test]
@@ -1157,6 +1157,237 @@ mod match_tests {
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
+
+    #[test]
+    fn test_round_trip_match_expr_of_flags() {
+        let input_expr = Expr::PatternMatch(
+            Box::new(Expr::Request()),
+            vec![
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "ok",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "foo".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Flags(vec!["flag1".to_string(), "flag2".to_string()])),
+                )),
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "err",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "msg".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Literal("failure".to_string())),
+                )),
+            ],
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${match request {  ok(foo) => {flag1, flag2}, err(msg) => 'failure' } }".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_match_expr_of_tuple() {
+        let input_expr = Expr::PatternMatch(
+            Box::new(Expr::Request()),
+            vec![
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "ok",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "foo".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Tuple(vec![Expr::Request(), Expr::Request()])),
+                )),
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "err",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "msg".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Literal("failure".to_string())),
+                )),
+            ],
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${match request {  ok(foo) => (request, request), err(msg) => 'failure' } }"
+                .to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_match_expr_of_sequence() {
+        let input_expr = Expr::PatternMatch(
+            Box::new(Expr::Request()),
+            vec![
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "ok",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "foo".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+                )),
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "err",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "msg".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Literal("failure".to_string())),
+                )),
+            ],
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${match request {  ok(foo) => [request, request], err(msg) => 'failure' } }"
+                .to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_match_expr_of_record() {
+        let input_expr = Expr::PatternMatch(
+            Box::new(Expr::Request()),
+            vec![
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "ok",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "foo".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Record(vec![(
+                        "field".to_string(),
+                        Box::new(Expr::Request()),
+                    )])),
+                )),
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "err",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "msg".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Literal("failure".to_string())),
+                )),
+            ],
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        dbg!(expr_str.clone());
+        let expected_str =
+            "${match request {  ok(foo) => {field: request}, err(msg) => 'failure' } }".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_match_expr_of_math_op() {
+        let input_expr = Expr::PatternMatch(
+            Box::new(Expr::Request()),
+            vec![
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "ok",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "foo".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::GreaterThan(
+                        Box::new(Expr::Number(InnerNumber::UnsignedInteger(1))),
+                        Box::new(Expr::Number(InnerNumber::UnsignedInteger(2))),
+                    )),
+                )),
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "err",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "msg".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::LessThan(
+                        Box::new(Expr::Number(InnerNumber::UnsignedInteger(1))),
+                        Box::new(Expr::Number(InnerNumber::UnsignedInteger(2))),
+                    )),
+                )),
+            ],
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${match request {  ok(foo) => 1 > 2, err(msg) => 1 < 2 } }".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_match_expr_of_if_condition() {
+        let input_expr = Expr::PatternMatch(
+            Box::new(Expr::Request()),
+            vec![
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "ok",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "foo".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Cond(
+                        Box::new(Expr::EqualTo(
+                            Box::new(Expr::SelectField(
+                                Box::new(Expr::Request()),
+                                "foo".to_string(),
+                            )),
+                            Box::new(Expr::Literal("bar".to_string())),
+                        )),
+                        Box::new(Expr::Literal("success".to_string())),
+                        Box::new(Expr::Literal("failed".to_string())),
+                    )),
+                )),
+                ConstructorPatternExpr((
+                    ConstructorPattern::constructor(
+                        "err",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "msg".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Literal("failure".to_string())),
+                )),
+            ],
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${match request {  ok(foo) => if request.foo == 'bar' then 'success' else 'failed', err(msg) => 'failure' } }".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
 }
 
 #[cfg(test)]
@@ -1179,6 +1410,129 @@ mod if_cond_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${if request.foo == 'bar' then 'success' else 'failed'}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_nested_if_condition() {
+        let input_expr = Expr::Cond(
+            Box::new(Expr::EqualTo(
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::Request()),
+                    "foo".to_string(),
+                )),
+                Box::new(Expr::Literal("bar".to_string())),
+            )),
+            Box::new(Expr::Literal("success".to_string())),
+            Box::new(Expr::Cond(
+                Box::new(Expr::EqualTo(
+                    Box::new(Expr::SelectField(
+                        Box::new(Expr::Request()),
+                        "foo".to_string(),
+                    )),
+                    Box::new(Expr::Literal("baz".to_string())),
+                )),
+                Box::new(Expr::Literal("success".to_string())),
+                Box::new(Expr::Literal("failed".to_string())),
+            )),
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${if request.foo == 'bar' then 'success' else if request.foo == 'baz' then 'success' else 'failed'}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_if_condition_of_tuple() {
+        let input_expr = Expr::Cond(
+            Box::new(Expr::EqualTo(
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::Tuple(vec![Expr::Request(), Expr::Request()])),
+                    "foo".to_string(),
+                )),
+                Box::new(Expr::Tuple(vec![Expr::Request(), Expr::Request()])),
+            )),
+            Box::new(Expr::Literal("success".to_string())),
+            Box::new(Expr::Literal("failed".to_string())),
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${if (request, request).foo == (request, request) then 'success' else 'failed'}"
+                .to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_if_condition_of_sequence() {
+        let input_expr = Expr::Cond(
+            Box::new(Expr::EqualTo(
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+                    "foo".to_string(),
+                )),
+                Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+            )),
+            Box::new(Expr::Literal("success".to_string())),
+            Box::new(Expr::Literal("failed".to_string())),
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${if [request, request].foo == [request, request] then 'success' else 'failed'}"
+                .to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_if_condition_of_record() {
+        let input_expr = Expr::Cond(
+            Box::new(Expr::EqualTo(
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::Record(vec![(
+                        "field".to_string(),
+                        Box::new(Expr::Request()),
+                    )])),
+                    "field".to_string(),
+                )),
+                Box::new(Expr::Record(vec![(
+                    "field".to_string(),
+                    Box::new(Expr::Request()),
+                )])),
+            )),
+            Box::new(Expr::Literal("success".to_string())),
+            Box::new(Expr::Literal("failed".to_string())),
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${if {field: request}.field == {field: request} then 'success' else 'failed'}"
+                .to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_if_condition_of_flags() {
+        let input_expr = Expr::Cond(
+            Box::new(Expr::EqualTo(
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::Worker()),
+                    "response".to_string(),
+                )),
+                Box::new(Expr::Flags(vec!["flag1".to_string(), "flag2".to_string()])),
+            )),
+            Box::new(Expr::Flags(vec!["flag1".to_string(), "flag2".to_string()])),
+            Box::new(Expr::Literal("failed".to_string())),
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${if worker.response == {flag1, flag2} then {flag1, flag2} else 'failed'}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }

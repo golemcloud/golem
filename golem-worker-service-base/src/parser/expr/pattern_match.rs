@@ -10,6 +10,8 @@ pub(crate) fn get_match_expr(tokenizer: &mut Tokenizer) -> Result<Expr, ParseErr
         Some(expr_under_evaluation) => {
             let expression = parse_with_context(expr_under_evaluation.as_str(), Context::Code)?;
 
+            dbg!(expression.clone());
+
             match tokenizer.next_non_empty_token() {
                 Some(Token::LCurly) => {
                     let constructors = get_match_constructor_patter_exprs(tokenizer)?;

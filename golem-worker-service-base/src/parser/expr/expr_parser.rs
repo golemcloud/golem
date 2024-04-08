@@ -310,6 +310,7 @@ pub(crate) fn parse_tokens(
                 }
 
                 Token::MultiChar(MultiCharTokens::Match) => {
+                    dbg!("sssss? {}", tokenizer.rest());
                     let new_expr = pattern_match::get_match_expr(tokenizer)?;
 
                     go(tokenizer, context, InternalExprResult::complete(new_expr))
