@@ -1,4 +1,3 @@
-use std::fmt::Display;
 use std::ops::Deref;
 
 use golem_wasm_ast::analysis::AnalysedType;
@@ -24,31 +23,12 @@ pub trait Evaluator {
     fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum EvaluationError {
-    InvalidReference { get_error: GetError },
+    #[error(transparent)]
+    InvalidReference(#[from] GetError),
+    #[error("{0}")]
     Message(String),
-}
-
-impl From<String> for EvaluationError {
-    fn from(string: String) -> Self {
-        EvaluationError::Message(string)
-    }
-}
-
-impl Display for EvaluationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EvaluationError::Message(string) => write!(f, "{}", string),
-            EvaluationError::InvalidReference { get_error } => write!(f, "{}", get_error),
-        }
-    }
-}
-
-impl From<GetError> for EvaluationError {
-    fn from(get_error: GetError) -> Self {
-        EvaluationError::InvalidReference { get_error }
-    }
 }
 
 pub struct RawString<'t> {
@@ -729,9 +709,8 @@ mod tests {
         );
 
         let expr = expression::from_string("${request.body.address.street2}").unwrap();
-        let expected_evaluated_result = EvaluationError::InvalidReference {
-            get_error: GetError::KeyNotFound("street2".to_string()),
-        };
+        let expected_evaluated_result =
+            EvaluationError::InvalidReference(GetError::KeyNotFound("street2".to_string()));
 
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
@@ -755,9 +734,8 @@ mod tests {
         );
 
         let expr = expression::from_string("${request.body.titles[4]}").unwrap();
-        let expected_evaluated_result = EvaluationError::InvalidReference {
-            get_error: GetError::IndexNotFound(4),
-        };
+        let expected_evaluated_result =
+            EvaluationError::InvalidReference(GetError::IndexNotFound(4));
 
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
@@ -778,18 +756,16 @@ mod tests {
         );
 
         let expr = expression::from_string("${request.body.address[4]}").unwrap();
-        let expected_evaluated_result = EvaluationError::InvalidReference {
-            get_error: GetError::NotArray {
-                index: 4,
-                found: json!(
-                    {
-                        "street": "bStreet",
-                        "city": "bCity"
-                    }
-                )
-                .to_string(),
-            },
-        };
+        let expected_evaluated_result = EvaluationError::InvalidReference(GetError::NotArray {
+            index: 4,
+            found: json!(
+                {
+                    "street": "bStreet",
+                    "city": "bCity"
+                }
+            )
+            .to_string(),
+        });
 
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
@@ -847,12 +823,10 @@ mod tests {
         );
 
         let expr = expression::from_string("${request.body.address.street.name}").unwrap();
-        let expected_evaluated_result = EvaluationError::InvalidReference {
-            get_error: GetError::NotRecord {
-                key_name: "name".to_string(),
-                found: json!("bStreet").to_string(),
-            },
-        };
+        let expected_evaluated_result = EvaluationError::InvalidReference(GetError::NotRecord {
+            key_name: "name".to_string(),
+            found: json!("bStreet").to_string(),
+        });
 
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
@@ -871,9 +845,8 @@ mod tests {
         );
 
         let expr = expression::from_string("${worker.response.address.street}").unwrap();
-        let expected_evaluated_result = EvaluationError::InvalidReference {
-            get_error: GetError::KeyNotFound("worker".to_string()),
-        };
+        let expected_evaluated_result =
+            EvaluationError::InvalidReference(GetError::KeyNotFound("worker".to_string()));
         let result = expr.evaluate(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
