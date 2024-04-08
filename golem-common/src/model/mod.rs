@@ -1232,7 +1232,7 @@ impl FromStr for WorkerFilter {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let elements = s.split(' ').collect::<Vec<&str>>();
+        let elements = s.trim().split_whitespace().collect::<Vec<&str>>();
 
         if elements.len() == 3 {
             let arg = elements[0];
@@ -1760,7 +1760,7 @@ mod tests {
     #[test]
     fn worker_filter_parse() {
         assert_eq!(
-            WorkerFilter::from_str("name == worker-1").unwrap(),
+            WorkerFilter::from_str(" name =  worker-1").unwrap(),
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
         );
 
@@ -1775,7 +1775,7 @@ mod tests {
         );
 
         assert_eq!(
-            WorkerFilter::from_str("env.tag1 == abc").unwrap(),
+            WorkerFilter::from_str("env.tag1 == abc ").unwrap(),
             WorkerFilter::new_env(
                 "tag1".to_string(),
                 StringFilterComparator::Equal,

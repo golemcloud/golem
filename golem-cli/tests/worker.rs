@@ -2,7 +2,7 @@ use crate::cli::{Cli, CliLive};
 use crate::context::ContextInfo;
 use golem_cli::clients::template::TemplateView;
 use golem_cli::model::InvocationKey;
-use golem_client::model::VersionedWorkerId;
+use golem_client::model::{VersionedWorkerId, WorkersMetadataResponse};
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
@@ -48,6 +48,7 @@ fn make(suffix: &str, name: &str, cli: CliLive, context: Arc<ContextInfo>) -> Ve
             ctx.clone(),
             worker_simulated_crash,
         ),
+        Trial::test_in_context(format!("worker_list{suffix}"), ctx.clone(), worker_list),
     ]
 }
 
@@ -488,6 +489,45 @@ fn auction_example(
             .and_then(|arr| arr[0].as_object().map(|obj| obj.contains_key("auction-id")))
             .unwrap_or(false));
     }
+
+    Ok(())
+}
+
+fn worker_list((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> Result<(), Failed> {
+    let template_id = make_template(&context, &format!("{name} worker_list"), &cli)?.template_id;
+    let worker_name1 = format!("{name}_worker-1");
+    let worker_name2 = format!("{name}_worker-2");
+    let cfg = &cli.config;
+    let _: VersionedWorkerId = cli.run(&[
+        "worker",
+        "add",
+        &cfg.arg('w', "worker-name"),
+        &worker_name1,
+        &cfg.arg('T', "template-id"),
+        &template_id,
+    ])?;
+    let _: VersionedWorkerId = cli.run(&[
+        "worker",
+        "add",
+        &cfg.arg('w', "worker-name"),
+        &worker_name2,
+        &cfg.arg('T', "template-id"),
+        &template_id,
+    ])?;
+    let result: WorkersMetadataResponse = cli.run(&[
+        "worker",
+        "list",
+        &cfg.arg('T', "template-id"),
+        &template_id,
+        &cfg.arg('f', "filter"),
+        format!("name == {}", worker_name1).as_str(),
+        &cfg.arg('f', "filter"),
+        format!("version == 0").as_str(),
+    ])?;
+
+    assert_eq!(result.workers.len(), 1);
+    assert_eq!(result.workers[0].worker_id.worker_name, worker_name1);
+    assert!(result.cursor.is_none());
 
     Ok(())
 }
