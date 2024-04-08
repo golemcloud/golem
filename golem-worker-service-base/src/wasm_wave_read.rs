@@ -11,12 +11,13 @@ use golem_wasm_rpc::{TypeAnnotatedValue, Value};
 // Not to mention wasm-wave syntax doesn't allow undefined variables such `request.path`, but those are features exclusive to `Expr`.
 // In short, `Expr` is a superset of wasm_wave syntax, and we use same expression parser to read wasm_syntax string, and convert to `TypeAnnotatedValue`
 pub fn read_wasm_wave_string(wasm_syntax_str: impl AsRef<str>) -> Result<Value, String> {
-    let typed_value = read_wasm_wave_string_typed(wasm_syntax_str)?;
+    let typed_value = read_wasm_wave_string_partially_typed(wasm_syntax_str)?;
     Value::try_from(typed_value).map_err(|e| e.to_string())
 }
 
-// This will give type annotated
-pub fn read_wasm_wave_string_typed(
+// This is partially typed because, we are not passing `AnalysedType` here
+// especially for Variants, Enums and Flags.
+fn read_wasm_wave_string_partially_typed(
     wasm_syntax_str: impl AsRef<str>,
 ) -> Result<TypeAnnotatedValue, String> {
     let expr = expression::from_string(wasm_syntax_str).map_err(|e| e.to_string())?;
