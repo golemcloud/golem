@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+pub mod k8s_postgres;
 pub mod postgres;
 pub mod sqlite;
 

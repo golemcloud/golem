@@ -9,7 +9,7 @@ description = "Integration tests for Golem"
 
 autotests = false
 
-[dev-dependencies]
+[dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
@@ -31,3 +31,7 @@ path = "tests/lib.rs"
 [[test]]
 name = "sharding"
 path = "tests/sharding.rs"
+
+[[bin]]
+name = "benchmark_simple_worker_echo"
+path = "src/benchmarks/simple_worker_echo.rs"

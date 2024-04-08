@@ -36,8 +36,8 @@ impl ProvidedWorkerExecutor {
 
 #[async_trait]
 impl WorkerExecutor for ProvidedWorkerExecutor {
-    fn private_host(&self) -> &str {
-        &self.host
+    fn private_host(&self) -> String {
+        self.host.clone()
     }
 
     fn private_http_port(&self) -> u16 {

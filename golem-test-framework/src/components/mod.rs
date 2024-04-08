@@ -23,6 +23,7 @@ use tokio::time::Instant;
 use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
 
+pub mod k8s;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;

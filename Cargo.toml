@@ -105,6 +105,7 @@ tokio = { version = "1.0", features = [
     "io-std",
     "net",
     "tracing",
+    "process"
 ] }
 tokio-rustls = { version = "0.25.0" }
 tokio-stream = { version = "0.1", features = ["sync"] }

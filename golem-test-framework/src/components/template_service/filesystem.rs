@@ -104,7 +104,7 @@ impl TemplateService for FileSystemTemplateService {
         *versions.last().unwrap_or(&-1)
     }
 
-    fn private_host(&self) -> &str {
+    fn private_host(&self) -> String {
         panic!("No real template service running")
     }
 

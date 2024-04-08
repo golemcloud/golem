@@ -12,21 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use redis::RedisResult;
 
 pub mod docker;
+pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
 pub trait Redis {
     fn assert_valid(&self);
 
-    fn private_host(&self) -> &str;
+    fn private_host(&self) -> String;
     fn private_port(&self) -> u16;
 
-    fn public_host(&self) -> &str {
+    fn public_host(&self) -> String {
         self.private_host()
     }
     fn public_port(&self) -> u16 {
@@ -62,7 +63,7 @@ pub fn check_if_running(host: &str, port: u16) -> bool {
     result.is_ok()
 }
 
-fn wait_for_startup(host: &str, port: u16) {
+fn wait_for_startup(host: &str, port: u16, timeout: Duration) {
     let start = Instant::now();
     loop {
         let is_running = check_if_running(host, port);
@@ -70,7 +71,7 @@ fn wait_for_startup(host: &str, port: u16) {
             break;
         }
 
-        if start.elapsed().as_secs() > 10 {
+        if start.elapsed() > timeout {
             std::panic!("Failed to verify that Redis is running");
         }
     }

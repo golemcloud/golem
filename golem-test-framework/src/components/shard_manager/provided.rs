@@ -36,8 +36,8 @@ impl ProvidedShardManager {
 
 #[async_trait]
 impl ShardManager for ProvidedShardManager {
-    fn private_host(&self) -> &str {
-        &self.host
+    fn private_host(&self) -> String {
+        self.host.clone()
     }
 
     fn private_http_port(&self) -> u16 {

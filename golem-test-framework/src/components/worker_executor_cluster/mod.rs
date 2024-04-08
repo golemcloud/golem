@@ -16,6 +16,7 @@ use crate::components::worker_executor::WorkerExecutor;
 use std::sync::Arc;
 
 pub mod docker;
+pub mod k8s;
 pub mod provided;
 pub mod spawned;
 

@@ -95,8 +95,8 @@ impl SpawnedWorkerService {
 
 #[async_trait]
 impl WorkerService for SpawnedWorkerService {
-    fn private_host(&self) -> &str {
-        "localhost"
+    fn private_host(&self) -> String {
+        "localhost".to_string()
     }
 
     fn private_http_port(&self) -> u16 {

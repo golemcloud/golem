@@ -36,13 +36,14 @@ use crate::components::wait_for_startup_grpc;
 
 pub mod docker;
 pub mod filesystem;
+pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
 #[async_trait]
 pub trait TemplateService {
     async fn client(&self) -> TemplateServiceClient<Channel> {
-        new_client(self.public_host(), self.public_grpc_port()).await
+        new_client(&self.public_host(), self.public_grpc_port()).await
     }
 
     async fn get_or_add_template(&self, local_path: &Path) -> TemplateId {
@@ -202,11 +203,11 @@ pub trait TemplateService {
         }
     }
 
-    fn private_host(&self) -> &str;
+    fn private_host(&self) -> String;
     fn private_http_port(&self) -> u16;
     fn private_grpc_port(&self) -> u16;
 
-    fn public_host(&self) -> &str {
+    fn public_host(&self) -> String {
         self.private_host()
     }
 

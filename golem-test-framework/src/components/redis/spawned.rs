@@ -17,6 +17,7 @@ use crate::components::ChildProcessLogger;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tracing::{info, Level};
 
 pub struct SpawnedRedis {
@@ -56,7 +57,7 @@ impl SpawnedRedis {
         let logger =
             ChildProcessLogger::log_child_process("[redis]", out_level, err_level, &mut child);
 
-        super::wait_for_startup(&host, port);
+        super::wait_for_startup(&host, port, Duration::from_secs(10));
 
         Self {
             port,
@@ -75,8 +76,8 @@ impl Redis for SpawnedRedis {
         }
     }
 
-    fn private_host(&self) -> &str {
-        "localhost"
+    fn private_host(&self) -> String {
+        "localhost".to_string()
     }
 
     fn private_port(&self) -> u16 {

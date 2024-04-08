@@ -74,8 +74,8 @@ impl DockerWorkerExecutor {
 
 #[async_trait]
 impl WorkerExecutor for DockerWorkerExecutor {
-    fn private_host(&self) -> &str {
-        &self.name
+    fn private_host(&self) -> String {
+        self.name.clone()
     }
 
     fn private_http_port(&self) -> u16 {
@@ -86,8 +86,8 @@ impl WorkerExecutor for DockerWorkerExecutor {
         self.grpc_port
     }
 
-    fn public_host(&self) -> &str {
-        "localhost"
+    fn public_host(&self) -> String {
+        "localhost".to_string()
     }
 
     fn public_http_port(&self) -> u16 {

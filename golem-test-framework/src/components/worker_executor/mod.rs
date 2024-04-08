@@ -28,20 +28,21 @@ use crate::components::wait_for_startup_grpc;
 use crate::components::worker_service::WorkerService;
 
 pub mod docker;
+pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
 #[async_trait]
 pub trait WorkerExecutor {
     async fn client(&self) -> WorkerExecutorClient<Channel> {
-        new_client(self.public_host(), self.public_grpc_port()).await
+        new_client(&self.public_host(), self.public_grpc_port()).await
     }
 
-    fn private_host(&self) -> &str;
+    fn private_host(&self) -> String;
     fn private_http_port(&self) -> u16;
     fn private_grpc_port(&self) -> u16;
 
-    fn public_host(&self) -> &str {
+    fn public_host(&self) -> String {
         self.private_host()
     }
 
@@ -83,19 +84,19 @@ fn env_vars(
         ("ENVIRONMENT"                    , "local"),
         ("WASMTIME_BACKTRACE_DETAILS"                    , "1"),
         ("RUST_BACKTRACE"                                , "1"),
-        ("GOLEM__REDIS__HOST"                            , redis.private_host()),
+        ("GOLEM__REDIS__HOST"                            , &redis.private_host()),
         ("GOLEM__REDIS__PORT"                            , &redis.private_port().to_string()),
         ("GOLEM__REDIS__KEY_PREFIX"                      , redis.prefix()),
-        ("GOLEM__PUBLIC_WORKER_API__HOST"                , worker_service.private_host()),
+        ("GOLEM__PUBLIC_WORKER_API__HOST"                , &worker_service.private_host()),
         ("GOLEM__PUBLIC_WORKER_API__PORT"                , &worker_service.private_grpc_port().to_string()),
         ("GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN"        , "2A354594-7A63-4091-A46B-CC58D379F677"),
-        ("GOLEM__TEMPLATE_SERVICE__CONFIG__HOST"         , template_service.private_host()),
+        ("GOLEM__TEMPLATE_SERVICE__CONFIG__HOST"         , &template_service.private_host()),
         ("GOLEM__TEMPLATE_SERVICE__CONFIG__PORT"         , &template_service.private_grpc_port().to_string()),
         ("GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN" , "2A354594-7A63-4091-A46B-CC58D379F677"),
         ("GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE"        , "Disabled"),
         ("GOLEM__BLOB_STORE_SERVICE__TYPE"               , "InMemory"),
         ("GOLEM__SHARD_MANAGER_SERVICE__TYPE"            , "Grpc"),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST"    , shard_manager.private_host()),
+        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST"    , &shard_manager.private_host()),
         ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT"    , &shard_manager.private_grpc_port().to_string()),
         ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS"    , "5"),
         ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY"    , "100ms"),

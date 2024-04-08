@@ -38,8 +38,8 @@ impl ProvidedWorkerService {
 
 #[async_trait]
 impl WorkerService for ProvidedWorkerService {
-    fn private_host(&self) -> &str {
-        &self.host
+    fn private_host(&self) -> String {
+        self.host.clone()
     }
 
     fn private_http_port(&self) -> u16 {

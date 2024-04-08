@@ -399,7 +399,7 @@ impl WorkerService for ForwardingWorkerService {
         }
     }
 
-    fn private_host(&self) -> &str {
+    fn private_host(&self) -> String {
         panic!("No real golem-worker-service, forwarding requests to worker-executor");
     }
 

@@ -35,8 +35,8 @@ impl ProvidedRedis {
 impl Redis for ProvidedRedis {
     fn assert_valid(&self) {}
 
-    fn private_host(&self) -> &str {
-        &self.host
+    fn private_host(&self) -> String {
+        self.host.to_string()
     }
 
     fn private_port(&self) -> u16 {

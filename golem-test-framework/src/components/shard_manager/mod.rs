@@ -25,20 +25,21 @@ use crate::components::redis::Redis;
 use crate::components::wait_for_startup_grpc;
 
 pub mod docker;
+pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
 #[async_trait]
 pub trait ShardManager {
     async fn client(&self) -> ShardManagerServiceClient<Channel> {
-        new_client(self.public_host(), self.public_grpc_port()).await
+        new_client(&self.public_host(), self.public_grpc_port()).await
     }
 
-    fn private_host(&self) -> &str;
+    fn private_host(&self) -> String;
     fn private_http_port(&self) -> u16;
     fn private_grpc_port(&self) -> u16;
 
-    fn public_host(&self) -> &str {
+    fn public_host(&self) -> String {
         self.private_host()
     }
 
@@ -75,7 +76,7 @@ fn env_vars(
     let env: &[(&str, &str)] = &[
         ("RUST_LOG", &format!("{log_level},h2=warn,cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn")),
         ("RUST_BACKTRACE", "1"),
-        ("REDIS__HOST", redis.private_host()),
+        ("REDIS__HOST", &redis.private_host()),
         ("GOLEM__REDIS__HOST", &redis.private_host()),
         ("GOLEM__REDIS__PORT", &redis.private_port().to_string()),
         ("GOLEM__REDIS__KEY_PREFIX", redis.prefix()),

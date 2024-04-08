@@ -15,6 +15,7 @@
 use crate::components::redis::Redis;
 use crate::components::{DOCKER, NETWORK};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use testcontainers::{Container, RunnableImage};
 use testcontainers_modules::redis::REDIS_PORT;
 use tracing::info;
@@ -37,7 +38,7 @@ impl DockerRedis {
             .with_network(NETWORK);
         let container = DOCKER.run(image);
 
-        super::wait_for_startup("localhost", container.get_host_port_ipv4(REDIS_PORT));
+        super::wait_for_startup("localhost", container.get_host_port_ipv4(REDIS_PORT), Duration::from_secs(10));
 
         Self {
             container,
@@ -54,16 +55,16 @@ impl Redis for DockerRedis {
         }
     }
 
-    fn private_host(&self) -> &str {
-        Self::NAME
+    fn private_host(&self) -> String {
+        Self::NAME.to_string()
     }
 
     fn private_port(&self) -> u16 {
         REDIS_PORT
     }
 
-    fn public_host(&self) -> &str {
-        "localhost"
+    fn public_host(&self) -> String {
+        "localhost".to_string()
     }
 
     fn public_port(&self) -> u16 {

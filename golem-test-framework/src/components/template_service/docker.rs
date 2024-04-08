@@ -53,8 +53,8 @@ impl DockerTemplateService {
 
 #[async_trait]
 impl TemplateService for DockerTemplateService {
-    fn private_host(&self) -> &str {
-        Self::NAME
+    fn private_host(&self) -> String {
+        Self::NAME.to_string()
     }
 
     fn private_http_port(&self) -> u16 {
@@ -65,8 +65,8 @@ impl TemplateService for DockerTemplateService {
         Self::GRPC_PORT
     }
 
-    fn public_host(&self) -> &str {
-        "localhost"
+    fn public_host(&self) -> String {
+        "localhost".to_string()
     }
 
     fn public_http_port(&self) -> u16 {
