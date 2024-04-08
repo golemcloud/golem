@@ -1,6 +1,6 @@
 use hyper::Method;
 
-use super::{RadixNode, RouterPattern};
+use super::{tree::RadixNode, RouterPattern};
 
 #[derive(Clone, Debug, Default)]
 pub struct Router<T> {

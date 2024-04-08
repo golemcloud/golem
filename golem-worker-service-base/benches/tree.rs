@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use golem_worker_service_base::http::router::{RadixNode, RouterPattern};
+use golem_worker_service_base::http::router::{tree::RadixNode, RouterPattern};
 
 criterion_group!(benches, radix_tree_all_matches);
 criterion_main!(benches);
