@@ -121,7 +121,7 @@ mod tests {
             _: &serde_json::Value,
         ) -> Result<HttpApiDefinition, Error<ApiDefinitionError>> {
             let mut calls = self.calls.lock().unwrap();
-            calls.push_str(format!("oas_put").as_str());
+            calls.push_str("oas_put");
 
             Ok(HttpApiDefinition {
                 id: "".to_string(),
