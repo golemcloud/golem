@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::model::{
     CallingConvention, InvokeParameters, InvokeResult, VersionedWorkerId, WorkerCreationRequest,
-    WorkerMetadata,
+    WorkerFilter, WorkerMetadata, WorkersMetadataRequest, WorkersMetadataResponse,
 };
 use golem_client::Context;
 use native_tls::TlsConnector;
@@ -80,6 +80,14 @@ pub trait WorkerClient {
         name: WorkerName,
         template_id: RawTemplateId,
     ) -> Result<WorkerMetadata, GolemError>;
+    async fn find_metadata(
+        &self,
+        template_id: RawTemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: Option<u64>,
+        count: Option<u64>,
+        precise: Option<bool>,
+    ) -> Result<WorkersMetadataResponse, GolemError>;
     async fn connect(&self, name: WorkerName, template_id: RawTemplateId)
         -> Result<(), GolemError>;
 }
@@ -224,6 +232,30 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         Ok(self
             .client
             .get_worker_metadata(&template_id.0, &name.0)
+            .await?)
+    }
+
+    async fn find_metadata(
+        &self,
+        template_id: RawTemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: Option<u64>,
+        count: Option<u64>,
+        precise: Option<bool>,
+    ) -> Result<WorkersMetadataResponse, GolemError> {
+        info!("Getting template {} workers metadata", template_id.0);
+
+        Ok(self
+            .client
+            .find_workers_metadata(
+                &template_id.0,
+                &WorkersMetadataRequest {
+                    filter,
+                    cursor,
+                    count,
+                    precise,
+                },
+            )
             .await?)
     }
 
