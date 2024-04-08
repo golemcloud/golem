@@ -116,8 +116,18 @@ mod tests {
 
     #[async_trait]
     impl golem_client::api::ApiDefinitionClient for ApiDefinitionClientTest {
-        async fn oas_put(&self) -> Result<HttpApiDefinition, Error<ApiDefinitionError>> {
-            todo!()
+        async fn oas_put(
+            &self,
+            _: &serde_json::Value,
+        ) -> Result<HttpApiDefinition, Error<ApiDefinitionError>> {
+            let mut calls = self.calls.lock().unwrap();
+            calls.push_str("oas_put");
+
+            Ok(HttpApiDefinition {
+                id: "".to_string(),
+                version: "".to_string(),
+                routes: vec![],
+            })
         }
 
         async fn get(

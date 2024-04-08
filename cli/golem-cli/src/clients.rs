@@ -15,6 +15,5 @@
 pub mod api_definition;
 pub mod errors;
 pub mod health_check;
-pub mod oas_api_definition;
 pub mod template;
 pub mod worker;
