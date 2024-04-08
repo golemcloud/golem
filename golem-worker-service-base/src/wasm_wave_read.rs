@@ -27,21 +27,24 @@ pub fn read_wasm_wave_string_typed(
     .map_err(|e| e.to_string())
 }
 
+#[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::wasm_wave_read::read_wasm_wave_string;
+    use golem_wasm_rpc::Value;
 
     fn wrap_in_code_interpolation(wasm_wave_string: &str) -> String {
         format!("${{{}}}", wasm_wave_string)
     }
+
     #[test]
-    fn test_read_wasm_wave_string() {
+    fn test_read_wasm_wave_number() {
         let wasm_wave_string = "1";
         let result = read_wasm_wave_string(wrap_in_code_interpolation(wasm_wave_string)).unwrap();
-        assert_eq!(result, Value::U64(1));
+        assert_eq!(result, golem_wasm_rpc::Value::U64(1));
     }
 
     #[test]
-    fn test_read_wasm_wave_string_record_of_constructors() {
+    fn test_read_wasm_wave_record_of_constructors() {
         let wasm_wave_string = "{ a : ok(1), b : err(2) }";
         let result = read_wasm_wave_string(wrap_in_code_interpolation(wasm_wave_string)).unwrap();
         let expected = Value::Record(vec![
@@ -53,10 +56,18 @@ mod tests {
     }
 
     #[test]
-    fn test_read_wasm_wave_string_of_sequence() {
+    fn test_read_wasm_wave_of_sequence() {
         let wasm_wave_string = "[1, 2, 3]";
         let result = read_wasm_wave_string(wrap_in_code_interpolation(wasm_wave_string)).unwrap();
         let expected = Value::List(vec![Value::U64(1), Value::U64(2), Value::U64(3)]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_read_wasm_wave_of_tuple() {
+        let wasm_wave_string = "(1, 2, 3)";
+        let result = read_wasm_wave_string(wrap_in_code_interpolation(wasm_wave_string)).unwrap();
+        let expected = Value::Tuple(vec![Value::U64(1), Value::U64(2), Value::U64(3)]);
         assert_eq!(result, expected);
     }
 }

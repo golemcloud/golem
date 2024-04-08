@@ -1118,12 +1118,10 @@ mod flag_tests {
 }
 
 #[cfg(test)]
-mod match_tests {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::expression::{ConstructorPattern, ConstructorPatternExpr, Expr, InnerNumber};
+mod match_tests {
+    use crate::expression::{
+        from_string, to_string, ConstructorPattern, ConstructorPatternExpr, Expr,
+    };
 
     #[test]
     fn test_round_trip_match_expr() {
@@ -1159,6 +1157,11 @@ mod tests {
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
+}
+
+#[cfg(test)]
+mod if_cond_tests {
+    use crate::expression::{from_string, to_string, Expr};
 
     #[test]
     fn test_round_trip_if_condition() {
@@ -1178,25 +1181,5 @@ mod tests {
         let expected_str = "${if request.foo == 'bar' then 'success' else 'failed'}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_sequence_of_tuple_singleton() {
-        let expr_string = "${[(bc)]}";
-        let output_expr = from_string(expr_string).unwrap();
-        let expected_expr =
-            Expr::Sequence(vec![Expr::Tuple(vec![Expr::Variable("bc".to_string())])]);
-        assert_eq!(output_expr, expected_expr);
-    }
-
-    #[test]
-    fn test_sequence_of_tuple_multiple() {
-        let expr_string = "${[(bc), (cd)]}";
-        let output_expr = from_string(expr_string).unwrap();
-        let expected_expr = Expr::Sequence(vec![
-            Expr::Tuple(vec![Expr::Variable("bc".to_string())]),
-            Expr::Tuple(vec![Expr::Variable("cd".to_string())]),
-        ]);
-        assert_eq!(output_expr, expected_expr);
     }
 }

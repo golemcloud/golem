@@ -14,7 +14,7 @@ mod primitive;
 pub mod repo;
 pub mod service;
 pub mod tokeniser;
-pub mod wasm_read;
+pub mod wasm_wave_read;
 mod worker_binding;
 pub mod worker_bridge_execution;
 pub trait UriBackConversion {
