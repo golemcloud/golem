@@ -4,8 +4,7 @@ use async_trait::async_trait;
 
 use golem_api_grpc::proto::golem::{
     apidefinition::{
-        api_definition::Definition, api_definition_error, api_definition_list::Definitions,
-        api_definition_service_server::ApiDefinitionService,
+        api_definition_error, api_definition_service_server::ApiDefinitionService,
         create_or_update_api_definition_request, create_or_update_response_api_definition_response,
         delete_api_definition_response, get_all_api_definitions_response,
         get_api_definition_response, get_api_definition_versions_response,
@@ -14,7 +13,6 @@ use golem_api_grpc::proto::golem::{
         DeleteApiDefinitionRequest, DeleteApiDefinitionResponse, GetAllApiDefinitionsRequest,
         GetAllApiDefinitionsResponse, GetApiDefinitionRequest, GetApiDefinitionResponse,
         GetApiDefinitionVersionsRequest, GetApiDefinitionVersionsResponse,
-        HttpApiDefinition as GrpcHttpApiDefinition, HttpApiDefinitionList,
     },
     common::{Empty, ErrorBody, ErrorsBody},
 };
@@ -95,7 +93,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         {
             Ok(definitions) => {
                 get_api_definition_versions_response::Result::Success(ApiDefinitionList {
-                    definitions: Some(Definitions::Http(HttpApiDefinitionList { definitions })),
+                    definitions,
                 })
             }
             Err(error) => get_api_definition_versions_response::Result::Error(error),
@@ -112,9 +110,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
     ) -> std::result::Result<tonic::Response<GetAllApiDefinitionsResponse>, tonic::Status> {
         let result = match self.get_all_api_definitions(request.into_inner()).await {
             Ok(definitions) => {
-                get_all_api_definitions_response::Result::Success(ApiDefinitionList {
-                    definitions: Some(Definitions::Http(HttpApiDefinitionList { definitions })),
-                })
+                get_all_api_definitions_response::Result::Success(ApiDefinitionList { definitions })
             }
             Err(error) => get_all_api_definitions_response::Result::Error(error),
         };
@@ -149,7 +145,7 @@ impl GrpcApiDefinitionService {
             .ok_or(bad_request("Missing Api Definition"))?;
 
         let internal_definition = match definition {
-            create_or_update_api_definition_request::ApiDefinition::Http(definition) => {
+            create_or_update_api_definition_request::ApiDefinition::Definition(definition) => {
                 definition.clone().try_into().map_err(bad_request)?
             }
             create_or_update_api_definition_request::ApiDefinition::Openapi(definition) => {
@@ -170,9 +166,7 @@ impl GrpcApiDefinitionService {
 
         let definition = internal_definition.try_into().map_err(internal_error)?;
 
-        Ok(GrpcApiDefinition {
-            definition: Some(Definition::Http(definition)),
-        })
+        Ok(definition)
     }
 
     async fn get_api_definition(
@@ -203,15 +197,13 @@ impl GrpcApiDefinitionService {
 
         let definition = definition.try_into().map_err(internal_error)?;
 
-        Ok(GrpcApiDefinition {
-            definition: Some(Definition::Http(definition)),
-        })
+        Ok(definition)
     }
 
     async fn get_all_api_definition_versions(
         &self,
         request: GetApiDefinitionVersionsRequest,
-    ) -> Result<Vec<GrpcHttpApiDefinition>, ApiDefinitionError> {
+    ) -> Result<Vec<GrpcApiDefinition>, ApiDefinitionError> {
         let api_definition_id = get_api_definition_id(request.api_definition_id)?;
 
         let definitions = self
@@ -226,7 +218,7 @@ impl GrpcApiDefinitionService {
         let definitions = definitions
             .into_iter()
             .map(|d| d.try_into())
-            .collect::<Result<Vec<GrpcHttpApiDefinition>, _>>()
+            .collect::<Result<Vec<_>, _>>()
             .map_err(internal_error)?;
 
         Ok(definitions)
@@ -235,7 +227,7 @@ impl GrpcApiDefinitionService {
     async fn get_all_api_definitions(
         &self,
         _request: GetAllApiDefinitionsRequest,
-    ) -> Result<Vec<GrpcHttpApiDefinition>, ApiDefinitionError> {
+    ) -> Result<Vec<GrpcApiDefinition>, ApiDefinitionError> {
         let definitions = self
             .definition_service
             .get_all(CommonNamespace::default(), &EmptyAuthCtx {})
@@ -244,7 +236,7 @@ impl GrpcApiDefinitionService {
         let definitions = definitions
             .into_iter()
             .map(|d| d.try_into())
-            .collect::<Result<Vec<GrpcHttpApiDefinition>, _>>()
+            .collect::<Result<Vec<_>, _>>()
             .map_err(internal_error)?;
 
         Ok(definitions)

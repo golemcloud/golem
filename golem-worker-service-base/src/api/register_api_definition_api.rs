@@ -171,9 +171,7 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
 
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 
-impl TryFrom<crate::api_definition::http::HttpApiDefinition>
-    for grpc_apidefinition::HttpApiDefinition
-{
+impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinition::ApiDefinition {
     type Error = String;
 
     fn try_from(
@@ -187,27 +185,31 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition>
 
         let id = value.id.0;
 
-        let result = grpc_apidefinition::HttpApiDefinition {
+        let definition = grpc_apidefinition::HttpApiDefinition { routes };
+
+        let result = grpc_apidefinition::ApiDefinition {
             id: Some(grpc_apidefinition::ApiDefinitionId { value: id }),
             version: value.version.0,
-            routes,
+            definition: Some(grpc_apidefinition::api_definition::Definition::Http(
+                definition,
+            )),
         };
 
         Ok(result)
     }
 }
 
-impl TryFrom<grpc_apidefinition::HttpApiDefinition>
-    for crate::api_definition::http::HttpApiDefinition
-{
+impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http::HttpApiDefinition {
     type Error = String;
 
-    fn try_from(value: grpc_apidefinition::HttpApiDefinition) -> Result<Self, Self::Error> {
-        let routes = value
-            .routes
-            .into_iter()
-            .map(crate::api_definition::http::Route::try_from)
-            .collect::<Result<Vec<crate::api_definition::http::Route>, String>>()?;
+    fn try_from(value: grpc_apidefinition::ApiDefinition) -> Result<Self, Self::Error> {
+        let routes = match value.definition.ok_or("definition is missing")? {
+            grpc_apidefinition::api_definition::Definition::Http(http) => http
+                .routes
+                .into_iter()
+                .map(crate::api_definition::http::Route::try_from)
+                .collect::<Result<Vec<crate::api_definition::http::Route>, String>>()?,
+        };
 
         let id = value.id.ok_or("Api Definition ID is missing")?;
 

@@ -17,7 +17,7 @@ service ApiDefinitionService {
 
 message CreateOrUpdateApiDefinitionRequest {
   oneof api_definition {
-    HttpApiDefinition http = 1;
+    ApiDefinition definition = 1;
     string openapi = 2;
   }
 }

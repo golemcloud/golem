@@ -5,25 +5,19 @@ package golem.apidefinition;
 import "golem/template/template_id.proto";
 
 message ApiDefinition {
+  ApiDefinitionId id = 1;
+  string version = 2;
   oneof definition {
-    HttpApiDefinition http = 1;
+    HttpApiDefinition http = 3;
   }
 }
 
 message ApiDefinitionList {
-  oneof definitions {
-    HttpApiDefinitionList http = 1;
-  }
-}
-
-message HttpApiDefinitionList {
-  repeated HttpApiDefinition definitions = 1;
+  repeated ApiDefinition definitions = 1;
 }
 
 message HttpApiDefinition {
-  ApiDefinitionId id = 1;
-  string version = 2;
-  repeated HttpRoute routes = 3;
+  repeated HttpRoute routes = 1;
 }
 
 message ApiDefinitionId {
