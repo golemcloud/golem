@@ -391,7 +391,8 @@ impl Routing {
             if stderr_string.contains("SVC_UNREACHABLE") && attempts < 5 {
                 attempts += 1;
                 tokio::time::sleep(Duration::from_secs(1)).await;
-                continue;
+            } else {
+                panic!("Failed to run minikube service for {service_name}");
             }
         }
     }
