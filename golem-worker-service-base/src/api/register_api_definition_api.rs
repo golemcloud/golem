@@ -223,14 +223,31 @@ impl TryFrom<crate::api_definition::http::Route> for grpc_apidefinition::HttpRou
     fn try_from(value: crate::api_definition::http::Route) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
         let binding = grpc_apidefinition::GolemWorkerBinding::try_from(value.binding)?;
+        let method: grpc_apidefinition::HttpMethod = value.method.into();
 
         let result = grpc_apidefinition::HttpRoute {
-            method: value.method.to_string(),
+            method: method as i32,
             path,
             binding: Some(binding),
         };
 
         Ok(result)
+    }
+}
+
+impl From<MethodPattern> for grpc_apidefinition::HttpMethod {
+    fn from(value: MethodPattern) -> Self {
+        match value {
+            MethodPattern::Get => grpc_apidefinition::HttpMethod::Get,
+            MethodPattern::Post => grpc_apidefinition::HttpMethod::Post,
+            MethodPattern::Put => grpc_apidefinition::HttpMethod::Put,
+            MethodPattern::Delete => grpc_apidefinition::HttpMethod::Delete,
+            MethodPattern::Patch => grpc_apidefinition::HttpMethod::Patch,
+            MethodPattern::Head => grpc_apidefinition::HttpMethod::Head,
+            MethodPattern::Options => grpc_apidefinition::HttpMethod::Options,
+            MethodPattern::Trace => grpc_apidefinition::HttpMethod::Trace,
+            MethodPattern::Connect => grpc_apidefinition::HttpMethod::Connect,
+        }
     }
 }
 
@@ -242,7 +259,7 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::api_definition::http::Rou
             .map_err(|e| e.to_string())?;
         let binding = value.binding.ok_or("binding is missing")?.try_into()?;
 
-        let method = value.method.parse()?;
+        let method: MethodPattern = value.method.try_into()?;
 
         let result = crate::api_definition::http::Route {
             method,
@@ -319,5 +336,14 @@ impl TryFrom<grpc_apidefinition::GolemWorkerBinding> for crate::worker_binding::
         };
 
         Ok(result)
+    }
+}
+
+#[test]
+fn test_method_pattern() {
+    for method in 0..8 {
+        let method_pattern: MethodPattern = method.try_into().unwrap();
+        let method_grpc: grpc_apidefinition::HttpMethod = method_pattern.into();
+        assert_eq!(method, method_grpc as i32);
     }
 }

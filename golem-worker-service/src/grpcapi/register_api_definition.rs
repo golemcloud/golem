@@ -4,8 +4,7 @@ use async_trait::async_trait;
 
 use golem_api_grpc::proto::golem::{
     apidefinition::{
-        api_definition_registration_error,
-        api_definition_registration_service_server::ApiDefinitionRegistrationService,
+        api_definition_registration_error, api_definition_service_server::ApiDefinitionService,
         create_or_update_open_api_response, create_or_update_response_api_definition_response,
         delete_api_definition_response, get_all_api_definition_versions_response,
         get_all_api_definitions_response, get_api_definition_response,
@@ -15,7 +14,7 @@ use golem_api_grpc::proto::golem::{
         DeleteApiDefinitionResponse, GetAllApiDefinitionVersionsRequest,
         GetAllApiDefinitionVersionsResponse, GetAllApiDefinitionsRequest,
         GetAllApiDefinitionsResponse, GetApiDefinitionRequest, GetApiDefinitionResponse,
-        HttpApiDefinition as GrpcHttpApiDefinition, ManyApiDefinitions,
+        HttpApiDefinition as GrpcHttpApiDefinition, HttpApiDefinitionList,
     },
     common::{Empty, ErrorBody, ErrorsBody},
 };
@@ -25,19 +24,16 @@ use golem_worker_service_base::{
         ApiDefinitionId, ApiVersion,
     },
     auth::{CommonNamespace, EmptyAuthCtx},
-    service::{
-        api_definition::ApiDefinitionService,
-        http::http_api_definition_validator::RouteValidationError,
-    },
+    service::http::http_api_definition_validator::RouteValidationError,
 };
 
 #[derive(Clone)]
-pub struct GrpcApiDefinitionRegistration {
+pub struct GrpcApiDefinitionService {
     definition_service: DefinitionService,
 }
 
 type DefinitionService = Arc<
-    dyn ApiDefinitionService<
+    dyn golem_worker_service_base::service::api_definition::ApiDefinitionService<
             EmptyAuthCtx,
             CommonNamespace,
             CoreHttpApiDefinition,
@@ -46,14 +42,14 @@ type DefinitionService = Arc<
         + Send,
 >;
 
-impl GrpcApiDefinitionRegistration {
+impl GrpcApiDefinitionService {
     pub fn new(definition_service: DefinitionService) -> Self {
         Self { definition_service }
     }
 }
 
 #[async_trait]
-impl ApiDefinitionRegistrationService for GrpcApiDefinitionRegistration {
+impl ApiDefinitionService for GrpcApiDefinitionService {
     async fn create_or_update_api_definition(
         &self,
         request: tonic::Request<CreateOrUpdateApiDefinitionRequest>,
@@ -110,17 +106,16 @@ impl ApiDefinitionRegistrationService for GrpcApiDefinitionRegistration {
         &self,
         request: tonic::Request<GetAllApiDefinitionVersionsRequest>,
     ) -> Result<tonic::Response<GetAllApiDefinitionVersionsResponse>, tonic::Status> {
-        let result = match self
-            .get_all_api_definition_versions(request.into_inner())
-            .await
-        {
-            Ok(api_definitions) => {
-                get_all_api_definition_versions_response::Result::Success(ManyApiDefinitions {
-                    api_definitions,
-                })
-            }
-            Err(error) => get_all_api_definition_versions_response::Result::Error(error),
-        };
+        let result =
+            match self
+                .get_all_api_definition_versions(request.into_inner())
+                .await
+            {
+                Ok(api_definitions) => get_all_api_definition_versions_response::Result::Success(
+                    HttpApiDefinitionList { api_definitions },
+                ),
+                Err(error) => get_all_api_definition_versions_response::Result::Error(error),
+            };
 
         Ok(tonic::Response::new(GetAllApiDefinitionVersionsResponse {
             result: Some(result),
@@ -133,7 +128,7 @@ impl ApiDefinitionRegistrationService for GrpcApiDefinitionRegistration {
     ) -> std::result::Result<tonic::Response<GetAllApiDefinitionsResponse>, tonic::Status> {
         let result = match self.get_all_api_definitions(request.into_inner()).await {
             Ok(api_definitions) => {
-                get_all_api_definitions_response::Result::Success(ManyApiDefinitions {
+                get_all_api_definitions_response::Result::Success(HttpApiDefinitionList {
                     api_definitions,
                 })
             }
@@ -160,7 +155,7 @@ impl ApiDefinitionRegistrationService for GrpcApiDefinitionRegistration {
     }
 }
 
-impl GrpcApiDefinitionRegistration {
+impl GrpcApiDefinitionService {
     async fn create_or_update_api_definition(
         &self,
         request: CreateOrUpdateApiDefinitionRequest,
