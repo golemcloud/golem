@@ -91,10 +91,7 @@ impl ApiEndpointError {
 mod conversion {
     use golem_api_grpc::proto::golem::{
         apidefinition,
-        apidefinition::{
-            api_definition_registration_error, ApiDefinitionRegistrationError,
-            RouteValidationErrorsBody,
-        },
+        apidefinition::{api_definition_error, ApiDefinitionError, RouteValidationErrorsBody},
         common::ErrorBody,
     };
     use poem_openapi::payload::Json;
@@ -147,25 +144,19 @@ mod conversion {
         }
     }
 
-    impl From<ApiRegistrationError<RouteValidationError>> for ApiDefinitionRegistrationError {
-        fn from(
-            error: ApiRegistrationError<RouteValidationError>,
-        ) -> ApiDefinitionRegistrationError {
+    impl From<ApiRegistrationError<RouteValidationError>> for ApiDefinitionError {
+        fn from(error: ApiRegistrationError<RouteValidationError>) -> ApiDefinitionError {
             match error {
                 ApiRegistrationError::RepoError(error) => match error {
-                    ApiRegistrationRepoError::AlreadyExists(_) => ApiDefinitionRegistrationError {
-                        error: Some(api_definition_registration_error::Error::AlreadyExists(
-                            ErrorBody {
-                                error: error.to_string(),
-                            },
-                        )),
+                    ApiRegistrationRepoError::AlreadyExists(_) => ApiDefinitionError {
+                        error: Some(api_definition_error::Error::AlreadyExists(ErrorBody {
+                            error: error.to_string(),
+                        })),
                     },
-                    ApiRegistrationRepoError::InternalError(_) => ApiDefinitionRegistrationError {
-                        error: Some(api_definition_registration_error::Error::InternalError(
-                            ErrorBody {
-                                error: error.to_string(),
-                            },
-                        )),
+                    ApiRegistrationRepoError::InternalError(_) => ApiDefinitionError {
+                        error: Some(api_definition_error::Error::InternalError(ErrorBody {
+                            error: error.to_string(),
+                        })),
                     },
                 },
                 ApiRegistrationError::ValidationError(e) => {
@@ -179,18 +170,16 @@ mod conversion {
                             detail: r.detail,
                         })
                         .collect();
-                    ApiDefinitionRegistrationError {
-                        error: Some(api_definition_registration_error::Error::InvalidRoutes(
+                    ApiDefinitionError {
+                        error: Some(api_definition_error::Error::InvalidRoutes(
                             RouteValidationErrorsBody { errors },
                         )),
                     }
                 }
-                ApiRegistrationError::TemplateNotFoundError(_) => ApiDefinitionRegistrationError {
-                    error: Some(api_definition_registration_error::Error::NotFound(
-                        ErrorBody {
-                            error: error.to_string(),
-                        },
-                    )),
+                ApiRegistrationError::TemplateNotFoundError(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::NotFound(ErrorBody {
+                        error: error.to_string(),
+                    })),
                 },
             }
         }

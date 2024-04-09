@@ -4,17 +4,17 @@ use async_trait::async_trait;
 
 use golem_api_grpc::proto::golem::{
     apidefinition::{
-        api_definition_registration_error, api_definition_service_server::ApiDefinitionService,
+        api_definition_error, api_definition_service_server::ApiDefinitionService,
         create_or_update_open_api_response, create_or_update_response_api_definition_response,
         delete_api_definition_response, get_all_api_definition_versions_response,
-        get_all_api_definitions_response, get_api_definition_response,
-        ApiDefinitionRegistrationError, CreateOrUpdateApiDefinitionRequest,
-        CreateOrUpdateOpenApiRequest, CreateOrUpdateOpenApiResponse,
-        CreateOrUpdateResponseApiDefinitionResponse, DeleteApiDefinitionRequest,
-        DeleteApiDefinitionResponse, GetAllApiDefinitionVersionsRequest,
-        GetAllApiDefinitionVersionsResponse, GetAllApiDefinitionsRequest,
-        GetAllApiDefinitionsResponse, GetApiDefinitionRequest, GetApiDefinitionResponse,
-        HttpApiDefinition as GrpcHttpApiDefinition, HttpApiDefinitionList,
+        get_all_api_definitions_response, get_api_definition_response, ApiDefinitionError,
+        CreateOrUpdateApiDefinitionRequest, CreateOrUpdateOpenApiRequest,
+        CreateOrUpdateOpenApiResponse, CreateOrUpdateResponseApiDefinitionResponse,
+        DeleteApiDefinitionRequest, DeleteApiDefinitionResponse,
+        GetAllApiDefinitionVersionsRequest, GetAllApiDefinitionVersionsResponse,
+        GetAllApiDefinitionsRequest, GetAllApiDefinitionsResponse, GetApiDefinitionRequest,
+        GetApiDefinitionResponse, HttpApiDefinition as GrpcHttpApiDefinition,
+        HttpApiDefinitionList,
     },
     common::{Empty, ErrorBody, ErrorsBody},
 };
@@ -159,7 +159,7 @@ impl GrpcApiDefinitionService {
     async fn create_or_update_api_definition(
         &self,
         request: CreateOrUpdateApiDefinitionRequest,
-    ) -> Result<GrpcHttpApiDefinition, ApiDefinitionRegistrationError> {
+    ) -> Result<GrpcHttpApiDefinition, ApiDefinitionError> {
         let definition = request
             .payload
             .ok_or(bad_request("Missing Api Definition"))?;
@@ -180,7 +180,7 @@ impl GrpcApiDefinitionService {
     async fn create_or_update_open_api_definition(
         &self,
         request: CreateOrUpdateOpenApiRequest,
-    ) -> Result<GrpcHttpApiDefinition, ApiDefinitionRegistrationError> {
+    ) -> Result<GrpcHttpApiDefinition, ApiDefinitionError> {
         let definition = request.payload;
 
         let value = serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?;
@@ -199,7 +199,7 @@ impl GrpcApiDefinitionService {
     async fn get_api_definition(
         &self,
         request: GetApiDefinitionRequest,
-    ) -> Result<GrpcHttpApiDefinition, ApiDefinitionRegistrationError> {
+    ) -> Result<GrpcHttpApiDefinition, ApiDefinitionError> {
         let api_definition_id = ApiDefinitionId(request.api_definition_id);
         let version = ApiVersion(request.version);
 
@@ -227,7 +227,7 @@ impl GrpcApiDefinitionService {
     async fn get_all_api_definition_versions(
         &self,
         request: GetAllApiDefinitionVersionsRequest,
-    ) -> Result<Vec<GrpcHttpApiDefinition>, ApiDefinitionRegistrationError> {
+    ) -> Result<Vec<GrpcHttpApiDefinition>, ApiDefinitionError> {
         let api_definition_id = ApiDefinitionId(request.api_definition_id);
 
         let definitions = self
@@ -251,7 +251,7 @@ impl GrpcApiDefinitionService {
     async fn get_all_api_definitions(
         &self,
         _request: GetAllApiDefinitionsRequest,
-    ) -> Result<Vec<GrpcHttpApiDefinition>, ApiDefinitionRegistrationError> {
+    ) -> Result<Vec<GrpcHttpApiDefinition>, ApiDefinitionError> {
         let definitions = self
             .definition_service
             .get_all(CommonNamespace::default(), &EmptyAuthCtx {})
@@ -269,7 +269,7 @@ impl GrpcApiDefinitionService {
     async fn delete_api_definition(
         &self,
         request: DeleteApiDefinitionRequest,
-    ) -> Result<(), ApiDefinitionRegistrationError> {
+    ) -> Result<(), ApiDefinitionError> {
         let api_definition_id = ApiDefinitionId(request.api_definition_id);
         let version = ApiVersion(request.version);
 
@@ -287,32 +287,26 @@ impl GrpcApiDefinitionService {
     }
 }
 
-fn bad_request(error: impl Into<String>) -> ApiDefinitionRegistrationError {
-    ApiDefinitionRegistrationError {
-        error: Some(api_definition_registration_error::Error::BadRequest(
-            ErrorsBody {
-                errors: vec![error.into()],
-            },
-        )),
+fn bad_request(error: impl Into<String>) -> ApiDefinitionError {
+    ApiDefinitionError {
+        error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
+            errors: vec![error.into()],
+        })),
     }
 }
 
-fn not_found(error: impl Into<String>) -> ApiDefinitionRegistrationError {
-    ApiDefinitionRegistrationError {
-        error: Some(api_definition_registration_error::Error::NotFound(
-            ErrorBody {
-                error: error.into(),
-            },
-        )),
+fn not_found(error: impl Into<String>) -> ApiDefinitionError {
+    ApiDefinitionError {
+        error: Some(api_definition_error::Error::NotFound(ErrorBody {
+            error: error.into(),
+        })),
     }
 }
 
-fn internal_error(error: impl Into<String>) -> ApiDefinitionRegistrationError {
-    ApiDefinitionRegistrationError {
-        error: Some(api_definition_registration_error::Error::InternalError(
-            ErrorBody {
-                error: error.into(),
-            },
-        )),
+fn internal_error(error: impl Into<String>) -> ApiDefinitionError {
+    ApiDefinitionError {
+        error: Some(api_definition_error::Error::InternalError(ErrorBody {
+            error: error.into(),
+        })),
     }
 }

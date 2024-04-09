@@ -82,8 +82,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/shardmanager/shard_id.proto",
                 "proto/golem/shardmanager/shard_manager_error.proto",
                 "proto/golem/shardmanager/shard_manager_service.proto",
-                "proto/golem/apidefinition/api_definition_registration_service.proto",
-                "proto/golem/apidefinition/api_definition_registration_error.proto",
+                "proto/golem/apidefinition/api_definition_service.proto",
+                "proto/golem/apidefinition/api_definition_error.proto",
             ],
             &[&format!("{wasm_rpc_root}/proto"), &"proto".to_string()],
         )

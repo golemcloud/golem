@@ -4,7 +4,7 @@ package golem.apidefinition;
 
 import "golem/common/empty.proto";
 import "golem/template/template_id.proto";
-import "golem/apidefinition/api_definition_registration_error.proto";
+import "golem/apidefinition/api_definition_error.proto";
 
 service ApiDefinitionService {
   rpc CreateOrUpdateApiDefinition (CreateOrUpdateApiDefinitionRequest) returns (CreateOrUpdateResponseApiDefinitionResponse) {}
@@ -22,7 +22,7 @@ message CreateOrUpdateOpenApiRequest {
 message CreateOrUpdateOpenApiResponse {
   oneof result {
     HttpApiDefinition success = 1;
-    ApiDefinitionRegistrationError error = 2;
+    ApiDefinitionError error = 2;
   }
 }
 
@@ -33,7 +33,7 @@ message CreateOrUpdateApiDefinitionRequest {
 message CreateOrUpdateResponseApiDefinitionResponse {
   oneof result {
     HttpApiDefinition success = 1;
-    ApiDefinitionRegistrationError error = 2;
+    ApiDefinitionError error = 2;
   }
 }
 
@@ -45,7 +45,7 @@ message GetApiDefinitionRequest {
 message GetApiDefinitionResponse {
   oneof result {
     HttpApiDefinition success = 1;
-    ApiDefinitionRegistrationError error = 2;
+    ApiDefinitionError error = 2;
   }
 }
 
@@ -56,7 +56,7 @@ message GetAllApiDefinitionVersionsRequest {
 message GetAllApiDefinitionVersionsResponse {
   oneof result {
     HttpApiDefinitionList success = 1;
-    ApiDefinitionRegistrationError error = 2;
+    ApiDefinitionError error = 2;
   }
 }
 
@@ -72,7 +72,7 @@ message DeleteApiDefinitionRequest {
 message DeleteApiDefinitionResponse {
   oneof result {
     golem.common.Empty success = 1;
-    ApiDefinitionRegistrationError error = 2;
+    ApiDefinitionError error = 2;
   }
 }
 
@@ -81,7 +81,7 @@ message GetAllApiDefinitionsRequest {}
 message GetAllApiDefinitionsResponse {
   oneof result {
     HttpApiDefinitionList success = 1;
-    ApiDefinitionRegistrationError error = 2;
+    ApiDefinitionError error = 2;
   }
 }
 
