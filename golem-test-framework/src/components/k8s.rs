@@ -21,7 +21,6 @@ use kube::api::{DeleteParams, PostParams};
 use kube::{Api, Client};
 use serde_json::json;
 use std::time::Duration;
-use tokio::io::AsyncBufReadExt;
 use tokio::process::{Child, Command};
 use tracing::{debug, error, info};
 use url::Url;
@@ -339,7 +338,7 @@ impl Routing {
         namespace: &K8sNamespace,
     ) -> (Url, Option<Child>) {
         use std::process::Stdio;
-        use tokio::io::{AsyncReadExt, BufReader};
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
         debug!(
             "Launching minikube service --namespace={} --url {}",
