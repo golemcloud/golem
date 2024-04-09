@@ -23,6 +23,7 @@ use crate::components::worker_executor::{env_vars, wait_for_startup, WorkerExecu
 use crate::components::worker_service::WorkerService;
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
+use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
@@ -183,6 +184,7 @@ impl K8sWorkerExecutor {
     }
 }
 
+#[async_trait]
 impl WorkerExecutor for K8sWorkerExecutor {
     fn private_host(&self) -> String {
         format!("{}.{}.svc.cluster.local", self.name(), &self.namespace.0)
@@ -221,7 +223,7 @@ impl WorkerExecutor for K8sWorkerExecutor {
         });
     }
 
-    fn restart(&self) {
+    async fn restart(&self) {
         panic!("Not supported yet");
     }
 }

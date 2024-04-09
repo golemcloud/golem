@@ -81,7 +81,7 @@ impl ShardManager for DockerShardManager {
         self.container.stop()
     }
 
-    fn restart(&self) {
+    async fn restart(&self) {
         self.container.start();
     }
 }

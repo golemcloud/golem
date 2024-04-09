@@ -20,6 +20,7 @@ use crate::components::redis::Redis;
 use crate::components::shard_manager::{env_vars, wait_for_startup, ShardManager};
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
+use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
@@ -161,6 +162,7 @@ impl K8sShardManager {
     }
 }
 
+#[async_trait]
 impl ShardManager for K8sShardManager {
     fn private_host(&self) -> String {
         format!("{}.{}.svc.cluster.local", Self::NAME, &self.namespace.0)
@@ -199,7 +201,7 @@ impl ShardManager for K8sShardManager {
         });
     }
 
-    fn restart(&self) {
+    async fn restart(&self) {
         panic!("Not supported yet");
     }
 }

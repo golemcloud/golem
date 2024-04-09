@@ -15,6 +15,7 @@
 use crate::components::worker_executor::provided::ProvidedWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
+use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
 
@@ -32,6 +33,7 @@ impl ProvidedWorkerExecutorCluster {
     }
 }
 
+#[async_trait]
 impl WorkerExecutorCluster for ProvidedWorkerExecutorCluster {
     fn size(&self) -> usize {
         1
@@ -41,13 +43,13 @@ impl WorkerExecutorCluster for ProvidedWorkerExecutorCluster {
         self.worker_executor.kill()
     }
 
-    fn restart_all(&self) {
-        self.worker_executor.restart()
+    async fn restart_all(&self) {
+        self.worker_executor.restart().await
     }
 
     fn stop(&self, _index: usize) {}
 
-    fn start(&self, _index: usize) {}
+    async fn start(&self, _index: usize) {}
 
     fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>> {
         vec![self.worker_executor.clone()]

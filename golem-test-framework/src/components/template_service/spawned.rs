@@ -32,7 +32,7 @@ pub struct SpawnedTemplateService {
 }
 
 impl SpawnedTemplateService {
-    pub fn new(
+    pub async fn new(
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -64,11 +64,7 @@ impl SpawnedTemplateService {
             &mut child,
         );
 
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(wait_for_startup("localhost", grpc_port));
+        wait_for_startup("localhost", grpc_port).await;
 
         Self {
             http_port,

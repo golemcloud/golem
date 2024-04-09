@@ -127,16 +127,13 @@ impl ManagedRouting {
 #[async_trait]
 impl AsyncDrop for ManagedRouting {
     async fn async_drop(&mut self) {
-        match self {
-            ManagedRouting::Minikube { child: Some(child) } => {
-                if let Some(pid) = child.id() {
-                    info!("Killing minikube service tunnel process {:?}", child.id());
-                    kill_tree::tokio::kill_tree(pid)
-                        .await
-                        .expect("Failed to kill minikube service tunnel");
-                }
+        if let ManagedRouting::Minikube { child: Some(child) } = self {
+            if let Some(pid) = child.id() {
+                info!("Killing minikube service tunnel process {:?}", child.id());
+                kill_tree::tokio::kill_tree(pid)
+                    .await
+                    .expect("Failed to kill minikube service tunnel");
             }
-            _ => {}
         }
     }
 }
@@ -326,7 +323,7 @@ impl Routing {
             .ingress
             .as_ref()
             .ok_or(anyhow!("No ingress for {service_name}"))?
-            .get(0)
+            .first()
             .as_ref()
             .ok_or(anyhow!("Empty ingress for {service_name}"))?
             .hostname

@@ -44,7 +44,7 @@ pub struct SpawnedWorkerExecutor {
 }
 
 impl SpawnedWorkerExecutor {
-    pub fn new(
+    pub async fn new(
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -75,7 +75,8 @@ impl SpawnedWorkerExecutor {
             verbosity,
             out_level,
             err_level,
-        );
+        )
+        .await;
 
         Self {
             http_port,
@@ -94,7 +95,7 @@ impl SpawnedWorkerExecutor {
         }
     }
 
-    fn start(
+    async fn start(
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -131,11 +132,7 @@ impl SpawnedWorkerExecutor {
             &mut child,
         );
 
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(wait_for_startup("localhost", grpc_port));
+        wait_for_startup("localhost", grpc_port).await;
 
         (child, logger)
     }
@@ -163,14 +160,8 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         let _logger = self.logger.lock().unwrap().take();
     }
 
-    fn restart(&self) {
+    async fn restart(&self) {
         info!("Restarting golem-worker-executor {}", self.grpc_port);
-
-        let mut child_field = self.child.lock().unwrap();
-        let mut logger_field = self.logger.lock().unwrap();
-
-        assert!(child_field.is_none());
-        assert!(logger_field.is_none());
 
         let (child, logger) = Self::start(
             &self.executable,
@@ -184,7 +175,14 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             self.verbosity,
             self.out_level,
             self.err_level,
-        );
+        )
+        .await;
+
+        let mut child_field = self.child.lock().unwrap();
+        let mut logger_field = self.logger.lock().unwrap();
+
+        assert!(child_field.is_none());
+        assert!(logger_field.is_none());
 
         *child_field = Some(child);
         *logger_field = Some(logger);

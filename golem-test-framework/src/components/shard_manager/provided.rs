@@ -52,7 +52,7 @@ impl ShardManager for ProvidedShardManager {
         panic!("Cannot kill provided shard manager");
     }
 
-    fn restart(&self) {
+    async fn restart(&self) {
         panic!("Cannot restart provided shard manager");
     }
 }

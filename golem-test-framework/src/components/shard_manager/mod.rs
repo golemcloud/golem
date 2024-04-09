@@ -52,7 +52,15 @@ pub trait ShardManager {
     }
 
     fn kill(&self);
-    fn restart(&self);
+    async fn restart(&self);
+
+    fn blocking_restart(&self) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move { self.restart().await });
+    }
 }
 
 async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Channel> {

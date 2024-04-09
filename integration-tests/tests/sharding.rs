@@ -38,7 +38,7 @@ impl Tracing {
 
 #[ctor]
 pub static DEPS: EnvBasedTestDependencies = {
-    let deps = EnvBasedTestDependencies::new(10);
+    let deps = EnvBasedTestDependencies::blocking_new(10);
 
     deps.redis_monitor().assert_valid();
     println!(
@@ -217,7 +217,7 @@ fn start_shard() {
         let mut rng = thread_rng();
         stopped.shuffle(&mut rng);
 
-        DEPS.worker_executor_cluster().start(stopped[0]);
+        DEPS.worker_executor_cluster().blocking_start(stopped[0]);
     }
 }
 
@@ -230,7 +230,7 @@ fn start_shards(n: usize) {
         let to_start = &stopped[0..n];
 
         for idx in to_start {
-            DEPS.worker_executor_cluster().start(*idx);
+            DEPS.worker_executor_cluster().blocking_start(*idx);
         }
     }
 }
@@ -268,7 +268,7 @@ fn stop_all_shards() {
 
 fn reload_shard_manager() {
     DEPS.shard_manager().kill();
-    DEPS.shard_manager().restart();
+    DEPS.shard_manager().blocking_restart();
 }
 
 async fn invoke_and_await_workers(workers: &[WorkerId]) -> Result<(), worker::worker_error::Error> {

@@ -11,6 +11,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  checks: write
+  pull-requests: write
+
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
 
@@ -241,7 +245,13 @@ jobs:
       - name: Check formatting and clippy rules
         run: cargo make check
       - name: Unit tests
-        run: cargo make unit-tests
+        run: cargo make unit-tests-ci
+      - name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: |
+            target/test-results/unit-tests.xml
       - name: Check that OpenAPI specs are up-to-date
         run: cargo make check-openapi
   worker-tests:
@@ -278,7 +288,13 @@ jobs:
           redis-version: latest
           auto-start: false
       - name: Worker Executor integration tests
-        run: cargo make worker-executor-tests
+        run: cargo make worker-executor-tests-ci
+      - name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: |
+            target/test-results/worker-executor-tests.xml
   integration-tests:
     runs-on: ubuntu-latest-large
     steps:
@@ -315,16 +331,24 @@ jobs:
       - name: Integration tests
         env:
           CI: true
-        run: cargo make integration-tests
+        run: cargo make integration-tests-ci
       - name: Sharding tests
         env:
           CI: true
-        run: cargo make sharding-tests
+        run: cargo make sharding-tests-ci
         timeout-minutes: 10
       - name: CLI tests
         env:
           CI: true
-        run: cargo make cli-tests
+        run: cargo make cli-tests-ci
+      - name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: |
+            target/test-results/integration-tests.xml
+            target/test-results/sharding-tests.xml
+            target/test-results/cli-tests.xml
   publish:
     needs: [ unit-tests, worker-tests, integration-tests ]
     if: "startsWith(github.ref, 'refs/tags/v')"

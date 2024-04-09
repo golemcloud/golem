@@ -25,7 +25,7 @@ use kube::{Api, Client};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing::info;
 
 pub struct K8sPostgresRdb {
     _namespace: K8sNamespace,

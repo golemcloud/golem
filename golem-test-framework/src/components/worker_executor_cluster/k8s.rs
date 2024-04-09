@@ -20,6 +20,7 @@ use crate::components::worker_executor::k8s::K8sWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
+use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
@@ -68,6 +69,7 @@ impl K8sWorkerExecutorCluster {
     }
 }
 
+#[async_trait]
 impl WorkerExecutorCluster for K8sWorkerExecutorCluster {
     fn size(&self) -> usize {
         self.worker_executors.len()
@@ -80,10 +82,10 @@ impl WorkerExecutorCluster for K8sWorkerExecutorCluster {
         }
     }
 
-    fn restart_all(&self) {
+    async fn restart_all(&self) {
         info!("Restarting all worker executors");
         for worker_executor in &self.worker_executors {
-            worker_executor.restart();
+            worker_executor.restart().await;
         }
     }
 
@@ -95,11 +97,10 @@ impl WorkerExecutorCluster for K8sWorkerExecutorCluster {
         }
     }
 
-    fn start(&self, index: usize) {
-        let mut stopped = self.stopped_indices.lock().unwrap();
-        if stopped.contains(&index) {
-            self.worker_executors[index].restart();
-            stopped.remove(&index);
+    async fn start(&self, index: usize) {
+        if self.stopped_indices().contains(&index) {
+            self.worker_executors[index].restart().await;
+            self.stopped_indices.lock().unwrap().remove(&index);
         }
     }
 

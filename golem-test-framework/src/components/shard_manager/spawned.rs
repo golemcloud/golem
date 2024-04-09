@@ -38,7 +38,7 @@ pub struct SpawnedShardManager {
 }
 
 impl SpawnedShardManager {
-    pub fn new(
+    pub async fn new(
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -63,7 +63,8 @@ impl SpawnedShardManager {
             verbosity,
             out_level,
             err_level,
-        );
+        )
+        .await;
 
         Self {
             http_port,
@@ -79,7 +80,7 @@ impl SpawnedShardManager {
         }
     }
 
-    fn start(
+    async fn start(
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -105,11 +106,7 @@ impl SpawnedShardManager {
             &mut child,
         );
 
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(wait_for_startup("localhost", grpc_port));
+        wait_for_startup("localhost", grpc_port).await;
 
         (child, logger)
     }
@@ -137,14 +134,8 @@ impl ShardManager for SpawnedShardManager {
         let _logger = self.logger.lock().unwrap().take();
     }
 
-    fn restart(&self) {
+    async fn restart(&self) {
         info!("Restarting golem-shard-manager");
-
-        let mut child_field = self.child.lock().unwrap();
-        let mut logger_field = self.logger.lock().unwrap();
-
-        assert!(child_field.is_none());
-        assert!(logger_field.is_none());
 
         let (child, logger) = Self::start(
             &self.executable,
@@ -155,7 +146,14 @@ impl ShardManager for SpawnedShardManager {
             self.verbosity,
             self.out_level,
             self.err_level,
-        );
+        )
+        .await;
+
+        let mut child_field = self.child.lock().unwrap();
+        let mut logger_field = self.logger.lock().unwrap();
+
+        assert!(child_field.is_none());
+        assert!(logger_field.is_none());
 
         *child_field = Some(child);
         *logger_field = Some(logger);

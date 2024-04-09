@@ -52,7 +52,7 @@ impl WorkerExecutor for ProvidedWorkerExecutor {
         panic!("Cannot kill provided worker executor");
     }
 
-    fn restart(&self) {
+    async fn restart(&self) {
         panic!("Cannot restart provided worker-executor");
     }
 }

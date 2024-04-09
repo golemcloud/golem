@@ -145,11 +145,30 @@ dependencies = [
     "integration-tests",
 ]
 
+[tasks.test-ci]
+description = "Runs all unit tests, worker executor tests and integration tests and captures results in XML reports"
+dependencies = [
+    "unit-tests-ci",
+    "worker-executor-tests-ci",
+    "cli-tests-ci",
+    "sharding-tests-ci",
+    "integration-tests-ci",
+]
+
 [tasks.unit-tests]
 description = "Runs unit tests only"
 command = "cargo"
 dependencies = ["build"]
 args = ["test", "--lib", "--bins", "--all-features"]
+
+[tasks.unit-tests-ci]
+description = "Runs unit tests only and captures results in an XML report"
+install_crate = "cargo2junit"
+dependencies = ["build"]
+script = '''
+mkdir -pv target/test-results
+RUST_BOOTSTRAP=1 cargo test --lib --bins --all-features -- -Z unstable-options --format json --report-time | cargo2junit > target/test-results/unit-tests.xml
+'''
 
 [tasks.worker-executor-tests]
 description = "Runs worker executor tests only"
@@ -158,12 +177,30 @@ env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 command = "cargo"
 args = ["test", "--package", "golem-worker-executor-base", "--test", "*", "--", "--nocapture"]
 
+[tasks.worker-executor-tests-ci]
+description = "Runs worker executor tests only and captures results in an XML report"
+install_crate = "cargo2junit"
+dependencies = ["build"]
+script = '''
+mkdir -pv target/test-results
+WASMTIME_BACKTRACE_DETAILS=1 RUST_LOG=info RUST_BOOTSTRAP=1 cargo test --package golem-worker-executor-base --test * -- --nocapture -Z unstable-options --format json --report-time | cargo2junit > target/test-results/worker-executor-tests.xml
+'''
+
 [tasks.integration-tests]
 description = "Runs integration tests only"
 dependencies = ["build"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = ["test", "--package", "integration-tests", "--test", "integration", "--", "--nocapture"]
+
+[tasks.integration-tests-ci]
+description = "Runs integration tests only and captures results in an XML report"
+install_crate = "cargo2junit"
+dependencies = ["build"]
+script = '''
+mkdir -pv target/test-results
+RUST_BACKTRACE=1 RUST_LOG=info RUST_BOOTSTRAP=1 cargo test --package integration-tests --test integration -- --nocapture -Z unstable-options --format json --report-time | cargo2junit > target/test-results/integration-tests.xml
+'''
 
 [tasks.sharding-tests]
 description = "Runs sharding integration tests only"
@@ -172,12 +209,30 @@ env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = ["test", "--package", "integration-tests", "--test", "sharding", "--", "--nocapture", "--test-threads=1"]
 
+[tasks.sharding-tests-ci]
+description = "Runs sharding integration tests only and captures results in an XML report"
+install_crate = "cargo2junit"
+dependencies = ["build"]
+script = '''
+mkdir -pv target/test-results
+RUST_BACKTRACE=1 RUST_LOG=info RUST_BOOTSTRAP=1 cargo test --package integration-tests --test sharding -- --nocapture --test-threads=1 -Z unstable-options --format json --report-time | cargo2junit > target/test-results/sharding-tests.xml
+'''
+
 [tasks.cli-tests]
 description = "Runs CLI tests only"
 dependencies = ["build"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = ["test", "--package", "golem-cli", "--test", "integration", "--", "--nocapture"]
+
+[tasks.cli-tests-ci]
+description = "Runs CLI tests only and captures results in an XML report"
+install_crate = "cargo2junit"
+dependencies = ["build"]
+script = '''
+mkdir -pv target/test-results
+RUST_BACKTRACE=1 RUST_LOG=info RUST_BOOTSTRAP=1 cargo test --package golem-cli --test integration -- --nocapture -Z unstable-options --format json --report-time | cargo2junit > target/test-results/cli-tests.xml
+'''
 
 ## ** CHECK-OPENAPI **
 [tasks.check-openapi]

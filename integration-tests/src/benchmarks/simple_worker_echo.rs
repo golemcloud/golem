@@ -12,26 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use tokio::io::{stdin, AsyncReadExt};
-use tracing::Level;
 
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Layer};
-
-use golem_test_framework::components::k8s::{K8sNamespace, K8sRoutingType};
-use golem_test_framework::components::rdb::k8s_postgres::K8sPostgresRdb;
-use golem_test_framework::components::rdb::Rdb;
-use golem_test_framework::components::redis::k8s::K8sRedis;
-use golem_test_framework::components::redis::Redis;
-use golem_test_framework::components::shard_manager::k8s::K8sShardManager;
-use golem_test_framework::components::shard_manager::ShardManager;
 use golem_test_framework::config::CliTestDependencies;
 
 #[tokio::main]
 async fn main() {
-    let deps = CliTestDependencies::new().await;
+    let _deps = CliTestDependencies::new().await;
     //
     //
     // let namespace = K8sNamespace::default();

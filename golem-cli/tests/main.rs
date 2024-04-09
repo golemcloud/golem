@@ -22,7 +22,7 @@ fn main() -> Result<(), Failed> {
     env_logger::init();
 
     let deps: Arc<dyn TestDependencies + Send + Sync + 'static> =
-        Arc::new(EnvBasedTestDependencies::new(3));
+        Arc::new(EnvBasedTestDependencies::blocking_new(3));
     let cluster = deps.worker_executor_cluster(); // forcing startup by getting it
     info!("Using cluster with {:?} worker executors", cluster.size());
 

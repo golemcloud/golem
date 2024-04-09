@@ -56,6 +56,7 @@ use tracing_subscriber::{EnvFilter, Layer};
 ///
 /// To be used when a single executable with an async entry point requires
 /// setting up the test infrastructure, for example in benchmarks.
+#[allow(dead_code)]
 pub struct CliTestDependencies {
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -286,7 +287,7 @@ impl CliTestDependencies {
                 worker_executor_base_grpc_port,
             } => {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new(true));
+                    Arc::new(DockerPostgresRdb::new(true).await);
                 let redis: Arc<dyn Redis + Send + Sync + 'static> =
                     Arc::new(DockerRedis::new(redis_prefix.clone()));
                 let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
@@ -349,7 +350,7 @@ impl CliTestDependencies {
                 let build_root = workspace_root.join(build_target);
 
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new(true));
+                    Arc::new(DockerPostgresRdb::new(true).await);
                 let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
                     *redis_port,
                     redis_prefix.clone(),
@@ -359,8 +360,8 @@ impl CliTestDependencies {
                 let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
                     SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
                 );
-                let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> =
-                    Arc::new(SpawnedShardManager::new(
+                let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
+                    SpawnedShardManager::new(
                         &build_root.join("golem-shard-manager"),
                         &workspace_root.join("golem-shard-manager"),
                         *shard_manager_http_port,
@@ -369,9 +370,11 @@ impl CliTestDependencies {
                         params.service_verbosity(),
                         Level::INFO,
                         Level::ERROR,
-                    ));
-                let template_service: Arc<dyn TemplateService + Send + Sync + 'static> =
-                    Arc::new(SpawnedTemplateService::new(
+                    )
+                    .await,
+                );
+                let template_service: Arc<dyn TemplateService + Send + Sync + 'static> = Arc::new(
+                    SpawnedTemplateService::new(
                         &build_root.join("golem-template-service"),
                         &workspace_root.join("golem-template-service"),
                         *template_service_http_port,
@@ -380,9 +383,11 @@ impl CliTestDependencies {
                         params.service_verbosity(),
                         Level::INFO,
                         Level::ERROR,
-                    ));
-                let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
-                    Arc::new(SpawnedWorkerService::new(
+                    )
+                    .await,
+                );
+                let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+                    SpawnedWorkerService::new(
                         &build_root.join("golem-worker-service"),
                         &workspace_root.join("golem-worker-service"),
                         *worker_service_http_port,
@@ -395,23 +400,28 @@ impl CliTestDependencies {
                         params.service_verbosity(),
                         Level::INFO,
                         Level::ERROR,
-                    ));
+                    )
+                    .await,
+                );
                 let worker_executor_cluster: Arc<
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
-                > = Arc::new(SpawnedWorkerExecutorCluster::new(
-                    *cluster_size,
-                    *worker_executor_base_http_port,
-                    *worker_executor_base_grpc_port,
-                    &build_root.join("worker-executor"),
-                    &workspace_root.join("golem-worker-executor"),
-                    redis.clone(),
-                    template_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    params.service_verbosity(),
-                    Level::INFO,
-                    Level::ERROR,
-                ));
+                > = Arc::new(
+                    SpawnedWorkerExecutorCluster::new(
+                        *cluster_size,
+                        *worker_executor_base_http_port,
+                        *worker_executor_base_grpc_port,
+                        &build_root.join("worker-executor"),
+                        &workspace_root.join("golem-worker-executor"),
+                        redis.clone(),
+                        template_service.clone(),
+                        shard_manager.clone(),
+                        worker_service.clone(),
+                        params.service_verbosity(),
+                        Level::INFO,
+                        Level::ERROR,
+                    )
+                    .await,
+                );
 
                 Self {
                     rdb,

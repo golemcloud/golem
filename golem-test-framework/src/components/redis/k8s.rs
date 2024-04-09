@@ -86,7 +86,7 @@ impl K8sRedis {
         let pp = PostParams::default();
 
         let _res_pod = pods.create(&pp, &pod).await.expect("Failed to create pod");
-        let managed_pod = AsyncDropper::new(ManagedPod::new("golem-redis", &namespace));
+        let managed_pod = AsyncDropper::new(ManagedPod::new("golem-redis", namespace));
 
         let service: Service = serde_json::from_value(json!({
             "apiVersion": "v1",

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::components::worker_executor::WorkerExecutor;
+use async_trait::async_trait;
 use std::sync::Arc;
 
 pub mod docker;
@@ -20,13 +21,22 @@ pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
+#[async_trait]
 pub trait WorkerExecutorCluster {
     fn size(&self) -> usize;
     fn kill_all(&self);
-    fn restart_all(&self);
+    async fn restart_all(&self);
 
     fn stop(&self, index: usize);
-    fn start(&self, index: usize);
+    async fn start(&self, index: usize);
+
+    fn blocking_start(&self, index: usize) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move { self.start(index).await });
+    }
 
     fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>>;
 

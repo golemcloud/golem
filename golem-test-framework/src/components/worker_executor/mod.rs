@@ -55,7 +55,7 @@ pub trait WorkerExecutor {
     }
 
     fn kill(&self);
-    fn restart(&self);
+    async fn restart(&self);
 }
 
 async fn new_client(host: &str, grpc_port: u16) -> WorkerExecutorClient<Channel> {

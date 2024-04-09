@@ -38,7 +38,11 @@ impl DockerRedis {
             .with_network(NETWORK);
         let container = DOCKER.run(image);
 
-        super::wait_for_startup("localhost", container.get_host_port_ipv4(REDIS_PORT), Duration::from_secs(10));
+        super::wait_for_startup(
+            "localhost",
+            container.get_host_port_ipv4(REDIS_PORT),
+            Duration::from_secs(10),
+        );
 
         Self {
             container,

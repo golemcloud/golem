@@ -36,7 +36,7 @@ pub struct SpawnedWorkerService {
 }
 
 impl SpawnedWorkerService {
-    pub fn new(
+    pub async fn new(
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -77,11 +77,7 @@ impl SpawnedWorkerService {
         let logger =
             ChildProcessLogger::log_child_process("[workersvc]", out_level, err_level, &mut child);
 
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(wait_for_startup("localhost", grpc_port));
+        wait_for_startup("localhost", grpc_port).await;
 
         Self {
             http_port,

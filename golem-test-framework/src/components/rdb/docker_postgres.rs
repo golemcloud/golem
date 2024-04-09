@@ -28,7 +28,7 @@ impl DockerPostgresRdb {
     const DEFAULT_PORT: u16 = 5432;
 
     // TODO: can we simplify this and get rid of local_env (and always use localhost and exposed ports)?
-    pub fn new(local_env: bool) -> Self {
+    pub async fn new(local_env: bool) -> Self {
         info!("Starting Postgres container");
 
         let name = "golem_postgres";
@@ -51,11 +51,7 @@ impl DockerPostgresRdb {
         };
 
         let host_port = container.get_host_port_ipv4(Self::DEFAULT_PORT);
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(assert_connection("localhost", host_port));
+        assert_connection("localhost", host_port).await;
 
         Self {
             container,

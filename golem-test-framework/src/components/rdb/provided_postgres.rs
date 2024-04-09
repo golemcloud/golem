@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use crate::components::rdb::{DbInfo, PostgresInfo, Rdb};
-use crate::components::{DOCKER, NETWORK};
-use testcontainers::{Container, RunnableImage};
 use tracing::info;
 
 pub struct ProvidedPostgresRdb {

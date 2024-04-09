@@ -19,6 +19,7 @@ use crate::components::worker_executor::spawned::SpawnedWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
+use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -30,7 +31,7 @@ pub struct SpawnedWorkerExecutorCluster {
 }
 
 impl SpawnedWorkerExecutorCluster {
-    pub fn new(
+    pub async fn new(
         size: usize,
         base_http_port: u16,
         base_grpc_port: u16,
@@ -51,8 +52,8 @@ impl SpawnedWorkerExecutorCluster {
             let http_port = base_http_port + i as u16;
             let grpc_port = base_grpc_port + i as u16;
 
-            let worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static> =
-                Arc::new(SpawnedWorkerExecutor::new(
+            let worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static> = Arc::new(
+                SpawnedWorkerExecutor::new(
                     executable,
                     working_directory,
                     http_port,
@@ -64,7 +65,9 @@ impl SpawnedWorkerExecutorCluster {
                     verbosity,
                     out_level,
                     err_level,
-                ));
+                )
+                .await,
+            );
 
             worker_executors.push(worker_executor);
         }
@@ -75,6 +78,7 @@ impl SpawnedWorkerExecutorCluster {
     }
 }
 
+#[async_trait]
 impl WorkerExecutorCluster for SpawnedWorkerExecutorCluster {
     fn size(&self) -> usize {
         self.worker_executors.len()
@@ -87,10 +91,10 @@ impl WorkerExecutorCluster for SpawnedWorkerExecutorCluster {
         }
     }
 
-    fn restart_all(&self) {
+    async fn restart_all(&self) {
         info!("Restarting all worker executors");
         for worker_executor in &self.worker_executors {
-            worker_executor.restart();
+            worker_executor.restart().await;
         }
     }
 
@@ -102,11 +106,10 @@ impl WorkerExecutorCluster for SpawnedWorkerExecutorCluster {
         }
     }
 
-    fn start(&self, index: usize) {
-        let mut stopped = self.stopped_indices.lock().unwrap();
-        if stopped.contains(&index) {
-            self.worker_executors[index].restart();
-            stopped.remove(&index);
+    async fn start(&self, index: usize) {
+        if self.stopped_indices().contains(&index) {
+            self.worker_executors[index].restart().await;
+            self.stopped_indices.lock().unwrap().remove(&index);
         }
     }
 

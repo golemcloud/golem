@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::rdb::docker_postgres::DockerPostgresRdb;
-use crate::components::rdb::k8s_postgres::K8sPostgresRdb;
 use clap::Args;
 use std::collections::HashMap;
 use std::path::PathBuf;

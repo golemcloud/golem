@@ -26,8 +26,8 @@ use crate::components::template_service::TemplateService;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 
-mod env;
 mod cli;
+mod env;
 
 pub trait TestDependencies {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static>;
@@ -38,13 +38,6 @@ pub trait TestDependencies {
     fn template_service(&self) -> Arc<dyn TemplateService + Send + Sync + 'static>;
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static>;
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
-}
-
-#[macro_export]
-macro_rules! lazy_field {
-    ($iface:ident) => {
-        Arc<Mutex<Option<Arc<dyn $iface + Send + Sync + 'static>>>>
-    }
 }
 
 #[derive(Debug, Clone)]
