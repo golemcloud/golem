@@ -1,4 +1,4 @@
-use crate::context::ContextInfo;
+use golem_test_framework::config::TestDependencies;
 use libtest_mimic::Failed;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -7,6 +7,7 @@ use std::fmt::Debug;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct CliConfig {
@@ -58,20 +59,22 @@ impl CliLive {
     }
 
     // TODO; Use NginxInfo
-    pub fn make(context: &ContextInfo) -> Result<CliLive, Failed> {
+    pub fn make(
+        deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+    ) -> Result<CliLive, Failed> {
         let golem_cli_path = PathBuf::from("../target/debug/golem-cli");
 
         println!(
             "CLI with template port {} and worker port {}",
-            context.golem_template_service.local_http_port,
-            context.golem_worker_service.local_http_port
+            deps.template_service().public_http_port(),
+            deps.worker_service().public_http_port()
         );
 
         if golem_cli_path.exists() {
             Ok(CliLive {
                 config: CliConfig { short_args: false },
-                golem_template_port: context.golem_template_service.local_http_port,
-                golem_worker_port: context.golem_worker_service.local_http_port,
+                golem_template_port: deps.template_service().public_http_port(),
+                golem_worker_port: deps.worker_service().public_http_port(),
                 golem_cli_path,
             })
         } else {

@@ -1,0 +1,39 @@
+[package]
+name = "integration-tests"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud/"
+repository = "https://github.com/golemcloud/golem"
+description = "Integration tests for Golem"
+
+autotests = false
+
+[dependencies]
+golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
+golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
+
+assert2 = "0.3.11"
+async-trait = { workspace = true }
+clap = { version = "4.5.4", features = ["derive", "suggestions", "color", "help"] }
+console-subscriber = { workspace = true }
+ctor = "0.2.7"
+golem-wasm-rpc = "0.0.16"
+rand = "0.8.5"
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+warp = { workspace = true }
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+
+[[test]]
+name = "sharding"
+path = "tests/sharding.rs"
+
+[[bin]]
+name = "benchmark_simple_worker_echo"
+path = "src/benchmarks/simple_worker_echo.rs"

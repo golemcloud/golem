@@ -85,6 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/apidefinition/api_definition.proto",
                 "proto/golem/apidefinition/api_definition_service.proto",
                 "proto/golem/apidefinition/api_definition_error.proto",
+                "proto/grpc/health/v1/health.proto",
             ],
             &[&format!("{wasm_rpc_root}/proto"), &"proto".to_string()],
         )

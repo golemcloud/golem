@@ -1,16 +1,21 @@
 use crate::cli::{Cli, CliLive};
-use crate::context::ContextInfo;
 use golem_cli::clients::template::TemplateView;
 use golem_cli::model::InvocationKey;
 use golem_client::model::VersionedWorkerId;
+use golem_test_framework::config::TestDependencies;
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use std::time::Duration;
 
-fn make(suffix: &str, name: &str, cli: CliLive, context: Arc<ContextInfo>) -> Vec<Trial> {
-    let ctx = (context, name.to_string(), cli);
+fn make(
+    suffix: &str,
+    name: &str,
+    cli: CliLive,
+    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+) -> Vec<Trial> {
+    let ctx = (deps, name.to_string(), cli);
     vec![
         Trial::test_in_context(
             format!("worker_new_instance{suffix}"),
@@ -51,34 +56,27 @@ fn make(suffix: &str, name: &str, cli: CliLive, context: Arc<ContextInfo>) -> Ve
     ]
 }
 
-pub fn all(context: Arc<ContextInfo>) -> Vec<Trial> {
-    let short_cli = CliLive::make(&context).unwrap().with_short_args();
-    let mut short_args = make("_short", "CLI_short", short_cli.clone(), context.clone());
+pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
+    let short_cli = CliLive::make(deps.clone()).unwrap().with_short_args();
+    let mut short_args = make("_short", "CLI_short", short_cli.clone(), deps.clone());
 
     let mut long_args = make(
         "_long",
         "CLI_long",
-        CliLive::make(&context).unwrap().with_long_args(),
-        context.clone(),
+        CliLive::make(deps.clone()).unwrap().with_long_args(),
+        deps.clone(),
     );
 
     short_args.append(&mut long_args);
-
-    short_args.push(Trial::test_in_context(
-        "auction_example".to_string(),
-        (context.clone(), "".to_string(), short_cli),
-        auction_example,
-    ));
-
     short_args
 }
 
 fn make_template(
-    context: &ContextInfo,
+    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
     template_name: &str,
     cli: &CliLive,
 ) -> Result<TemplateView, Failed> {
-    let env_service = context.env.wasm_root.join("environment-service.wasm");
+    let env_service = deps.template_directory().join("environment-service.wasm");
     let cfg = &cli.config;
     cli.run(&[
         "template",
@@ -90,10 +88,14 @@ fn make_template(
 }
 
 fn worker_new_instance(
-    (context, name, cli): (Arc<ContextInfo>, String, CliLive),
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
 ) -> Result<(), Failed> {
     let template_id =
-        make_template(&context, &format!("{name} worker new instance"), &cli)?.template_id;
+        make_template(deps, &format!("{name} worker new instance"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_new_instance");
     let cfg = &cli.config;
     let worker_id: VersionedWorkerId = cli.run(&[
@@ -111,10 +113,14 @@ fn worker_new_instance(
 }
 
 fn worker_get_invocation_key(
-    (context, name, cli): (Arc<ContextInfo>, String, CliLive),
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
 ) -> Result<(), Failed> {
     let template_id =
-        make_template(&context, &format!("{name} worker invocation key"), &cli)?.template_id;
+        make_template(deps, &format!("{name} worker invocation key"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_invocation_key");
     let cfg = &cli.config;
     let _: VersionedWorkerId = cli.run(&[
@@ -137,10 +143,14 @@ fn worker_get_invocation_key(
 }
 
 fn worker_invoke_and_await(
-    (context, name, cli): (Arc<ContextInfo>, String, CliLive),
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
 ) -> Result<(), Failed> {
     let template_id =
-        make_template(&context, &format!("{name} worker_invoke_and_await"), &cli)?.template_id;
+        make_template(deps, &format!("{name} worker_invoke_and_await"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
     let _: VersionedWorkerId = cli.run(&[
@@ -219,8 +229,14 @@ fn worker_invoke_and_await(
     Ok(())
 }
 
-fn worker_invoke((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> Result<(), Failed> {
-    let template_id = make_template(&context, &format!("{name} worker_invoke"), &cli)?.template_id;
+fn worker_invoke(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let template_id = make_template(deps, &format!("{name} worker_invoke"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_invoke");
     let cfg = &cli.config;
     let _: VersionedWorkerId = cli.run(&[
@@ -247,10 +263,16 @@ fn worker_invoke((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> R
     Ok(())
 }
 
-fn worker_connect((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> Result<(), Failed> {
+fn worker_connect(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
     let cfg = &cli.config;
 
-    let stdout_service = context.env.wasm_root.join("write-stdout.wasm");
+    let stdout_service = deps.template_directory().join("write-stdout.wasm");
     let template: TemplateView = cli.run(&[
         "template",
         "add",
@@ -315,11 +337,15 @@ fn worker_connect((context, name, cli): (Arc<ContextInfo>, String, CliLive)) -> 
 }
 
 fn worker_connect_failed(
-    (context, name, cli): (Arc<ContextInfo>, String, CliLive),
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
 
-    let stdout_service = context.env.wasm_root.join("write-stdout.wasm");
+    let stdout_service = deps.template_directory().join("write-stdout.wasm");
     let template: TemplateView = cli.run(&[
         "template",
         "add",
@@ -347,11 +373,15 @@ fn worker_connect_failed(
 }
 
 fn worker_interrupt(
-    (context, name, cli): (Arc<ContextInfo>, String, CliLive),
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
 
-    let interruption_service = context.env.wasm_root.join("interruption.wasm");
+    let interruption_service = deps.template_directory().join("interruption.wasm");
     let template: TemplateView = cli.run(&[
         "template",
         "add",
@@ -382,11 +412,15 @@ fn worker_interrupt(
 }
 
 fn worker_simulated_crash(
-    (context, name, cli): (Arc<ContextInfo>, String, CliLive),
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
 
-    let interruption_service = context.env.wasm_root.join("interruption.wasm");
+    let interruption_service = deps.template_directory().join("interruption.wasm");
     let template: TemplateView = cli.run(&[
         "template",
         "add",
@@ -412,82 +446,6 @@ fn worker_simulated_crash(
         &cfg.arg('T', "template-id"),
         &template_id,
     ])?;
-
-    Ok(())
-}
-
-fn auction_example(
-    (context, name, cli): (Arc<ContextInfo>, String, CliLive),
-) -> Result<(), Failed> {
-    let auction_registry_wasm = context.env.wasm_root.join("auction_registry_composed.wasm");
-    let auction_wasm = context.env.wasm_root.join("auction.wasm");
-    let cfg = &cli.config;
-
-    let auction_registry_template_name = format!("{name}_auction_registry");
-    let auction_template_name = format!("{name}_auction");
-
-    let auction_registry = cli
-        .run::<TemplateView, &str>(&[
-            "template",
-            "add",
-            &cfg.arg('t', "template-name"),
-            &auction_registry_template_name,
-            auction_registry_wasm.to_str().unwrap(),
-        ])?
-        .template_id;
-
-    let auction = cli
-        .run::<TemplateView, &str>(&[
-            "template",
-            "add",
-            &cfg.arg('t', "template-name"),
-            &auction_template_name,
-            auction_wasm.to_str().unwrap(),
-        ])?
-        .template_id;
-
-    let worker_name = format!("{name}_auction_registry_1");
-
-    let _: VersionedWorkerId = cli.run(&[
-        "worker",
-        "add",
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('T', "template-id"),
-        &auction_registry,
-        &cfg.arg('e', "env"),
-        &format!("AUCTION_TEMPLATE_ID={auction}"),
-        "",
-    ])?;
-    let args_key: InvocationKey = cli.run(&[
-        "worker",
-        "invocation-key",
-        &cfg.arg('T', "template-id"),
-        &auction_registry,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-    ])?;
-
-    for _ in 1..100 {
-        let args = cli.run_json(&[
-            "worker",
-            "invoke-and-await",
-            &cfg.arg('T', "template-id"),
-            &auction_registry,
-            &cfg.arg('w', "worker-name"),
-            &worker_name,
-            &cfg.arg('f', "function"),
-            "auction:registry/api/create-auction",
-            &cfg.arg('j', "parameters"),
-            "[\"test-auction\", \"this is a test\", 100.0, 600]",
-            &cfg.arg('k', "invocation-key"),
-            &args_key.0,
-        ])?;
-        assert!(args
-            .as_array()
-            .and_then(|arr| arr[0].as_object().map(|obj| obj.contains_key("auction-id")))
-            .unwrap_or(false));
-    }
 
     Ok(())
 }
