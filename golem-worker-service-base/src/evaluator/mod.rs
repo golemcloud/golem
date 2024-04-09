@@ -100,14 +100,14 @@ impl Evaluator for Expr {
                     .map_err(|err| err.into()),
 
                 Expr::SelectIndex(expr, index) => {
-                    let evaluation_result = go(&expr, input)?;
+                    let evaluation_result = go(expr, input)?;
                     evaluation_result
                         .get(&Path::from_index(*index))
                         .map_err(|err| err.into())
                 }
 
                 Expr::SelectField(expr, field_name) => {
-                    let evaluation_result = go(&expr, input)?;
+                    let evaluation_result = go(expr, input)?;
 
                     evaluation_result
                         .get(&Path::from_key(field_name.as_str()))
@@ -115,8 +115,8 @@ impl Evaluator for Expr {
                 }
 
                 Expr::EqualTo(left, right) => {
-                    let left = go(&left, input)?;
-                    let right = go(&right, input)?;
+                    let left = go(left, input)?;
+                    let right = go(right, input)?;
 
                     match (left.get_primitive(), right.get_primitive()) {
                         (Some(left), Some(right)) => {
@@ -129,8 +129,8 @@ impl Evaluator for Expr {
                     }
                 }
                 Expr::GreaterThan(left, right) => {
-                    let left = go(&left, input)?;
-                    let right = go(&right, input)?;
+                    let left = go(left, input)?;
+                    let right = go(right, input)?;
 
                     match (left.get_primitive(), right.get_primitive()) {
                         (Some(left), Some(right)) => {
@@ -143,8 +143,8 @@ impl Evaluator for Expr {
                     }
                 }
                 Expr::GreaterThanOrEqualTo(left, right) => {
-                    let left = go(&left, input)?;
-                    let right = go(&right, input)?;
+                    let left = go(left, input)?;
+                    let right = go(right, input)?;
 
                     match (left.get_primitive(), right.get_primitive()) {
                         (Some(left), Some(right)) => {
@@ -157,8 +157,8 @@ impl Evaluator for Expr {
                     }
                 }
                 Expr::LessThan(left, right) => {
-                    let left = go(&left, input)?;
-                    let right = go(&right, input)?;
+                    let left = go(left, input)?;
+                    let right = go(right, input)?;
 
                     match (left.get_primitive(), right.get_primitive()) {
                         (Some(left), Some(right)) => {
@@ -171,8 +171,8 @@ impl Evaluator for Expr {
                     }
                 }
                 Expr::LessThanOrEqualTo(left, right) => {
-                    let left = go(&left, input)?;
-                    let right = go(&right, input)?;
+                    let left = go(left, input)?;
+                    let right = go(right, input)?;
 
                     match (left.get_primitive(), right.get_primitive()) {
                         (Some(left), Some(right)) => {
@@ -198,9 +198,9 @@ impl Evaluator for Expr {
                 }
 
                 Expr::Cond(pred0, left, right) => {
-                    let pred = go(&pred0, input)?;
-                    let left = go(&left, input)?;
-                    let right = go(&right, input)?;
+                    let pred = go(pred0, input)?;
+                    let left = go(left, input)?;
+                    let right = go(right, input)?;
 
                     match pred {
                         TypeAnnotatedValue::Bool(value) => {
@@ -223,7 +223,7 @@ impl Evaluator for Expr {
                     let mut result: Vec<TypeAnnotatedValue> = vec![];
 
                     for expr in exprs {
-                        match go(&expr, input) {
+                        match go(expr, input) {
                             Ok(value) => result.push(value),
                             Err(result) => return Err(result),
                         }
@@ -244,7 +244,7 @@ impl Evaluator for Expr {
                     let mut values: Vec<(String, TypeAnnotatedValue)> = vec![];
 
                     for (key, expr) in tuples {
-                        match go(&expr, input) {
+                        match go(expr, input) {
                             Ok(value) => {
                                 values.push((key.to_string(), value));
                             }
@@ -268,7 +268,7 @@ impl Evaluator for Expr {
                     let mut result = String::new();
 
                     for expr in exprs {
-                        match go(&expr, input) {
+                        match go(expr, input) {
                             Ok(value) => {
                                 if let Some(primitive) = value.get_primitive() {
                                     result.push_str(primitive.to_string().as_str())
@@ -303,14 +303,14 @@ impl Evaluator for Expr {
                         .map(|constructor| (constructor.0 .0.clone(), *constructor.0 .1.clone()))
                         .collect();
 
-                    handle_pattern_match(&input_expr, constructors, input)
+                    handle_pattern_match(input_expr, constructors, input)
                 }
-                Expr::Constructor0(constructor) => handle_expr_construction(&constructor, input),
+                Expr::Constructor0(constructor) => handle_expr_construction(constructor, input),
                 Expr::Tuple(tuple_exprs) => {
                     let mut result: Vec<TypeAnnotatedValue> = vec![];
 
                     for expr in tuple_exprs {
-                        let type_annotated_value = go(&expr, input)?;
+                        let type_annotated_value = go(expr, input)?;
                         result.push(type_annotated_value);
                     }
 
