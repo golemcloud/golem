@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::model::{
     CallingConvention, InvokeParameters, InvokeResult, VersionedWorkerId, WorkerCreationRequest,
-    WorkerMetadata,
+    WorkerFilter, WorkerMetadata, WorkersMetadataRequest, WorkersMetadataResponse,
 };
 use golem_client::Context;
 use native_tls::TlsConnector;
@@ -80,6 +80,22 @@ pub trait WorkerClient {
         name: WorkerName,
         template_id: RawTemplateId,
     ) -> Result<WorkerMetadata, GolemError>;
+    async fn find_metadata(
+        &self,
+        template_id: RawTemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: Option<u64>,
+        count: Option<u64>,
+        precise: Option<bool>,
+    ) -> Result<WorkersMetadataResponse, GolemError>;
+    async fn list_metadata(
+        &self,
+        template_id: RawTemplateId,
+        filter: Option<Vec<String>>,
+        cursor: Option<u64>,
+        count: Option<u64>,
+        precise: Option<bool>,
+    ) -> Result<WorkersMetadataResponse, GolemError>;
     async fn connect(&self, name: WorkerName, template_id: RawTemplateId)
         -> Result<(), GolemError>;
 }
@@ -224,6 +240,59 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         Ok(self
             .client
             .get_worker_metadata(&template_id.0, &name.0)
+            .await?)
+    }
+
+    async fn find_metadata(
+        &self,
+        template_id: RawTemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: Option<u64>,
+        count: Option<u64>,
+        precise: Option<bool>,
+    ) -> Result<WorkersMetadataResponse, GolemError> {
+        info!(
+            "Getting workers metadata for template: {}, filter: {}",
+            template_id.0,
+            filter.is_some()
+        );
+
+        Ok(self
+            .client
+            .find_workers_metadata(
+                &template_id.0,
+                &WorkersMetadataRequest {
+                    filter,
+                    cursor,
+                    count,
+                    precise,
+                },
+            )
+            .await?)
+    }
+
+    async fn list_metadata(
+        &self,
+        template_id: RawTemplateId,
+        filter: Option<Vec<String>>,
+        cursor: Option<u64>,
+        count: Option<u64>,
+        precise: Option<bool>,
+    ) -> Result<WorkersMetadataResponse, GolemError> {
+        info!(
+            "Getting workers metadata for template: {}, filter: {}",
+            template_id.0,
+            filter
+                .clone()
+                .map(|fs| fs.join(" AND "))
+                .unwrap_or("N/A".to_string())
+        );
+
+        let filter: Option<&[String]> = filter.as_deref();
+
+        Ok(self
+            .client
+            .get_workers_metadata(&template_id.0, filter, cursor, count, precise)
             .await?)
     }
 
