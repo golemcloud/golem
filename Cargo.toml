@@ -10,11 +10,13 @@ members = [
     "golem-template-compilation-service",
     "golem-template-service-base",
     "golem-template-service",
+    "golem-test-framework",
     "golem-shard-manager",
     "golem-worker-executor-base",
     "golem-worker-executor",
     "golem-worker-service-base",
     "golem-worker-service",
+    "integration-tests"
 ]
 
 exclude = [
@@ -103,6 +105,7 @@ tokio = { version = "1.0", features = [
     "io-std",
     "net",
     "tracing",
+    "process"
 ] }
 tokio-rustls = { version = "0.25.0" }
 tokio-stream = { version = "0.1", features = ["sync"] }

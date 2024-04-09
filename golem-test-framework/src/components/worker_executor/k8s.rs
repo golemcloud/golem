@@ -1,0 +1,229 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::components::k8s::{
+    K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
+    Routing,
+};
+use crate::components::redis::Redis;
+use crate::components::shard_manager::ShardManager;
+use crate::components::template_service::TemplateService;
+use crate::components::worker_executor::{env_vars, wait_for_startup, WorkerExecutor};
+use crate::components::worker_service::WorkerService;
+use async_dropper_simple::{AsyncDrop, AsyncDropper};
+use async_scoped::TokioScope;
+use async_trait::async_trait;
+use k8s_openapi::api::core::v1::{Pod, Service};
+use kube::api::PostParams;
+use kube::{Api, Client};
+use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::{info, Level};
+
+pub struct K8sWorkerExecutor {
+    namespace: K8sNamespace,
+    idx: usize,
+    local_host: String,
+    local_port: u16,
+    pod: Arc<Mutex<K8sPod>>,
+    service: Arc<Mutex<K8sService>>,
+    routing: Arc<Mutex<K8sRouting>>,
+}
+
+impl K8sWorkerExecutor {
+    const GRPC_PORT: u16 = 9000;
+    const HTTP_PORT: u16 = 9100;
+
+    pub async fn new(
+        namespace: &K8sNamespace,
+        routing_type: &K8sRoutingType,
+        idx: usize,
+        verbosity: Level,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+    ) -> Self {
+        info!("Starting Golem Worker Executor {idx} pod");
+
+        let name = &format!("golem-worker-executor-{idx}");
+
+        let env_vars = env_vars(
+            Self::HTTP_PORT,
+            Self::GRPC_PORT,
+            template_service,
+            shard_manager,
+            worker_service,
+            redis,
+            verbosity,
+        );
+        let env_vars = env_vars
+            .into_iter()
+            .map(|(k, v)| json!({"name": k, "value": v}))
+            .collect::<Vec<_>>();
+
+        let pods: Api<Pod> = Api::namespaced(
+            Client::try_default()
+                .await
+                .expect("Failed to create K8s client"),
+            &namespace.0,
+        );
+        let services: Api<Service> = Api::namespaced(
+            Client::try_default()
+                .await
+                .expect("Failed to create K8s client"),
+            &namespace.0,
+        );
+
+        let pod: Pod = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": name,
+                "labels": {
+                    "app": name,
+                    "app-group": "golem"
+                },
+            },
+            "spec": {
+                "ports": [
+                    {
+                        "port": Self::GRPC_PORT,
+                        "protocol": "TCP"
+                    },
+                    {
+                        "port": Self::HTTP_PORT,
+                        "protocol": "TCP"
+                    }
+                ],
+                "containers": [{
+                    "name": "service",
+                    "image": format!("golemservices/golem-worker-executor:latest"),
+                    "env": env_vars
+                }]
+            }
+        }))
+        .expect("Failed to deserialize Pod definition");
+
+        let pp = PostParams::default();
+
+        let _res_pod = pods.create(&pp, &pod).await.expect("Failed to create pod");
+        let managed_pod = AsyncDropper::new(ManagedPod::new(name, namespace));
+
+        let service: Service = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": name,
+                "labels": {
+                    "app": name,
+                    "app-group": "golem"
+                },
+            },
+            "spec": {
+                "ports": [
+                    {
+                        "name": "grpc",
+                        "port": Self::GRPC_PORT,
+                        "protocol": "TCP"
+                    },
+                    {
+                        "name": "http",
+                        "port": Self::HTTP_PORT,
+                        "protocol": "TCP"
+                    }
+                ],
+                "selector": { "app": name },
+                "type": "LoadBalancer"
+            }
+        }))
+        .expect("Failed to deserialize service definition");
+
+        let _res_srv = services
+            .create(&pp, &service)
+            .await
+            .expect("Failed to create service");
+
+        let managed_service = AsyncDropper::new(ManagedService::new(name, namespace));
+
+        let Routing {
+            hostname: local_host,
+            port: local_port,
+            routing: managed_routing,
+        } = Routing::create(name, Self::GRPC_PORT, namespace, routing_type).await;
+
+        wait_for_startup(&local_host, local_port).await;
+
+        info!("Golem Worker Executor pod started");
+
+        Self {
+            namespace: namespace.clone(),
+            idx,
+            local_host,
+            local_port,
+            pod: Arc::new(Mutex::new(managed_pod)),
+            service: Arc::new(Mutex::new(managed_service)),
+            routing: Arc::new(Mutex::new(managed_routing)),
+        }
+    }
+
+    fn name(&self) -> String {
+        format!("golem-worker-executor-{}", self.idx)
+    }
+}
+
+#[async_trait]
+impl WorkerExecutor for K8sWorkerExecutor {
+    fn private_host(&self) -> String {
+        format!("{}.{}.svc.cluster.local", self.name(), &self.namespace.0)
+    }
+
+    fn private_http_port(&self) -> u16 {
+        Self::HTTP_PORT
+    }
+
+    fn private_grpc_port(&self) -> u16 {
+        Self::GRPC_PORT
+    }
+
+    fn public_host(&self) -> String {
+        self.local_host.clone()
+    }
+
+    fn public_http_port(&self) -> u16 {
+        todo!()
+    }
+
+    fn public_grpc_port(&self) -> u16 {
+        self.local_port
+    }
+
+    fn kill(&self) {
+        TokioScope::scope_and_block(|s| {
+            s.spawn(async move {
+                let mut pod = self.pod.lock().await;
+                pod.inner_mut().async_drop().await;
+                let mut service = self.service.lock().await;
+                service.inner_mut().async_drop().await;
+                let mut routing = self.routing.lock().await;
+                routing.inner_mut().async_drop().await;
+            })
+        });
+    }
+
+    async fn restart(&self) {
+        panic!("Not supported yet");
+    }
+}

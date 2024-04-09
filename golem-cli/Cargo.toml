@@ -15,11 +15,6 @@ name = "integration"
 path = "tests/main.rs"
 harness = false
 
-[[test]]
-name = "sharding"
-path = "tests/sharding.rs"
-harness = false
-
 [dependencies]
 golem-client = { path = "../golem-client", version = "0.0.0" }
 
@@ -58,6 +53,8 @@ uuid = { workspace = true }
 version-compare = "=0.0.11"
 
 [dev-dependencies]
+golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
+
 async-recursion = "1.0.5"
 env_logger = "0.11.1"
 libtest-mimic = { git = "https://github.com/senia-psm/libtest-mimic.git", branch = "async_and_context_tests" }
