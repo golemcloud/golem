@@ -86,7 +86,7 @@ pub trait WorkerClient {
     async fn find_metadata(
         &self,
         template_id: RawTemplateId,
-        filter: Option<Vec<String>>,
+        filter: Option<WorkerFilter>,
         cursor: Option<u64>,
         count: Option<u64>,
         precise: Option<bool>,
@@ -241,7 +241,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
     async fn find_metadata(
         &self,
         template_id: RawTemplateId,
-        filter: Option<Vec<String>>,
+        filter: Option<WorkerFilter>,
         cursor: Option<u64>,
         count: Option<u64>,
         precise: Option<bool>,
@@ -251,11 +251,6 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             template_id.0,
             filter.is_some()
         );
-
-        let filter = match filter {
-            Some(filters) => Some(worker_filter_from(filters).map_err(GolemError)?),
-            None => None,
-        };
 
         Ok(self
             .client
@@ -486,14 +481,14 @@ fn filter_comparator_from_str(s: &str) -> Result<FilterComparator, String> {
 }
 
 fn worker_status_from_str(s: &str) -> Result<WorkerStatus, String> {
-    match s {
-        "Running" => Ok(WorkerStatus::Running),
-        "Idle" => Ok(WorkerStatus::Idle),
-        "Suspended" => Ok(WorkerStatus::Suspended),
-        "Interrupted" => Ok(WorkerStatus::Interrupted),
-        "Retrying" => Ok(WorkerStatus::Retrying),
-        "Failed" => Ok(WorkerStatus::Failed),
-        "Exited" => Ok(WorkerStatus::Exited),
+    match s.to_lowercase().as_str() {
+        "running" => Ok(WorkerStatus::Running),
+        "idle" => Ok(WorkerStatus::Idle),
+        "suspended" => Ok(WorkerStatus::Suspended),
+        "interrupted" => Ok(WorkerStatus::Interrupted),
+        "retrying" => Ok(WorkerStatus::Retrying),
+        "failed" => Ok(WorkerStatus::Failed),
+        "exited" => Ok(WorkerStatus::Exited),
         _ => Err(format!("Unknown Worker Status: {}", s)),
     }
 }
@@ -541,7 +536,7 @@ fn worker_filter_from_str(s: &str) -> Result<WorkerFilter, String> {
     }
 }
 
-fn worker_filter_from(values: Vec<String>) -> Result<WorkerFilter, String> {
+pub fn worker_filter_from(values: Vec<String>) -> Result<WorkerFilter, String> {
     let mut filters = vec![];
 
     for value in values {
@@ -549,4 +544,57 @@ fn worker_filter_from(values: Vec<String>) -> Result<WorkerFilter, String> {
     }
 
     Ok(WorkerFilter::And(WorkerAndFilter { filters }))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::clients::worker::worker_filter_from_str;
+    use golem_client::model::{
+        FilterComparator, StringFilterComparator, WorkerEnvFilter, WorkerFilter, WorkerNameFilter,
+        WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
+    };
+
+    #[test]
+    fn worker_filter_parse() {
+        assert_eq!(
+            worker_filter_from_str(" name =  worker-1").unwrap(),
+            WorkerFilter::Name(WorkerNameFilter {
+                comparator: StringFilterComparator::Equal,
+                value: "worker-1".to_string()
+            })
+        );
+
+        assert_eq!(
+            worker_filter_from_str("status == Running").unwrap(),
+            WorkerFilter::Status(WorkerStatusFilter {
+                comparator: FilterComparator::Equal,
+                value: WorkerStatus::Running
+            })
+        );
+
+        assert_eq!(
+            worker_filter_from_str("status eq running").unwrap(),
+            WorkerFilter::Status(WorkerStatusFilter {
+                comparator: FilterComparator::Equal,
+                value: WorkerStatus::Running
+            })
+        );
+
+        assert_eq!(
+            worker_filter_from_str("version >= 10").unwrap(),
+            WorkerFilter::Version(WorkerVersionFilter {
+                comparator: FilterComparator::GreaterEqual,
+                value: 10
+            })
+        );
+
+        assert_eq!(
+            worker_filter_from_str("env.tag1 == abc ").unwrap(),
+            WorkerFilter::Env(WorkerEnvFilter {
+                name: "tag1".to_string(),
+                comparator: StringFilterComparator::Equal,
+                value: "abc".to_string(),
+            })
+        );
+    }
 }

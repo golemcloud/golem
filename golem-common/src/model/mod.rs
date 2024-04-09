@@ -673,14 +673,14 @@ impl FromStr for WorkerStatus {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Running" => Ok(WorkerStatus::Running),
-            "Idle" => Ok(WorkerStatus::Idle),
-            "Suspended" => Ok(WorkerStatus::Suspended),
-            "Interrupted" => Ok(WorkerStatus::Interrupted),
-            "Retrying" => Ok(WorkerStatus::Retrying),
-            "Failed" => Ok(WorkerStatus::Failed),
-            "Exited" => Ok(WorkerStatus::Exited),
+        match s.to_lowercase().as_str() {
+            "running" => Ok(WorkerStatus::Running),
+            "idle" => Ok(WorkerStatus::Idle),
+            "suspended" => Ok(WorkerStatus::Suspended),
+            "interrupted" => Ok(WorkerStatus::Interrupted),
+            "retrying" => Ok(WorkerStatus::Retrying),
+            "failed" => Ok(WorkerStatus::Failed),
+            "exited" => Ok(WorkerStatus::Exited),
             _ => Err(format!("Unknown worker status: {}", s)),
         }
     }
