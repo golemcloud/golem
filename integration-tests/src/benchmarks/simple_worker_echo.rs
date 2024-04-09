@@ -12,10 +12,131 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_test_framework::config::CliTestDependencies;
+use std::time::SystemTime;
+
+use async_trait::async_trait;
+use clap::Parser;
+use golem_wasm_rpc::Value;
+
+use golem_common::model::WorkerId;
+use golem_test_framework::config::{CliParams, CliTestDependencies, TestDependencies};
+use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkApi, BenchmarkRecorder};
+use golem_test_framework::dsl::TestDsl;
+
+#[derive(Clone)]
+struct Context {
+    deps: CliTestDependencies,
+    worker_ids: Vec<WorkerId>,
+}
+
+struct SimpleWorkerEcho {
+    config: CliParams,
+}
+
+#[async_trait]
+impl Benchmark for SimpleWorkerEcho {
+    type IterationContext = Context;
+
+    fn name() -> &'static str {
+        "simple-worker-echo"
+    }
+
+    async fn create(config: CliParams) -> Self {
+        Self { config }
+    }
+
+    async fn setup_iteration(&self) -> Self::IterationContext {
+        // Initialize infrastructure
+        let deps = CliTestDependencies::new(self.config.clone()).await;
+
+        // Upload test template
+        let template_id = deps.store_template("option-service").await;
+        let mut worker_ids = Vec::new();
+
+        // Create 'size' workers
+        for i in 0..self.config.benchmark_config.size {
+            let worker_id = deps
+                .start_worker(&template_id, &format!("worker-{i}"))
+                .await;
+            worker_ids.push(worker_id);
+        }
+
+        Self::IterationContext { deps, worker_ids }
+    }
+
+    async fn warmup(&self, context: &Self::IterationContext) {
+        // Invoke each worker a few times in parallel
+        let mut fibers = Vec::new();
+        for worker_id in &context.worker_ids {
+            let context_clone = context.clone();
+            let worker_id_clone = worker_id.clone();
+            let fiber = tokio::task::spawn(async move {
+                for _ in 0..5 {
+                    context_clone
+                        .deps
+                        .invoke_and_await(
+                            &worker_id_clone,
+                            "golem:it/api/echo",
+                            vec![Value::Option(Some(Box::new(Value::String(
+                                "hello".to_string(),
+                            ))))],
+                        )
+                        .await
+                        .expect("invoke_and_await failed");
+                }
+            });
+            fibers.push(fiber);
+        }
+
+        for fiber in fibers {
+            fiber.await.expect("fiber failed");
+        }
+    }
+
+    async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
+        // Invoke each worker a 'length' times in parallel and record the duration
+        let mut fibers = Vec::new();
+        for (n, worker_id) in context.worker_ids.iter().enumerate() {
+            let context_clone = context.clone();
+            let worker_id_clone = worker_id.clone();
+            let recorder_clone = recorder.clone();
+            let length = self.config.benchmark_config.length;
+            let fiber = tokio::task::spawn(async move {
+                for _ in 0..length {
+                    let start = SystemTime::now();
+                    context_clone
+                        .deps
+                        .invoke_and_await(
+                            &worker_id_clone,
+                            "golem:it/api/echo",
+                            vec![Value::Option(Some(Box::new(Value::String(
+                                "hello".to_string(),
+                            ))))],
+                        )
+                        .await
+                        .expect("invoke_and_await failed");
+                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
+                    recorder_clone.duration(&"invocation".to_string(), elapsed);
+                    recorder_clone.duration(&format!("worker-{n}"), elapsed);
+                }
+            });
+            fibers.push(fiber);
+        }
+
+        for fiber in fibers {
+            fiber.await.expect("fiber failed");
+        }
+    }
+
+    async fn cleanup_iteration(&self, context: Self::IterationContext) {
+        context.deps.kill_all();
+    }
+}
 
 #[tokio::main]
 async fn main() {
-    let _deps = CliTestDependencies::new().await;
-    todo!()
+    let params = CliParams::parse();
+    CliTestDependencies::init_logging(&params);
+    let result = SimpleWorkerEcho::run_benchmark(params).await;
+    println!("{}", result);
 }

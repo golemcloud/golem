@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub use cli::CliTestDependencies;
+pub use cli::{CliParams, CliTestDependencies};
 pub use env::EnvBasedTestDependencies;
 
 use crate::components::rdb::Rdb;
@@ -38,6 +38,16 @@ pub trait TestDependencies {
     fn template_service(&self) -> Arc<dyn TemplateService + Send + Sync + 'static>;
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static>;
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
+
+    fn kill_all(&self) {
+        self.worker_executor_cluster().kill_all();
+        self.worker_service().kill();
+        self.template_service().kill();
+        self.shard_manager().kill();
+        self.rdb().kill();
+        self.redis_monitor().kill();
+        self.redis().kill();
+    }
 }
 
 #[derive(Debug, Clone)]

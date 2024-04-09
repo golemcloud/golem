@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod benchmark;
+
 use crate::config::TestDependencies;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::ErrorsBody;

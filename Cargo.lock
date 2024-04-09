@@ -4262,6 +4262,8 @@ name = "integration-tests"
 version = "0.0.0"
 dependencies = [
  "assert2",
+ "async-trait",
+ "clap 4.5.4",
  "console-subscriber",
  "ctor",
  "golem-api-grpc",

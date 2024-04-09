@@ -15,6 +15,8 @@ golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 
 assert2 = "0.3.11"
+async-trait = { workspace = true }
+clap = { version = "4.5.4", features = ["derive", "suggestions", "color", "help"] }
 console-subscriber = { workspace = true }
 ctor = "0.2.7"
 golem-wasm-rpc = "0.0.16"

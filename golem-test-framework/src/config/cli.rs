@@ -44,8 +44,10 @@ use crate::components::worker_service::k8s::K8sWorkerService;
 use crate::components::worker_service::provided::ProvidedWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
+use crate::config::TestDependencies;
+use crate::dsl::benchmark::BenchmarkConfig;
 use clap::{Parser, Subcommand};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::Level;
 use tracing_subscriber::layer::SubscriberExt;
@@ -57,6 +59,7 @@ use tracing_subscriber::{EnvFilter, Layer};
 /// To be used when a single executable with an async entry point requires
 /// setting up the test infrastructure, for example in benchmarks.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct CliTestDependencies {
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -65,18 +68,25 @@ pub struct CliTestDependencies {
     template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
+    template_directory: PathBuf,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command()]
-struct CliParams {
+pub struct CliParams {
     #[command(subcommand)]
-    mode: TestMode,
+    pub mode: TestMode,
+
+    #[arg(long, default_value = "test-templates")]
+    pub template_directory: String,
+
+    #[command(flatten)]
+    pub benchmark_config: BenchmarkConfig,
 
     #[arg(long, default_value = "false")]
-    quiet: bool,
+    pub quiet: bool,
     #[arg(long, default_value = "false")]
-    verbose: bool,
+    pub verbose: bool,
 }
 
 impl CliParams {
@@ -99,9 +109,9 @@ impl CliParams {
     }
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 #[command()]
-enum TestMode {
+pub enum TestMode {
     #[command()]
     Provided {
         #[command(flatten)]
@@ -202,9 +212,7 @@ enum TestMode {
 }
 
 impl CliTestDependencies {
-    pub async fn new() -> Self {
-        let params = CliParams::parse();
-
+    pub fn init_logging(params: &CliParams) {
         let ansi_layer = tracing_subscriber::fmt::layer()
             .with_ansi(true)
             .with_filter(
@@ -212,7 +220,9 @@ impl CliTestDependencies {
             );
 
         tracing_subscriber::registry().with(ansi_layer).init();
+    }
 
+    pub async fn new(params: CliParams) -> Self {
         match &params.mode {
             TestMode::Provided {
                 postgres,
@@ -278,6 +288,7 @@ impl CliTestDependencies {
                     template_service,
                     worker_service,
                     worker_executor_cluster,
+                    template_directory: Path::new(&params.template_directory).to_path_buf(),
                 }
             }
             TestMode::Docker {
@@ -328,6 +339,7 @@ impl CliTestDependencies {
                     template_service,
                     worker_service,
                     worker_executor_cluster,
+                    template_directory: Path::new(&params.template_directory).to_path_buf(),
                 }
             }
             TestMode::Spawned {
@@ -431,6 +443,7 @@ impl CliTestDependencies {
                     template_service,
                     worker_service,
                     worker_executor_cluster,
+                    template_directory: Path::new(&params.template_directory).to_path_buf(),
                 }
             }
             TestMode::Minikube {
@@ -492,6 +505,7 @@ impl CliTestDependencies {
                     template_service,
                     worker_service,
                     worker_executor_cluster,
+                    template_directory: Path::new(&params.template_directory).to_path_buf(),
                 }
             }
             TestMode::Aws {
@@ -553,8 +567,43 @@ impl CliTestDependencies {
                     template_service,
                     worker_service,
                     worker_executor_cluster,
+                    template_directory: Path::new(&params.template_directory).to_path_buf(),
                 }
             }
         }
+    }
+}
+
+impl TestDependencies for CliTestDependencies {
+    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
+        self.rdb.clone()
+    }
+
+    fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static> {
+        self.redis.clone()
+    }
+
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
+        self.redis_monitor.clone()
+    }
+
+    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static> {
+        self.shard_manager.clone()
+    }
+
+    fn template_directory(&self) -> PathBuf {
+        self.template_directory.clone()
+    }
+
+    fn template_service(&self) -> Arc<dyn TemplateService + Send + Sync + 'static> {
+        self.template_service.clone()
+    }
+
+    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {
+        self.worker_service.clone()
+    }
+
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
+        self.worker_executor_cluster.clone()
     }
 }
