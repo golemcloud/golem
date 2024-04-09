@@ -82,6 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/shardmanager/shard_id.proto",
                 "proto/golem/shardmanager/shard_manager_error.proto",
                 "proto/golem/shardmanager/shard_manager_service.proto",
+                "proto/grpc/health/v1/health.proto",
             ],
             &[&format!("{wasm_rpc_root}/proto"), &"proto".to_string()],
         )

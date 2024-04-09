@@ -1,10 +1,13 @@
-use crate::common;
+use crate::common::{start, TestContext};
 use assert2::check;
 use bytes::Bytes;
+use golem_test_framework::dsl::{
+    drain_connection, stdout_event, stdout_event_starting_with, worker_error_message, TestDsl,
+};
+use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::task::JoinHandle;
@@ -79,22 +82,21 @@ impl TestHttpServer {
 #[tokio::test]
 #[tracing::instrument]
 async fn jump() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let host_http_port = context.host_http_port();
 
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+    let template_id = executor.store_template("runtime-service").await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "runtime-service-jump", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "runtime-service-jump", vec![], env)
+        .await;
 
     let (rx, abort_capture) = executor.capture_output_forever(&worker_id).await;
 
@@ -107,28 +109,27 @@ async fn jump() {
     http_server.abort();
 
     abort_capture.send(()).unwrap();
-    let mut events = common::drain_connection(rx).await;
+    let mut events = drain_connection(rx).await;
     events.retain(|e| match e {
         Some(e) => {
-            !common::stdout_event_starting_with(e, "Sending")
-                && !common::stdout_event_starting_with(e, "Received")
+            !stdout_event_starting_with(e, "Sending") && !stdout_event_starting_with(e, "Received")
         }
         None => false,
     });
 
     println!("events: {:?}", events);
 
-    check!(result == vec![common::val_u64(5)]);
+    check!(result == vec![Value::U64(5)]);
     check!(
         events
             == vec![
-                Some(common::stdout_event("started: 0\n")),
-                Some(common::stdout_event("second: 2\n")),
-                Some(common::stdout_event("second: 2\n")),
-                Some(common::stdout_event("third: 3\n")),
-                Some(common::stdout_event("fourth: 4\n")),
-                Some(common::stdout_event("fourth: 4\n")),
-                Some(common::stdout_event("fifth: 5\n")),
+                Some(stdout_event("started: 0\n")),
+                Some(stdout_event("second: 2\n")),
+                Some(stdout_event("second: 2\n")),
+                Some(stdout_event("third: 3\n")),
+                Some(stdout_event("fourth: 4\n")),
+                Some(stdout_event("fourth: 4\n")),
+                Some(stdout_event("fifth: 5\n")),
             ]
     );
 }
@@ -136,10 +137,10 @@ async fn jump() {
 #[tokio::test]
 #[instrument]
 async fn explicit_oplog_commit() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+    let template_id = executor.store_template("runtime-service").await;
 
     let worker_id = executor
         .start_worker(&template_id, "runtime-service-explicit-oplog-commit")
@@ -152,7 +153,7 @@ async fn explicit_oplog_commit() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/explicit-commit",
-            vec![common::val_u8(0)],
+            vec![Value::U8(0)],
         )
         .await;
 
@@ -163,10 +164,10 @@ async fn explicit_oplog_commit() {
 #[tokio::test]
 #[instrument]
 async fn set_retry_policy() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+    let template_id = executor.store_template("runtime-service").await;
     let worker_id = executor
         .start_worker(&template_id, "set-retry-policy-1")
         .await;
@@ -178,7 +179,7 @@ async fn set_retry_policy() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/fail-with-custom-max-retries",
-            vec![common::val_u64(2)],
+            vec![Value::U64(2)],
         )
         .await;
     let elapsed = start.elapsed().unwrap();
@@ -187,7 +188,7 @@ async fn set_retry_policy() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/fail-with-custom-max-retries",
-            vec![common::val_u64(1)],
+            vec![Value::U64(1)],
         )
         .await;
 
@@ -196,37 +197,28 @@ async fn set_retry_policy() {
     check!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
     check!(result1.is_err());
     check!(result2.is_err());
-    check!(result1
-        .clone()
-        .err()
-        .unwrap()
-        .to_string()
+    check!(worker_error_message(&result1.clone().err().unwrap())
         .starts_with("Runtime error: error while executing at wasm backtrace:"));
-    check!(result2
-        .err()
-        .unwrap()
-        .to_string()
-        .starts_with("The previously invoked function failed"));
+    check!(worker_error_message(&result2.err().unwrap()).starts_with("Previous invocation failed"));
 }
 
 #[tokio::test]
 #[tracing::instrument]
 async fn atomic_region() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let host_http_port = context.host_http_port();
 
     let http_server = TestHttpServer::start(host_http_port, 2);
-    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+    let template_id = executor.store_template("runtime-service").await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "atomic-region", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "atomic-region", vec![], env)
+        .await;
 
     let _ = executor
         .invoke_and_await(&worker_id, "golem:it/api/atomic-region", vec![])
@@ -245,27 +237,26 @@ async fn atomic_region() {
 #[tokio::test]
 #[tracing::instrument]
 async fn idempotence_on() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+    let template_id = executor.store_template("runtime-service").await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "idempotence-flag", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "idempotence-flag", vec![], env)
+        .await;
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/idempotence-flag",
-            vec![common::val_bool(true)],
+            vec![Value::Bool(true)],
         )
         .await
         .unwrap();
@@ -282,27 +273,26 @@ async fn idempotence_on() {
 #[tokio::test]
 #[tracing::instrument]
 async fn idempotence_off() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+    let template_id = executor.store_template("runtime-service").await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "idempotence-flag", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "idempotence-flag", vec![], env)
+        .await;
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/idempotence-flag",
-            vec![common::val_bool(false)],
+            vec![Value::Bool(false)],
         )
         .await;
 
@@ -320,21 +310,20 @@ async fn idempotence_off() {
 #[tokio::test]
 #[tracing::instrument]
 async fn persist_nothing() {
-    let context = common::TestContext::new();
-    let mut executor = common::start(&context).await.unwrap();
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 2);
 
-    let template_id = executor.store_template(Path::new("../test-templates/runtime-service.wasm"));
+    let template_id = executor.store_template("runtime-service").await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
     let worker_id = executor
-        .try_start_worker_versioned(&template_id, 0, "persist-nothing", vec![], env)
-        .await
-        .unwrap();
+        .start_worker_with(&template_id, "persist-nothing", vec![], env)
+        .await;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api/persist-nothing", vec![])
