@@ -7,6 +7,7 @@ use golem_common::model::TemplateId;
 
 use crate::api_definition::http::MethodPattern;
 use crate::api_definition::{ApiDefinitionId, ApiVersion};
+use crate::expression;
 use crate::expression::Expr;
 
 // Mostly this data structures that represents the actual incoming request
@@ -33,10 +34,10 @@ pub struct Route {
 #[oai(rename_all = "camelCase")]
 pub struct GolemWorkerBinding {
     pub template: TemplateId,
-    pub worker_id: serde_json::value::Value,
+    pub worker_id: String,
     pub function_name: String,
-    pub function_params: Vec<serde_json::value::Value>,
-    pub response: Option<serde_json::value::Value>,
+    pub function_params: Vec<String>,
+    pub response: Option<String>,
 }
 
 impl TryFrom<crate::api_definition::http::HttpApiDefinition> for HttpApiDefinition {
@@ -113,17 +114,17 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     type Error = String;
 
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
-        let response: Option<serde_json::value::Value> = match value.response {
+        let response: Option<String> = match value.response {
             Some(v) => {
-                let r = Expr::to_json_value(&v.0).map_err(|e| e.to_string())?;
+                let r = expression::to_string(&v.0).map_err(|e| e.to_string())?;
                 Some(r)
             }
             None => None,
         };
-        let worker_id = serde_json::to_value(value.worker_id).map_err(|e| e.to_string())?;
+        let worker_id = expression::to_string(&value.worker_id).map_err(|e| e.to_string())?;
         let mut function_params = Vec::new();
         for param in value.function_params {
-            let v = serde_json::to_value(param).map_err(|e| e.to_string())?;
+            let v = expression::to_string(&param).map_err(|e| e.to_string())?;
             function_params.push(v);
         }
 
@@ -143,17 +144,17 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     fn try_into(self) -> Result<crate::worker_binding::GolemWorkerBinding, Self::Error> {
         let response: Option<crate::worker_binding::ResponseMapping> = match self.response {
             Some(v) => {
-                let r = Expr::from_json_value(&v).map_err(|e| e.to_string())?;
+                let r = expression::from_string(v).map_err(|e| e.to_string())?;
                 Some(crate::worker_binding::ResponseMapping(r))
             }
             None => None,
         };
 
-        let worker_id: Expr = serde_json::from_value(self.worker_id).map_err(|e| e.to_string())?;
+        let worker_id: Expr = expression::from_string(self.worker_id).map_err(|e| e.to_string())?;
         let mut function_params = Vec::new();
 
         for param in self.function_params {
-            let v: Expr = serde_json::from_value(param).map_err(|e| e.to_string())?;
+            let v: Expr = expression::from_string(param).map_err(|e| e.to_string())?;
             function_params.push(v);
         }
 

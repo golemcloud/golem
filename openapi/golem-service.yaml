@@ -2089,13 +2089,16 @@ components:
         template:
           type: string
           format: uuid
-        workerId: {}
+        workerId:
+          type: string
         functionName:
           type: string
         functionParams:
           type: array
-          items: {}
-        response: {}
+          items:
+            type: string
+        response:
+          type: string
       required:
       - template
       - workerId

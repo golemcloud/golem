@@ -255,9 +255,8 @@ pub struct Route {
 
 #[cfg(test)]
 mod tests {
+    use crate::expression;
     use golem_common::serialization;
-
-    use crate::expression::Expr;
 
     use super::*;
 
@@ -350,9 +349,9 @@ mod tests {
 
     #[track_caller]
     fn test_string_expr_parse_and_encode(input: &str) {
-        let parsed_expr1 = Expr::from_primitive_string(input).unwrap();
+        let parsed_expr1 = expression::from_string(input).unwrap();
         let encoded_expr = parsed_expr1.to_string().unwrap();
-        let parsed_expr2 = Expr::from_primitive_string(encoded_expr.as_str()).unwrap();
+        let parsed_expr2 = expression::from_string(encoded_expr.as_str()).unwrap();
 
         assert_eq!(
             parsed_expr1,
@@ -399,34 +398,34 @@ mod tests {
 
     #[test]
     fn expr_with_if_condition() {
-        test_string_expr_parse_and_encode("${if (request.path.user_id>1) then 1 else 0}");
+        test_string_expr_parse_and_encode("${if request.path.user_id>1 then 1 else 0}");
     }
 
     #[test]
     fn expr_with_if_condition_with_expr_left() {
         test_string_expr_parse_and_encode(
-            "${if (request.path.user_id>1) then request.path.user_id else 0}",
+            "${if request.path.user_id>1 then request.path.user_id else 0}",
         );
     }
 
     #[test]
     fn expr_with_if_condition_with_expr_left_right() {
         test_string_expr_parse_and_encode(
-            "${if (request.path.user_id>1) then request.path.user_id else request.path.id}",
+            "${if request.path.user_id>1 then request.path.user_id else request.path.id}",
         );
     }
 
     #[test]
     fn expr_with_if_condition_with_expr_right() {
         test_string_expr_parse_and_encode(
-            "${if (request.path.user_id>1) then 0 else request.path.id}",
+            "${if request.path.user_id>1 then 0 else request.path.id}",
         );
     }
 
     #[test]
     fn expr_with_if_condition_with_with_literals() {
         test_string_expr_parse_and_encode(
-            "foo-${if (request.path.user_id>1) then request.path.user_id else 0}",
+            "foo-${if request.path.user_id>1 then request.path.user_id else 0}",
         );
     }
 
@@ -445,6 +444,7 @@ mod tests {
         path_pattern: &str,
         worker_id: &str,
         function_params: &str,
+        response_mapping: &str,
     ) -> serde_yaml::Value {
         let yaml_string = format!(
             r#"
@@ -459,19 +459,11 @@ mod tests {
               workerId: '{}'
               functionName: golem:it/api/get-cart-contents
               functionParams: {}
-              response:
-                status: '{}'
-                body: '{}'
-                headers:
-                  user: '{}'
+              response: '{}'
+
 
         "#,
-            path_pattern,
-            worker_id,
-            function_params,
-            "${if (worker.response.user == \"admin\") then 401 else 200}",
-            "hello-${if (worker.response.user == \"admin\") then \"unauthorised\" else ${worker.response.user}}",
-            "hello-${worker.response.user}"
+            path_pattern, worker_id, function_params, response_mapping
         );
 
         let de = serde_yaml::Deserializer::from_str(yaml_string.as_str());
@@ -484,32 +476,44 @@ mod tests {
             "foo/{user-id}?{id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.body}\"]",
+            "{status: if (worker.response.user == admin) then 401 else 200}",
         );
 
         test_serde(
             "foo/{user-id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.body.foo}\"]",
+            "{status: if (worker.response.user == admin) then 401 else 200}",
         );
 
         test_serde(
             "foo/{user-id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.path.user-id}\"]",
+            "{status: if (worker.response.user == admin) then 401 else 200}",
         );
 
         test_serde(
             "foo",
             "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
             "[ \"data\"]",
+            "{status: if (worker.response.user == admin) then 401 else 200}",
         );
     }
 
     #[track_caller]
-    fn test_serde(path_pattern: &str, worker_id: &str, function_params: &str) {
-        let yaml = get_api_spec(path_pattern, worker_id, function_params);
+    fn test_serde(
+        path_pattern: &str,
+        worker_id: &str,
+        function_params: &str,
+        response_mapping: &str,
+    ) {
+        let yaml = get_api_spec(path_pattern, worker_id, function_params, response_mapping);
+
         let result: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
+
         let yaml2 = serde_yaml::to_value(result.clone()).unwrap();
+
         let result2: HttpApiDefinition = serde_yaml::from_value(yaml2.clone()).unwrap();
 
         assert_eq!(
@@ -522,8 +526,13 @@ mod tests {
 
     #[test]
     fn test_api_spec_encode_decode() {
-        fn test_encode_decode(path_pattern: &str, worker_id: &str, function_params: &str) {
-            let yaml = get_api_spec(path_pattern, worker_id, function_params);
+        fn test_encode_decode(
+            path_pattern: &str,
+            worker_id: &str,
+            function_params: &str,
+            response_mapping: &str,
+        ) {
+            let yaml = get_api_spec(path_pattern, worker_id, function_params, response_mapping);
             let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
             let encoded = serialization::serialize(&original).unwrap();
             let decoded: HttpApiDefinition = serialization::deserialize(&encoded).unwrap();
@@ -535,30 +544,35 @@ mod tests {
             "foo/{user-id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.body}\"]",
+            "{status : 200}",
         );
 
         test_encode_decode(
             "foo/{user-id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.body.foo}\"]",
+            "{status : 200}",
         );
 
         test_encode_decode(
             "foo/{user-id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.path.user-id}\"]",
+            "{status : 200}",
         );
 
         test_encode_decode(
             "foo",
             "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
             "[ \"data\"]",
+            "{status : 200}",
         );
 
         test_encode_decode(
             "foo",
             "match worker.response { ok(value) => 1, error => 0 }",
             "[ \"data\"]",
+            "{status : 200}",
         );
     }
 }
