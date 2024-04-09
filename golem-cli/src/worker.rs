@@ -17,7 +17,7 @@ use clap::builder::ValueParser;
 use clap::Subcommand;
 use golem_client::model::InvokeParameters;
 
-use crate::clients::worker::{worker_filter_from, WorkerClient};
+use crate::clients::worker::WorkerClient;
 use crate::model::{
     GolemError, GolemResult, InvocationKey, JsonValueParser, TemplateIdOrName, WorkerName,
 };
@@ -353,14 +353,9 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
             } => {
                 let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
-                let filter = match filter {
-                    Some(filters) => Some(worker_filter_from(filters).map_err(GolemError)?),
-                    None => None,
-                };
-
                 let response = self
                     .client
-                    .find_metadata(template_id, filter, cursor, count, precise)
+                    .list_metadata(template_id, filter, cursor, count, precise)
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(response)))
