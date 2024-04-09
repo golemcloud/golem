@@ -145,14 +145,14 @@ impl GrpcApiDefinitionService {
         request: CreateOrUpdateApiDefinitionRequest,
     ) -> Result<GrpcApiDefinition, ApiDefinitionError> {
         let definition = request
-            .definition
+            .api_definition
             .ok_or(bad_request("Missing Api Definition"))?;
 
         let internal_definition = match definition {
-            create_or_update_api_definition_request::Definition::Http(definition) => {
+            create_or_update_api_definition_request::ApiDefinition::Http(definition) => {
                 definition.clone().try_into().map_err(bad_request)?
             }
-            create_or_update_api_definition_request::Definition::OpenApi(definition) => {
+            create_or_update_api_definition_request::ApiDefinition::Openapi(definition) => {
                 let value =
                     serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?;
 
