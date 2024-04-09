@@ -421,14 +421,7 @@ impl Display for ShardManagerState {
 fn shard_assignments_to_string(shard_assignments: &[(Pod, Vec<ShardId>)]) -> String {
     let elements: Vec<String> = shard_assignments
         .iter()
-        .map(|(pod, shard_ids)| {
-            let ranges: Vec<ShardIdRange> = shard_ids_to_ranges(shard_ids.iter());
-            let strings: Vec<String> = ranges
-                .iter()
-                .map(|rng| format!("{rng}").to_string())
-                .collect();
-            format!("{}: [{}]", pod, strings.join(", "))
-        })
+        .map(|(pod, shard_ids)| pod_shard_assignments_to_string(pod, shard_ids.iter()))
         .collect();
     elements.join(", ")
 }
@@ -436,16 +429,21 @@ fn shard_assignments_to_string(shard_assignments: &[(Pod, Vec<ShardId>)]) -> Str
 fn shard_assignments_map_to_string(shard_assignments: &BTreeMap<Pod, BTreeSet<ShardId>>) -> String {
     let elements: Vec<String> = shard_assignments
         .iter()
-        .map(|(pod, shard_ids)| {
-            let ranges: Vec<ShardIdRange> = shard_ids_to_ranges(shard_ids.iter());
-            let strings: Vec<String> = ranges
-                .iter()
-                .map(|rng| format!("{rng}").to_string())
-                .collect();
-            format!("{}: [{}]", pod, strings.join(", "))
-        })
+        .map(|(pod, shard_ids)| pod_shard_assignments_to_string(pod, shard_ids.iter()))
         .collect();
     elements.join(", ")
+}
+
+pub fn pod_shard_assignments_to_string<'a, T: Iterator<Item = &'a ShardId>>(
+    pod: &Pod,
+    shard_ids: T,
+) -> String {
+    let ranges: Vec<ShardIdRange> = shard_ids_to_ranges(shard_ids);
+    let strings: Vec<String> = ranges
+        .iter()
+        .map(|rng| format!("{rng}").to_string())
+        .collect();
+    format!("{}: [{}]", pod, strings.join(", "))
 }
 
 enum ShardIdRange {

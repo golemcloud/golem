@@ -19,7 +19,11 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     GetInvocationKeyRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest,
     ResumeWorkerRequest,
 };
-use golem_common::model::{AccountId, CallingConvention, InvocationKey, TemplateId};
+
+use golem_common::model::{
+    AccountId, CallingConvention, FilterComparator, InvocationKey, TemplateId, WorkerFilter,
+    WorkerStatus,
+};
 use golem_service_base::model::{
     GolemErrorUnknown, PromiseId, ResourceLimits, VersionedWorkerId, WorkerId, WorkerMetadata,
 };
@@ -140,6 +144,16 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerMetadata>;
+
+    async fn find_metadata(
+        &self,
+        template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: u64,
+        count: u64,
+        precise: bool,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)>;
 
     async fn resume(&self, worker_id: &WorkerId, auth_ctx: &AuthCtx) -> WorkerResult<()>;
 }
@@ -290,36 +304,36 @@ where
 
     async fn delete(&self, worker_id: &WorkerId, _auth_ctx: &AuthCtx) -> WorkerResult<()> {
         self.retry_on_invalid_shard_id(
-                worker_id,
-                worker_id,
-                |worker_executor_client, worker_id| {
-                    Box::pin(async move {
-                        let response = worker_executor_client
-                            .delete_worker(golem_api_grpc::proto::golem::worker::WorkerId::from(
-                                worker_id.clone(),
-                            ))
-                            .await
-                            .map_err(|err| {
-                                GolemError::RuntimeError(GolemErrorRuntimeError {
-                                    details: err.to_string(),
-                                })
-                            })?;
-                        match response.into_inner() {
-                            workerexecutor::DeleteWorkerResponse {
-                                result: Some(workerexecutor::delete_worker_response::Result::Success(_)),
-                            } => Ok(()),
-                            workerexecutor::DeleteWorkerResponse {
-                                result: Some(workerexecutor::delete_worker_response::Result::Failure(err)),
-                            } => Err(err.try_into().unwrap()),
-                            workerexecutor::DeleteWorkerResponse { .. } => {
-                                Err(GolemError::Unknown(GolemErrorUnknown {
-                                    details: "Empty response".to_string(),
-                                }))
-                            }
+            worker_id,
+            worker_id,
+            |worker_executor_client, worker_id| {
+                Box::pin(async move {
+                    let response = worker_executor_client
+                        .delete_worker(golem_api_grpc::proto::golem::worker::WorkerId::from(
+                            worker_id.clone(),
+                        ))
+                        .await
+                        .map_err(|err| {
+                            GolemError::RuntimeError(GolemErrorRuntimeError {
+                                details: err.to_string(),
+                            })
+                        })?;
+                    match response.into_inner() {
+                        workerexecutor::DeleteWorkerResponse {
+                            result: Some(workerexecutor::delete_worker_response::Result::Success(_)),
+                        } => Ok(()),
+                        workerexecutor::DeleteWorkerResponse {
+                            result: Some(workerexecutor::delete_worker_response::Result::Failure(err)),
+                        } => Err(err.try_into().unwrap()),
+                        workerexecutor::DeleteWorkerResponse { .. } => {
+                            Err(GolemError::Unknown(GolemErrorUnknown {
+                                details: "Empty response".to_string(),
+                            }))
                         }
-                    })
-                },
-            )
+                    }
+                })
+            },
+        )
             .await?;
 
         Ok(())
@@ -331,40 +345,40 @@ where
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<InvocationKey> {
         let invocation_key = self
-                .retry_on_invalid_shard_id(worker_id, worker_id, |worker_executor_client, worker_id| {
-                    Box::pin(async move {
-                        let response = worker_executor_client
-                            .get_invocation_key(GetInvocationKeyRequest {
-                                worker_id: Some(worker_id.clone().into()),
+            .retry_on_invalid_shard_id(worker_id, worker_id, |worker_executor_client, worker_id| {
+                Box::pin(async move {
+                    let response = worker_executor_client
+                        .get_invocation_key(GetInvocationKeyRequest {
+                            worker_id: Some(worker_id.clone().into()),
+                        })
+                        .await
+                        .map_err(|err| {
+                            GolemError::RuntimeError(GolemErrorRuntimeError {
+                                details: err.to_string(),
                             })
-                            .await
-                            .map_err(|err| {
-                                GolemError::RuntimeError(GolemErrorRuntimeError {
-                                    details: err.to_string(),
-                                })
-                            })?;
-                        match response.into_inner() {
-                            workerexecutor::GetInvocationKeyResponse {
-                                result:
-                                Some(workerexecutor::get_invocation_key_response::Result::Success(
-                                         workerexecutor::GetInvocationKeySuccess {
-                                             invocation_key: Some(invocation_key),
-                                         },
-                                     )),
-                            } => Ok(invocation_key.into()),
-                            workerexecutor::GetInvocationKeyResponse {
-                                result:
-                                Some(workerexecutor::get_invocation_key_response::Result::Failure(err)),
-                            } => Err(err.try_into().unwrap()),
-                            workerexecutor::GetInvocationKeyResponse { .. } => {
-                                Err(GolemError::Unknown(GolemErrorUnknown {
-                                    details: "Empty response".to_string(),
-                                }))
-                            }
+                        })?;
+                    match response.into_inner() {
+                        workerexecutor::GetInvocationKeyResponse {
+                            result:
+                            Some(workerexecutor::get_invocation_key_response::Result::Success(
+                                     workerexecutor::GetInvocationKeySuccess {
+                                         invocation_key: Some(invocation_key),
+                                     },
+                                 )),
+                        } => Ok(invocation_key.into()),
+                        workerexecutor::GetInvocationKeyResponse {
+                            result:
+                            Some(workerexecutor::get_invocation_key_response::Result::Failure(err)),
+                        } => Err(err.try_into().unwrap()),
+                        workerexecutor::GetInvocationKeyResponse { .. } => {
+                            Err(GolemError::Unknown(GolemErrorUnknown {
+                                details: "Empty response".to_string(),
+                            }))
                         }
-                    })
+                    }
                 })
-                .await?;
+            })
+            .await?;
 
         Ok(invocation_key)
     }
@@ -773,6 +787,27 @@ where
         Ok(metadata)
     }
 
+    async fn find_metadata(
+        &self,
+        template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: u64,
+        count: u64,
+        precise: bool,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
+        if filter.clone().is_some_and(is_filter_with_running_status) {
+            let result = self
+                .find_running_metadata_internal(template_id, filter, auth_ctx)
+                .await?;
+
+            Ok((None, result.into_iter().take(count as usize).collect()))
+        } else {
+            self.find_metadata_internal(template_id, filter, cursor, count, precise, auth_ctx)
+                .await
+        }
+    }
+
     async fn resume(&self, worker_id: &WorkerId, _auth_ctx: &AuthCtx) -> WorkerResult<()> {
         self.retry_on_invalid_shard_id(
             worker_id,
@@ -805,7 +840,7 @@ where
                 })
             },
         )
-        .await?;
+            .await?;
         Ok(())
     }
 }
@@ -932,6 +967,306 @@ where
             }
         }
     }
+
+    async fn random_worker_executor_client(
+        &self,
+    ) -> Result<Option<WorkerExecutorClient<Channel>>, GetWorkerExecutorClientError> {
+        let routing_table = self
+            .routing_table_service
+            .get_routing_table()
+            .await
+            .map_err(GetWorkerExecutorClientError::FailedToGetRoutingTable)?;
+        match routing_table.random() {
+            None => Ok(None),
+            Some(pod) => {
+                let worker_executor_client = self
+                    .worker_executor_clients
+                    .lookup(pod.clone())
+                    .await
+                    .map_err(GetWorkerExecutorClientError::FailedToConnectToPod)?;
+                Ok(Some(worker_executor_client))
+            }
+        }
+    }
+
+    async fn execute_with_random_client<F, In, Out>(
+        &self,
+        input: &In,
+        execute: F,
+    ) -> Result<Out, WorkerServiceError>
+    where
+        F: for<'b> Fn(
+            &'b mut WorkerExecutorClient<Channel>,
+            &'b In,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
+    {
+        loop {
+            match self.random_worker_executor_client().await {
+                Ok(Some(mut worker_executor_client)) => {
+                    match execute(&mut worker_executor_client, input).await {
+                        Ok(result) => return Ok(result),
+                        Err(GolemError::InvalidShardId(GolemErrorInvalidShardId {
+                            shard_id,
+                            shard_ids,
+                        })) => {
+                            info!("InvalidShardId: {} not in {:?}", shard_id, shard_ids);
+                            info!("Invalidating routing table");
+                            self.routing_table_service.invalidate_routing_table().await;
+                            sleep(Duration::from_secs(1)).await;
+                        }
+                        Err(GolemError::RuntimeError(GolemErrorRuntimeError { details }))
+                            if is_connection_failure(&details) =>
+                        {
+                            info!("Worker executor unavailable");
+                            info!("Invalidating routing table and retrying immediately");
+                            self.routing_table_service.invalidate_routing_table().await;
+                        }
+                        Err(other) => {
+                            debug!("Got {:?}, not retrying", other);
+                            return Err(WorkerServiceError::Golem(other));
+                        }
+                    }
+                }
+                Ok(None) => {
+                    info!("No active shards");
+                    info!("Invalidating routing table");
+                    self.routing_table_service.invalidate_routing_table().await;
+                    sleep(Duration::from_secs(1)).await;
+                }
+                Err(GetWorkerExecutorClientError::FailedToGetRoutingTable(
+                    RoutingTableError::Unexpected(details),
+                )) if is_connection_failure(&details) => {
+                    info!("Shard manager unavailable");
+                    info!("Invalidating routing table and retrying in 1 seconds");
+                    self.routing_table_service.invalidate_routing_table().await;
+                    sleep(Duration::from_secs(1)).await;
+                }
+                Err(GetWorkerExecutorClientError::FailedToConnectToPod(details))
+                    if is_connection_failure(&details) =>
+                {
+                    info!("Worker executor unavailable");
+                    info!("Invalidating routing table and retrying immediately");
+                    self.routing_table_service.invalidate_routing_table().await;
+                }
+                Err(other) => {
+                    debug!("Got {}, not retrying", other);
+                    // let err = anyhow::Error::new(other);
+                    return Err(WorkerServiceError::internal(other));
+                }
+            }
+        }
+    }
+
+    async fn all_worker_executor_clients(
+        &self,
+    ) -> Result<Vec<WorkerExecutorClient<Channel>>, GetWorkerExecutorClientError> {
+        let routing_table = self
+            .routing_table_service
+            .get_routing_table()
+            .await
+            .map_err(GetWorkerExecutorClientError::FailedToGetRoutingTable)?;
+
+        let get_clients = routing_table
+            .all()
+            .into_iter()
+            .map(|pod| async move {
+                self.worker_executor_clients
+                    .lookup(pod.clone())
+                    .await
+                    .map_err(GetWorkerExecutorClientError::FailedToConnectToPod)
+            })
+            .collect::<Vec<_>>();
+
+        let results = futures::future::join_all(get_clients).await;
+        results
+            .into_iter()
+            .collect::<Result<Vec<WorkerExecutorClient<Channel>>, GetWorkerExecutorClientError>>()
+    }
+
+    async fn execute_with_all_clients<F, In, Out>(
+        &self,
+        input: &In,
+        execute: F,
+    ) -> Result<Vec<Out>, WorkerServiceError>
+    where
+        F: for<'b> Fn(
+            &'b mut WorkerExecutorClient<Channel>,
+            &'b In,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
+    {
+        loop {
+            match self.all_worker_executor_clients().await {
+                Ok(worker_executor_clients) if !worker_executor_clients.is_empty() => {
+                    let mut results = vec![];
+
+                    for mut client in worker_executor_clients {
+                        match execute(&mut client, input).await {
+                            Ok(result) => results.push(result),
+                            Err(GolemError::InvalidShardId(GolemErrorInvalidShardId {
+                                shard_id,
+                                shard_ids,
+                            })) => {
+                                info!("InvalidShardId: {} not in {:?}", shard_id, shard_ids);
+                                info!("Invalidating routing table");
+                                self.routing_table_service.invalidate_routing_table().await;
+                                sleep(Duration::from_secs(1)).await;
+                                break;
+                            }
+                            Err(GolemError::RuntimeError(GolemErrorRuntimeError { details }))
+                                if is_connection_failure(&details) =>
+                            {
+                                info!("Worker executor unavailable");
+                                info!("Invalidating routing table and retrying immediately");
+                                self.routing_table_service.invalidate_routing_table().await;
+                                break;
+                            }
+                            Err(other) => {
+                                debug!("Got {:?}, not retrying", other);
+                                return Err(WorkerServiceError::Golem(other));
+                            }
+                        }
+                    }
+                    return Ok(results);
+                }
+                Ok(_) => {
+                    info!("No active shards");
+                    info!("Invalidating routing table");
+                    self.routing_table_service.invalidate_routing_table().await;
+                    sleep(Duration::from_secs(1)).await;
+                }
+                Err(GetWorkerExecutorClientError::FailedToGetRoutingTable(
+                    RoutingTableError::Unexpected(details),
+                )) if is_connection_failure(&details) => {
+                    info!("Shard manager unavailable");
+                    info!("Invalidating routing table and retrying in 1 seconds");
+                    self.routing_table_service.invalidate_routing_table().await;
+                    sleep(Duration::from_secs(1)).await;
+                }
+                Err(GetWorkerExecutorClientError::FailedToConnectToPod(details))
+                    if is_connection_failure(&details) =>
+                {
+                    info!("Worker executor unavailable");
+                    info!("Invalidating routing table and retrying immediately");
+                    self.routing_table_service.invalidate_routing_table().await;
+                }
+                Err(other) => {
+                    debug!("Got {}, not retrying", other);
+                    // let err = anyhow::Error::new(other);
+                    return Err(WorkerServiceError::internal(other));
+                }
+            }
+        }
+    }
+
+    async fn find_running_metadata_internal(
+        &self,
+        template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<Vec<WorkerMetadata>> {
+        let result = self.execute_with_all_clients(
+            &(template_id.clone(), filter.clone()),
+            |worker_executor_client, (template_id, filter)| {
+                Box::pin(async move {
+                    let template_id: golem_api_grpc::proto::golem::template::TemplateId =
+                        template_id.clone().into();
+                    let response = worker_executor_client.get_running_workers_metadata(
+                        golem_api_grpc::proto::golem::workerexecutor::GetRunningWorkersMetadataRequest {
+                            template_id: Some(template_id),
+                            filter: filter.clone().map(|f| f.into())
+                        }
+                    ).await.map_err(|err| {
+                        GolemError::RuntimeError(GolemErrorRuntimeError {
+                            details: err.to_string(),
+                        })
+                    })?;
+                    match response.into_inner() {
+                        workerexecutor::GetRunningWorkersMetadataResponse {
+                            result:
+                            Some(workerexecutor::get_running_workers_metadata_response::Result::Success(workerexecutor::GetRunningWorkersMetadataSuccessResponse {
+                                                                                                    workers
+                                                                                                })),
+                        } => {
+                            let workers: Vec<WorkerMetadata> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::Unknown(GolemErrorUnknown {
+                                details: "Convert response error".to_string(),
+                            }))?;
+                            Ok(workers)
+                        }
+                        workerexecutor::GetRunningWorkersMetadataResponse {
+                            result:
+                            Some(workerexecutor::get_running_workers_metadata_response::Result::Failure(err)),
+                        } => Err(err.try_into().unwrap()),
+                        workerexecutor::GetRunningWorkersMetadataResponse { .. } => {
+                            Err(GolemError::Unknown(GolemErrorUnknown {
+                                details: "Empty response".to_string(),
+                            }))
+                        }
+                    }
+                })
+            },
+        ).await?;
+
+        Ok(result.iter().flat_map(|r| r.iter()).cloned().collect())
+    }
+
+    async fn find_metadata_internal(
+        &self,
+        template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: u64,
+        count: u64,
+        precise: bool,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
+        let result = self.execute_with_random_client(
+            &(template_id.clone(), filter.clone(), cursor, count, precise),
+            |worker_executor_client, (template_id, filter, cursor, count, precise)| {
+                Box::pin(async move {
+                    let template_id: golem_api_grpc::proto::golem::template::TemplateId =
+                        template_id.clone().into();
+                    let response = worker_executor_client.get_workers_metadata(
+                        golem_api_grpc::proto::golem::workerexecutor::GetWorkersMetadataRequest {
+                            template_id: Some(template_id),
+                            filter: filter.clone().map(|f| f.into()),
+                            cursor: *cursor,
+                            count: *count,
+                            precise: *precise,
+                        }
+                    ).await.map_err(|err| {
+                        GolemError::RuntimeError(GolemErrorRuntimeError {
+                            details: err.to_string(),
+                        })
+                    })?;
+                    match response.into_inner() {
+                        workerexecutor::GetWorkersMetadataResponse {
+                            result:
+                            Some(workerexecutor::get_workers_metadata_response::Result::Success(workerexecutor::GetWorkersMetadataSuccessResponse {
+                                                                                                    workers, cursor
+                                                                                                })),
+                        } => {
+                            let workers = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::Unknown(GolemErrorUnknown {
+                                details: "Convert response error".to_string(),
+                            }))?;
+                            Ok((cursor, workers))
+                        }
+                        workerexecutor::GetWorkersMetadataResponse {
+                            result:
+                            Some(workerexecutor::get_workers_metadata_response::Result::Failure(err)),
+                        } => Err(err.try_into().unwrap()),
+                        workerexecutor::GetWorkersMetadataResponse { .. } => {
+                            Err(GolemError::Unknown(GolemErrorUnknown {
+                                details: "Empty response".to_string(),
+                            }))
+                        }
+                    }
+                })
+            },
+        ).await?;
+
+        Ok(result)
+    }
 }
 
 fn is_connection_failure(message: &str) -> bool {
@@ -939,6 +1274,21 @@ fn is_connection_failure(message: &str) -> bool {
         || message.contains("CHANNEL CLOSED")
         || message.contains("transport error")
         || message.contains("Connection refused")
+}
+
+fn is_filter_with_running_status(filter: WorkerFilter) -> bool {
+    match filter {
+        WorkerFilter::Status(f)
+            if f.value == WorkerStatus::Running && f.comparator == FilterComparator::Equal =>
+        {
+            true
+        }
+        WorkerFilter::And(f) => f
+            .filters
+            .into_iter()
+            .any(|f| is_filter_with_running_status(f.clone())),
+        _ => false,
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1105,6 +1455,18 @@ where
             template_version: 0,
             retry_count: 0,
         })
+    }
+
+    async fn find_metadata(
+        &self,
+        _template_id: &TemplateId,
+        _filter: Option<WorkerFilter>,
+        _cursor: u64,
+        _count: u64,
+        _precise: bool,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
+        Ok((None, vec![]))
     }
 
     async fn resume(&self, _worker_id: &WorkerId, _auth_ctx: &AuthCtx) -> WorkerResult<()> {

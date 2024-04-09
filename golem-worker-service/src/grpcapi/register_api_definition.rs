@@ -21,7 +21,7 @@ use golem_api_grpc::proto::golem::{
 };
 use golem_worker_service_base::{
     api_definition::{
-        http::{get_api_definition_from_oas, HttpApiDefinition as CoreHttpApiDefinition},
+        http::{get_api_definition, HttpApiDefinition as CoreHttpApiDefinition},
         ApiDefinitionId, ApiVersion,
     },
     auth::{CommonNamespace, EmptyAuthCtx},
@@ -188,7 +188,9 @@ impl GrpcApiDefinitionRegistration {
     ) -> Result<GrpcHttpApiDefinition, ApiDefinitionRegistrationError> {
         let definition = request.payload;
 
-        let definition = get_api_definition_from_oas(definition.as_str()).map_err(bad_request)?;
+        let value = serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?;
+
+        let definition = get_api_definition(value).map_err(bad_request)?;
 
         self.definition_service
             .register(&definition, CommonNamespace::default(), &EmptyAuthCtx {})

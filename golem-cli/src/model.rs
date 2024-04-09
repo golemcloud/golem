@@ -225,6 +225,15 @@ pub struct WorkerName(pub String); // TODO: Validate
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Serialize, Deserialize)]
 pub struct InvocationKey(pub String); // TODO: Validate
 
+#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+pub struct ApiDefinitionId(pub String); // TODO: Validate
+
+#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+pub struct ApiDefinitionVersion(pub String); // TODO: Validate
+
+#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
+pub struct TemplateId(pub Uuid);
+
 #[derive(Clone)]
 pub struct JsonValueParser;
 

@@ -15,11 +15,13 @@
 use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
-use golem_common::model::{parse_function_name, ShardId, TemplateId, WorkerStatus};
+use golem_common::model::{parse_function_name, ShardId, TemplateId, WorkerFilter, WorkerStatus};
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use http::Uri;
 use poem_openapi::{Enum, NewType, Object, Union};
+use rand::seq::IteratorRandom;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashSet;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -2630,6 +2632,20 @@ pub struct InterruptResponse {}
 pub struct ResumeResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct WorkersMetadataRequest {
+    pub filter: Option<WorkerFilter>,
+    pub cursor: Option<u64>,
+    pub count: Option<u64>,
+    pub precise: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct WorkersMetadataResponse {
+    pub workers: Vec<WorkerMetadata>,
+    pub cursor: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerMetadata {
@@ -3083,6 +3099,20 @@ impl RoutingTable {
             &worker_id.clone().into(),
             self.number_of_shards.value,
         ))
+    }
+
+    pub fn random(&self) -> Option<&Pod> {
+        self.shard_assignments
+            .values()
+            .choose(&mut rand::thread_rng())
+    }
+
+    pub fn first(&self) -> Option<&Pod> {
+        self.shard_assignments.values().next()
+    }
+
+    pub fn all(&self) -> HashSet<&Pod> {
+        self.shard_assignments.values().collect()
     }
 }
 

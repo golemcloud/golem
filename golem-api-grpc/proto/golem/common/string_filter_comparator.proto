@@ -2,8 +2,9 @@ syntax = "proto3";
 
 package golem.common;
 
-
 enum StringFilterComparator {
   STRING_EQUAL = 0;
-  STRING_LIKE = 1;
+  STRING_NOT_EQUAL = 1;
+  STRING_LIKE = 2;
+  STRING_NOT_LIKE = 3;
 }
