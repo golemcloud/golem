@@ -7,7 +7,7 @@ import "golem/apidefinition/api_definition_error.proto";
 import "golem/apidefinition/api_definition.proto";
 
 service ApiDefinitionService {
-  rpc CreateOrUpdateApiDefinition (CreateOrUpdateApiDefinitionRequest) returns (CreateOrUpdateResponseApiDefinitionResponse) {}
+  rpc CreateOrUpdateApiDefinition (CreateOrUpdateApiDefinitionRequest) returns (CreateOrUpdateApiDefinitionResponse) {}
   rpc GetApiDefinition (GetApiDefinitionRequest) returns (GetApiDefinitionResponse) {}
   rpc GetApiDefinitionVersions (GetApiDefinitionVersionsRequest) returns (GetApiDefinitionVersionsResponse) {}
   rpc GetAllApiDefinitions (GetAllApiDefinitionsRequest) returns (GetAllApiDefinitionsResponse) {}
@@ -23,7 +23,7 @@ message CreateOrUpdateApiDefinitionRequest {
 }
 
 
-message CreateOrUpdateResponseApiDefinitionResponse {
+message CreateOrUpdateApiDefinitionResponse {
   oneof result {
     ApiDefinition success = 1;
     ApiDefinitionError error = 2;

@@ -5,11 +5,11 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::{
     apidefinition::{
         api_definition_error, api_definition_service_server::ApiDefinitionService,
-        create_or_update_api_definition_request, create_or_update_response_api_definition_response,
+        create_or_update_api_definition_request, create_or_update_api_definition_response,
         delete_api_definition_response, get_all_api_definitions_response,
         get_api_definition_response, get_api_definition_versions_response,
         ApiDefinition as GrpcApiDefinition, ApiDefinitionError, ApiDefinitionList,
-        CreateOrUpdateApiDefinitionRequest, CreateOrUpdateResponseApiDefinitionResponse,
+        CreateOrUpdateApiDefinitionRequest, CreateOrUpdateApiDefinitionResponse,
         DeleteApiDefinitionRequest, DeleteApiDefinitionResponse, GetAllApiDefinitionsRequest,
         GetAllApiDefinitionsResponse, GetApiDefinitionRequest, GetApiDefinitionResponse,
         GetApiDefinitionVersionsRequest, GetApiDefinitionVersionsResponse,
@@ -51,22 +51,18 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
     async fn create_or_update_api_definition(
         &self,
         request: tonic::Request<CreateOrUpdateApiDefinitionRequest>,
-    ) -> Result<tonic::Response<CreateOrUpdateResponseApiDefinitionResponse>, tonic::Status> {
+    ) -> Result<tonic::Response<CreateOrUpdateApiDefinitionResponse>, tonic::Status> {
         let result = match self
             .create_or_update_api_definition(request.into_inner())
             .await
         {
-            Ok(result) => {
-                create_or_update_response_api_definition_response::Result::Success(result)
-            }
-            Err(error) => create_or_update_response_api_definition_response::Result::Error(error),
+            Ok(result) => create_or_update_api_definition_response::Result::Success(result),
+            Err(error) => create_or_update_api_definition_response::Result::Error(error),
         };
 
-        Ok(tonic::Response::new(
-            CreateOrUpdateResponseApiDefinitionResponse {
-                result: Some(result),
-            },
-        ))
+        Ok(tonic::Response::new(CreateOrUpdateApiDefinitionResponse {
+            result: Some(result),
+        }))
     }
 
     async fn get_api_definition(
