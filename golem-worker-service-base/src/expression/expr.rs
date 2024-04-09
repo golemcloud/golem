@@ -33,7 +33,7 @@ pub enum Expr {
     EqualTo(Box<Expr>, Box<Expr>),
     LessThan(Box<Expr>, Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
-    PatternMatch(Box<Expr>, Vec<ConstructorPatternExpr>),
+    PatternMatch(Box<Expr>, Vec<PatternMatchArm>),
     Constructor0(ConstructorPattern), // Can exist standalone from pattern match
 }
 
@@ -69,7 +69,7 @@ impl Display for InnerNumber {
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
-pub struct ConstructorPatternExpr(pub (ConstructorPattern, Box<Expr>));
+pub struct PatternMatchArm(pub (ConstructorPattern, Box<Expr>));
 
 // A constructor pattern by itself is an expr,
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]

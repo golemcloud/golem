@@ -1,4 +1,4 @@
-use crate::expression::{ConstructorPattern, ConstructorPatternExpr, Expr};
+use crate::expression::{ConstructorPattern, PatternMatchArm, Expr};
 use crate::parser::expr_parser::{parse_with_context, Context};
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
@@ -8,20 +8,13 @@ pub(crate) fn get_match_expr(tokenizer: &mut Tokenizer) -> Result<Expr, ParseErr
 
     match expr_under_evaluation {
         Some(expr_under_evaluation) => {
-            let expression = parse_with_context(expr_under_evaluation.as_str(), Context::Code)?;
+            let match_expression = parse_with_context(expr_under_evaluation.as_str(), Context::Code)?;
 
-            dbg!(expression.clone());
+            tokenizer.skip_next_non_empty_token(); // Skip LCurly
 
-            match tokenizer.next_non_empty_token() {
-                Some(Token::LCurly) => {
-                    let constructors = get_match_constructor_patter_exprs(tokenizer)?;
+            let constructors = get_arms(tokenizer)?;
 
-                    Ok(Expr::PatternMatch(Box::new(expression), constructors))
-                }
-                _ => Err(ParseError::Message(
-                    "Expecting a curly brace after match expr".to_string(),
-                )),
-            }
+            Ok(Expr::PatternMatch(Box::new(match_expression), constructors))
         }
 
         None => Err(ParseError::Message(
@@ -33,14 +26,14 @@ pub(crate) fn get_match_expr(tokenizer: &mut Tokenizer) -> Result<Expr, ParseErr
 // To parse collection of terms under match expression
 // Ex: some(x) => x
 // Handles Ok, Err, Some, None
-pub(crate) fn get_match_constructor_patter_exprs(
+pub(crate) fn get_arms(
     tokenizer: &mut Tokenizer,
-) -> Result<Vec<ConstructorPatternExpr>, ParseError> {
-    let mut constructor_patterns: Vec<ConstructorPatternExpr> = vec![];
+) -> Result<Vec<PatternMatchArm>, ParseError> {
+    let mut constructor_patterns: Vec<PatternMatchArm> = vec![];
 
     fn go(
         tokenizer: &mut Tokenizer,
-        constructor_patterns: &mut Vec<ConstructorPatternExpr>,
+        constructor_patterns: &mut Vec<PatternMatchArm>,
     ) -> Result<(), ParseError> {
         match tokenizer.next_non_empty_token() {
             Some(token) if token.is_non_empty_constructor() => {
@@ -112,11 +105,11 @@ pub(crate) fn get_match_constructor_patter_exprs(
 fn accumulate_constructor_pattern_expr<F>(
     tokenizer: &mut Tokenizer,
     constructor_pattern: ConstructorPattern,
-    collected_exprs: &mut Vec<ConstructorPatternExpr>,
+    collected_exprs: &mut Vec<PatternMatchArm>,
     accumulator: F,
 ) -> Result<(), ParseError>
 where
-    F: FnOnce(&mut Tokenizer, &mut Vec<ConstructorPatternExpr>) -> Result<(), ParseError>,
+    F: FnOnce(&mut Tokenizer, &mut Vec<PatternMatchArm>) -> Result<(), ParseError>,
 {
     match tokenizer.next_non_empty_token() {
         Some(Token::MultiChar(MultiCharTokens::Arrow)) => {
@@ -131,7 +124,7 @@ where
                         let individual_expr =
                             parse_with_context(captured_string.unwrap().as_str(), Context::Code)
                                 .map(|expr| {
-                                    ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
+                                    PatternMatchArm((constructor_pattern, Box::new(expr)))
                                 })?;
                         collected_exprs.push(individual_expr);
                         tokenizer.next_non_empty_token(); // Skip CommaSeparator
@@ -142,7 +135,7 @@ where
                         let individual_expr =
                             parse_with_context(captured_string.unwrap().as_str(), Context::Code)
                                 .map(|expr| {
-                                    ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
+                                    PatternMatchArm((constructor_pattern, Box::new(expr)))
                                 })?;
                         collected_exprs.push(individual_expr);
                         Ok(())
@@ -157,7 +150,7 @@ where
                         let individual_expr =
                             parse_with_context(captured_string.as_str(), Context::Code).map(
                                 |expr| {
-                                    ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
+                                    PatternMatchArm((constructor_pattern, Box::new(expr)))
                                 },
                             )?;
                         collected_exprs.push(individual_expr);

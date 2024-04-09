@@ -590,7 +590,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expression::ConstructorPatternExpr;
+    use crate::expression::PatternMatchArm;
 
     #[test]
     fn expr_parser_without_vars() {
@@ -1148,7 +1148,7 @@ mod tests {
                 "response".to_string(),
             )),
             vec![
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor(
                         "some",
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
@@ -1158,7 +1158,7 @@ mod tests {
                     .unwrap(),
                     Box::new(Expr::Variable("foo".to_string())),
                 )),
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
                     Box::new(Expr::Variable("result2".to_string())),
                 )),
@@ -1182,7 +1182,7 @@ mod tests {
                 "response".to_string(),
             )),
             vec![
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor(
                         "ok",
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
@@ -1192,7 +1192,7 @@ mod tests {
                     .unwrap(),
                     Box::new(Expr::Variable("foo".to_string())),
                 )),
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor(
                         "err",
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
@@ -1222,7 +1222,7 @@ mod tests {
                 "response".to_string(),
             )),
             vec![
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor(
                         "some",
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
@@ -1235,7 +1235,7 @@ mod tests {
                         "response".to_string(),
                     )),
                 )),
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
                     Box::new(Expr::Literal("nothing".to_string())),
                 )),
@@ -1259,7 +1259,7 @@ mod tests {
                 "response".to_string(),
             )),
             vec![
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor(
                         "some",
                         vec![ConstructorPattern::constructor(
@@ -1276,7 +1276,7 @@ mod tests {
                         "response".to_string(),
                     )),
                 )),
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
                     Box::new(Expr::Literal("nothing".to_string())),
                 )),
@@ -1299,7 +1299,7 @@ mod tests {
                 "response".to_string(),
             )),
             vec![
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor(
                         "some",
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
@@ -1309,7 +1309,7 @@ mod tests {
                     .unwrap(),
                     Box::new(Expr::Literal("foo".to_string())),
                 )),
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
                     Box::new(Expr::Concat(vec![
                         Expr::Literal("bar".to_string()),
@@ -1339,7 +1339,7 @@ mod tests {
                 "response".to_string(),
             )),
             vec![
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor(
                         "some",
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
@@ -1356,7 +1356,7 @@ mod tests {
                         Box::new(Expr::unsigned_integer(0)),
                     )),
                 )),
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
                     Box::new(Expr::unsigned_integer(0)),
                 )),
@@ -1380,7 +1380,7 @@ mod tests {
                 "response".to_string(),
             )),
             vec![
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor(
                         "some",
                         vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
@@ -1400,7 +1400,7 @@ mod tests {
                         Box::new(Expr::unsigned_integer(0)),
                     )),
                 )),
-                ConstructorPatternExpr((
+                PatternMatchArm((
                     ConstructorPattern::constructor("none", vec![]).unwrap(),
                     Box::new(Expr::Record(vec![(
                         "a".to_string(),
