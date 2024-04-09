@@ -1,7 +1,7 @@
 use crate::cli::{Cli, CliLive};
 use golem_cli::clients::template::TemplateView;
 use golem_cli::model::InvocationKey;
-use golem_client::model::VersionedWorkerId;
+use golem_client::model::{VersionedWorkerId, WorkersMetadataResponse};
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
@@ -53,6 +53,7 @@ fn make(
             ctx.clone(),
             worker_simulated_crash,
         ),
+        Trial::test_in_context(format!("worker_list{suffix}"), ctx.clone(), worker_list),
     ]
 }
 
@@ -446,6 +447,105 @@ fn worker_simulated_crash(
         &cfg.arg('T', "template-id"),
         &template_id,
     ])?;
+
+    Ok(())
+}
+
+fn worker_list(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let template_id = make_template(deps, &format!("{name} worker_list"), &cli)?.template_id;
+    let cfg = &cli.config;
+
+    let workers_count = 10;
+    let mut worker_ids = vec![];
+
+    for i in 0..workers_count {
+        let worker_name = format!("{name}_worker-{i}");
+        let worker_id: VersionedWorkerId = cli.run(&[
+            "worker",
+            "add",
+            &cfg.arg('w', "worker-name"),
+            &worker_name,
+            &cfg.arg('T', "template-id"),
+            &template_id,
+        ])?;
+
+        worker_ids.push(worker_id);
+    }
+
+    for worker_id in worker_ids {
+        let result: WorkersMetadataResponse = cli.run(&[
+            "worker",
+            "list",
+            &cfg.arg('T', "template-id"),
+            &template_id,
+            &cfg.arg('f', "filter"),
+            format!("name = {}", worker_id.worker_id.worker_name).as_str(),
+            &cfg.arg('f', "filter"),
+            "version >= 0",
+            &cfg.arg('p', "precise"),
+            "true",
+        ])?;
+
+        assert_eq!(result.workers.len(), 1);
+        assert!(result.cursor.is_none());
+    }
+
+    let result: WorkersMetadataResponse = cli.run(&[
+        "worker",
+        "list",
+        &cfg.arg('T', "template-id"),
+        &template_id,
+        &cfg.arg('f', "filter"),
+        "version >= 0",
+        &cfg.arg('f', "filter"),
+        format!("name like {}_worker", name).as_str(),
+        &cfg.arg('s', "count"),
+        (workers_count / 2).to_string().as_str(),
+    ])?;
+
+    assert!(result.workers.len() >= workers_count / 2);
+    assert!(result.cursor.is_some());
+
+    let result2: WorkersMetadataResponse = cli.run(&[
+        "worker",
+        "list",
+        &cfg.arg('T', "template-id"),
+        &template_id,
+        &cfg.arg('f', "filter"),
+        "version >= 0",
+        &cfg.arg('f', "filter"),
+        format!("name like {}_worker", name).as_str(),
+        &cfg.arg('s', "count"),
+        (workers_count - result.workers.len()).to_string().as_str(),
+        &cfg.arg('c', "cursor"),
+        result.cursor.unwrap().to_string().as_str(),
+    ])?;
+
+    assert_eq!(result2.workers.len(), workers_count - result.workers.len());
+
+    if let Some(cursor2) = result2.cursor {
+        let result3: WorkersMetadataResponse = cli.run(&[
+            "worker",
+            "list",
+            &cfg.arg('T', "template-id"),
+            &template_id,
+            &cfg.arg('f', "filter"),
+            "version >= 0",
+            &cfg.arg('f', "filter"),
+            format!("name like {}_worker", name).as_str(),
+            &cfg.arg('s', "count"),
+            workers_count.to_string().as_str(),
+            &cfg.arg('c', "cursor"),
+            cursor2.to_string().as_str(),
+        ])?;
+        assert_eq!(result3.workers.len(), 0);
+    }
 
     Ok(())
 }

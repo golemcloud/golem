@@ -168,6 +168,29 @@ pub enum WorkerSubcommand {
         #[arg(short, long)]
         worker_name: WorkerName,
     },
+    /// Retrieves metadata about an existing workers in a template
+    #[command()]
+    List {
+        /// The Golem template the workers to be retrieved belongs to
+        #[command(flatten)]
+        template_id_or_name: TemplateIdOrName,
+
+        // Filter
+        #[arg(short, long)]
+        filter: Option<Vec<String>>,
+
+        // Cursor
+        #[arg(short, long)]
+        cursor: Option<u64>,
+
+        // Count
+        #[arg(short = 's', long)]
+        count: Option<u64>,
+
+        // Precise
+        #[arg(short, long)]
+        precise: Option<bool>,
+    },
 }
 
 #[async_trait]
@@ -317,9 +340,25 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
             } => {
                 let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
-                let mata = self.client.get_metadata(worker_name, template_id).await?;
+                let response = self.client.get_metadata(worker_name, template_id).await?;
 
-                Ok(GolemResult::Ok(Box::new(mata)))
+                Ok(GolemResult::Ok(Box::new(response)))
+            }
+            WorkerSubcommand::List {
+                template_id_or_name,
+                filter,
+                count,
+                cursor,
+                precise,
+            } => {
+                let template_id = self.templates.resolve_id(template_id_or_name).await?;
+
+                let response = self
+                    .client
+                    .list_metadata(template_id, filter, cursor, count, precise)
+                    .await?;
+
+                Ok(GolemResult::Ok(Box::new(response)))
             }
         }
     }
