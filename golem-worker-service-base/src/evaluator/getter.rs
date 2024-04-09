@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 
@@ -9,30 +7,16 @@ pub trait Getter<T> {
     fn get(&self, key: &Path) -> Result<T, GetError>;
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum GetError {
+    #[error("Key not found: {0}")]
     KeyNotFound(String),
+    #[error("Index not found: {0}")]
     IndexNotFound(usize),
+    #[error("Not a record: key_name: {key_name}, original_value: {found}")]
     NotRecord { key_name: String, found: String },
+    #[error("Not an array: index: {index}, original_value: {found}")]
     NotArray { index: usize, found: String },
-}
-impl Display for GetError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GetError::KeyNotFound(key) => write!(f, "Key not found: {}", key),
-            GetError::IndexNotFound(index) => write!(f, "Index not found: {}", index),
-            GetError::NotRecord { key_name, found } => write!(
-                f,
-                "Not a record: key_name: {}, original_value: {}",
-                key_name, found
-            ),
-            GetError::NotArray { index, found } => write!(
-                f,
-                "Not an array: index: {}, original_value: {}",
-                index, found
-            ),
-        }
-    }
 }
 
 impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {

@@ -1,13 +1,11 @@
 use golem_wasm_rpc::TypeAnnotatedValue;
-
 pub(crate) trait Merge {
-    fn merge(&self, other: &Self) -> Self;
+    fn merge(&mut self, other: &Self) -> &mut Self;
 }
 
 impl Merge for TypeAnnotatedValue {
-    // the only way to merge two type annotated value is only if they are records
-    fn merge(&self, other: &Self) -> Self {
-        match (self, other) {
+    fn merge(&mut self, other: &Self) -> &mut Self {
+        match (&mut *self, other) {
             (
                 TypeAnnotatedValue::Record { value, typ },
                 TypeAnnotatedValue::Record {
@@ -17,18 +15,21 @@ impl Merge for TypeAnnotatedValue {
             ) => {
                 let mut new_value = value.clone();
                 let mut types = typ.clone();
+
                 for (key, value) in other_value {
                     new_value.push((key.clone(), value.clone()));
                 }
+
                 for (key, value) in other_typ {
                     types.push((key.clone(), value.clone()));
                 }
-                TypeAnnotatedValue::Record {
-                    typ: types,
-                    value: new_value,
-                }
+
+                *value = new_value;
+                *typ = types;
+
+                self
             }
-            _ => self.clone(),
+            _ => self,
         }
     }
 }

@@ -144,20 +144,21 @@ mod internal {
             response_mapping: &ResponseMapping,
             input_request: &TypeAnnotatedValue,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
+            let mut input_request = input_request.clone();
             let type_annotated_value =
                 input_request.merge(&worker_response.result_with_worker_response_key());
 
-            let http_response_mapping = HttpResponseMapping::try_from(response_mapping)?;
+            let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
+                .map_err(EvaluationError::Message)?;
 
-            let status_code =
-                get_status_code(&http_response_mapping.status, &type_annotated_value)?;
+            let status_code = get_status_code(&http_response_mapping.status, type_annotated_value)?;
 
             let headers = ResolvedResponseHeaders::from(
                 &http_response_mapping.headers,
-                &type_annotated_value,
+                type_annotated_value,
             )?;
 
-            let response_body = http_response_mapping.body.evaluate(&type_annotated_value)?;
+            let response_body = http_response_mapping.body.evaluate(type_annotated_value)?;
 
             Ok(IntermediateHttpResponse {
                 body: response_body,

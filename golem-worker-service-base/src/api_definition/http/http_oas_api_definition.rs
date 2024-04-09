@@ -1,13 +1,13 @@
+use async_trait::async_trait;
 use openapiv3::OpenAPI;
-use serde_json;
+use poem_openapi::types::ParseFromJSON;
+use poem_openapi::{registry, types};
 
 use crate::api_definition::http::HttpApiDefinition;
 use crate::api_definition::{ApiDefinitionId, ApiVersion};
 use internal::*;
 
-pub fn get_api_definition_from_oas(open_api: &str) -> Result<HttpApiDefinition, String> {
-    let openapi: OpenAPI = serde_json::from_str(open_api).map_err(|e| e.to_string())?;
-
+pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinition, String> {
     let api_definition_id = ApiDefinitionId(get_root_extension(
         &openapi,
         GOLEM_API_DEFINITION_ID_EXTENSION,
@@ -25,14 +25,63 @@ pub fn get_api_definition_from_oas(open_api: &str) -> Result<HttpApiDefinition, 
     })
 }
 
+// Used to extract the OpenAPI spec from JSON Body in Poem OpenAPI endpoints.
+pub struct JsonOpenApiDefinition(pub openapiv3::OpenAPI);
+
+impl types::Type for JsonOpenApiDefinition {
+    const IS_REQUIRED: bool = true;
+
+    type RawValueType = Self;
+
+    type RawElementValueType = Self;
+
+    fn name() -> std::borrow::Cow<'static, str> {
+        "OpenApiDefinition".into()
+    }
+
+    fn schema_ref() -> registry::MetaSchemaRef {
+        registry::MetaSchemaRef::Inline(Box::new(registry::MetaSchema::ANY))
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+#[async_trait]
+impl ParseFromJSON for JsonOpenApiDefinition {
+    fn parse_from_json(value: Option<serde_json::Value>) -> types::ParseResult<Self> {
+        match value {
+            Some(value) => match serde_json::from_value::<openapiv3::OpenAPI>(value) {
+                Ok(openapi) => Ok(JsonOpenApiDefinition(openapi)),
+                Err(e) => Err(types::ParseError::<Self>::custom(format!(
+                    "Failed to parse OpenAPI: {}",
+                    e
+                ))),
+            },
+
+            _ => Err(poem_openapi::types::ParseError::<Self>::custom(
+                "OpenAPI spec missing".to_string(),
+            )),
+        }
+    }
+}
+
 mod internal {
-    use crate::api_definition::http::{HttpResponseMapping, MethodPattern, PathPattern, Route};
+    use crate::api_definition::http::{AllPathPatterns, HttpResponseMapping, MethodPattern, Route};
     use crate::expression::Expr;
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::TemplateId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use serde_json::Value;
 
+    use crate::expression;
     use uuid::Uuid;
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
@@ -79,7 +128,7 @@ mod internal {
     pub(crate) fn get_route_from_path_item(
         method: &str,
         path_item: &PathItem,
-        path_pattern: &PathPattern,
+        path_pattern: &AllPathPatterns,
     ) -> Result<Route, String> {
         let method_res = match method {
             "get" => Ok(MethodPattern::Get),
@@ -132,12 +181,25 @@ mod internal {
     pub(crate) fn get_response_mapping(
         worker_bridge_info: &Value,
     ) -> Result<Option<ResponseMapping>, String> {
-        let response = worker_bridge_info.get("response");
-        match response {
-            Some(response) => {
-                let response_mapping_expr =
-                    Expr::from_json_value(response).map_err(|err| err.to_string())?;
+        let response = {
+            let response_mapping_optional = worker_bridge_info.get("response");
 
+            match response_mapping_optional {
+                None => Ok(None),
+                Some(Value::Null) => Ok(None),
+                Some(Value::String(expr)) => expression::from_string(expr)
+                    .map_err(|err| err.to_string())
+                    .map(Some),
+                _ => Err(
+                    "Invalid response mapping type. It should be a string representing expression"
+                        .to_string(),
+                ),
+            }
+        };
+
+        match response? {
+            Some(response_mapping_expr) => {
+                // Validating
                 let _ =
                     HttpResponseMapping::try_from(&ResponseMapping(response_mapping_expr.clone()))
                         .map_err(|err| err.to_string())?;
@@ -158,7 +220,17 @@ mod internal {
             .ok_or("function-params is not an array")?;
         let mut exprs = vec![];
         for param in function_params {
-            exprs.push(Expr::from_json_value(param).map_err(|err| err.to_string())?);
+            match param {
+                Value::String(function_param_expr_str) => {
+                    let function_param_expr = expression::from_string(function_param_expr_str)
+                        .map_err(|err| err.to_string())?;
+                    exprs.push(function_param_expr);
+                }
+                _ => return Err(
+                    "Invalid function param type. It should be a string representing expression"
+                        .to_string(),
+                ),
+            }
         }
         Ok(exprs)
     }
@@ -175,11 +247,98 @@ mod internal {
     pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Expr, String> {
         let worker_id = worker_bridge_info
             .get("worker-id")
-            .ok_or("No worker-id found")?;
-        Expr::from_json_value(worker_id).map_err(|err| err.to_string())
+            .ok_or("No worker-id found")?
+            .as_str()
+            .ok_or("worker-id is not a string")?;
+
+        expression::from_string(worker_id).map_err(|err| err.to_string())
     }
 
-    pub(crate) fn get_path_pattern(path: &str) -> Result<PathPattern, String> {
-        PathPattern::from(path).map_err(|err| err.to_string())
+    pub(crate) fn get_path_pattern(path: &str) -> Result<AllPathPatterns, String> {
+        AllPathPatterns::parse(path).map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
+    use crate::expression::{Expr, InnerNumber};
+    use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
+    use golem_common::model::TemplateId;
+    use openapiv3::PathItem;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    #[test]
+    fn test_get_route_from_path_item() {
+        let path_item = PathItem {
+            extensions: vec![("x-golem-worker-bridge".to_string(), json!({
+                "worker-id": "worker-${request.body.user}",
+                "function-name": "test",
+                "function-params": ["${request}"],
+                "template-id": "00000000-0000-0000-0000-000000000000",
+                "response": "${{headers : {ContentType: 'json', user-id: 'foo'}, body: worker.response, status: 200}}"
+            }))]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+
+        let path_pattern = AllPathPatterns::parse("/test").unwrap();
+
+        let result = get_route_from_path_item("get", &path_item, &path_pattern);
+        assert_eq!(
+            result,
+            Ok(Route {
+                path: path_pattern,
+                method: MethodPattern::Get,
+                binding: GolemWorkerBinding {
+                    worker_id: Expr::Concat(vec![
+                        Expr::Literal("worker-".to_string()),
+                        Expr::SelectField(
+                            Box::new(Expr::SelectField(
+                                Box::new(Expr::Request()),
+                                "body".to_string()
+                            )),
+                            "user".to_string()
+                        )
+                    ]),
+                    function_name: "test".to_string(),
+                    function_params: vec![Expr::Request()],
+                    template: TemplateId(Uuid::nil()),
+                    response: Some(ResponseMapping(Expr::Record(
+                        vec![
+                            (
+                                "headers".to_string(),
+                                Box::new(Expr::Record(vec![
+                                    (
+                                        "ContentType".to_string(),
+                                        Box::new(Expr::Literal("json".to_string())),
+                                    ),
+                                    (
+                                        "user-id".to_string(),
+                                        Box::new(Expr::Literal("foo".to_string())),
+                                    )
+                                ])),
+                            ),
+                            (
+                                "body".to_string(),
+                                Box::new(Expr::SelectField(
+                                    Box::new(Expr::Worker()),
+                                    "response".to_string(),
+                                )),
+                            ),
+                            (
+                                "status".to_string(),
+                                Box::new(Expr::Number(InnerNumber::UnsignedInteger(200)))
+                            ),
+                        ]
+                        .into_iter()
+                        .collect()
+                    )))
+                }
+            })
+        );
     }
 }

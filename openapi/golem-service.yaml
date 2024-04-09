@@ -864,6 +864,11 @@ paths:
     put:
       tags:
       - ApiDefinition
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema: {}
+        required: true
       responses:
         '200':
           description: ''
@@ -2084,13 +2089,16 @@ components:
         template:
           type: string
           format: uuid
-        workerId: {}
+        workerId:
+          type: string
         functionName:
           type: string
         functionParams:
           type: array
-          items: {}
-        response: {}
+          items:
+            type: string
+        response:
+          type: string
       required:
       - template
       - workerId
@@ -2219,7 +2227,9 @@ components:
       type: string
       enum:
       - Equal
+      - NotEqual
       - Like
+      - NotLike
     ValidationErrorsBody:
       type: object
       properties:
@@ -2531,9 +2541,12 @@ components:
     WorkerStatusFilter:
       type: object
       properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
         value:
           $ref: '#/components/schemas/WorkerStatus'
       required:
+      - comparator
       - value
     WorkerVersionFilter:
       type: object
@@ -2542,7 +2555,7 @@ components:
           $ref: '#/components/schemas/FilterComparator'
         value:
           type: integer
-          format: int32
+          format: uint64
       required:
       - comparator
       - value
