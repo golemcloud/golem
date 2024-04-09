@@ -255,17 +255,19 @@ mod internal {
         spec_query_variables: &[QueryInfo],
         path_variables: HashMap<VarInfo, &str>,
     ) -> Result<RecordField, Vec<String>> {
-        let request_query_values =
+        let mut request_query_values =
             get_request_query_values(request_query_variables, spec_query_variables)?;
 
         let request_path_values = get_request_path_values(path_variables);
 
-        let path_values = request_query_values.merge(&request_path_values);
+        request_query_values.merge(&request_path_values);
+
+        let merged = request_query_values;
 
         Ok(RecordField {
             name: "path".into(),
-            typ: AnalysedType::from(&path_values),
-            value: path_values,
+            typ: AnalysedType::from(&merged),
+            value: merged,
         })
     }
 
@@ -364,7 +366,7 @@ mod tests {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
-        let function_params = "[{\"x\" : \"y\"}]";
+        let function_params = "[\"${{x : 'y'}}\"]";
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
@@ -399,7 +401,7 @@ mod tests {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
-        let function_params = "[{\"x\" : \"${request.path.user-id}\"}]";
+        let function_params = "[\"${{x : request.path.user-id}}\"]";
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
@@ -545,13 +547,17 @@ mod tests {
             serde_json::Value::Object(request_body_amp),
         );
 
-        let function_params =
-            "[{ \"user-id\" : \"${request.path.user-id}\" }, \"${request.path.token-id}\",  \"age-${request.body.age}\", \"user-name\" : \"${request.header.username}\"]";
+        let arg1 = "${{ user-id : request.path.user-id }}";
+        let arg2 = "${request.path.token-id}";
+        let arg3 = "age-${request.body.age}";
+        let arg4 = "${{user-name : request.header.username}}";
+
+        let function_params = format!("[\"{}\", \"{}\", \"{}\", \"{}\"]", arg1, arg2, arg3, arg4);
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}?{token-id}",
             "shopping-cart-${request.path.user-id}",
-            function_params,
+            function_params.as_str(),
         );
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
@@ -597,7 +603,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             function_params,
         );
 
@@ -635,7 +641,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             function_params,
         );
 
@@ -857,7 +863,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             function_params.as_str(),
         );
 
@@ -910,7 +916,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             function_params.as_str(),
         );
 
@@ -962,7 +968,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             function_params.as_str(),
         );
 
@@ -1020,7 +1026,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "/foo/{user-id}",
-            "shopping-cart-${if (request.path.user-id>100) then 0 else 1}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             function_params.as_str(),
         );
 

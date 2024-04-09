@@ -298,72 +298,65 @@ mod test {
             "x-golem-api-definition-id": "shopping-cart-test-api",
             "x-golem-api-definition-version": "0.1.0",
             "paths": {
-              "/{user-id}/get-cart-contents": {
-                "x-golem-worker-bridge": {
-                  "worker-id": "worker-${request.path.user-id}",
-                  "function-name": "golem:it/api/get-cart-contents",
-                  "function-params": [],
-                  "template-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-                  "response" : {
-                    "status": "200",
-                    "body": {
-                      "name" : "${worker.response[0][0].name}",
-                      "price" : "${worker.response[0][0].price}",
-                      "quantity" : "${worker.response[0][0].quantity}"
-                    },
-                    "headers": {}
-                  }
-                },
-                "get": {
-                  "summary": "Get Cart Contents",
-                  "description": "Get the contents of a user's cart",
-                  "parameters": [
-                    {
-                      "name": "user-id",
-                      "in": "path",
-                      "required": true,
-                      "schema": {
-                        "type": "string"
-                      }
-                    }
-                  ],
-                  "responses": {
-                    "200": {
-                      "description": "OK",
-                      "content":{
-                        "application/json": {
-                          "schema": {
-                            "$ref": "#/components/schemas/CartItem"
-                          }
+                "/{user-id}/get-cart-contents": {
+                  "x-golem-worker-bridge": {
+                    "worker-id": "worker-${request.path.user-id}",
+                    "function-name": "golem:it/api/get-cart-contents",
+                    "function-params": [],
+                    "template-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
+                    "response" : "${{headers : {ContentType: 'json', userid: 'foo'}, body: worker.response, status: 200}}"
+                  },
+                  "get": {
+                    "summary": "Get Cart Contents",
+                    "description": "Get the contents of a user's cart",
+                    "parameters": [
+                      {
+                        "name": "user-id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                          "type": "string"
                         }
                       }
-                    },
-                    "404": {
-                      "description": "Contents not found"
+                    ],
+                    "responses": {
+                      "200": {
+                        "description": "OK",
+                        "content":{
+                          "application/json": {
+                            "schema": {
+                              "$ref": "#/components/schemas/CartItem"
+                            }
+                          }
+            
+                        }
+                      },
+                      "404": {
+                        "description": "Contents not found"
+                      }
                     }
                   }
                 }
-              }
-            },
-            "components": {
-              "schemas": {
-                "CartItem": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string"
-                    },
-                    "name": {
-                      "type": "string"
-                    },
-                    "price": {
-                      "type": "number"
+              },
+              "components": {
+                "schemas": {
+                  "CartItem": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "price": {
+                        "type": "number"
+                      }
                     }
                   }
                 }
-              }
             }
-          }
+        }
         "###;
 
         let response = client

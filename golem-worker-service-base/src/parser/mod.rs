@@ -1,8 +1,11 @@
 use std::fmt;
 
-pub(crate) mod expr_parser;
+pub(crate) use expr::expr_parser;
+
 pub(crate) mod path_pattern_parser;
 pub(crate) mod place_holder_parser;
+
+mod expr;
 
 pub trait GolemParser<T> {
     fn parse(&self, str: &str) -> Result<T, ParseError>;
@@ -11,6 +14,12 @@ pub trait GolemParser<T> {
 #[derive(Debug, PartialEq)]
 pub enum ParseError {
     Message(String),
+}
+
+impl ParseError {
+    pub fn message(msg: impl Into<String>) -> Self {
+        ParseError::Message(msg.into())
+    }
 }
 
 impl fmt::Display for ParseError {
