@@ -16,7 +16,7 @@ use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
-use crate::components::rdb::{DbInfo, PostgresInfo, Rdb};
+use crate::components::rdb::{assert_connection, DbInfo, PostgresInfo, Rdb};
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
 use k8s_openapi::api::core::v1::{Pod, Service};
@@ -25,7 +25,7 @@ use kube::{Api, Client};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{debug, info};
 
 pub struct K8sPostgresRdb {
     _namespace: K8sNamespace,
@@ -117,12 +117,12 @@ impl K8sPostgresRdb {
             hostname: local_host,
             port: local_port,
             routing: managed_routing,
-        } = Routing::create("golem-redis", 6379, namespace, routing_type).await;
+        } = Routing::create("golem-postgres", 5432, namespace, routing_type).await;
 
         let host = format!("golem-postgres.{}.svc.cluster.local", &namespace.0);
         let port = 5432;
 
-        Self::assert_connection(&local_host, local_port).await;
+        assert_connection(&local_host, local_port).await;
 
         info!("Test Postgres started on private host {host}:{port}, accessible from localhost as {local_host}:{local_port}");
 
@@ -134,24 +134,6 @@ impl K8sPostgresRdb {
             service: Arc::new(Mutex::new(managed_service)),
             routing: Arc::new(Mutex::new(managed_routing)),
         }
-    }
-
-    fn connection_string(host: &str, port: u16) -> String {
-        format!("postgres://postgres:postgres@{host}:{port}/postgres")
-    }
-
-    async fn assert_connection(host: &str, port: u16) {
-        let (client, _conn) = ::tokio_postgres::connect(
-            &K8sPostgresRdb::connection_string(host, port),
-            ::tokio_postgres::NoTls,
-        )
-        .await
-        .unwrap();
-
-        client
-            .query("SELECT version()", &[])
-            .await
-            .expect("Failed to connect to Postgres");
     }
 }
 

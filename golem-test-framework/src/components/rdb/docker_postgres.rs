@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::rdb::{DbInfo, PostgresInfo, Rdb};
+use crate::components::rdb::{assert_connection, DbInfo, PostgresInfo, Rdb};
 use crate::components::{DOCKER, NETWORK};
 use testcontainers::{Container, RunnableImage};
 use tracing::info;
@@ -51,7 +51,11 @@ impl DockerPostgresRdb {
         };
 
         let host_port = container.get_host_port_ipv4(Self::DEFAULT_PORT);
-        Self::assert_connection(host_port);
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(assert_connection("localhost", host_port));
 
         Self {
             container,
@@ -59,21 +63,6 @@ impl DockerPostgresRdb {
             port,
             host_port,
         }
-    }
-
-    fn connection_string(host_port: u16) -> String {
-        format!("postgres://postgres:postgres@localhost:{host_port}/postgres")
-    }
-
-    fn assert_connection(host_port: u16) {
-        let mut conn = ::postgres::Client::connect(
-            &DockerPostgresRdb::connection_string(host_port),
-            ::postgres::NoTls,
-        )
-        .unwrap();
-
-        conn.query("SELECT version()", &[])
-            .expect("Failed to connect to Postgres");
     }
 }
 

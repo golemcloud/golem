@@ -27,31 +27,27 @@ use golem_test_framework::components::redis::k8s::K8sRedis;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::shard_manager::k8s::K8sShardManager;
 use golem_test_framework::components::shard_manager::ShardManager;
+use golem_test_framework::config::CliTestDependencies;
 
 #[tokio::main]
 async fn main() {
-    let ansi_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(true)
-        .with_filter(
-            EnvFilter::try_new("debug,cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn,fred=warn").unwrap()
-        );
-
-    tracing_subscriber::registry().with(ansi_layer).init();
-
-    let namespace = K8sNamespace::default();
-    let routing_type = K8sRoutingType::Minikube;
-
-    let redis: Arc<dyn Redis + Send + Sync + 'static> =
-        Arc::new(K8sRedis::new(&namespace, &routing_type, "".to_string()).await);
-    let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-        Arc::new(K8sPostgresRdb::new(&namespace, &routing_type).await);
-    let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
-        K8sShardManager::new(&namespace, &routing_type, Level::DEBUG, redis.clone()).await,
-    );
-
+    let deps = CliTestDependencies::new().await;
+    //
+    //
+    // let namespace = K8sNamespace::default();
+    // let routing_type = K8sRoutingType::Minikube;
+    //
+    // let redis: Arc<dyn Redis + Send + Sync + 'static> =
+    //     Arc::new(K8sRedis::new(&namespace, &routing_type, "".to_string()).await);
+    // let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
+    //     Arc::new(K8sPostgresRdb::new(&namespace, &routing_type).await);
+    // let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
+    //     K8sShardManager::new(&namespace, &routing_type, Level::DEBUG, redis.clone()).await,
+    // );
+    //
     println!("Hello, world!");
 
     let mut answer = String::new();
     stdin().read_to_string(&mut answer).await;
-    // panic!("nemjo");
+    // // panic!("nemjo");
 }

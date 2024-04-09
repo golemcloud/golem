@@ -129,11 +129,12 @@ impl AsyncDrop for ManagedRouting {
     async fn async_drop(&mut self) {
         match self {
             ManagedRouting::Minikube { child: Some(child) } => {
-                info!("Killing minikube service tunnel process {:?}", child.id());
-                child
-                    .kill()
-                    .await
-                    .expect("Failed to kill minikube service tunnel");
+                if let Some(pid) = child.id() {
+                    info!("Killing minikube service tunnel process {:?}", child.id());
+                    kill_tree::tokio::kill_tree(pid)
+                        .await
+                        .expect("Failed to kill minikube service tunnel");
+                }
             }
             _ => {}
         }

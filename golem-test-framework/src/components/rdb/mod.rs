@@ -12,11 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::rdb::docker_postgres::DockerPostgresRdb;
+use crate::components::rdb::k8s_postgres::K8sPostgresRdb;
+use clap::Args;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tracing::debug;
 
+pub mod docker_postgres;
 pub mod k8s_postgres;
-pub mod postgres;
+pub mod provided_postgres;
 pub mod sqlite;
 
 pub trait Rdb {
@@ -53,13 +58,19 @@ impl DbInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Args)]
 pub struct PostgresInfo {
+    #[arg(long = "postgres-host", default_value = "localhost")]
     pub host: String,
+    #[arg(long = "postgres-port", default_value = "5432")]
     pub port: u16,
+    #[arg(long = "postgres-host-port", default_value = "5432")]
     pub host_port: u16,
+    #[arg(long = "postgres-db-name", default_value = "postgres")]
     pub database_name: String,
+    #[arg(long = "postgres-username", default_value = "postgres")]
     pub username: String,
+    #[arg(long = "postgres-password", default_value = "postgres")]
     pub password: String,
 }
 
@@ -100,4 +111,29 @@ impl PostgresInfo {
             ),
         ])
     }
+}
+
+fn connection_string(host: &str, port: u16) -> String {
+    format!("postgres://postgres:postgres@{host}:{port}/postgres?connect_timeout=3")
+}
+
+async fn assert_connection(host: &str, port: u16) {
+    let (client, connection) =
+        ::tokio_postgres::connect(&connection_string(host, port), ::tokio_postgres::NoTls)
+            .await
+            .unwrap();
+
+    let connection_fiber = tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {}", e);
+        }
+    });
+
+    let r = client
+        .simple_query("SELECT version();")
+        .await
+        .expect("Failed to connect to Postgres");
+
+    debug!("Test query returned with {r:?}");
+    connection_fiber.abort();
 }

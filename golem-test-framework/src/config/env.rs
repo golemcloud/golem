@@ -12,19 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use tracing::Level;
 use crate::components;
-use crate::components::rdb::postgres::DockerPostgresRdb;
-use crate::components::rdb::sqlite::SqliteRdb;
+use crate::components::rdb::docker_postgres::DockerPostgresRdb;
 use crate::components::rdb::Rdb;
+use crate::components::rdb::sqlite::SqliteRdb;
 use crate::components::redis::docker::DockerRedis;
 use crate::components::redis::provided::ProvidedRedis;
-use crate::components::redis::spawned::SpawnedRedis;
 use crate::components::redis::Redis;
-use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
+use crate::components::redis::spawned::SpawnedRedis;
 use crate::components::redis_monitor::RedisMonitor;
+use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use crate::components::shard_manager::docker::DockerShardManager;
-use crate::components::shard_manager::spawned::SpawnedShardManager;
 use crate::components::shard_manager::ShardManager;
+use crate::components::shard_manager::spawned::SpawnedShardManager;
 use crate::components::template_service::docker::DockerTemplateService;
 use crate::components::template_service::spawned::SpawnedTemplateService;
 use crate::components::template_service::TemplateService;
@@ -34,36 +37,17 @@ use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::docker::DockerWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use tracing::Level;
-
-pub trait TestDependencies {
-    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static>;
-    fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static>;
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static>;
-    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static>;
-    fn template_directory(&self) -> PathBuf;
-    fn template_service(&self) -> Arc<dyn TemplateService + Send + Sync + 'static>;
-    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static>;
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
-}
-
-macro_rules! lazy_field {
-    ($iface:ident) => {
-        Arc<Mutex<Option<Arc<dyn $iface + Send + Sync + 'static>>>>
-    }
-}
+use crate::config::{DbType, TestDependencies};
 
 pub struct EnvBasedTestDependencies {
     worker_executor_cluster_size: usize,
-    rdb: lazy_field!(Rdb),
-    redis: lazy_field!(Redis),
-    redis_monitor: lazy_field!(RedisMonitor),
-    shard_manager: lazy_field!(ShardManager),
-    template_service: lazy_field!(TemplateService),
-    worker_service: lazy_field!(WorkerService),
-    worker_executor_cluster: lazy_field!(WorkerExecutorCluster),
+    rdb: crate::lazy_field!(Rdb),
+    redis: crate::lazy_field!(Redis),
+    redis_monitor: crate::lazy_field!(RedisMonitor),
+    shard_manager: crate::lazy_field!(ShardManager),
+    template_service: crate::lazy_field!(TemplateService),
+    worker_service: crate::lazy_field!(WorkerService),
+    worker_executor_cluster: crate::lazy_field!(WorkerExecutorCluster),
 }
 
 impl EnvBasedTestDependencies {
@@ -360,10 +344,4 @@ impl TestDependencies for EnvBasedTestDependencies {
             Some(worker_executor_cluster) => worker_executor_cluster.clone(),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum DbType {
-    Postgres,
-    Sqlite,
 }
