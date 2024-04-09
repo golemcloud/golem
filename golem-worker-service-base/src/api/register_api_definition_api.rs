@@ -185,8 +185,10 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition>
             .map(grpc_apidefinition::HttpRoute::try_from)
             .collect::<Result<Vec<grpc_apidefinition::HttpRoute>, String>>()?;
 
+        let id = value.id.0;
+
         let result = grpc_apidefinition::HttpApiDefinition {
-            id: value.id.0,
+            id: Some(grpc_apidefinition::ApiDefinitionId { value: id }),
             version: value.version.0,
             routes,
         };
@@ -207,8 +209,10 @@ impl TryFrom<grpc_apidefinition::HttpApiDefinition>
             .map(crate::api_definition::http::Route::try_from)
             .collect::<Result<Vec<crate::api_definition::http::Route>, String>>()?;
 
+        let id = value.id.ok_or("Api Definition ID is missing")?;
+
         let result = crate::api_definition::http::HttpApiDefinition {
-            id: crate::api_definition::ApiDefinitionId(value.id),
+            id: crate::api_definition::ApiDefinitionId(id.value),
             version: crate::api_definition::ApiVersion(value.version),
             routes,
         };
@@ -222,7 +226,7 @@ impl TryFrom<crate::api_definition::http::Route> for grpc_apidefinition::HttpRou
 
     fn try_from(value: crate::api_definition::http::Route) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
-        let binding = grpc_apidefinition::GolemWorkerBinding::try_from(value.binding)?;
+        let binding = grpc_apidefinition::WorkerBinding::try_from(value.binding)?;
         let method: grpc_apidefinition::HttpMethod = value.method.into();
 
         let result = grpc_apidefinition::HttpRoute {
@@ -271,7 +275,7 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::api_definition::http::Rou
     }
 }
 
-impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::GolemWorkerBinding {
+impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::WorkerBinding {
     type Error = String;
 
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
@@ -290,7 +294,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
             .map(|p| expression::to_string(&p).map_err(|e| e.to_string()))
             .collect::<Result<Vec<String>, String>>()?;
 
-        let result = golem_api_grpc::proto::golem::apidefinition::GolemWorkerBinding {
+        let result = grpc_apidefinition::WorkerBinding {
             template: Some(value.template.into()),
             worker_id,
             function_name: value.function_name,
@@ -302,10 +306,10 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
     }
 }
 
-impl TryFrom<grpc_apidefinition::GolemWorkerBinding> for crate::worker_binding::GolemWorkerBinding {
+impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::GolemWorkerBinding {
     type Error = String;
 
-    fn try_from(value: grpc_apidefinition::GolemWorkerBinding) -> Result<Self, Self::Error> {
+    fn try_from(value: grpc_apidefinition::WorkerBinding) -> Result<Self, Self::Error> {
         let response: Option<crate::worker_binding::ResponseMapping> = match value.response {
             Some(v) => {
                 let r: Expr = v.parse().map_err(|e: ParseError| e.to_string())?;

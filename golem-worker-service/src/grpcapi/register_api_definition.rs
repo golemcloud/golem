@@ -4,17 +4,17 @@ use async_trait::async_trait;
 
 use golem_api_grpc::proto::golem::{
     apidefinition::{
-        api_definition_error, api_definition_service_server::ApiDefinitionService,
-        create_or_update_open_api_response, create_or_update_response_api_definition_response,
-        delete_api_definition_response, get_all_api_definition_versions_response,
-        get_all_api_definitions_response, get_api_definition_response, ApiDefinitionError,
-        CreateOrUpdateApiDefinitionRequest, CreateOrUpdateOpenApiRequest,
-        CreateOrUpdateOpenApiResponse, CreateOrUpdateResponseApiDefinitionResponse,
-        DeleteApiDefinitionRequest, DeleteApiDefinitionResponse,
-        GetAllApiDefinitionVersionsRequest, GetAllApiDefinitionVersionsResponse,
-        GetAllApiDefinitionsRequest, GetAllApiDefinitionsResponse, GetApiDefinitionRequest,
-        GetApiDefinitionResponse, HttpApiDefinition as GrpcHttpApiDefinition,
-        HttpApiDefinitionList,
+        api_definition::Definition, api_definition_error, api_definition_list::Definitions,
+        api_definition_service_server::ApiDefinitionService,
+        create_or_update_api_definition_request, create_or_update_response_api_definition_response,
+        delete_api_definition_response, get_all_api_definitions_response,
+        get_api_definition_response, get_api_definition_versions_response,
+        ApiDefinition as GrpcApiDefinition, ApiDefinitionError, ApiDefinitionList,
+        CreateOrUpdateApiDefinitionRequest, CreateOrUpdateResponseApiDefinitionResponse,
+        DeleteApiDefinitionRequest, DeleteApiDefinitionResponse, GetAllApiDefinitionsRequest,
+        GetAllApiDefinitionsResponse, GetApiDefinitionRequest, GetApiDefinitionResponse,
+        GetApiDefinitionVersionsRequest, GetApiDefinitionVersionsResponse,
+        HttpApiDefinition as GrpcHttpApiDefinition, HttpApiDefinitionList,
     },
     common::{Empty, ErrorBody, ErrorsBody},
 };
@@ -71,23 +71,6 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         ))
     }
 
-    async fn create_or_update_open_api_definition(
-        &self,
-        request: tonic::Request<CreateOrUpdateOpenApiRequest>,
-    ) -> Result<tonic::Response<CreateOrUpdateOpenApiResponse>, tonic::Status> {
-        let result = match self
-            .create_or_update_open_api_definition(request.into_inner())
-            .await
-        {
-            Ok(result) => create_or_update_open_api_response::Result::Success(result),
-            Err(error) => create_or_update_open_api_response::Result::Error(error),
-        };
-
-        Ok(tonic::Response::new(CreateOrUpdateOpenApiResponse {
-            result: Some(result),
-        }))
-    }
-
     async fn get_api_definition(
         &self,
         request: tonic::Request<GetApiDefinitionRequest>,
@@ -102,22 +85,25 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         }))
     }
 
-    async fn get_all_api_definition_versions(
+    async fn get_api_definition_versions(
         &self,
-        request: tonic::Request<GetAllApiDefinitionVersionsRequest>,
-    ) -> Result<tonic::Response<GetAllApiDefinitionVersionsResponse>, tonic::Status> {
-        let result =
-            match self
-                .get_all_api_definition_versions(request.into_inner())
-                .await
-            {
-                Ok(api_definitions) => get_all_api_definition_versions_response::Result::Success(
-                    HttpApiDefinitionList { api_definitions },
-                ),
-                Err(error) => get_all_api_definition_versions_response::Result::Error(error),
-            };
+        request: tonic::Request<GetApiDefinitionVersionsRequest>,
+    ) -> Result<tonic::Response<GetApiDefinitionVersionsResponse>, tonic::Status> {
+        let result = match self
+            .get_all_api_definition_versions(request.into_inner())
+            .await
+        {
+            Ok(api_definitions) => {
+                get_api_definition_versions_response::Result::Success(ApiDefinitionList {
+                    definitions: Some(Definitions::Http(HttpApiDefinitionList {
+                        http: api_definitions,
+                    })),
+                })
+            }
+            Err(error) => get_api_definition_versions_response::Result::Error(error),
+        };
 
-        Ok(tonic::Response::new(GetAllApiDefinitionVersionsResponse {
+        Ok(tonic::Response::new(GetApiDefinitionVersionsResponse {
             result: Some(result),
         }))
     }
@@ -128,8 +114,10 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
     ) -> std::result::Result<tonic::Response<GetAllApiDefinitionsResponse>, tonic::Status> {
         let result = match self.get_all_api_definitions(request.into_inner()).await {
             Ok(api_definitions) => {
-                get_all_api_definitions_response::Result::Success(HttpApiDefinitionList {
-                    api_definitions,
+                get_all_api_definitions_response::Result::Success(ApiDefinitionList {
+                    definitions: Some(Definitions::Http(HttpApiDefinitionList {
+                        http: api_definitions,
+                    })),
                 })
             }
             Err(error) => get_all_api_definitions_response::Result::Error(error),
@@ -140,7 +128,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         }))
     }
 
-    async fn delete(
+    async fn delete_api_definition(
         &self,
         request: tonic::Request<DeleteApiDefinitionRequest>,
     ) -> Result<tonic::Response<DeleteApiDefinitionResponse>, tonic::Status> {
@@ -159,12 +147,22 @@ impl GrpcApiDefinitionService {
     async fn create_or_update_api_definition(
         &self,
         request: CreateOrUpdateApiDefinitionRequest,
-    ) -> Result<GrpcHttpApiDefinition, ApiDefinitionError> {
+    ) -> Result<GrpcApiDefinition, ApiDefinitionError> {
         let definition = request
-            .payload
+            .definition
             .ok_or(bad_request("Missing Api Definition"))?;
 
-        let internal_definition = definition.clone().try_into().map_err(bad_request)?;
+        let internal_definition = match definition {
+            create_or_update_api_definition_request::Definition::Http(definition) => {
+                definition.clone().try_into().map_err(bad_request)?
+            }
+            create_or_update_api_definition_request::Definition::OpenApi(definition) => {
+                let value =
+                    serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?;
+
+                get_api_definition(value).map_err(bad_request)?
+            }
+        };
 
         self.definition_service
             .register(
@@ -174,33 +172,21 @@ impl GrpcApiDefinitionService {
             )
             .await?;
 
-        Ok(definition)
-    }
+        let definition = internal_definition.try_into().map_err(internal_error)?;
 
-    async fn create_or_update_open_api_definition(
-        &self,
-        request: CreateOrUpdateOpenApiRequest,
-    ) -> Result<GrpcHttpApiDefinition, ApiDefinitionError> {
-        let definition = request.payload;
-
-        let value = serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?;
-
-        let definition = get_api_definition(value).map_err(bad_request)?;
-
-        self.definition_service
-            .register(&definition, CommonNamespace::default(), &EmptyAuthCtx {})
-            .await?;
-
-        let grpc_definition = definition.try_into().map_err(internal_error)?;
-
-        Ok(grpc_definition)
+        Ok(GrpcApiDefinition {
+            definition: Some(Definition::Http(definition)),
+        })
     }
 
     async fn get_api_definition(
         &self,
         request: GetApiDefinitionRequest,
-    ) -> Result<GrpcHttpApiDefinition, ApiDefinitionError> {
-        let api_definition_id = ApiDefinitionId(request.api_definition_id);
+    ) -> Result<GrpcApiDefinition, ApiDefinitionError> {
+        let api_definition_id = request
+            .api_definition_id
+            .ok_or(bad_request("Missing Api Definition Id"))?;
+        let api_definition_id = ApiDefinitionId(api_definition_id.value);
         let version = ApiVersion(request.version);
 
         let definition = self
@@ -221,14 +207,16 @@ impl GrpcApiDefinitionService {
 
         let definition = definition.try_into().map_err(internal_error)?;
 
-        Ok(definition)
+        Ok(GrpcApiDefinition {
+            definition: Some(Definition::Http(definition)),
+        })
     }
 
     async fn get_all_api_definition_versions(
         &self,
-        request: GetAllApiDefinitionVersionsRequest,
+        request: GetApiDefinitionVersionsRequest,
     ) -> Result<Vec<GrpcHttpApiDefinition>, ApiDefinitionError> {
-        let api_definition_id = ApiDefinitionId(request.api_definition_id);
+        let api_definition_id = get_api_definition_id(request.api_definition_id)?;
 
         let definitions = self
             .definition_service
@@ -270,7 +258,7 @@ impl GrpcApiDefinitionService {
         &self,
         request: DeleteApiDefinitionRequest,
     ) -> Result<(), ApiDefinitionError> {
-        let api_definition_id = ApiDefinitionId(request.api_definition_id);
+        let api_definition_id = get_api_definition_id(request.api_definition_id)?;
         let version = ApiVersion(request.version);
 
         let _ = self
@@ -285,6 +273,13 @@ impl GrpcApiDefinitionService {
 
         Ok(())
     }
+}
+
+fn get_api_definition_id(
+    id: Option<golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId>,
+) -> Result<ApiDefinitionId, ApiDefinitionError> {
+    id.map(|id| ApiDefinitionId(id.value))
+        .ok_or(bad_request("Missing Api Definition Id"))
 }
 
 fn bad_request(error: impl Into<String>) -> ApiDefinitionError {
