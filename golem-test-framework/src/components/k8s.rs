@@ -68,8 +68,10 @@ impl AsyncDrop for ManagedPod {
         let pods: Api<Pod> =
             Api::namespaced(Client::try_default().await.unwrap(), &self.namespace.0);
 
-        let mut dp = DeleteParams::default();
-        dp.grace_period_seconds = Some(0);
+        let dp = DeleteParams {
+            grace_period_seconds: Some(0),
+            ..Default::default()
+        };
         match pods.delete(&name, &dp).await {
             Ok(_) => info!("Pod deleted: {name}"),
             Err(e) => error!("!!! Failed to delete pod {name}: {e:?}"),
@@ -101,8 +103,10 @@ impl AsyncDrop for ManagedService {
         let services: Api<Service> =
             Api::namespaced(Client::try_default().await.unwrap(), &self.namespace.0);
 
-        let mut dp = DeleteParams::default();
-        dp.grace_period_seconds = Some(0);
+        let dp = DeleteParams {
+            grace_period_seconds: Some(0),
+            ..Default::default()
+        };
         match services.delete(&name, &dp).await {
             Ok(_) => info!("Service deleted: {name}"),
             Err(e) => error!("!!! Failed to delete service {name}: {e:?}"),
