@@ -9,6 +9,7 @@ use crate::api_definition::http::MethodPattern;
 use crate::api_definition::{ApiDefinitionId, ApiVersion};
 use crate::expression;
 use crate::expression::Expr;
+use crate::parser::ParseError;
 
 // Mostly this data structures that represents the actual incoming request
 // exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.
@@ -265,11 +266,11 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
             None => None,
         };
 
-        let worker_id = serde_json::to_string(&value.worker_id).map_err(|e| e.to_string())?;
+        let worker_id = expression::to_string(&value.worker_id).map_err(|e| e.to_string())?;
         let function_params = value
             .function_params
             .into_iter()
-            .map(|p| serde_json::to_string(&p).map_err(|e| e.to_string()))
+            .map(|p| expression::to_string(&p).map_err(|e| e.to_string()))
             .collect::<Result<Vec<String>, String>>()?;
 
         let result = golem_api_grpc::proto::golem::apidefinition::GolemWorkerBinding {
@@ -290,19 +291,22 @@ impl TryFrom<grpc_apidefinition::GolemWorkerBinding> for crate::worker_binding::
     fn try_from(value: grpc_apidefinition::GolemWorkerBinding) -> Result<Self, Self::Error> {
         let response: Option<crate::worker_binding::ResponseMapping> = match value.response {
             Some(v) => {
-                let json_value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
-                let r = Expr::from_json_value(&json_value).map_err(|e| e.to_string())?;
+                let r: Expr = v.parse().map_err(|e: ParseError| e.to_string())?;
                 Some(crate::worker_binding::ResponseMapping(r))
             }
             None => None,
         };
 
-        let worker_id = serde_json::from_str(&value.worker_id).map_err(|e| e.to_string())?;
-        let function_params = value
+        let worker_id = value
+            .worker_id
+            .parse()
+            .map_err(|e: ParseError| e.to_string())?;
+
+        let function_params: Vec<Expr> = value
             .function_params
             .into_iter()
-            .map(|p| serde_json::from_str(&p).map_err(|e| e.to_string()))
-            .collect::<Result<Vec<Expr>, String>>()?;
+            .map(|p| p.parse().map_err(|e: ParseError| e.to_string()))
+            .collect::<Result<_, String>>()?;
 
         let template_id = value.template.ok_or("template is missing")?.try_into()?;
 
