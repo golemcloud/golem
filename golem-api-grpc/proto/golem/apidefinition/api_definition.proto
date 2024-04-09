@@ -17,7 +17,7 @@ message ApiDefinitionList {
 }
 
 message HttpApiDefinitionList {
-  repeated HttpApiDefinition http = 1;
+  repeated HttpApiDefinition definitions = 1;
 }
 
 message HttpApiDefinition {

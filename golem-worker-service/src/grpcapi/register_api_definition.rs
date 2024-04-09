@@ -93,11 +93,9 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
             .get_all_api_definition_versions(request.into_inner())
             .await
         {
-            Ok(api_definitions) => {
+            Ok(definitions) => {
                 get_api_definition_versions_response::Result::Success(ApiDefinitionList {
-                    definitions: Some(Definitions::Http(HttpApiDefinitionList {
-                        http: api_definitions,
-                    })),
+                    definitions: Some(Definitions::Http(HttpApiDefinitionList { definitions })),
                 })
             }
             Err(error) => get_api_definition_versions_response::Result::Error(error),
@@ -113,11 +111,9 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         request: tonic::Request<GetAllApiDefinitionsRequest>,
     ) -> std::result::Result<tonic::Response<GetAllApiDefinitionsResponse>, tonic::Status> {
         let result = match self.get_all_api_definitions(request.into_inner()).await {
-            Ok(api_definitions) => {
+            Ok(definitions) => {
                 get_all_api_definitions_response::Result::Success(ApiDefinitionList {
-                    definitions: Some(Definitions::Http(HttpApiDefinitionList {
-                        http: api_definitions,
-                    })),
+                    definitions: Some(Definitions::Http(HttpApiDefinitionList { definitions })),
                 })
             }
             Err(error) => get_all_api_definitions_response::Result::Error(error),
