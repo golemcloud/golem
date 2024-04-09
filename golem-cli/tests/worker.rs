@@ -451,7 +451,6 @@ fn worker_simulated_crash(
     Ok(())
 }
 
-
 fn worker_list(
     (deps, name, cli): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
@@ -459,8 +458,7 @@ fn worker_list(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id = make_template(&context, &format!("{name} worker_list"), &cli)?.template_id;
-
+    let template_id = make_template(deps, &format!("{name} worker_list"), &cli)?.template_id;
     let cfg = &cli.config;
 
     let workers_count = 10;
