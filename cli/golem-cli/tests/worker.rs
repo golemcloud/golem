@@ -505,7 +505,7 @@ fn worker_list(
         "version >= 0",
         &cfg.arg('f', "filter"),
         format!("name like {}_worker", name).as_str(),
-        &cfg.arg('s', "count"),
+        &cfg.arg('n', "count"),
         (workers_count / 2).to_string().as_str(),
     ])?;
 
@@ -521,7 +521,7 @@ fn worker_list(
         "version >= 0",
         &cfg.arg('f', "filter"),
         format!("name like {}_worker", name).as_str(),
-        &cfg.arg('s', "count"),
+        &cfg.arg('n', "count"),
         (workers_count - result.workers.len()).to_string().as_str(),
         &cfg.arg('c', "cursor"),
         result.cursor.unwrap().to_string().as_str(),
@@ -539,7 +539,7 @@ fn worker_list(
             "version >= 0",
             &cfg.arg('f', "filter"),
             format!("name like {}_worker", name).as_str(),
-            &cfg.arg('s', "count"),
+            &cfg.arg('n', "count"),
             workers_count.to_string().as_str(),
             &cfg.arg('c', "cursor"),
             cursor2.to_string().as_str(),

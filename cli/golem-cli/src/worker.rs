@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use clap::builder::ValueParser;
 use clap::Subcommand;
-use golem_client::model::InvokeParameters;
+use golem_client::model::{InvokeParameters, WorkerMetadata, WorkersMetadataResponse};
 
 use crate::clients::worker::WorkerClient;
 use crate::model::{
@@ -175,19 +175,24 @@ pub enum WorkerSubcommand {
         #[command(flatten)]
         template_id_or_name: TemplateIdOrName,
 
-        // Filter
+        /// Filter for worker metadata in form of `property op value`.
+        ///
+        /// Filter examples: `name = worker-name`, `version >= 0`, `status = Running`, `env.var1 = value`.
+        /// Can be used multiple times (AND condition is applied between them)
         #[arg(short, long)]
         filter: Option<Vec<String>>,
 
-        // Cursor
+        /// Position where to start listing, if not provided, starts from the beginning
+        ///
+        /// It is used to get the next page of results. To get next page, use the cursor returned in the response
         #[arg(short, long)]
         cursor: Option<u64>,
 
-        // Count
-        #[arg(short = 's', long)]
+        /// Count of listed values, if count is not provided, returns all values
+        #[arg(short = 'n', long)]
         count: Option<u64>,
 
-        // Precise
+        /// Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
         #[arg(short, long)]
         precise: Option<bool>,
     },
@@ -353,12 +358,43 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
             } => {
                 let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
-                let response = self
-                    .client
-                    .list_metadata(template_id, filter, cursor, count, precise)
-                    .await?;
+                if count.is_some() {
+                    let response = self
+                        .client
+                        .list_metadata(template_id, filter, cursor, count, precise)
+                        .await?;
 
-                Ok(GolemResult::Ok(Box::new(response)))
+                    Ok(GolemResult::Ok(Box::new(response)))
+                } else {
+                    let mut workers: Vec<WorkerMetadata> = vec![];
+                    let mut new_cursor = cursor;
+
+                    loop {
+                        let response = self
+                            .client
+                            .list_metadata(
+                                template_id.clone(),
+                                filter.clone(),
+                                new_cursor,
+                                Some(50),
+                                precise,
+                            )
+                            .await?;
+
+                        workers.extend(response.workers);
+
+                        new_cursor = response.cursor;
+
+                        if new_cursor.is_none() {
+                            break;
+                        }
+                    }
+
+                    Ok(GolemResult::Ok(Box::new(WorkersMetadataResponse {
+                        workers,
+                        cursor: None,
+                    })))
+                }
             }
         }
     }
