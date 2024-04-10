@@ -395,7 +395,6 @@ mod record_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        dbg!(expr_str.clone());
         let expected_record_str = "${{a: match request {  ok(foo) => 'success', err(msg) => 'failure' } , b: match request {  ok(foo) => 'success', err(msg) => match request {  ok(foo) => 'success', err(msg) => 'failure' }  } }}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
@@ -1407,7 +1406,7 @@ mod if_cond_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${if 'foo' == 'bar' then 'success' else 'failed'}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expected_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 

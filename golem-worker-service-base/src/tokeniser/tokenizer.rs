@@ -1119,4 +1119,16 @@ else${z}
             (None, Some(Token::Quote))
         )
     }
+
+    #[test]
+    fn test_capture_string_between_quotes() {
+        let tokens = "foo' == 'bar'";
+
+        let mut tokeniser = Tokenizer::new(tokens);
+        let result = tokeniser.capture_string_until_and_skip_end(&Token::Quote);
+        assert_eq!(
+          result,
+            Some("foo".to_string())
+        )
+    }
 }

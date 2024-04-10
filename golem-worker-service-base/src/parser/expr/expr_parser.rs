@@ -222,7 +222,6 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             }
 
             Token::Dot => {
-                dbg!(previous_expression.clone());
                 let expr = previous_expression.get_and_reset().ok_or::<ParseError>(
                     "Selection of field is applied to a non existing left expression".into(),
                 )?;
