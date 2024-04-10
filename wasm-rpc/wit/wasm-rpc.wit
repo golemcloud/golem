@@ -47,6 +47,7 @@ interface types {
     constructor(location: uri);
 
     invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> result<wit-value, rpc-error>;
+    invoke: func(function-name: string, function-params: list<wit-value>) -> result<_, rpc-error>;
   }
 }
 
