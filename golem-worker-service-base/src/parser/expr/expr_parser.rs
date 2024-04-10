@@ -244,12 +244,7 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
 
                 Token::MultiChar(MultiCharTokens::If) => {
                     let if_expr = if_condition::create_if_condition(tokenizer)?;
-
-                    dbg!(&if_expr);
-
-                    let res = go(tokenizer, prev_expression.apply_with(if_expr))?;
-                    dbg!(&res);
-                    Ok(res)
+                    go(tokenizer, prev_expression.apply_with(if_expr))
                 }
 
                 Token::MultiChar(MultiCharTokens::Match) => {
