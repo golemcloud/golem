@@ -19,7 +19,7 @@ async-trait = { workspace = true }
 clap = { version = "4.5.4", features = ["derive", "suggestions", "color", "help"] }
 console-subscriber = { workspace = true }
 ctor = "0.2.7"
-golem-wasm-rpc = "0.0.16"
+golem-wasm-rpc = { workspace = true }
 rand = "0.8.5"
 tokio = { workspace = true }
 tracing = { workspace = true }
