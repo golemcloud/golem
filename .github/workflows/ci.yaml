@@ -246,12 +246,6 @@ jobs:
         run: cargo make check
       - name: Unit tests
         run: cargo make unit-tests
-      - name: Publish Test Results
-        uses: EnricoMi/publish-unit-test-result-action@v2
-        if: always()
-        with:
-          files: |
-            target/test-results/unit-tests.xml
       - name: Check that OpenAPI specs are up-to-date
         run: cargo make check-openapi
   worker-tests:
@@ -289,12 +283,6 @@ jobs:
           auto-start: false
       - name: Worker Executor integration tests
         run: cargo make worker-executor-tests
-      - name: Publish Test Results
-        uses: EnricoMi/publish-unit-test-result-action@v2
-        if: always()
-        with:
-          files: |
-            target/test-results/worker-executor-tests.xml
   integration-tests:
     runs-on: ubuntu-latest-large
     steps:
