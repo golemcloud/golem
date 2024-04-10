@@ -80,6 +80,9 @@ pub struct WasmRpcEntry {
     pub payload: Box<dyn std::any::Any + Send + Sync>,
 }
 
+#[cfg(feature = "text")]
+pub use text::*;
+
 #[cfg(feature = "typeinfo")]
 pub use type_annotated_value::*;
 
