@@ -31,6 +31,7 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         run: cargo binstall --no-confirm cargo-component@0.7.0
       - name: Check formatting
