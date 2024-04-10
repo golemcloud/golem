@@ -14,7 +14,9 @@ pub(crate) fn create_if_condition(tokenizer: &mut Tokenizer) -> Result<Expr, Par
     // Parse the 'then' branch expression
     let then_str = tokenizer
         .capture_string_until_and_skip_end(&Token::else_token())
-        .ok_or_else(|| ParseError::Message("Expecting a valid expression after then".to_string()))?;
+        .ok_or_else(|| {
+            ParseError::Message("Expecting a valid expression after then".to_string())
+        })?;
 
     let then_expr = parse_code(then_str.as_str())?;
 
@@ -25,9 +27,12 @@ pub(crate) fn create_if_condition(tokenizer: &mut Tokenizer) -> Result<Expr, Par
 
     let else_expr = match else_condition {
         Some(else_condition) => parse_code(else_condition.as_str())?,
-        None => return Err(ParseError::Message("Expecting a valid expression after then".to_string())),
+        None => {
+            return Err(ParseError::Message(
+                "Expecting a valid expression after then".to_string(),
+            ))
+        }
     };
-
 
     // Return the conditional expression
     Ok(Expr::Cond(

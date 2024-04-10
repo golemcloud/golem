@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::expression::Expr;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-use crate::parser::expr::{constructor, flags, if_condition, let_statement, pattern_match, quoted, record, selection, sequence, tuple, util};
+use crate::parser::expr::{code_block, constructor, flags, if_condition, let_statement, math_op, pattern_match, quoted, record, selection, sequence, tuple, util};
 use crate::parser::{GolemParser, ParseError};
 use internal::*;
 
@@ -47,281 +47,256 @@ pub(crate) fn parse_text(input: &str) -> Result<Expr, ParseError> {
     }
 }
 
-pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
-    fn go(
-        tokenizer: &mut Tokenizer,
-        prev_expression: InternalExprResult,
-    ) -> Result<Expr, ParseError> {
-        if let Some(token) = tokenizer.next_non_empty_token() {
-            match token {
-                Token::MultiChar(MultiCharTokens::Other(raw_string)) => {
-                    let new_expr = get_expr_from_custom_string(tokenizer, raw_string.as_str())?;
+#[derive(Default)]
+struct MultiLineExpressions {
+    expressions: Vec<Expr>,
+}
 
-                    go(tokenizer, prev_expression.apply_with(new_expr))
-                }
+impl MultiLineExpressions {
+    pub fn push(&mut self, expr: Expr) {
+        self.expressions.push(expr);
+    }
 
-                Token::MultiChar(MultiCharTokens::Number(number)) => {
-                    let new_expr = util::get_primitive_expr(number.as_str());
-                    go(tokenizer, prev_expression.apply_with(new_expr))
-                }
+    pub fn get_and_reset(&mut self) -> Expr {
+        let expressions = std::mem::take(&mut self.expressions);
 
-                Token::MultiChar(MultiCharTokens::Request) => {
-                    go(tokenizer, prev_expression.apply_with(Expr::Request()))
-                }
-
-                token @ Token::MultiChar(MultiCharTokens::Some)
-                | token @ Token::MultiChar(MultiCharTokens::None)
-                | token @ Token::MultiChar(MultiCharTokens::Ok)
-                | token @ Token::MultiChar(MultiCharTokens::Err) => {
-                    let constructor_pattern = constructor::get_constructor_pattern(
-                        tokenizer,
-                        token.to_string().as_str(),
-                    )?;
-                    go(
-                        tokenizer,
-                        prev_expression.apply_with(Expr::Constructor0(constructor_pattern)),
-                    )
-                }
-
-                Token::MultiChar(MultiCharTokens::Worker) => {
-                    go(tokenizer, prev_expression.apply_with(Expr::Worker()))
-                }
-
-                Token::MultiChar(MultiCharTokens::InterpolationStart) => {
-                    let new_expr = capture_expression_until(
-                        tokenizer,
-                        vec![&Token::interpolation_start(), &Token::LCurly],
-                        Some(&Token::RCurly),
-                        prev_expression,
-                        go,
-                    )?;
-
-                    go(tokenizer, new_expr)
-                }
-
-                Token::Quote => {
-                    let new_expr = quoted::create_expr_between_quotes(tokenizer)?;
-                    go(tokenizer, prev_expression.apply_with(new_expr))
-                }
-
-                Token::LParen => tuple::create_tuple(tokenizer)
-                    .and_then(|tuple| go(tokenizer, prev_expression.apply_with(tuple))),
-
-                Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo) => {
-                    if prev_expression.is_empty() {
-                        return Err(ParseError::Message(
-                            "GreaterThanOrEqualTo (>=) is applied to a non existing left expression"
-                                .to_string(),
-                        ));
-                    };
-
-                    let new_expr = build_with_last_complete_expr(
-                        InCompleteExpressionContext::GreaterThanOrEqualTo,
-                        prev_expression,
-                        |prev, new| {
-                            InternalExprResult::complete(Expr::GreaterThanOrEqualTo(
-                                Box::new(prev),
-                                Box::new(new),
-                            ))
-                        },
-                    )?;
-
-                    go(tokenizer, new_expr)
-                }
-
-                Token::GreaterThan => {
-                    if prev_expression.is_empty() {
-                        return Err(ParseError::Message(
-                            "GreaterThan (>) is applied to a non existing left expression"
-                                .to_string(),
-                        ));
-                    };
-
-                    let new_expr = build_with_last_complete_expr(
-                        InCompleteExpressionContext::GreaterThan,
-                        prev_expression,
-                        |prev, new| {
-                            InternalExprResult::complete(Expr::GreaterThan(
-                                Box::new(prev),
-                                Box::new(new),
-                            ))
-                        },
-                    )?;
-
-                    go(tokenizer, new_expr)
-                }
-
-                Token::MultiChar(MultiCharTokens::Let) => {
-                    let let_expr = let_statement::create_let_statement(tokenizer)?;
-                    go(tokenizer, prev_expression.accumulate_with(let_expr))
-                }
-
-                Token::LessThan => {
-                    if prev_expression.is_empty() {
-                        return Err(ParseError::Message(
-                            "LessThan (<) is applied to a non existing left expression".to_string(),
-                        ));
-                    };
-
-                    let new_expr = build_with_last_complete_expr(
-                        InCompleteExpressionContext::LessThan,
-                        prev_expression,
-                        |prev, new| {
-                            InternalExprResult::complete(Expr::LessThan(
-                                Box::new(prev),
-                                Box::new(new),
-                            ))
-                        },
-                    )?;
-
-                    go(tokenizer, new_expr)
-                }
-
-                Token::MultiChar(MultiCharTokens::LessThanOrEqualTo) => {
-                    if prev_expression.is_empty() {
-                        return Err(ParseError::Message(
-                            "LessThanOrEqualTo (<=)  is applied to a non existing left expression"
-                                .to_string(),
-                        ));
-                    };
-
-                    let new_expr = build_with_last_complete_expr(
-                        InCompleteExpressionContext::LessThanOrEqualTo,
-                        prev_expression,
-                        |prev, new| {
-                            InternalExprResult::complete(Expr::LessThanOrEqualTo(
-                                Box::new(prev),
-                                Box::new(new),
-                            ))
-                        },
-                    )?;
-
-                    go(tokenizer, new_expr)
-                }
-
-                Token::MultiChar(MultiCharTokens::EqualTo) => {
-                    if prev_expression.is_empty() {
-                        return Err(ParseError::Message(
-                            "EqualTo (=) is applied to a non existing left expression".to_string(),
-                        ));
-                    };
-
-                    let new_expr = build_with_last_complete_expr(
-                        InCompleteExpressionContext::EqualTo,
-                        prev_expression,
-                        |prev, new| {
-                            InternalExprResult::complete(Expr::EqualTo(
-                                Box::new(prev),
-                                Box::new(new),
-                            ))
-                        },
-                    )?;
-
-                    go(tokenizer, new_expr)
-                }
-
-                Token::Dot => match prev_expression {
-                    InternalExprResult::Complete(expr) => {
-                        let expr = selection::get_select_field(tokenizer, expr)?;
-                        go(tokenizer, InternalExprResult::complete(expr))
-                    }
-
-                    _ => Err(ParseError::message(
-                        "Invalid token field. Make sure expression format is correct",
-                    )),
-                },
-
-                Token::LSquare => match prev_expression {
-                    InternalExprResult::Complete(prev_expr) => {
-                        let new_expr = selection::get_select_index(tokenizer, &prev_expr)?;
-                        go(tokenizer, InternalExprResult::complete(new_expr))
-                    }
-                    _ => {
-                        let expr = sequence::create_sequence(tokenizer)?;
-                        go(tokenizer, prev_expression.apply_with(expr))
-                    }
-                },
-
-                Token::MultiChar(MultiCharTokens::If) => {
-                    let if_expr = if_condition::create_if_condition(tokenizer)?;
-                    go(tokenizer, prev_expression.apply_with(if_expr))
-                }
-
-                Token::MultiChar(MultiCharTokens::Match) => {
-                    let new_expr = pattern_match::create_pattern_match_expr(tokenizer)?;
-
-                    go(tokenizer, InternalExprResult::complete(new_expr))
-                }
-
-                Token::MultiChar(MultiCharTokens::Then) => match prev_expression {
-                    InternalExprResult::InComplete(InCompleteExpressionContext::Then, _) => {
-                        let mew_expr = capture_expression_until(
-                            tokenizer,
-                            vec![&Token::then()],
-                            Some(&Token::else_token()),
-                            prev_expression,
-                            go,
-                        )?;
-
-                        go(tokenizer, mew_expr)
-                    }
-
-                    _ => Err(ParseError::Message(
-                        "then is a keyword and should be part of a if condition logic".to_string(),
-                    )),
-                },
-
-                Token::MultiChar(MultiCharTokens::Else) => match prev_expression {
-                    InternalExprResult::InComplete(InCompleteExpressionContext::Else, _) => {
-                        let expr = capture_expression_until(
-                            tokenizer,
-                            vec![&Token::else_token()],
-                            None,
-                            prev_expression,
-                            go,
-                        )?;
-
-                        go(tokenizer, expr)
-                    }
-                    _ => Err(ParseError::Message(
-                        "else is a keyword and should be part of a if-then condition logic"
-                            .to_string(),
-                    )),
-                },
-                Token::LCurly => {
-                    let expr = if flags::is_flags(tokenizer) {
-                        flags::create_flags(tokenizer)
-                    } else {
-                        record::create_record(tokenizer)
-                    };
-
-                    go(tokenizer, prev_expression.apply_with(expr?))
-                }
-
-                Token::RCurly => go(tokenizer, prev_expression),
-                Token::RSquare => go(tokenizer, prev_expression),
-                Token::RParen => go(tokenizer, prev_expression),
-                Token::Space => go(tokenizer, prev_expression),
-                Token::NewLine => go(tokenizer, prev_expression),
-                Token::LetEqual => go(tokenizer, prev_expression),
-                Token::SemiColon => go(tokenizer, prev_expression),
-                Token::MultiChar(MultiCharTokens::Arrow) => go(tokenizer, prev_expression),
-                Token::Comma => go(tokenizer, prev_expression),
-                Token::Colon => go(tokenizer, prev_expression),
-            }
+        if expressions.len() == 1 {
+            expressions[0].clone()
         } else {
-            match prev_expression {
-                InternalExprResult::Complete(expr) => Ok(expr),
-                _ => Err(ParseError::Message(
-                    "failed expression. Internal logical error".to_string(),
-                )),
-            }
+            Expr::Multiple(expressions)
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone)]
+struct ConcatenatedExpressions {
+    expressions: Vec<Expr>,
+}
+
+impl ConcatenatedExpressions {
+    pub fn build(&mut self, expr: Expr) {
+        self.expressions.push(expr);
+    }
+
+    fn get_and_reset(&mut self) -> Option<Expr> {
+        let expressions = std::mem::take(&mut self.expressions);
+
+        match expressions.as_slice() {
+            [expr] => Some(expr.clone()),
+            [] => None, // If there are no expressions
+            _ => Some(Expr::Concat(expressions)),
         }
     }
 
-    let mut tokenizer: Tokenizer =  Tokenizer::new(input.as_ref());
+    fn get(&mut self) -> Option<Expr> {
+        let expressions = self.expressions.clone();
 
-    go(&mut tokenizer, InternalExprResult::Empty)
+        match expressions.as_slice() {
+            [expr] => Some(expr.clone()),
+            [] => None,
+            _ => Some(Expr::Concat(expressions)),
+        }
+    }
+}
+
+pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
+    let mut multi_line_expressions: MultiLineExpressions = MultiLineExpressions::default();
+    let mut previous_expression: ConcatenatedExpressions = ConcatenatedExpressions::default();
+    let mut tokenizer: Tokenizer = Tokenizer::new(input.as_ref());
+
+    while let Some(token) = tokenizer.next_non_empty_token() {
+        match token {
+            Token::MultiChar(MultiCharTokens::Other(raw_string)) => {
+                let new_expr = get_expr_from_custom_string(&mut tokenizer, raw_string.as_str())?;
+                previous_expression.build(new_expr);
+            }
+
+            Token::MultiChar(MultiCharTokens::Number(number)) => {
+                let new_expr = util::get_primitive_expr(number.as_str());
+                previous_expression.build(new_expr);
+            }
+
+            Token::MultiChar(MultiCharTokens::Request) => {
+                previous_expression.build(Expr::Request())
+            }
+
+            token @ Token::MultiChar(MultiCharTokens::Some)
+            | token @ Token::MultiChar(MultiCharTokens::None)
+            | token @ Token::MultiChar(MultiCharTokens::Ok)
+            | token @ Token::MultiChar(MultiCharTokens::Err) => {
+                let constructor_pattern = constructor::get_constructor_pattern(
+                    &mut tokenizer,
+                    token.to_string().as_str(),
+                )?;
+                let expr = Expr::Constructor0(constructor_pattern);
+                previous_expression.build(expr);
+            }
+
+            Token::MultiChar(MultiCharTokens::Worker) => {
+                previous_expression.build(Expr::Worker())
+            }
+
+            Token::MultiChar(MultiCharTokens::InterpolationStart) => {
+                let code_block = code_block::create_code_block(&mut tokenizer)?;
+                previous_expression.build(code_block);
+            }
+
+            Token::Quote => {
+                let new_expr = quoted::create_expr_between_quotes(&mut tokenizer)?;
+                previous_expression.build(new_expr);
+            }
+
+            Token::LParen => {
+                let tuple_expr = tuple::create_tuple(&mut tokenizer)?;
+                previous_expression.build(tuple_expr);
+            }
+
+            Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo) => {
+                let left_op = previous_expression.get_and_reset().ok_or::<ParseError>(
+                    "GreaterThanOrEqualTo (>=) is applied to a non existing left expression".into(),
+                )?;
+
+                let new_expr =
+                    math_op::create_binary_op(&mut tokenizer, left_op, |left, right| {
+                        Expr::GreaterThanOrEqualTo(left, right)
+                    })?;
+
+                previous_expression.build(new_expr);
+            }
+
+            Token::GreaterThan => {
+                let left_op = previous_expression.get_and_reset().ok_or::<ParseError>(
+                    "GreaterThan (>) is applied to a non existing left expression".into(),
+                )?;
+
+                let new_expr =
+                    math_op::create_binary_op(&mut tokenizer, left_op, |left, right| {
+                        Expr::GreaterThan(left, right)
+                    })?;
+
+                previous_expression.build(new_expr);
+            }
+
+            Token::LessThan => {
+                let left_op = previous_expression.get_and_reset().ok_or::<ParseError>(
+                    "LessThan (<) is applied to a non existing left expression".into(),
+                )?;
+
+                let new_expr =
+                    math_op::create_binary_op(&mut tokenizer, left_op, |left, right| {
+                        Expr::LessThan(left, right)
+                    })?;
+
+                previous_expression.build(new_expr);
+            }
+
+            Token::MultiChar(MultiCharTokens::LessThanOrEqualTo) => {
+                let left_op = previous_expression.get_and_reset().ok_or::<ParseError>(
+                    "LessThanOrEqualTo (<=) is applied to a non existing left expression".into(),
+                )?;
+
+                let new_expr =
+                    math_op::create_binary_op(&mut tokenizer, left_op, |left, right| {
+                        Expr::LessThanOrEqualTo(left, right)
+                    })?;
+
+                previous_expression.build(new_expr);
+            }
+
+            Token::MultiChar(MultiCharTokens::EqualTo) => {
+                let left_op = previous_expression.get_and_reset().ok_or::<ParseError>(
+                    "EqualTo (==) is applied to a non existing left expression".into(),
+                )?;
+
+                let new_expr =
+                    math_op::create_binary_op(&mut tokenizer, left_op, |left, right| {
+                        Expr::EqualTo(left, right)
+                    })?;
+
+                previous_expression.build(new_expr);
+            }
+
+            Token::MultiChar(MultiCharTokens::Let) => {
+                let let_expr = let_statement::create_let_statement(&mut tokenizer)?;
+                multi_line_expressions.push(let_expr);
+            }
+
+            Token::Dot => {
+                dbg!(previous_expression.clone());
+                let expr = previous_expression.get_and_reset().ok_or::<ParseError>(
+                    "Selection of field is applied to a non existing left expression".into(),
+                )?;
+
+                let expr = selection::get_select_field(&mut tokenizer, expr)?;
+                previous_expression.build(expr);
+            }
+
+            Token::LSquare => {
+
+                if let Some(expr) = previous_expression.get() {
+                    let expr = selection::get_select_index(&mut tokenizer, &expr)?;
+                    previous_expression.build(expr);
+                } else {
+                    let expr = sequence::create_sequence(&mut tokenizer)?;
+                    previous_expression.build(expr);
+                }
+            }
+
+            Token::MultiChar(MultiCharTokens::If) => {
+                let if_expr = if_condition::create_if_condition(&mut tokenizer)?;
+                previous_expression.build(if_expr);
+            }
+
+            Token::MultiChar(MultiCharTokens::Match) => {
+                let new_expr = pattern_match::create_pattern_match_expr(&mut tokenizer)?;
+
+                previous_expression.build(new_expr);
+            }
+
+            Token::MultiChar(MultiCharTokens::Then) => {
+                return Err(ParseError::Message(
+                    "then is a keyword and should be part of a if condition logic".to_string(),
+                ));
+            }
+
+            Token::MultiChar(MultiCharTokens::Else) =>  {
+                return Err(ParseError::Message(
+                    "else is a keyword and should be part of a if condition logic".to_string(),
+                ));
+            },
+            Token::SemiColon => {
+                if let Some(expr) = previous_expression.get_and_reset() {
+                    multi_line_expressions.push(expr);
+                }
+            },
+
+            Token::LCurly => {
+                let expr = if flags::is_flags(&mut tokenizer) {
+                    flags::create_flags(&mut tokenizer)
+                } else {
+                    record::create_record(&mut tokenizer)
+                }?;
+
+                previous_expression.build(expr);
+            }
+
+            Token::MultiChar(MultiCharTokens::Arrow) => {}
+            Token::RCurly => {},
+            Token::RSquare => {},
+            Token::RParen => {},
+            Token::Space => {},
+            Token::NewLine => {},
+            Token::LetEqual => {},
+            Token::Comma => {},
+            Token::Colon => {}
+        }
+    }
+
+    if let Some(prev_expr) = previous_expression.get_and_reset() {
+        multi_line_expressions.push(prev_expr);
+    }
+
+    Ok(multi_line_expressions.get_and_reset())
 }
 
 mod internal {
@@ -329,99 +304,6 @@ mod internal {
     use crate::parser::expr::{constructor, util};
     use crate::parser::ParseError;
     use crate::tokeniser::tokenizer::{Token, Tokenizer};
-    use strum_macros::Display;
-
-    // While at every node (Token), we can somehow form a complete expression by peeking ahead using tokenizer multiple times,
-    // we can avoid this at times, and form an in-complete expression using `InternalExprResult`.
-    // This allows us to not worry about future at every token node.
-    // Example: At Token::GreaterThan, we simply form an incomplete expression with prev exression (Ex: incomplete_expr  `1 >`),
-    // which will get completed in further loop (Ex: complete_expr `1 > 2`)
-    // Another example is Token::If, where we parse only predicate and leave it to the rest of the parsing to get the branches.
-    // If we have a concrete idea of what the future should be, then it's good idea to peak ahead and complete and avoid building function.
-    // Example: We really need all the tokens until the next curly `}` in a pattern match. So at Token::Match, we peak ahead many times and get a
-    // complete match expression.
-    pub(crate) enum InternalExprResult {
-        Complete(Expr),
-        InComplete(
-            InCompleteExpressionContext,
-            Box<dyn Fn(Expr) -> InternalExprResult>,
-        ),
-        Empty,
-    }
-
-    impl InternalExprResult {
-        pub(crate) fn is_empty(&self) -> bool {
-            match self {
-                InternalExprResult::Complete(_) => false,
-                InternalExprResult::InComplete(_, _) => false,
-                InternalExprResult::Empty => true,
-            }
-        }
-
-        pub(crate) fn apply_with(&self, expr: Expr) -> InternalExprResult {
-            match self {
-                InternalExprResult::Complete(complete_expr) => match complete_expr {
-                    Expr::Concat(vec) => {
-                        let mut new_expr = vec.clone();
-                        new_expr.push(expr);
-                        InternalExprResult::complete(Expr::Concat(new_expr))
-                    }
-                    _ => InternalExprResult::complete(Expr::Concat(vec![
-                        complete_expr.clone(),
-                        expr,
-                    ])),
-                },
-                InternalExprResult::InComplete(_, in_complete) => in_complete(expr),
-                InternalExprResult::Empty => InternalExprResult::Complete(expr),
-            }
-        }
-
-        pub(crate) fn accumulate_with(&self, expr: Expr) -> InternalExprResult {
-            match self {
-                InternalExprResult::Complete(complete_expr) => match complete_expr {
-                    Expr::Multiple(vec) => {
-                        let mut new_expr = vec.clone();
-                        new_expr.push(expr);
-                        InternalExprResult::complete(Expr::Multiple(new_expr))
-                    }
-                    _ => InternalExprResult::complete(Expr::Multiple(vec![
-                        complete_expr.clone(),
-                        expr,
-                    ])),
-                },
-                InternalExprResult::InComplete(_, in_complete) => in_complete(expr),
-                InternalExprResult::Empty => InternalExprResult::Complete(expr),
-            }
-        }
-
-        pub(crate) fn complete(expr: Expr) -> InternalExprResult {
-            InternalExprResult::Complete(expr)
-        }
-
-        pub(crate) fn incomplete<F>(scope: InCompleteExpressionContext, f: F) -> InternalExprResult
-        where
-            F: Fn(Expr) -> InternalExprResult + 'static,
-        {
-            InternalExprResult::InComplete(
-                scope,
-                Box::new(f) as Box<dyn Fn(Expr) -> InternalExprResult>,
-            )
-        }
-    }
-
-    // The errors that happens in a context can make use of more information in
-    // its message
-    #[derive(Display, Debug)]
-    pub(crate) enum InCompleteExpressionContext {
-        If,
-        Else,
-        Then,
-        LessThan,
-        GreaterThan,
-        EqualTo,
-        GreaterThanOrEqualTo,
-        LessThanOrEqualTo,
-    }
 
     // Returns a custom constructor if the string is followed by paranthesis
     pub(crate) fn get_expr_from_custom_string(
@@ -437,67 +319,6 @@ mod internal {
                 Ok(Expr::Constructor0(constructor_pattern))
             }
             _ => Ok(util::get_primitive_expr(custom_string)),
-        }
-    }
-
-    // possible_nested_token_starts
-    // corresponds to the tokens whose closed end is same as capture_until
-    // and we should include those capture_untils
-    pub(crate) fn capture_expression_until<F>(
-        tokenizer: &mut Tokenizer,
-        _possible_nested_token_starts: Vec<&Token>,
-        capture_until: Option<&Token>,
-        future_expression: InternalExprResult,
-        get_expr: F,
-    ) -> Result<InternalExprResult, ParseError>
-    where
-        F: FnOnce(&mut Tokenizer, InternalExprResult) -> Result<Expr, ParseError>,
-    {
-        let optional_captured_string = match capture_until {
-            Some(last_token) => tokenizer.capture_string_until(last_token),
-            None => tokenizer.capture_tail(),
-        };
-
-        match optional_captured_string {
-            Some(captured_string) => {
-                let mut new_tokenizer = Tokenizer::new(captured_string.as_str());
-
-                let inner_expr = get_expr(&mut new_tokenizer, InternalExprResult::Empty)?;
-
-                Ok(future_expression.apply_with(inner_expr))
-            }
-            None => Err(ParseError::Message(format!(
-                "Unable to find a matching closing symbol {:?}",
-                capture_until
-            ))),
-        }
-    }
-
-    // Keep building the expression only if previous expression is a complete expression
-    pub(crate) fn build_with_last_complete_expr<F>(
-        scope: InCompleteExpressionContext,
-        last_expression: InternalExprResult,
-        complete_expression: F,
-    ) -> Result<InternalExprResult, ParseError>
-    where
-        F: Fn(Expr, Expr) -> InternalExprResult + 'static,
-    {
-        match last_expression {
-            InternalExprResult::Complete(prev_complete_expr) => {
-                let new_incomplete_expr = InternalExprResult::incomplete(scope, {
-                    move |future_expr| complete_expression(prev_complete_expr.clone(), future_expr)
-                });
-
-                Ok(new_incomplete_expr)
-            }
-
-            InternalExprResult::InComplete(_, _) => Err(ParseError::Message(
-                "Cannot apply greater than on top of an incomplete expression".to_string(),
-            )),
-
-            InternalExprResult::Empty => Err(ParseError::Message(
-                "Cannot apply greater than on an empty expression".to_string(),
-            )),
         }
     }
 }
