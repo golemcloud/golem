@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod template;
+pub mod wave;
+mod invoke_result_view;
+
 use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::PathBuf;

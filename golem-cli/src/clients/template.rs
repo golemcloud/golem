@@ -15,15 +15,12 @@
 use std::io::Read;
 
 use async_trait::async_trait;
-use golem_client::model::{
-    Export, ExportFunction, ExportInstance, FunctionParameter, FunctionResult, NameOptionTypePair,
-    NameTypePair, ResourceMode, Template, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple,
-    TypeVariant,
-};
-use serde::{Deserialize, Serialize};
+use golem_client::model::Template;
+
 use tokio::fs::File;
 use tracing::info;
 
+use crate::model::template::TemplateView;
 use crate::model::{GolemError, PathBufOrStdin, RawTemplateId, TemplateName};
 
 #[async_trait]
@@ -44,145 +41,6 @@ pub trait TemplateClient {
 #[derive(Clone)]
 pub struct TemplateClientLive<C: golem_client::api::TemplateClient + Sync + Send> {
     pub client: C,
-}
-
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TemplateView {
-    pub template_id: String,
-    pub template_version: i32,
-    pub template_name: String,
-    pub template_size: i32,
-    pub exports: Vec<String>,
-}
-
-impl From<&Template> for TemplateView {
-    fn from(value: &Template) -> Self {
-        TemplateView {
-            template_id: value.versioned_template_id.template_id.to_string(),
-            template_version: value.versioned_template_id.version,
-            template_name: value.template_name.to_string(),
-            template_size: value.template_size,
-            exports: value
-                .metadata
-                .exports
-                .iter()
-                .flat_map(|exp| match exp {
-                    Export::Instance(ExportInstance { name, functions }) => {
-                        let fs: Vec<String> = functions
-                            .iter()
-                            .map(|f| {
-                                show_exported_function(
-                                    &format!("{name}/"),
-                                    &f.name,
-                                    &f.parameters,
-                                    &f.results,
-                                )
-                            })
-                            .collect();
-                        fs
-                    }
-                    Export::Function(ExportFunction {
-                        name,
-                        parameters,
-                        results,
-                    }) => {
-                        vec![show_exported_function("", name, parameters, results)]
-                    }
-                })
-                .collect(),
-        }
-    }
-}
-
-fn render_type(typ: &Type) -> String {
-    match typ {
-        Type::Variant(TypeVariant { cases }) => {
-            let cases_str = cases
-                .iter()
-                .map(|NameOptionTypePair { name, typ }| {
-                    format!(
-                        "{name}: {}",
-                        typ.clone()
-                            .map(|typ| render_type(&typ))
-                            .unwrap_or("()".to_string())
-                    )
-                })
-                .collect::<Vec<String>>()
-                .join(", ");
-            format!("variant({cases_str})")
-        }
-        Type::Result(boxed) => format!(
-            "result({}, {})",
-            boxed
-                .ok
-                .clone()
-                .map_or("()".to_string(), |typ| render_type(&typ)),
-            boxed
-                .err
-                .clone()
-                .map_or("()".to_string(), |typ| render_type(&typ))
-        ),
-        Type::Option(boxed) => format!("{}?", render_type(&boxed.inner)),
-        Type::Enum(TypeEnum { cases }) => format!("enum({})", cases.join(", ")),
-        Type::Flags(TypeFlags { cases }) => format!("flags({})", cases.join(", ")),
-        Type::Record(TypeRecord { cases }) => {
-            let pairs: Vec<String> = cases
-                .iter()
-                .map(|NameTypePair { name, typ }| format!("{name}: {}", render_type(typ)))
-                .collect();
-
-            format!("{{{}}}", pairs.join(", "))
-        }
-        Type::Tuple(TypeTuple { items }) => {
-            let typs: Vec<String> = items.iter().map(render_type).collect();
-            format!("({})", typs.join(", "))
-        }
-        Type::List(boxed) => format!("[{}]", render_type(&boxed.inner)),
-        Type::Str { .. } => "str".to_string(),
-        Type::Chr { .. } => "chr".to_string(),
-        Type::F64 { .. } => "f64".to_string(),
-        Type::F32 { .. } => "f32".to_string(),
-        Type::U64 { .. } => "u64".to_string(),
-        Type::S64 { .. } => "s64".to_string(),
-        Type::U32 { .. } => "u32".to_string(),
-        Type::S32 { .. } => "s32".to_string(),
-        Type::U16 { .. } => "u16".to_string(),
-        Type::S16 { .. } => "s16".to_string(),
-        Type::U8 { .. } => "u8".to_string(),
-        Type::S8 { .. } => "s8".to_string(),
-        Type::Bool { .. } => "bool".to_string(),
-        Type::Handle(handle) => match handle.mode {
-            ResourceMode::Borrowed => format!("&handle<{}>", handle.resource_id),
-            ResourceMode::Owned => format!("handle<{}>", handle.resource_id),
-        },
-    }
-}
-
-fn render_result(r: &FunctionResult) -> String {
-    match &r.name {
-        None => render_type(&r.typ),
-        Some(name) => format!("{name}: {}", render_type(&r.typ)),
-    }
-}
-
-fn show_exported_function(
-    prefix: &str,
-    name: &str,
-    parameters: &[FunctionParameter],
-    results: &[FunctionResult],
-) -> String {
-    let params = parameters
-        .iter()
-        .map(|p| format!("{}: {}", p.name, render_type(&p.typ)))
-        .collect::<Vec<String>>()
-        .join(", ");
-    let res_str = results
-        .iter()
-        .map(render_result)
-        .collect::<Vec<String>>()
-        .join(", ");
-    format!("{prefix}{name}({params}) => {res_str}")
 }
 
 #[async_trait]

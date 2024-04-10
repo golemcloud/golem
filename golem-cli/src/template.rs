@@ -18,7 +18,8 @@ use indoc::formatdoc;
 use itertools::Itertools;
 use uuid::Uuid;
 
-use crate::clients::template::{TemplateClient, TemplateView};
+use crate::clients::template::TemplateClient;
+use crate::model::template::TemplateView;
 use crate::model::{
     GolemError, GolemResult, PathBufOrStdin, RawTemplateId, TemplateIdOrName, TemplateName,
 };
