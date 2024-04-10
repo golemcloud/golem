@@ -42,7 +42,6 @@ pub(crate) fn get_arms(tokenizer: &mut Tokenizer) -> Result<Vec<PatternMatchArm>
                 accumulate_arms(tokenizer, constructor_pattern, constructor_patterns, go)
             }
 
-
             None => Err(ParseError::Message(
                 "Expecting a constructor pattern. But found nothing".to_string(),
             )),

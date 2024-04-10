@@ -11,7 +11,9 @@ pub(crate) fn create_binary_op<F>(
 where
     F: Fn(Box<Expr>, Box<Expr>) -> Expr,
 {
-    let right_op_str = tokenizer.capture_string_until(&Token::SemiColon).or_else(|| Some(tokenizer.consume_rest().to_string()))
+    let right_op_str = tokenizer
+        .capture_string_until(&Token::SemiColon)
+        .or_else(|| Some(tokenizer.consume_rest().to_string()))
         .ok_or::<ParseError>("Binary Op is applied to a non existing right expression".into())?
         .to_string();
 

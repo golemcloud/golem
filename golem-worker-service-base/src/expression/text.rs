@@ -1407,7 +1407,9 @@ mod match_tests {
                 PatternMatchArm((
                     ConstructorPattern::constructor(
                         "bar",
-                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable("c".to_string())))],
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "c".to_string(),
+                        )))],
                     )
                     .unwrap(),
                     Box::new(Expr::Literal("failure".to_string())),
@@ -1416,7 +1418,8 @@ mod match_tests {
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${match request {  foo(a,b) => 'success', bar(c) => 'failure' } }".to_string();
+        let expected_str =
+            "${match request {  foo(a,b) => 'success', bar(c) => 'failure' } }".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1427,26 +1430,25 @@ mod match_tests {
             Box::new(Expr::Request()),
             vec![
                 PatternMatchArm((
-                    ConstructorPattern::constructor(
-                        "foo",
-                        vec![],
-                    )
-                        .unwrap(),
+                    ConstructorPattern::constructor("foo", vec![]).unwrap(),
                     Box::new(Expr::Literal("success".to_string())),
                 )),
                 PatternMatchArm((
                     ConstructorPattern::constructor(
                         "bar",
-                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable("c".to_string())))],
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "c".to_string(),
+                        )))],
                     )
-                        .unwrap(),
+                    .unwrap(),
                     Box::new(Expr::Literal("failure".to_string())),
                 )),
             ],
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${match request {  foo() => 'success', bar(c) => 'failure' } }".to_string();
+        let expected_str =
+            "${match request {  foo() => 'success', bar(c) => 'failure' } }".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1457,38 +1459,36 @@ mod match_tests {
             Box::new(Expr::Request()),
             vec![
                 PatternMatchArm((
-                    ConstructorPattern::constructor(
-                        "foo1",
-                        vec![],
-                    )
-                        .unwrap(),
+                    ConstructorPattern::constructor("foo1", vec![]).unwrap(),
                     Box::new(Expr::Constructor0(
                         ConstructorPattern::constructor(
                             "bar1",
-                            vec![ConstructorPattern::Literal(Box::new(Expr::Variable("a1".to_string())))],
+                            vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                                "a1".to_string(),
+                            )))],
                         )
-                            .unwrap(),
+                        .unwrap(),
                     )),
                 )),
                 PatternMatchArm((
                     ConstructorPattern::constructor(
                         "bar",
-                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable("c".to_string())))],
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "c".to_string(),
+                        )))],
                     )
-                        .unwrap(),
+                    .unwrap(),
                     Box::new(Expr::Literal("failure".to_string())),
                 )),
             ],
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${match request {  foo1() => bar1(a1), bar(c) => 'failure' } }".to_string();
+        let expected_str =
+            "${match request {  foo1() => bar1(a1), bar(c) => 'failure' } }".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
-
-
-
 }
 
 #[cfg(test)]

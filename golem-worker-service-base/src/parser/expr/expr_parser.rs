@@ -1,7 +1,10 @@
 use crate::expression::Expr;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-use crate::parser::expr::{code_block, constructor, flags, if_condition, let_statement, math_op, pattern_match, quoted, record, selection, sequence, tuple, util};
+use crate::parser::expr::{
+    code_block, constructor, flags, if_condition, let_statement, math_op, pattern_match, quoted,
+    record, selection, sequence, tuple, util,
+};
 use crate::parser::{GolemParser, ParseError};
 use internal::*;
 
@@ -78,9 +81,7 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                 previous_expression.build(expr);
             }
 
-            Token::MultiChar(MultiCharTokens::Worker) => {
-                previous_expression.build(Expr::Worker())
-            }
+            Token::MultiChar(MultiCharTokens::Worker) => previous_expression.build(Expr::Worker()),
 
             Token::MultiChar(MultiCharTokens::InterpolationStart) => {
                 let code_block = code_block::create_code_block(&mut tokenizer)?;
@@ -177,7 +178,6 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             }
 
             Token::LSquare => {
-
                 if let Some(expr) = previous_expression.get_and_reset() {
                     let expr = selection::get_select_index(&mut tokenizer, &expr)?;
 
@@ -205,16 +205,16 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                 ));
             }
 
-            Token::MultiChar(MultiCharTokens::Else) =>  {
+            Token::MultiChar(MultiCharTokens::Else) => {
                 return Err(ParseError::Message(
                     "else is a keyword and should be part of a if condition logic".to_string(),
                 ));
-            },
+            }
             Token::SemiColon => {
                 if let Some(expr) = previous_expression.get_and_reset() {
                     multi_line_expressions.push(expr);
                 }
-            },
+            }
 
             Token::LCurly => {
                 let expr = if flags::is_flags(&mut tokenizer) {
@@ -227,13 +227,13 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             }
 
             Token::MultiChar(MultiCharTokens::Arrow) => {}
-            Token::RCurly => {},
-            Token::RSquare => {},
-            Token::RParen => {},
-            Token::Space => {},
-            Token::NewLine => {},
-            Token::LetEqual => {},
-            Token::Comma => {},
+            Token::RCurly => {}
+            Token::RSquare => {}
+            Token::RParen => {}
+            Token::Space => {}
+            Token::NewLine => {}
+            Token::LetEqual => {}
+            Token::Comma => {}
             Token::Colon => {}
         }
     }
@@ -250,7 +250,6 @@ mod internal {
     use crate::parser::expr::{constructor, util};
     use crate::parser::ParseError;
     use crate::tokeniser::tokenizer::{Token, Tokenizer};
-
 
     #[derive(Default)]
     pub(crate) struct MultiLineExpressions {
@@ -293,7 +292,6 @@ mod internal {
             }
         }
     }
-
 
     // Returns a custom constructor if the string is followed by paranthesis
     pub(crate) fn get_expr_from_custom_string(
