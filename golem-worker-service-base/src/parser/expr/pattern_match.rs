@@ -5,22 +5,15 @@ use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
 pub(crate) fn create_pattern_match_expr(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
-    let match_expr = tokenizer.capture_string_until(&Token::LCurly);
-
-    match match_expr {
-        Some(expr_under_evaluation) => {
-            let match_expression = parse_code(expr_under_evaluation.as_str())?;
-
-            tokenizer.skip_next_non_empty_token(); // Skip LCurly
-
-            let constructors = get_arms(tokenizer)?;
-
-            Ok(Expr::PatternMatch(Box::new(match_expression), constructors))
-        }
-
-        None => Err(ParseError::Message(
+    if let Some(match_expr_str) = tokenizer.capture_string_until(&Token::LCurly) {
+        let match_expression = parse_code(match_expr_str.as_str())?;
+        tokenizer.skip_next_non_empty_token(); // Skip LCurly
+        let constructors = get_arms(tokenizer)?;
+        Ok(Expr::PatternMatch(Box::new(match_expression), constructors))
+    } else {
+        Err(ParseError::Message(
             "Expecting a valid expression after match".to_string(),
-        )),
+        ))
     }
 }
 
