@@ -180,16 +180,6 @@ impl Display for Token {
 }
 
 impl Token {
-    pub fn is_non_empty_constructor(&self) -> bool {
-        matches!(
-            self,
-            Token::MultiChar(MultiCharTokens::Ok)
-                | Token::MultiChar(MultiCharTokens::Err)
-                | Token::MultiChar(MultiCharTokens::Some)
-                | Token::MultiChar(MultiCharTokens::Match)
-        )
-    }
-
     pub fn is_empty_constructor(&self) -> bool {
         matches!(self, Token::MultiChar(MultiCharTokens::None))
     }

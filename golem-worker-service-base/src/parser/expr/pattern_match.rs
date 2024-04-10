@@ -1,4 +1,5 @@
 use crate::expression::{ConstructorPattern, Expr, PatternMatchArm};
+use crate::parser::expr::constructor;
 use crate::parser::expr_parser::parse_code;
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
@@ -34,61 +35,13 @@ pub(crate) fn get_arms(tokenizer: &mut Tokenizer) -> Result<Vec<PatternMatchArm>
         constructor_patterns: &mut Vec<PatternMatchArm>,
     ) -> Result<(), ParseError> {
         match tokenizer.next_non_empty_token() {
-            Some(token) if token.is_non_empty_constructor() => {
-                let next_non_empty_open_braces = tokenizer.next_non_empty_token();
-
-                match next_non_empty_open_braces {
-                    Some(Token::LParen) => {
-                        let constructor_var_optional =
-                            tokenizer.capture_string_until_and_skip_end(&Token::RParen);
-
-                        match constructor_var_optional {
-                            Some(constructor_var) => {
-                                let expr = parse_code(constructor_var.as_str())?;
-
-                                let cons = match expr {
-                                    Expr::Constructor0(cons) => cons,
-                                    expr => ConstructorPattern::Literal(Box::new(expr))
-                                };
-
-                                let constructor_pattern =
-                                    ConstructorPattern::constructor(
-                                        token.to_string().as_str(),
-                                        vec![cons],
-                                    )?;
-
-                                accumulate_constructor_pattern_expr(tokenizer, constructor_pattern, constructor_patterns, go)
-
-                            }
-                            _ => Err(ParseError::Message(
-                                format!("Token {} is a non empty constructor. Expecting the following pattern: {}(foo) => bar", token, token),
-                            )),
-                        }
-                    }
-
-                    value => Err(ParseError::Message(format!(
-                        "Expecting an open parenthesis, but found {}",
-                        value.map(|x| x.to_string()).unwrap_or("".to_string())
-                    ))),
-                }
-            }
-
-            Some(token) if token.is_empty_constructor() => {
+            Some(token) => {
                 let constructor_pattern =
-                    ConstructorPattern::constructor(token.to_string().as_str(), vec![]);
+                    constructor::get_constructor_pattern(tokenizer, token.to_string().as_str())?;
 
-                accumulate_constructor_pattern_expr(
-                    tokenizer,
-                    constructor_pattern?,
-                    constructor_patterns,
-                    go,
-                )
+                accumulate_arms(tokenizer, constructor_pattern, constructor_patterns, go)
             }
 
-            Some(token) => Err(ParseError::Message(format!(
-                "Expecting a constructor pattern. But found {}",
-                token
-            ))),
 
             None => Err(ParseError::Message(
                 "Expecting a constructor pattern. But found nothing".to_string(),
@@ -100,7 +53,7 @@ pub(crate) fn get_arms(tokenizer: &mut Tokenizer) -> Result<Vec<PatternMatchArm>
     Ok(constructor_patterns)
 }
 
-fn accumulate_constructor_pattern_expr<F>(
+fn accumulate_arms<F>(
     tokenizer: &mut Tokenizer,
     constructor_pattern: ConstructorPattern,
     collected_exprs: &mut Vec<PatternMatchArm>,
