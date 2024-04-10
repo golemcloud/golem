@@ -26,7 +26,6 @@ use fred::types::{
     InfoKind, Limit, MultipleKeys, MultipleOrderedPairs, MultipleValues, MultipleZaddValues,
     Ordering, RedisKey, RedisMap, XCap, ZRange, ZSort, XID,
 };
-use serde::de::DeserializeOwned;
 use tracing::{debug, Level};
 
 use crate::metrics::redis::{record_redis_failure, record_redis_success};
@@ -88,7 +87,7 @@ impl RedisPool {
         serialize(value)
     }
 
-    pub fn deserialize<T: DeserializeOwned + Decode>(&self, bytes: &[u8]) -> Result<T, String> {
+    pub fn deserialize<T: Decode>(&self, bytes: &[u8]) -> Result<T, String> {
         deserialize(bytes)
     }
 }

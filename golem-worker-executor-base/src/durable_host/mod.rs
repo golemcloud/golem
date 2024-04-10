@@ -974,8 +974,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         calling_convention,
                         ..
                     } => {
-                        let request = oplog_entry
-                            .payload_as_val_array()
+                        let request: Vec<golem_wasm_rpc::protobuf::Val> = oplog_entry
+                            .payload()
                             .expect("failed to deserialize function request payload")
                             .unwrap();
                         let request = request
@@ -1014,8 +1014,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 let oplog_entry = self.get_oplog_entry().await;
                 match &oplog_entry {
                     OplogEntry::ExportedFunctionCompleted { .. } => {
-                        let response = oplog_entry
-                            .payload_as_val_array()
+                        let response: Vec<golem_wasm_rpc::protobuf::Val> = oplog_entry
+                            .payload()
                             .expect("failed to deserialize function response payload")
                             .unwrap();
                         let response = response
