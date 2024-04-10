@@ -1,0 +1,215 @@
+package golem:api@0.2.0;
+
+/// The Golem host API provides low level access to Golem specific features such as promises and control over
+/// the durability and transactional guarantees the executor provides.
+interface host {
+    use golem:rpc/types@0.1.0.{uri};
+    use wasi:clocks/monotonic-clock@0.2.0.{duration};
+
+    /// An index into the persistent log storing all performed operations of a worker
+    type oplog-index = u64;
+
+    /// A promise ID is a value that can be passed to an external Golem API to complete that promise
+    /// from an arbitrary external source, while Golem workers can await for this completion.
+    record promise-id {
+        worker-id: worker-id,
+        oplog-idx: oplog-index,
+    }
+
+    /// Represents a Golem worker
+    record worker-id {
+        template-id: template-id,
+        worker-name: string
+    }
+
+
+    /// Represents a Golem template
+    record template-id {
+        uuid: uuid,
+    }
+
+    /// UUID
+    record uuid {
+      high-bits: u64,
+      low-bits: u64
+    }
+
+    /// Configures how the executor retries failures
+    record retry-policy {
+        /// The maximum number of retries before the worker becomes permanently failed
+        max-attempts: u32,
+        /// The minimum delay between retries (applied to the first retry)
+        min-delay: duration,
+        /// The maximum delay between retries
+        max-delay: duration,
+        /// Multiplier applied to the delay on each retry to implement exponential backoff
+        multiplier: u32
+    }
+
+    /// Configurable persistence level for workers
+    variant persistence-level {
+        persist-nothing,
+        persist-remote-side-effects,
+        smart
+    }
+
+    enum filter-comparator {
+        equal,
+        not-equal,
+        greater-equal,
+        greater,
+        less-equal,
+        less
+    }
+
+    enum string-filter-comparator {
+        equal,
+        not-equal,
+        like,
+        not-like
+    }
+
+    enum worker-status {
+        /// The worker is running an invoked function
+        running,
+        /// The worker is ready to run an invoked function
+        idle,
+        /// An invocation is active but waiting for something (sleeping, waiting for a promise)
+        suspended,
+        /// The last invocation was interrupted but will be resumed
+        interrupted,
+        /// The last invocation failed and a retry was scheduled
+        retrying,
+        /// The last invocation failed and the worker can no longer be used
+        failed,
+        /// The worker exited after a successful invocation and can no longer be invoked
+        exited,
+    }
+
+    record worker-name-filter {
+        comparator: string-filter-comparator,
+        value: string
+    }
+
+    record worker-status-filter {
+        comparator: filter-comparator,
+        value: worker-status
+    }
+
+    record worker-version-filter {
+        comparator: filter-comparator,
+        value: u64
+    }
+
+    record worker-created-at-filter {
+        comparator: filter-comparator,
+        value: u64
+    }
+
+    record worker-env-filter {
+        name: string,
+        comparator: string-filter-comparator,
+        value: string
+    }
+
+    variant worker-property-filter {
+        name(worker-name-filter),
+        status(worker-status-filter),
+        version(worker-version-filter),
+        created-at(worker-created-at-filter),
+        env(worker-env-filter)
+    }
+
+    record worker-all-filter {
+        filters: list<worker-property-filter>
+    }
+
+    record worker-any-filter {
+        filters: list<worker-all-filter>
+    }
+
+    record worker-metadata {
+        worker-id: worker-id,
+        args: list<string>,
+        env: list<tuple<string, string>>,
+        status: worker-status,
+        template-version: u64,
+        retry-count: u64
+    }
+
+    resource get-workers {
+        constructor(template-id: template-id, filter: option<worker-any-filter>, precise: bool);
+
+        get-next: func() -> option<list<worker-metadata>>;
+    }
+
+    /// Create a new promise
+    golem-create-promise: func() -> promise-id;
+
+    /// Suspends execution until the given promise gets completed, and returns the payload passed to
+    /// the promise completion.
+    golem-await-promise: func(promise-id: promise-id) -> list<u8>;
+
+    /// Completes the given promise with the given payload. Returns true if the promise was completed, false
+    /// if the promise was already completed. The payload is passed to the worker that is awaiting the promise.
+    golem-complete-promise: func(promise-id: promise-id, data: list<u8>) -> bool;
+
+    /// Deletes the given promise
+    golem-delete-promise: func(promise-id: promise-id) -> ();
+
+    /// Returns a Golem worker URI that can be used to invoke a given function on the current worker
+    get-self-uri: func(function-name: string) -> uri;
+
+    /// Returns the current position in the persistent op log
+    get-oplog-index: func() -> oplog-index;
+
+    /// Makes the current worker travel back in time and continue execution from the given position in the persistent
+    /// op log.
+    set-oplog-index: func(oplog-idx: oplog-index) -> ();
+
+    /// Blocks the execution until the oplog has been written to at least the specified number of replicas, 
+    /// or the maximum number of replicas if the requested number is higher.
+    oplog-commit: func(replicas: u8) -> ();
+
+    /// Marks the beginning of an atomic operation. 
+    /// In case of a failure within the region selected by `mark-begin-operation` and `mark-end-operation` 
+    /// the whole region will be reexecuted on retry. 
+    /// The end of the region is when `mark-end-operation` is called with the returned oplog-index.
+    mark-begin-operation: func() -> oplog-index;
+
+    /// Commits this atomic operation. After `mark-end-operation` is called for a given index, further calls
+    /// with the same parameter will do nothing.
+    mark-end-operation: func(begin: oplog-index) -> ();
+
+    /// Gets the current retry policy associated with the worker
+    get-retry-policy: func() -> retry-policy;
+
+    /// Overrides the current retry policy associated with the worker. Following this call, `get-retry-policy` will return the
+    /// new retry policy.
+    set-retry-policy: func(new-retry-policy: retry-policy) -> ();
+
+    /// Gets the worker's current persistence level. 
+    get-oplog-persistence-level: func() -> persistence-level;
+
+    /// Sets the worker's current persistence level. This can increase the performance of execution in cases where durable
+    /// execution is not required.
+    set-oplog-persistence-level: func(new-persistence-level: persistence-level) -> ();
+
+    /// Gets the current idempotence mode. See `set-idempotence-mode` for details.
+    get-idempotence-mode: func() -> bool;
+
+    /// Sets the current idempotence mode. The default is true.
+    /// True means side-effects are treated idempotent and Golem guarantees at-least-once semantics.
+    /// In case of false the executor provides at-most-once semantics, failing the worker in case it is 
+    /// not known if the side effect was already executed.
+    set-idempotence-mode: func(idempotent: bool) -> ();
+
+    /// Generates an idempotency key. This operation will never be replayed — 
+    /// i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)
+    /// to introduce idempotence.
+    generate-idempotency-key: func() -> uuid;
+}
+
+world golem-host {
+    import host;
+}
