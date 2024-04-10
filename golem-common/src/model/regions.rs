@@ -20,9 +20,8 @@ use std::ops::RangeInclusive;
 
 use bincode::{Decode, Encode};
 use range_set_blaze::RangeSetBlaze;
-use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct OplogRegion {
     pub start: u64,
     pub end: u64,
@@ -98,7 +97,7 @@ impl DeletedRegionsBuilder {
 }
 
 /// Structure holding all the regions deleted from the oplog by jumps
-#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, Encode, Decode)]
 pub struct DeletedRegions {
     regions: BTreeMap<u64, OplogRegion>,
 }
