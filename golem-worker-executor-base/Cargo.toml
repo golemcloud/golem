@@ -43,8 +43,7 @@ fs-set-times = "0.20.1"
 futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "0.4.3"
-#golem-wit = { version = "0.2.4" }
-golem-wit = { git="https://github.com/golemcloud/golem-wit.git", branch = "invoke" }
+golem-wit = { version = "0.2.5" }
 http = { workspace = true }
 http_02 = { workspace = true }
 http-body = "1.0.0" # keep in sync with wasmtime
