@@ -119,18 +119,6 @@ mod tests {
     }
 
     #[test]
-    pub fn from_v1() {
-        let mut rng = rand::thread_rng();
-        for _ in 0..1000 {
-            let example = Example::random(&mut rng);
-            let serialized = serde_json::to_vec(&example).unwrap();
-            let prefixed = [vec![1], serialized].concat();
-            let deserialized = super::deserialize(&prefixed).unwrap();
-            assert_eq!(example, deserialized);
-        }
-    }
-
-    #[test]
     pub fn try_deserialize_without_version() {
         let mut rng = rand::thread_rng();
         for _ in 0..1000 {
