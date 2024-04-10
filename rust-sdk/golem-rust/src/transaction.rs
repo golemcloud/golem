@@ -121,28 +121,37 @@ pub fn transaction<Out>(f: impl FnOnce(&mut Transaction) -> Out) -> Out {
 #[cfg(test)]
 mod tests {
     use crate::{operation, transaction};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     // Not a real test, just verifying that the code compiles
+    #[test]
+    #[ignore]
     fn tx_test_1() {
-        let mut log = Vec::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
 
-        let op1 = operation(
-            |input: String| {
-                log.push(format!("op1 execute {input}"));
+        let log1 = log.clone();
+        let log2 = log.clone();
+        let log3 = log.clone();
+        let log4 = log.clone();
+
+        let op1 = operation::<String, (), ()>(
+            move |input: String| {
+                log1.borrow_mut().push(format!("op1 execute {input}"));
                 Ok(())
             },
-            |input: String| {
-                log.push(format!("op1 rollback {input}"));
+            move |input: String| {
+                log2.borrow_mut().push(format!("op1 rollback {input}"));
             },
         );
 
-        let op2 = operation(
-            |_: ()| {
-                log.push("op2 execute".to_string());
+        let op2 = operation::<(), (), &str>(
+            move |_: ()| {
+                log3.clone().borrow_mut().push("op2 execute".to_string());
                 Err("op2 error")
             },
-            |_: ()| {
-                log.push("op2 rollback".to_string());
+            move |_: ()| {
+                log4.clone().borrow_mut().push("op2 rollback".to_string());
             },
         );
 

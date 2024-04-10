@@ -41,7 +41,7 @@ use syn::*;
 ///  }
 ///
 ///
-///  #[derive(golem_rust::WIT_From_Into)]
+///  #[derive(golem_rust_macro::WIT_From_Into)]
 ///  #[wit_type_name(WitPerson)]
 ///  pub struct Person {
 ///
@@ -60,12 +60,12 @@ pub fn derive(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Annotates a module with `#[golem_rust::create_wit_file]` and generates WIT file in the root of your project.
+/// Annotates a module with `#[golem_rust_macro::create_wit_file]` and generates WIT file in the root of your project.
 /// Supports enums, structs, traits and alias types.
 ///
 /// # Example:
 /// ```
-///  #[golem_rust::create_wit_file("auction_app.wit")]
+///  #[golem_rust_macro::create_wit_file("auction_app.wit")]
 ///  mod auction_app {
 ///  
 ///      struct BidderId {
