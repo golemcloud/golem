@@ -4,11 +4,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use golem_common::model::ProjectId;
 use golem_common::model::TemplateId;
-use golem_wasm_ast::analysis::{
-    AnalysedExport, AnalysedFunction, AnalysisContext, AnalysisFailure,
-};
-use golem_wasm_ast::component::Component;
-use golem_wasm_ast::IgnoreAllButMetadata;
+use golem_template_service_base::service::template_compilation::TemplateCompilationService;
+use golem_template_service_base::service::template_processor::process_template;
+use golem_template_service_base::service::template_processor::TemplateProcessingError;
 use tap::TapFallible;
 use tracing::{error, info};
 
@@ -24,7 +22,7 @@ use crate::service::project_auth::{ProjectAuthorisationError, ProjectAuthorisati
 use golem_service_base::model::*;
 use golem_service_base::service::template_object_store::TemplateObjectStore;
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum TemplateError {
     #[error("Template already exists: {0}")]
     AlreadyExists(TemplateId),
@@ -34,22 +32,23 @@ pub enum TemplateError {
     UnknownVersionedTemplateId(VersionedTemplateId),
     #[error("Unknown project id: {0}")]
     UnknownProjectId(ProjectId),
-    #[error("Internal error: {0}")]
-    Internal(String),
-    #[error("IO error: {0}")]
-    IOError(String),
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
     #[error("Limit exceeded: {0}")]
     LimitExceeded(String),
-    #[error("Template processing error: {0}")]
-    // TODO: processing error? more detail?
-    TemplateProcessingError(String),
+    #[error(transparent)]
+    TemplateProcessing(#[from] TemplateProcessingError),
+    #[error("Internal error: {0}")]
+    Internal(anyhow::Error),
 }
 
 impl TemplateError {
-    pub fn internal<T: Display>(error: T) -> Self {
-        TemplateError::Internal(error.to_string())
+    fn internal<E, C>(error: E, context: C) -> Self
+    where
+        E: Display + std::fmt::Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
+    {
+        TemplateError::Internal(anyhow::Error::msg(error).context(context))
     }
 
     pub fn unauthorized<T: Display>(error: T) -> Self {
@@ -59,7 +58,8 @@ impl TemplateError {
 
 impl From<RepoError> for TemplateError {
     fn from(error: RepoError) -> Self {
-        TemplateError::internal(error)
+        let RepoError::Internal(error) = error;
+        TemplateError::Internal(anyhow::Error::msg(error))
     }
 }
 
@@ -67,9 +67,12 @@ impl From<PlanLimitError> for TemplateError {
     fn from(error: PlanLimitError) -> Self {
         match error {
             PlanLimitError::Unauthorized(error) => TemplateError::Unauthorized(error),
-            PlanLimitError::Internal(error) => TemplateError::Internal(error),
+            PlanLimitError::Internal(error) => {
+                TemplateError::Internal(anyhow::Error::msg(error.to_string()))
+            }
+            // TODO: This looks wrong.
             PlanLimitError::AccountIdNotFound(_) => {
-                TemplateError::Internal("Account not found".to_string())
+                TemplateError::Internal(anyhow::Error::msg("Account not found"))
             }
             PlanLimitError::ProjectIdNotFound(project_id) => {
                 TemplateError::UnknownProjectId(project_id)
@@ -85,8 +88,8 @@ impl From<ProjectError> for TemplateError {
     fn from(error: ProjectError) -> Self {
         match error {
             ProjectError::Unauthorized(error) => TemplateError::Unauthorized(error),
-            ProjectError::Internal(error) => TemplateError::Internal(error),
             ProjectError::LimitExceeded(error) => TemplateError::LimitExceeded(error),
+            ProjectError::Internal(error) => TemplateError::Internal(anyhow::Error::msg(error)),
         }
     }
 }
@@ -94,8 +97,10 @@ impl From<ProjectError> for TemplateError {
 impl From<ProjectAuthorisationError> for TemplateError {
     fn from(error: ProjectAuthorisationError) -> Self {
         match error {
-            ProjectAuthorisationError::Internal(error) => TemplateError::Internal(error),
             ProjectAuthorisationError::Unauthorized(error) => TemplateError::Unauthorized(error),
+            ProjectAuthorisationError::Internal(error) => {
+                TemplateError::Internal(anyhow::Error::msg(error))
+            }
         }
     }
 }
@@ -170,6 +175,7 @@ pub struct TemplateServiceDefault {
     object_store: Arc<dyn TemplateObjectStore + Sync + Send>,
     project_service: Arc<dyn ProjectService + Sync + Send>,
     project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
+    template_compilation_service: Arc<dyn TemplateCompilationService + Sync + Send>,
 }
 
 impl TemplateServiceDefault {
@@ -180,6 +186,7 @@ impl TemplateServiceDefault {
         object_store: Arc<dyn TemplateObjectStore + Sync + Send>,
         project_service: Arc<dyn ProjectService + Sync + Send>,
         project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
+        template_compilation_service: Arc<dyn TemplateCompilationService + Sync + Send>,
     ) -> Self {
         TemplateServiceDefault {
             account_uploads_repo,
@@ -188,6 +195,7 @@ impl TemplateServiceDefault {
             object_store,
             project_service,
             project_auth_service,
+            template_compilation_service,
         }
     }
 }
@@ -242,7 +250,7 @@ impl TemplateService for TemplateServiceDefault {
         self.validate_limits(storage_limit, upload_limit, &data)
             .await?;
 
-        let metadata = self.process_template(&data)?;
+        let metadata = process_template(&data)?;
 
         let template_id = TemplateId::new_v4();
 
@@ -262,9 +270,10 @@ impl TemplateService for TemplateServiceDefault {
 
         info!("Pushing {:?}", user_template_id);
 
-        let template_size: i32 = data.len().try_into().map_err(|e| {
-            TemplateError::internal(format!("Failed to convert data length: {}", e))
-        })?;
+        let template_size: i32 = data
+            .len()
+            .try_into()
+            .map_err(|e| TemplateError::internal(e, "Failed to convert data length"))?;
 
         tokio::try_join!(
             self.upload_user_template(&user_template_id, data.clone()),
@@ -286,6 +295,10 @@ impl TemplateService for TemplateServiceDefault {
         self.template_repo.upsert(&template.clone().into()).await?;
 
         info!("TemplateService create_template finished successfully");
+
+        self.template_compilation_service
+            .enqueue_compilation(&template.versioned_template_id.template_id, 0)
+            .await;
 
         Ok(template)
     }
@@ -322,7 +335,7 @@ impl TemplateService for TemplateServiceDefault {
         self.validate_limits(storage_limit, upload_limit, &data)
             .await?;
 
-        let metadata = self.process_template(&data)?;
+        let metadata = process_template(&data)?;
 
         let next_template = self
             .template_repo
@@ -330,15 +343,16 @@ impl TemplateService for TemplateServiceDefault {
             .await?
             .map(crate::model::Template::try_from)
             .transpose()
-            .map_err(TemplateError::Internal)?
+            .map_err(|e| TemplateError::internal(e, "Failed to convert Template"))?
             .map(crate::model::Template::next_version)
             .ok_or(TemplateError::UnknownTemplateId(template_id.clone()))?;
 
         info!("Pushing {:?}", next_template.user_template_id);
 
-        let template_size: i32 = data.len().try_into().map_err(|e| {
-            TemplateError::internal(format!("Failed to convert data length: {}", e))
-        })?;
+        let template_size: i32 = data
+            .len()
+            .try_into()
+            .map_err(|e| TemplateError::internal(e, "Failed to convert data length"))?;
 
         tokio::try_join!(
             self.upload_user_template(&next_template.user_template_id, data.clone()),
@@ -352,6 +366,13 @@ impl TemplateService for TemplateServiceDefault {
             metadata,
             ..next_template
         };
+
+        self.template_compilation_service
+            .enqueue_compilation(
+                &template.versioned_template_id.template_id,
+                template.versioned_template_id.version,
+            )
+            .await;
 
         self.template_repo.upsert(&template.clone().into()).await?;
 
@@ -378,7 +399,7 @@ impl TemplateService for TemplateServiceDefault {
                     .await?
                     .map(crate::model::Template::try_from)
                     .transpose()
-                    .map_err(TemplateError::Internal)?
+                    .map_err(|e| TemplateError::internal(e, "Failed to convert Template"))?
                     .map(|t| t.versioned_template_id)
                     .ok_or(TemplateError::UnknownTemplateId(template_id.clone()))?,
             }
@@ -392,7 +413,7 @@ impl TemplateService for TemplateServiceDefault {
             .get(&self.get_protected_object_store_key(&id))
             .await
             .tap_err(|e| error!("Error downloading template: {}", e))
-            .map_err(|e| TemplateError::IOError(e.to_string()))
+            .map_err(|e| TemplateError::internal(e.to_string(), "Error downloading template"))
     }
 
     async fn get_protected_data(
@@ -443,7 +464,10 @@ impl TemplateService for TemplateServiceDefault {
             .object_store
             .get(&object_key)
             .await
-            .map_err(|e| TemplateError::internal(e.to_string()))?;
+            .tap_err(|e| error!("Error retrieving protected template: {}", e))
+            .map_err(|e| {
+                TemplateError::internal(e.to_string(), "Error retrieving protected template")
+            })?;
 
         Ok(Some(result))
     }
@@ -483,7 +507,7 @@ impl TemplateService for TemplateServiceDefault {
             .into_iter()
             .map(|t| t.try_into())
             .collect::<Result<_, String>>()
-            .map_err(TemplateError::Internal)
+            .map_err(|e| TemplateError::internal(e, "Failed to convert Template"))
     }
 
     async fn get_by_project(
@@ -501,7 +525,7 @@ impl TemplateService for TemplateServiceDefault {
             .into_iter()
             .map(|t| t.try_into())
             .collect::<Result<_, String>>()
-            .map_err(TemplateError::Internal)
+            .map_err(|e| TemplateError::internal(e, "Failed to convert Template"))
     }
 
     async fn get(
@@ -518,7 +542,7 @@ impl TemplateService for TemplateServiceDefault {
             .into_iter()
             .map(|t| t.try_into())
             .collect::<Result<_, String>>()
-            .map_err(TemplateError::Internal)
+            .map_err(|e| TemplateError::internal(e, "Failed to convert Template"))
     }
 
     async fn get_by_version(
@@ -544,7 +568,7 @@ impl TemplateService for TemplateServiceDefault {
         result
             .map(crate::model::Template::try_from)
             .transpose()
-            .map_err(TemplateError::Internal)
+            .map_err(|e| TemplateError::internal(e, "Failed to convert Template"))
     }
 
     async fn get_latest_version(
@@ -563,7 +587,7 @@ impl TemplateService for TemplateServiceDefault {
         result
             .map(crate::model::Template::try_from)
             .transpose()
-            .map_err(TemplateError::Internal)
+            .map_err(|e| TemplateError::internal(e, "Failed to convert Template"))
     }
 }
 
@@ -653,82 +677,12 @@ impl TemplateServiceDefault {
             .next()
             .map(crate::model::Template::try_from)
             .transpose()
-            .map_err(TemplateError::Internal)?
+            .map_err(|e| TemplateError::internal(e, "Failed to convert Template"))?
             .map_or(Ok(()), |t| {
                 Err(TemplateError::AlreadyExists(
                     t.versioned_template_id.template_id,
                 ))
             })
-    }
-
-    // TODO: should be using a single definition in golem-services
-    fn process_template(&self, data: &[u8]) -> Result<TemplateMetadata, TemplateError> {
-        let component = Component::<IgnoreAllButMetadata>::from_bytes(data)
-            .map_err(|e| TemplateError::TemplateProcessingError(e.to_string()))?;
-
-        let producers = component
-            .get_all_producers()
-            .into_iter()
-            .map(|producers| producers.into())
-            .collect::<Vec<_>>();
-
-        let state = AnalysisContext::new(component);
-
-        let mut exports = state.get_top_level_exports().map_err(|e| {
-            TemplateError::TemplateProcessingError(format!(
-                "Error getting top level exports: {}",
-                match e {
-                    AnalysisFailure::Failed(e) => e,
-                }
-            ))
-        })?;
-
-        self.add_resource_drops(&mut exports);
-
-        let exports = exports
-            .into_iter()
-            .map(|export| export.into())
-            .collect::<Vec<_>>();
-
-        Ok(TemplateMetadata { exports, producers })
-    }
-
-    // TODO: should be using a single definition in golem-services
-    fn add_resource_drops(&self, exports: &mut Vec<AnalysedExport>) {
-        // Components are not exporting explicit drop functions for exported resources, but
-        // worker executor does. So we keep golem-wasm-ast as an universal library and extend
-        // its result with the explicit drops here, for each resource, identified by an exported
-        // constructor.
-
-        let mut to_add = Vec::new();
-        for export in exports.iter_mut() {
-            match export {
-                AnalysedExport::Function(fun) => {
-                    if fun.is_constructor() {
-                        let drop_name = fun.name.replace("[constructor]", "[drop]");
-                        to_add.push(AnalysedExport::Function(AnalysedFunction {
-                            name: drop_name,
-                            ..fun.clone()
-                        }));
-                    }
-                }
-                AnalysedExport::Instance(instance) => {
-                    let mut to_add = Vec::new();
-                    for fun in &instance.funcs {
-                        if fun.is_constructor() {
-                            let drop_name = fun.name.replace("[constructor]", "[drop]");
-                            to_add.push(AnalysedFunction {
-                                name: drop_name,
-                                ..fun.clone()
-                            });
-                        }
-                    }
-                    instance.funcs.extend(to_add.into_iter());
-                }
-            }
-        }
-
-        exports.extend(to_add);
     }
 
     fn get_user_object_store_key(&self, id: &UserTemplateId) -> String {
@@ -749,11 +703,8 @@ impl TemplateServiceDefault {
         self.object_store
             .put(&self.get_user_object_store_key(user_template_id), data)
             .await
-            .map_err(|e| {
-                let message = format!("Failed to upload user template: {}", e);
-                error!("{}", message);
-                TemplateError::IOError(message)
-            })
+            .tap_err(|e| error!("Error uploading user template: {}", e))
+            .map_err(|e| TemplateError::internal(e.to_string(), "Failed to upload user template"))
     }
 
     async fn upload_protected_template(
@@ -769,10 +720,9 @@ impl TemplateServiceDefault {
                 data,
             )
             .await
+            .tap_err(|e| error!("Error uploading protected template: {}", e))
             .map_err(|e| {
-                let message = format!("Failed to upload protected template: {}", e);
-                error!("{}", message);
-                TemplateError::IOError(message)
+                TemplateError::internal(e.to_string(), "Failed to upload protected template")
             })
     }
 
@@ -785,7 +735,7 @@ impl TemplateServiceDefault {
         let num_bytes: i32 = data
             .len()
             .try_into()
-            .map_err(|_| TemplateError::Internal("Failed to convert data length".into()))?;
+            .map_err(|e| TemplateError::internal(e, "Failed to convert data length"))?;
 
         if num_bytes > 50000000 {
             Err(TemplateError::LimitExceeded(

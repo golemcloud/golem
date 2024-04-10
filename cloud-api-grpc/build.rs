@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let golem_api_grpc_root = find_package_root("golem-api-grpc");
 
     tonic_build::configure()
+        .extern_path(".wasm.rpc", "::golem_wasm_rpc::protobuf")
         .extern_path(".golem.common", "::golem_api_grpc::proto::golem::common")
         .extern_path(
             ".golem.template",
@@ -22,9 +23,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ".golem.workerexecutor",
             "::golem_api_grpc::proto::golem::workerexecutor",
         )
+        .extern_path(
+            ".golem.templatecompilation",
+            "::golem_api_grpc::proto::golem::templatecompilation",
+        )
+        .extern_path(
+            ".golem.apidefinition",
+            "::golem_api_grpc::proto::golem::apidefinition",
+        )
         .file_descriptor_set_path(out_dir.join("services.bin"))
         .type_attribute(
-            ".",
+            "golem.worker.LogEvent",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.LogEvent.event",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.StdOutLog",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.StdErrLog",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.Level",
+            "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "golem.worker.Log",
             "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
         )
         .include_file("mod.rs")

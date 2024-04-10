@@ -1,5 +1,8 @@
 use golem_service_base::config::TemplateStoreConfig;
 use golem_service_base::service::template_object_store;
+use golem_template_service_base::service::template_compilation::{
+    TemplateCompilationService, TemplateCompilationServiceDisabled,
+};
 use std::sync::Arc;
 
 use crate::auth::AccountAuthorisation;
@@ -176,6 +179,10 @@ impl Services {
                 repositories.template_repo.clone(),
             ));
 
+        // TODO: Load from config.
+        let compilation_service: Arc<dyn TemplateCompilationService + Sync + Send> =
+            Arc::new(TemplateCompilationServiceDisabled);
+
         let template_service: Arc<dyn template::TemplateService + Sync + Send> =
             Arc::new(template::TemplateServiceDefault::new(
                 repositories.account_uploads_repo.clone(),
@@ -184,6 +191,7 @@ impl Services {
                 object_store.clone(),
                 project_service.clone(),
                 project_auth_service.clone(),
+                compilation_service,
             ));
 
         let routing_table_service: Arc<

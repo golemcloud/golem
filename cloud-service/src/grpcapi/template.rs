@@ -48,14 +48,13 @@ impl From<template::TemplateError> for TemplateError {
                 template_error::Error::Unauthorized(ErrorBody { error })
             }
             template::TemplateError::Internal(error) => {
-                template_error::Error::InternalError(ErrorBody { error })
+                template_error::Error::InternalError(ErrorBody {
+                    error: error.to_string(),
+                })
             }
-            template::TemplateError::IOError(error) => {
-                template_error::Error::InternalError(ErrorBody { error })
-            }
-            template::TemplateError::TemplateProcessingError(error) => {
+            template::TemplateError::TemplateProcessing(error) => {
                 template_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![error],
+                    errors: vec![error.to_string()],
                 })
             }
             template::TemplateError::LimitExceeded(error) => {
@@ -63,22 +62,14 @@ impl From<template::TemplateError> for TemplateError {
             }
             template::TemplateError::AlreadyExists(_) => {
                 template_error::Error::AlreadyExists(ErrorBody {
-                    error: "Template already exists".to_string(),
+                    error: value.to_string(),
                 })
             }
-            template::TemplateError::UnknownTemplateId(_) => {
+            template::TemplateError::UnknownTemplateId(_)
+            | template::TemplateError::UnknownVersionedTemplateId(_)
+            | template::TemplateError::UnknownProjectId(_) => {
                 template_error::Error::NotFound(ErrorBody {
-                    error: "Template not found".to_string(),
-                })
-            }
-            template::TemplateError::UnknownVersionedTemplateId(_) => {
-                template_error::Error::NotFound(ErrorBody {
-                    error: "Template not found".to_string(),
-                })
-            }
-            template::TemplateError::UnknownProjectId(_) => {
-                template_error::Error::NotFound(ErrorBody {
-                    error: "Project not found".to_string(),
+                    error: value.to_string(),
                 })
             }
         };

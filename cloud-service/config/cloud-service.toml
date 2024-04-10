@@ -21,6 +21,9 @@ database = "golem"
 [templates.store]
 type = "Local" # Local, S3
 
+[templates.compilation]
+type = "Disabled"
+
 [templates.store.config]
 object_prefix = ""
 #bucket_name

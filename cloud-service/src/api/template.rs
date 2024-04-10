@@ -65,38 +65,29 @@ impl From<TemplateServiceError> for TemplateError {
             TemplateServiceError::Unauthorized(error) => {
                 TemplateError::Unauthorized(Json(ErrorBody { error }))
             }
-            TemplateServiceError::Internal(error) => {
-                TemplateError::InternalError(Json(ErrorBody { error }))
-            }
-            TemplateServiceError::TemplateProcessingError(error) => {
+            TemplateServiceError::TemplateProcessing(error) => {
                 TemplateError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error],
+                    errors: vec![error.to_string()],
                 }))
             }
-            TemplateServiceError::UnknownTemplateId(_) => {
-                TemplateError::NotFound(Json(ErrorBody {
-                    error: "Template not found".to_string(),
-                }))
-            }
-            TemplateServiceError::UnknownVersionedTemplateId(_) => {
-                TemplateError::NotFound(Json(ErrorBody {
-                    error: "Template not found".to_string(),
-                }))
-            }
-            TemplateServiceError::UnknownProjectId(_) => {
+            TemplateServiceError::UnknownTemplateId(_)
+            | TemplateServiceError::UnknownVersionedTemplateId(_)
+            | TemplateServiceError::UnknownProjectId(_) => {
                 TemplateError::BadRequest(Json(ErrorsBody {
-                    errors: vec!["Project not found".to_string()],
+                    errors: vec![value.to_string()],
                 }))
             }
             TemplateServiceError::LimitExceeded(error) => {
                 TemplateError::LimitExceeded(Json(ErrorBody { error }))
             }
-            TemplateServiceError::IOError(error) => {
-                TemplateError::InternalError(Json(ErrorBody { error }))
-            }
             TemplateServiceError::AlreadyExists(_) => {
                 TemplateError::AlreadyExists(Json(ErrorBody {
-                    error: "Template already exists".to_string(),
+                    error: value.to_string(),
+                }))
+            }
+            TemplateServiceError::Internal(error) => {
+                TemplateError::InternalError(Json(ErrorBody {
+                    error: error.to_string(),
                 }))
             }
         }

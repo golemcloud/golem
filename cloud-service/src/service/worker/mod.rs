@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::worker::InvokeResult as ProtoInvokeResult;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, ProjectId, TemplateId, WorkerStatus,
+    AccountId, CallingConvention, InvocationKey, ProjectId, TemplateId, WorkerFilter, WorkerStatus,
 };
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use golem_worker_service_base::service::worker::{
@@ -127,6 +127,16 @@ pub trait WorkerService {
         worker_id: &WorkerId,
         auth: &AccountAuthorisation,
     ) -> Result<crate::model::WorkerMetadata, WorkerError>;
+
+    async fn find_metadata(
+        &self,
+        template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: u64,
+        count: u64,
+        precise: bool,
+        auth: &AccountAuthorisation,
+    ) -> Result<(Option<u64>, Vec<crate::model::WorkerMetadata>), WorkerError>;
 
     async fn resume(
         &self,
@@ -454,22 +464,40 @@ impl WorkerService for WorkerServiceDefault {
             .authorize(&worker_id.template_id, &ProjectAction::ViewWorker, auth)
             .await?;
 
-        let value = self
+        let metadata = self
             .base_worker_service
             .get_metadata(worker_id, auth)
             .await?;
 
-        let metadata = crate::model::WorkerMetadata {
-            account_id: namespace.account_id,
-            worker_id: value.worker_id,
-            args: value.args,
-            env: value.env,
-            status: value.status,
-            template_version: value.template_version,
-            retry_count: value.retry_count,
-        };
+        let metadata = convert_metadata(metadata, namespace.account_id);
 
         Ok(metadata)
+    }
+
+    async fn find_metadata(
+        &self,
+        template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: u64,
+        count: u64,
+        precise: bool,
+        auth: &AccountAuthorisation,
+    ) -> Result<(Option<u64>, Vec<crate::model::WorkerMetadata>), WorkerError> {
+        let namespace = self
+            .authorize(template_id, &ProjectAction::ViewWorker, auth)
+            .await?;
+
+        let (pagination, metadata) = self
+            .base_worker_service
+            .find_metadata(template_id, filter, cursor, count, precise, auth)
+            .await?;
+
+        let metadata = metadata
+            .into_iter()
+            .map(|metadata| convert_metadata(metadata, namespace.account_id.clone()))
+            .collect();
+
+        Ok((pagination, metadata))
     }
 
     async fn resume(
@@ -480,6 +508,21 @@ impl WorkerService for WorkerServiceDefault {
         let _ = self.base_worker_service.resume(worker_id, auth).await?;
 
         Ok(())
+    }
+}
+
+fn convert_metadata(
+    metadata: golem_service_base::model::WorkerMetadata,
+    account_id: AccountId,
+) -> crate::model::WorkerMetadata {
+    crate::model::WorkerMetadata {
+        account_id,
+        worker_id: metadata.worker_id,
+        args: metadata.args,
+        env: metadata.env,
+        status: metadata.status,
+        template_version: metadata.template_version,
+        retry_count: metadata.retry_count,
     }
 }
 
@@ -775,6 +818,18 @@ impl WorkerService for WorkerServiceNoOp {
             template_version: 0,
             retry_count: 0,
         })
+    }
+
+    async fn find_metadata(
+        &self,
+        _template_id: &TemplateId,
+        _filter: Option<WorkerFilter>,
+        _cursor: u64,
+        _count: u64,
+        _precise: bool,
+        _auth: &AccountAuthorisation,
+    ) -> Result<(Option<u64>, Vec<crate::model::WorkerMetadata>), WorkerError> {
+        Ok((None, vec![]))
     }
 
     async fn resume(

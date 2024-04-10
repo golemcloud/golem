@@ -28,7 +28,7 @@ use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::HasAll;
+use golem_worker_executor_base::services::{worker_enumeration, HasAll};
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
     StatusManagement, WorkerCtx,
@@ -360,10 +360,13 @@ impl WorkerCtx for Context {
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
-        active_workers: Arc<ActiveWorkers<Context>>,
+        active_workers: Arc<ActiveWorkers<Self>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
@@ -379,6 +382,7 @@ impl WorkerCtx for Context {
             promise_service,
             invocation_key_service,
             worker_service,
+            worker_enumeration_service,
             key_value_service,
             blob_store_service,
             event_service,
@@ -388,7 +392,7 @@ impl WorkerCtx for Context {
             recovery_management,
             rpc,
             config.clone(),
-            worker_config,
+            worker_config.clone(),
             execution_status,
         )
         .await?;

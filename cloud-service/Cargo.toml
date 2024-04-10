@@ -63,6 +63,7 @@ num-traits = { workspace = true }
 anyhow = { workspace = true }
 futures = { workspace = true }
 thiserror.workspace = true
+golem-template-service-base.workspace = true
 
 [dev-dependencies]
 futures.workspace = true

@@ -650,18 +650,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
     }
 }
 
-impl From<ProjectGrantData>
-    for cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantData
-{
-    fn from(value: ProjectGrantData) -> Self {
-        Self {
-            grantee_account_id: Some(value.grantee_account_id.into()),
-            grantor_project_id: Some(value.grantor_project_id.into()),
-            project_policy_id: Some(value.project_policy_id.into()),
-        }
-    }
-}
-
 impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
     fn from(value: WorkerMetadata) -> Self {
         Self {
@@ -676,6 +664,12 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+pub struct WorkersMetadataResponse {
+    pub workers: Vec<WorkerMetadata>,
+    pub cursor: Option<u64>,
+}
+
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
 )]
@@ -685,6 +679,18 @@ pub struct ProjectGrantData {
     pub grantee_account_id: AccountId,
     pub grantor_project_id: ProjectId,
     pub project_policy_id: ProjectPolicyId,
+}
+
+impl From<ProjectGrantData>
+    for cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantData
+{
+    fn from(value: ProjectGrantData) -> Self {
+        Self {
+            grantee_account_id: Some(value.grantee_account_id.into()),
+            grantor_project_id: Some(value.grantor_project_id.into()),
+            project_policy_id: Some(value.project_policy_id.into()),
+        }
+    }
 }
 
 impl TryFrom<cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantData>

@@ -6,6 +6,7 @@ use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use golem_service_base::config::{TemplateStoreConfig, TemplateStoreLocalConfig};
 use golem_service_base::routing_table::RoutingTableConfig;
+use golem_template_service_base::config::TemplateCompilationConfig;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -78,6 +79,7 @@ impl Default for EdDsaConfig {
 #[derive(Clone, Debug, Deserialize)]
 pub struct TemplatesConfig {
     pub store: TemplateStoreConfig,
+    pub compilation: TemplateCompilationConfig,
 }
 
 impl Default for TemplatesConfig {
@@ -87,6 +89,7 @@ impl Default for TemplatesConfig {
                 root_path: "templates".to_string(),
                 object_prefix: "".to_string(),
             }),
+            compilation: TemplateCompilationConfig::default(),
         }
     }
 }

@@ -5,18 +5,20 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::{
     complete_promise_response, delete_worker_response, get_invocation_key_response,
-    get_worker_metadata_response, interrupt_worker_response, invoke_and_await_response,
-    invoke_and_await_response_json, invoke_response, launch_new_worker_response,
-    resume_worker_response, worker_error, worker_execution_error, CompletePromiseRequest,
-    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
-    GetInvocationKeyRequest, GetInvocationKeyResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvocationKey,
-    InvokeAndAwaitRequest, InvokeAndAwaitRequestJson, InvokeAndAwaitResponse,
-    InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson, InvokeResponse, InvokeResult,
-    InvokeResultJson, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, UnknownError, VersionedWorkerId, WorkerError as GrpcWorkerError,
-    WorkerExecutionError, WorkerMetadata,
+    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
+    invoke_and_await_response, invoke_and_await_response_json, invoke_response,
+    launch_new_worker_response, resume_worker_response, worker_error, worker_execution_error,
+    CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest,
+    DeleteWorkerResponse, GetInvocationKeyRequest, GetInvocationKeyResponse,
+    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvocationKey, InvokeAndAwaitRequest, InvokeAndAwaitRequestJson,
+    InvokeAndAwaitResponse, InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson,
+    InvokeResponse, InvokeResult, InvokeResultJson, LaunchNewWorkerRequest,
+    LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse, UnknownError,
+    VersionedWorkerId, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
 };
+use golem_common::model::WorkerFilter;
 use golem_worker_service_base::service::worker::WorkerServiceError;
 use tap::TapFallible;
 use tonic::metadata::MetadataMap;
@@ -90,6 +92,24 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(GetWorkerMetadataResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_workers_metadata(
+        &self,
+        request: Request<GetWorkersMetadataRequest>,
+    ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
+        let (m, _, r) = request.into_parts();
+        let response =
+            match self.get_workers_metadata(r, m).await {
+                Ok((cursor, workers)) => get_workers_metadata_response::Result::Success(
+                    GetWorkersMetadataSuccessResponse { cursor, workers },
+                ),
+                Err(error) => get_workers_metadata_response::Result::Error(error),
+            };
+
+        Ok(Response::new(GetWorkersMetadataResponse {
             result: Some(response),
         }))
     }
@@ -346,6 +366,43 @@ impl WorkerGrpcApi {
         Ok(metadata.into())
     }
 
+    async fn get_workers_metadata(
+        &self,
+        request: GetWorkersMetadataRequest,
+        metadata: MetadataMap,
+    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GrpcWorkerError> {
+        let auth = self.auth(metadata).await?;
+        let template_id: golem_common::model::TemplateId = request
+            .template_id
+            .ok_or_else(|| bad_request_error("Missing template id"))?
+            .try_into()
+            .map_err(|_| bad_request_error("Invalid template id"))?;
+
+        let filter: Option<WorkerFilter> =
+            match request.filter {
+                Some(f) => Some(f.try_into().map_err(|error| {
+                    bad_request_error(format!("Invalid worker filter: {error}"))
+                })?),
+                _ => None,
+            };
+
+        let (new_cursor, workers) = self
+            .worker_service
+            .find_metadata(
+                &template_id,
+                filter,
+                request.cursor,
+                request.count,
+                request.precise,
+                &auth,
+            )
+            .await?;
+
+        let result: Vec<WorkerMetadata> = workers.into_iter().map(|worker| worker.into()).collect();
+
+        Ok((new_cursor, result))
+    }
+
     async fn interrupt_worker(
         &self,
         request: InterruptWorkerRequest,
@@ -577,7 +634,7 @@ impl From<TemplateError> for worker_error::Error {
             TemplateError::Internal(error) => {
                 worker_error::Error::InternalError(WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: error,
+                        details: error.to_string(),
                     })),
                 })
             }
@@ -587,38 +644,17 @@ impl From<TemplateError> for worker_error::Error {
             TemplateError::LimitExceeded(error) => {
                 worker_error::Error::LimitExceeded(ErrorBody { error })
             }
-            TemplateError::AlreadyExists(template_id) => {
+            TemplateError::AlreadyExists(_) => worker_error::Error::BadRequest(ErrorsBody {
+                errors: vec![value.to_string()],
+            }),
+            TemplateError::UnknownTemplateId(_)
+            | TemplateError::UnknownVersionedTemplateId(_)
+            | TemplateError::UnknownProjectId(_) => worker_error::Error::NotFound(ErrorBody {
+                error: value.to_string(),
+            }),
+            TemplateError::TemplateProcessing(error) => {
                 worker_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![format!("Template already exists: {template_id}")],
-                })
-            }
-            TemplateError::UnknownTemplateId(template_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Template not found: {template_id}"),
-                })
-            }
-            TemplateError::UnknownVersionedTemplateId(template_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Versioned template not found: {template_id}"),
-                })
-            }
-            TemplateError::UnknownProjectId(project_id) => {
-                worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Project not found: {project_id}"),
-                })
-            }
-            TemplateError::IOError(error) => {
-                worker_error::Error::InternalError(WorkerExecutionError {
-                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: error,
-                    })),
-                })
-            }
-            TemplateError::TemplateProcessingError(error) => {
-                worker_error::Error::InternalError(WorkerExecutionError {
-                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: error,
-                    })),
+                    errors: vec![error.to_string()],
                 })
             }
         }

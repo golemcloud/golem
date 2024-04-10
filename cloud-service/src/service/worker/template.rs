@@ -40,9 +40,9 @@ impl BaseTemplateService<AccountAuthorisation> for TemplateServiceWrapper {
             .template_service
             .get_by_version(&versioned, auth_ctx)
             .await?
-            .ok_or(BaseTemplateError::NotFound(
-                "Template not found".to_string(),
-            ))?;
+            .ok_or(BaseTemplateError::NotFound(format!(
+                "Template not found: {template_id}",
+            )))?;
 
         let template = convert_template(template);
 
@@ -77,9 +77,10 @@ impl From<TemplateError> for BaseTemplateError {
             | TemplateError::UnknownProjectId(_) => BaseTemplateError::NotFound(error.to_string()),
             TemplateError::Unauthorized(e) => BaseTemplateError::Unauthorized(e),
             TemplateError::LimitExceeded(e) => BaseTemplateError::Forbidden(e),
-            TemplateError::TemplateProcessingError(e)
-            | TemplateError::IOError(e)
-            | TemplateError::Internal(e) => BaseTemplateError::Internal(anyhow::Error::msg(e)),
+            TemplateError::TemplateProcessing(e) => {
+                BaseTemplateError::BadRequest(vec![e.to_string()])
+            }
+            TemplateError::Internal(e) => BaseTemplateError::Internal(anyhow::Error::msg(e)),
         }
     }
 }

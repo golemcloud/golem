@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use cloud_common::auth::GolemSecurityScheme;
-use golem_common::model::{CallingConvention, InvocationKey, TemplateId};
+use golem_common::model::{CallingConvention, InvocationKey, TemplateId, WorkerFilter};
 use golem_worker_service_base::service::template::TemplateServiceError;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
@@ -166,9 +166,10 @@ impl From<TemplateError> for WorkerError {
             TemplateError::LimitExceeded(error) => {
                 WorkerError::LimitExceeded(Json(ErrorBody { error }))
             }
-            TemplateError::TemplateProcessingError(_)
-            | TemplateError::Internal(_)
-            | TemplateError::IOError(_) => WorkerError::InternalError(Json(GolemErrorBody {
+            TemplateError::TemplateProcessing(_) => WorkerError::BadRequest(Json(ErrorsBody {
+                errors: vec![error.to_string()],
+            })),
+            TemplateError::Internal(_) => WorkerError::InternalError(Json(GolemErrorBody {
                 golem_error: GolemError::Unknown(GolemErrorUnknown {
                     details: error.to_string(),
                 }),
@@ -418,6 +419,82 @@ impl WorkerApi {
         let result = self.worker_service.get_metadata(&worker_id, &auth).await?;
 
         Ok(Json(result))
+    }
+
+    /// Get metadata of multiple workers
+    ///
+    /// Returns metadata about multiple workers.
+    #[oai(
+        path = "/:template_id/workers",
+        method = "get",
+        operation_id = "get_workers_metadata"
+    )]
+    async fn get_workers_metadata(
+        &self,
+        template_id: Path<TemplateId>,
+        filter: Query<Option<Vec<String>>>,
+        cursor: Query<Option<u64>>,
+        count: Query<Option<u64>>,
+        precise: Query<Option<bool>>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+
+        let filter = match filter.0 {
+            Some(filters) if !filters.is_empty() => Some(
+                WorkerFilter::from(filters)
+                    .map_err(|e| WorkerError::BadRequest(Json(ErrorsBody { errors: vec![e] })))?,
+            ),
+            _ => None,
+        };
+
+        let (cursor, workers) = self
+            .worker_service
+            .find_metadata(
+                &template_id.0,
+                filter,
+                cursor.0.unwrap_or(0),
+                count.0.unwrap_or(50),
+                precise.0.unwrap_or(false),
+                &auth,
+            )
+            .await?;
+
+        Ok(Json(crate::model::WorkersMetadataResponse {
+            workers,
+            cursor,
+        }))
+    }
+
+    #[oai(
+        path = "/:template_id/workers/find",
+        method = "post",
+        operation_id = "find_workers_metadata"
+    )]
+    async fn find_workers_metadata(
+        &self,
+        template_id: Path<TemplateId>,
+        params: Json<WorkersMetadataRequest>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+
+        let (cursor, workers) = self
+            .worker_service
+            .find_metadata(
+                &template_id.0,
+                params.filter.clone(),
+                params.cursor.unwrap_or(0),
+                params.count.unwrap_or(50),
+                params.precise.unwrap_or(false),
+                &auth,
+            )
+            .await?;
+
+        Ok(Json(crate::model::WorkersMetadataResponse {
+            workers,
+            cursor,
+        }))
     }
 
     /// Resume a worker
