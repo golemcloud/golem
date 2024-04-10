@@ -18,7 +18,7 @@ use std::io::{BufReader, Read};
 
 use async_trait::async_trait;
 use clap::Subcommand;
-use golem_gateway_client::model::ApiDefinition;
+use golem_gateway_client::model::HttpApiDefinition;
 
 use crate::clients::gateway::definition::DefinitionClient;
 use crate::clients::project::ProjectClient;
@@ -74,16 +74,16 @@ fn read_definition<R: Read>(
     format: Format,
     r: R,
     source: &str,
-) -> Result<ApiDefinition, GolemError> {
-    let api_definition: ApiDefinition = match format {
+) -> Result<HttpApiDefinition, GolemError> {
+    let api_definition: HttpApiDefinition = match format {
         Format::Json => serde_json::from_reader(r).map_err(|e| {
             GolemError(format!(
-                "Failed to parse ApiDefinition from {source} as json: ${e}"
+                "Failed to parse HttpApiDefinition from {source} as json: ${e}"
             ))
         })?,
         Format::Yaml => serde_yaml::from_reader(r).map_err(|e| {
             GolemError(format!(
-                "Failed to parse ApiDefinition from {source} as yaml: ${e}"
+                "Failed to parse HttpApiDefinition from {source} as yaml: ${e}"
             ))
         })?,
     };

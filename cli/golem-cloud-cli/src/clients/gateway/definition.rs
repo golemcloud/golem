@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_gateway_client::model::ApiDefinition;
+use golem_gateway_client::model::HttpApiDefinition;
 
 use crate::model::{GolemError, ProjectId};
 
@@ -23,13 +23,13 @@ pub trait DefinitionClient {
         &self,
         project_id: ProjectId,
         api_definition_id: Option<&str>,
-    ) -> Result<Vec<ApiDefinition>, GolemError>;
+    ) -> Result<Vec<HttpApiDefinition>, GolemError>;
 
     async fn update(
         &self,
         project_id: ProjectId,
-        api_definition: ApiDefinition,
-    ) -> Result<ApiDefinition, GolemError>;
+        api_definition: HttpApiDefinition,
+    ) -> Result<HttpApiDefinition, GolemError>;
 
     async fn delete(
         &self,
@@ -51,15 +51,15 @@ impl<C: golem_gateway_client::api::ApiDefinitionClient + Sync + Send> Definition
         &self,
         project_id: ProjectId,
         api_definition_id: Option<&str>,
-    ) -> Result<Vec<ApiDefinition>, GolemError> {
+    ) -> Result<Vec<HttpApiDefinition>, GolemError> {
         Ok(self.client.get(&project_id.0, api_definition_id).await?)
     }
 
     async fn update(
         &self,
         project_id: ProjectId,
-        api_definition: ApiDefinition,
-    ) -> Result<ApiDefinition, GolemError> {
+        api_definition: HttpApiDefinition,
+    ) -> Result<HttpApiDefinition, GolemError> {
         Ok(self.client.put(&project_id.0, &api_definition).await?)
     }
 
