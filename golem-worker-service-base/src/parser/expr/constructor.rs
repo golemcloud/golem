@@ -7,19 +7,25 @@ pub(crate) fn get_constructor_pattern(
     tokenizer: &mut Tokenizer,
     constructor_name: &str,
 ) -> Result<ConstructorPattern, ParseError> {
-    match tokenizer.next_non_empty_token() {
-        Some(Token::LParen) => {
-            let construction_variables = match tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
+    if tokenizer.peek_next_non_empty_token_is(&Token::LParen) {
+        tokenizer.skip_next_non_empty_token(); // Skip LParen
+        let construction_variables =
+            match tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
                 Some(value) => collect_construction_variables(value.as_str())?,
-                None => return Err(ParseError::Message(format!("Empty value inside the constructor {}", constructor_name))),
+                None => {
+                    return Err(ParseError::Message(format!(
+                        "Empty value inside the constructor {}",
+                        constructor_name
+                    )))
+                }
             };
-            let constructor_patterns = construction_variables
-                .into_iter()
-                .map(|expr| ConstructorPattern::Literal(Box::new(expr)))
-                .collect();
-            ConstructorPattern::constructor(constructor_name, constructor_patterns)
-        }
-        _ => ConstructorPattern::constructor(constructor_name, vec![]),
+        let constructor_patterns = construction_variables
+            .into_iter()
+            .map(|expr| ConstructorPattern::Literal(Box::new(expr)))
+            .collect();
+        ConstructorPattern::constructor(constructor_name, constructor_patterns)
+    } else {
+        ConstructorPattern::constructor(constructor_name, vec![])
     }
 }
 
