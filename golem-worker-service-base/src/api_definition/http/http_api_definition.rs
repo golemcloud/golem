@@ -96,6 +96,44 @@ impl MethodPattern {
     }
 }
 
+impl FromStr for MethodPattern {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "get" => Ok(MethodPattern::Get),
+            "connect" => Ok(MethodPattern::Connect),
+            "post" => Ok(MethodPattern::Post),
+            "delete" => Ok(MethodPattern::Delete),
+            "put" => Ok(MethodPattern::Put),
+            "patch" => Ok(MethodPattern::Patch),
+            "options" => Ok(MethodPattern::Options),
+            "trace" => Ok(MethodPattern::Trace),
+            "head" => Ok(MethodPattern::Head),
+            _ => Err("Failed to parse method"),
+        }
+    }
+}
+
+impl TryFrom<i32> for MethodPattern {
+    type Error = &'static str;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(MethodPattern::Get),
+            1 => Ok(MethodPattern::Connect),
+            2 => Ok(MethodPattern::Post),
+            3 => Ok(MethodPattern::Delete),
+            4 => Ok(MethodPattern::Put),
+            5 => Ok(MethodPattern::Patch),
+            6 => Ok(MethodPattern::Options),
+            7 => Ok(MethodPattern::Trace),
+            8 => Ok(MethodPattern::Head),
+            _ => Err("Failed to parse MethodPattern"),
+        }
+    }
+}
+
 impl From<MethodPattern> for hyper::http::Method {
     fn from(method: MethodPattern) -> Self {
         match method {
