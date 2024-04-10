@@ -88,20 +88,47 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             }
             Err(err) => {
                 error!("RPC error for {}: {err}", self.worker_id);
-                match err {
-                    RpcError::ProtocolError { details } => {
-                        Ok(Err(golem_wasm_rpc::RpcError::ProtocolError(details)))
-                    }
-                    RpcError::Denied { details } => {
-                        Ok(Err(golem_wasm_rpc::RpcError::Denied(details)))
-                    }
-                    RpcError::NotFound { details } => {
-                        Ok(Err(golem_wasm_rpc::RpcError::NotFound(details)))
-                    }
-                    RpcError::RemoteInternalError { details } => {
-                        Ok(Err(golem_wasm_rpc::RpcError::RemoteInternalError(details)))
-                    }
-                }
+                Ok(Err(err.into()))
+            }
+        }
+    }
+
+    async fn invoke(
+        &mut self,
+        self_: Resource<WasmRpcEntry>,
+        function_name: String,
+        function_params: Vec<WitValue>,
+    ) -> anyhow::Result<Result<(), golem_wasm_rpc::RpcError>> {
+        record_host_function_call("golem::rpc::wasm-rpc", "invoke");
+
+        let entry = self.table.get(&self_)?;
+        let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+        let remote_worker_id = payload.remote_worker_id.clone();
+
+        let result = Durability::<Ctx, (), SerializableError>::wrap(
+            self,
+            WrappedFunctionType::WriteRemote,
+            "golem::rpc::wasm-rpc::invoke",
+            |ctx| {
+                Box::pin(async move {
+                    ctx.rpc()
+                        .invoke(
+                            &remote_worker_id,
+                            function_name,
+                            function_params,
+                            &ctx.state.account_id,
+                        )
+                        .await
+                })
+            },
+        )
+        .await;
+
+        match result {
+            Ok(result) => Ok(Ok(result)),
+            Err(err) => {
+                error!("RPC error for {}: {err}", self.worker_id);
+                Ok(Err(err.into()))
             }
         }
     }
@@ -111,6 +138,19 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let _ = self.table.delete(rep)?;
         Ok(())
+    }
+}
+
+impl From<RpcError> for golem_wasm_rpc::RpcError {
+    fn from(value: RpcError) -> Self {
+        match value {
+            RpcError::ProtocolError { details } => golem_wasm_rpc::RpcError::ProtocolError(details),
+            RpcError::Denied { details } => golem_wasm_rpc::RpcError::Denied(details),
+            RpcError::NotFound { details } => golem_wasm_rpc::RpcError::NotFound(details),
+            RpcError::RemoteInternalError { details } => {
+                golem_wasm_rpc::RpcError::RemoteInternalError(details)
+            }
+        }
     }
 }
 
