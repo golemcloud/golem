@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use crate::expression::Expr;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
@@ -44,58 +42,6 @@ pub(crate) fn parse_text(input: &str) -> Result<Expr, ParseError> {
         Ok(expressions[0].clone())
     } else {
         Ok(Expr::Concat(expressions))
-    }
-}
-
-#[derive(Default)]
-struct MultiLineExpressions {
-    expressions: Vec<Expr>,
-}
-
-impl MultiLineExpressions {
-    pub fn push(&mut self, expr: Expr) {
-        self.expressions.push(expr);
-    }
-
-    pub fn get_and_reset(&mut self) -> Expr {
-        let expressions = std::mem::take(&mut self.expressions);
-
-        if expressions.len() == 1 {
-            expressions[0].clone()
-        } else {
-            Expr::Multiple(expressions)
-        }
-    }
-}
-
-#[derive(Default, Debug, Clone)]
-struct ConcatenatedExpressions {
-    expressions: Vec<Expr>,
-}
-
-impl ConcatenatedExpressions {
-    pub fn build(&mut self, expr: Expr) {
-        self.expressions.push(expr);
-    }
-
-    fn get_and_reset(&mut self) -> Option<Expr> {
-        let expressions = std::mem::take(&mut self.expressions);
-
-        match expressions.as_slice() {
-            [expr] => Some(expr.clone()),
-            [] => None, // If there are no expressions
-            _ => Some(Expr::Concat(expressions)),
-        }
-    }
-
-    fn get(&mut self) -> Option<Expr> {
-        let expressions = self.expressions.clone();
-
-        match expressions.as_slice() {
-            [expr] => Some(expr.clone()),
-            [] => None,
-            _ => Some(Expr::Concat(expressions)),
-        }
     }
 }
 
@@ -232,8 +178,9 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
 
             Token::LSquare => {
 
-                if let Some(expr) = previous_expression.get() {
+                if let Some(expr) = previous_expression.get_and_reset() {
                     let expr = selection::get_select_index(&mut tokenizer, &expr)?;
+
                     previous_expression.build(expr);
                 } else {
                     let expr = sequence::create_sequence(&mut tokenizer)?;
@@ -303,6 +250,50 @@ mod internal {
     use crate::parser::expr::{constructor, util};
     use crate::parser::ParseError;
     use crate::tokeniser::tokenizer::{Token, Tokenizer};
+
+
+    #[derive(Default)]
+    pub(crate) struct MultiLineExpressions {
+        expressions: Vec<Expr>,
+    }
+
+    impl MultiLineExpressions {
+        pub(crate) fn push(&mut self, expr: Expr) {
+            self.expressions.push(expr);
+        }
+
+        pub(crate) fn get_and_reset(&mut self) -> Expr {
+            let expressions = std::mem::take(&mut self.expressions);
+
+            if expressions.len() == 1 {
+                expressions[0].clone()
+            } else {
+                Expr::Multiple(expressions)
+            }
+        }
+    }
+
+    #[derive(Default, Debug, Clone)]
+    pub(crate) struct ConcatenatedExpressions {
+        expressions: Vec<Expr>,
+    }
+
+    impl ConcatenatedExpressions {
+        pub(crate) fn build(&mut self, expr: Expr) {
+            self.expressions.push(expr);
+        }
+
+        pub(crate) fn get_and_reset(&mut self) -> Option<Expr> {
+            let expressions = std::mem::take(&mut self.expressions);
+
+            match expressions.as_slice() {
+                [expr] => Some(expr.clone()),
+                [] => None, // If there are no expressions
+                _ => Some(Expr::Concat(expressions)),
+            }
+        }
+    }
+
 
     // Returns a custom constructor if the string is followed by paranthesis
     pub(crate) fn get_expr_from_custom_string(
