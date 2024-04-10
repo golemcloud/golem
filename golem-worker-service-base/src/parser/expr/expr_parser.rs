@@ -39,7 +39,12 @@ pub(crate) fn parse_text(input: &str) -> Result<Expr, ParseError> {
         }
     }
 
-    Ok(Expr::Concat(expressions))
+    if expressions.len() == 1 {
+        Ok(expressions[0].clone())
+    } else {
+        Ok(Expr::Concat(expressions))
+    }
+
 }
 
 
@@ -550,7 +555,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expression::PatternMatchArm;
+    use crate::expression::{ConstructorPattern, PatternMatchArm};
 
     #[test]
     fn expr_parser_without_vars() {
