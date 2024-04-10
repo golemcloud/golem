@@ -1,5 +1,5 @@
 use crate::expression::{ConstructorPattern, Expr};
-use crate::parser::expr_parser::{parse_tokens, Context};
+use crate::parser::expr_parser::{parse_code};
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
@@ -13,27 +13,20 @@ pub(crate) fn get_constructor_pattern(
             let constructor_var_optional =
                 tokenizer.capture_string_until_and_skip_end(&Token::RParen);
             match constructor_var_optional {
-                Some(constructor_var) => {
-                    let mut tokenizer = Tokenizer::new(constructor_var.as_str());
+                Some(construction_variables) => {
+                    if construction_variables.is_empty() {
+                        ConstructorPattern::constructor(
+                            constructor_name.to_string().as_str(),
+                            vec![],
+                        )
+                    } else {
+                        let construction_variables = collect_construction_variables(construction_variables.as_str())?;
+                        let constructor_patterns =
+                            construction_variables.iter().map(|expr| ConstructorPattern::Literal(Box::new(expr.clone()))).collect::<Vec<ConstructorPattern>>();
 
-                    let constructor_expr = parse_tokens(&mut tokenizer, Context::Code)?;
-
-                    match constructor_expr {
-                        Expr::Variable(variable) => ConstructorPattern::constructor(
-                            constructor_name.to_string().as_str(),
-                            vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
-                                variable,
-                            )))],
-                        ),
-                        Expr::Constructor0(pattern) => ConstructorPattern::constructor(
-                            constructor_name.to_string().as_str(),
-                            vec![pattern],
-                        ),
-                        expr => ConstructorPattern::constructor(
-                            constructor_name.to_string().as_str(),
-                            vec![ConstructorPattern::Literal(Box::new(expr))],
-                        ),
+                        ConstructorPattern::constructor(constructor_name, constructor_patterns)
                     }
+
                 }
                 None => Err(ParseError::Message(format!(
                     "Empty value inside the constructor {}",
@@ -42,9 +35,27 @@ pub(crate) fn get_constructor_pattern(
             }
         }
 
-        _ => Err(ParseError::Message(format!(
-            "Expecting an open parenthesis '(' after {}",
-            constructor_name
-        ))),
+        _ => ConstructorPattern::constructor(constructor_name.to_string().as_str(), vec![], ),
     }
+}
+
+fn collect_construction_variables(constructor_variable_str: &str) -> Result<Vec<Expr>, ParseError> {
+    let mut tokenizer = Tokenizer::new(constructor_variable_str);
+    let mut construction_variables = vec![];
+    loop {
+        if let Some(value) = tokenizer.capture_string_until_and_skip_end(&Token::Comma) {
+            let construction_variable = parse_code(value.as_str())?;
+            construction_variables.push(construction_variable);
+        } else  {
+            let rest = tokenizer.rest();
+
+            if !rest.is_empty() {
+                let construction_variable = parse_code(rest)?;
+                construction_variables.push(construction_variable);
+            }
+            break;
+        }
+    }
+
+    Ok(construction_variables)
 }

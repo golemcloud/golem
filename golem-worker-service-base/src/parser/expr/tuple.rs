@@ -1,5 +1,5 @@
 use crate::expression::Expr;
-use crate::parser::expr_parser::{parse_with_context, Context};
+use crate::parser::expr_parser::{parse_code};
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
@@ -19,7 +19,7 @@ pub(crate) fn create_tuple(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError
 
         match captured_string {
             Some(r) => {
-                let expr = parse_with_context(r.as_str(), Context::Code)?;
+                let expr = parse_code(r.as_str())?;
 
                 tuple_elements.push(expr);
                 tokenizer.next_non_empty_token(); // Skip Comma
@@ -31,7 +31,7 @@ pub(crate) fn create_tuple(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError
 
                 match last_value {
                     Some(last_value) if !last_value.is_empty() => {
-                        let expr = parse_with_context(last_value.as_str(), Context::Code)?;
+                        let expr = parse_code(last_value.as_str())?;
                         // If there is only 1 element, and it's an invalid tuple element, then we need to push it to grouped_exprs
                         if tuple_elements.is_empty() && !is_valid_tuple_element(&expr) {
                             grouped_exprs.push(expr.clone());
