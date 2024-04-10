@@ -4,7 +4,7 @@ use std::fmt::{Debug, Formatter};
 use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct AnalysedType(golem_wasm_ast::analysis::AnalysedType);
+pub struct AnalysedType(pub golem_wasm_ast::analysis::AnalysedType);
 
 impl Debug for AnalysedType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
