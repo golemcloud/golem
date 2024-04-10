@@ -16,7 +16,7 @@ pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
 #[cfg(test)]
 mod record_tests {
     use crate::expression::{
-        from_string, to_string, ConstructorPattern, PatternMatchArm, Expr, InnerNumber,
+        from_string, to_string, ConstructorPattern, Expr, InnerNumber, PatternMatchArm,
     };
 
     #[test]
@@ -439,7 +439,7 @@ mod record_tests {
 #[cfg(test)]
 mod sequence_tests {
     use crate::expression::{
-        from_string, to_string, ConstructorPattern, PatternMatchArm, Expr, InnerNumber,
+        from_string, to_string, ConstructorPattern, Expr, InnerNumber, PatternMatchArm,
     };
 
     #[test]
@@ -1120,7 +1120,7 @@ mod flag_tests {
 #[cfg(test)]
 mod match_tests {
     use crate::expression::{
-        from_string, to_string, ConstructorPattern, PatternMatchArm, Expr, InnerNumber,
+        from_string, to_string, ConstructorPattern, Expr, InnerNumber, PatternMatchArm,
     };
 
     #[test]
@@ -1395,7 +1395,24 @@ mod if_cond_tests {
     use crate::expression::{from_string, to_string, Expr};
 
     #[test]
-    fn test_round_trip_if_condition() {
+    fn test_round_trip_if_condition_literals() {
+        let input_expr = Expr::Cond(
+            Box::new(Expr::EqualTo(
+                Box::new(Expr::Literal("foo".to_string())),
+                Box::new(Expr::Literal("bar".to_string())),
+            )),
+            Box::new(Expr::Literal("success".to_string())),
+            Box::new(Expr::Literal("failed".to_string())),
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${if 'foo' == 'bar' then 'success' else 'failed'}".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_if_condition_of_select_field() {
         let input_expr = Expr::Cond(
             Box::new(Expr::EqualTo(
                 Box::new(Expr::SelectField(

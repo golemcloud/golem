@@ -1,5 +1,5 @@
-use crate::expression::{ConstructorPattern, PatternMatchArm, Expr};
-use crate::parser::expr_parser::{parse_code};
+use crate::expression::{ConstructorPattern, Expr, PatternMatchArm};
+use crate::parser::expr_parser::parse_code;
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
@@ -26,9 +26,7 @@ pub(crate) fn create_pattern_match_expr(tokenizer: &mut Tokenizer) -> Result<Exp
 // To parse collection of terms under match expression
 // Ex: some(x) => x
 // Handles Ok, Err, Some, None
-pub(crate) fn get_arms(
-    tokenizer: &mut Tokenizer,
-) -> Result<Vec<PatternMatchArm>, ParseError> {
+pub(crate) fn get_arms(tokenizer: &mut Tokenizer) -> Result<Vec<PatternMatchArm>, ParseError> {
     let mut constructor_patterns: Vec<PatternMatchArm> = vec![];
 
     fn go(
@@ -121,22 +119,16 @@ where
                     if end_of_constructors > comma {
                         let captured_string = tokenizer.capture_string_until(&Token::Comma);
 
-                        let individual_expr =
-                            parse_code(captured_string.unwrap().as_str())
-                                .map(|expr| {
-                                    PatternMatchArm((constructor_pattern, Box::new(expr)))
-                                })?;
+                        let individual_expr = parse_code(captured_string.unwrap().as_str())
+                            .map(|expr| PatternMatchArm((constructor_pattern, Box::new(expr))))?;
                         collected_exprs.push(individual_expr);
                         tokenizer.next_non_empty_token(); // Skip CommaSeparator
                         accumulator(tokenizer, collected_exprs)
                     } else {
                         // End of constructor
                         let captured_string = tokenizer.capture_string_until(&Token::RCurly);
-                        let individual_expr =
-                            parse_code(captured_string.unwrap().as_str())
-                                .map(|expr| {
-                                    PatternMatchArm((constructor_pattern, Box::new(expr)))
-                                })?;
+                        let individual_expr = parse_code(captured_string.unwrap().as_str())
+                            .map(|expr| PatternMatchArm((constructor_pattern, Box::new(expr))))?;
                         collected_exprs.push(individual_expr);
                         Ok(())
                     }
@@ -147,12 +139,8 @@ where
                     let captured_string = tokenizer.capture_string_until(&Token::RCurly);
 
                     if let Some(captured_string) = captured_string {
-                        let individual_expr =
-                            parse_code(captured_string.as_str()).map(
-                                |expr| {
-                                    PatternMatchArm((constructor_pattern, Box::new(expr)))
-                                },
-                            )?;
+                        let individual_expr = parse_code(captured_string.as_str())
+                            .map(|expr| PatternMatchArm((constructor_pattern, Box::new(expr))))?;
                         collected_exprs.push(individual_expr);
                     }
 

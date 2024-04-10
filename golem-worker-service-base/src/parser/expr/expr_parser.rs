@@ -1,11 +1,12 @@
 use std::rc::Rc;
 
-use crate::expression::{Expr};
+use crate::expression::Expr;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-use crate::parser::expr::{constructor, flags, let_statement, pattern_match, quoted, record, selection, sequence, tuple, util};
+use crate::parser::expr::{constructor, flags, if_condition, let_statement, pattern_match, quoted, record, selection, sequence, tuple, util};
 use crate::parser::{GolemParser, ParseError};
 use internal::*;
+
 #[derive(Clone, Debug)]
 pub struct ExprParser {}
 
@@ -18,7 +19,7 @@ impl GolemParser<Expr> for ExprParser {
 // parse_as_str and parse_as_code avoids the strong dependency to
 // `${` and `}`.
 pub(crate) fn parse_text(input: &str) -> Result<Expr, ParseError> {
-    let mut tokenizer: Tokenizer = tokenise(input);
+    let mut tokenizer: Tokenizer = Tokenizer::new(input);
 
     let mut expressions: Vec<Expr> = vec![];
 
@@ -27,7 +28,7 @@ pub(crate) fn parse_text(input: &str) -> Result<Expr, ParseError> {
             Token::MultiChar(MultiCharTokens::InterpolationStart) => {
                 let captured_string = tokenizer.capture_string_until_and_skip_end(&Token::RCurly);
 
-                if let Some(captured_string) =  captured_string {
+                if let Some(captured_string) = captured_string {
                     let current_expr = parse_code(captured_string.as_str())?;
                     expressions.push(current_expr);
                 }
@@ -44,19 +45,13 @@ pub(crate) fn parse_text(input: &str) -> Result<Expr, ParseError> {
     } else {
         Ok(Expr::Concat(expressions))
     }
-
 }
 
-
-pub(crate) fn parse_code(
-    input: &str,
-) -> Result<Expr, ParseError> {
-
+pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
     fn go(
         tokenizer: &mut Tokenizer,
         prev_expression: InternalExprResult,
     ) -> Result<Expr, ParseError> {
-
         if let Some(token) = tokenizer.next_non_empty_token() {
             match token {
                 Token::MultiChar(MultiCharTokens::Other(raw_string)) => {
@@ -70,14 +65,13 @@ pub(crate) fn parse_code(
                     go(tokenizer, prev_expression.apply_with(new_expr))
                 }
 
-                Token::MultiChar(MultiCharTokens::Request) => go(
-                    tokenizer,
-                    prev_expression.apply_with(Expr::Request()),
-                ),
+                Token::MultiChar(MultiCharTokens::Request) => {
+                    go(tokenizer, prev_expression.apply_with(Expr::Request()))
+                }
 
                 token @ Token::MultiChar(MultiCharTokens::Some)
-                |token@  Token::MultiChar(MultiCharTokens::None)
-                |token @ Token::MultiChar(MultiCharTokens::Ok)
+                | token @ Token::MultiChar(MultiCharTokens::None)
+                | token @ Token::MultiChar(MultiCharTokens::Ok)
                 | token @ Token::MultiChar(MultiCharTokens::Err) => {
                     let constructor_pattern = constructor::get_constructor_pattern(
                         tokenizer,
@@ -89,10 +83,9 @@ pub(crate) fn parse_code(
                     )
                 }
 
-                Token::MultiChar(MultiCharTokens::Worker) => go(
-                    tokenizer,
-                    prev_expression.apply_with(Expr::Worker()),
-                ),
+                Token::MultiChar(MultiCharTokens::Worker) => {
+                    go(tokenizer, prev_expression.apply_with(Expr::Worker()))
+                }
 
                 Token::MultiChar(MultiCharTokens::InterpolationStart) => {
                     let new_expr = capture_expression_until(
@@ -160,10 +153,7 @@ pub(crate) fn parse_code(
 
                 Token::MultiChar(MultiCharTokens::Let) => {
                     let let_expr = let_statement::create_let_statement(tokenizer)?;
-                    go(
-                        tokenizer,
-                        prev_expression.accumulate_with(let_expr),
-                    )
+                    go(tokenizer, prev_expression.accumulate_with(let_expr))
                 }
 
                 Token::LessThan => {
@@ -253,41 +243,13 @@ pub(crate) fn parse_code(
                 },
 
                 Token::MultiChar(MultiCharTokens::If) => {
-                    // We expect to form Expr::Cond given three unknown variables
-                    let future_expr = InternalExprResult::incomplete(
-                        InCompleteExpressionContext::If,
-                        move |first_result| {
-                            let first_result: Rc<Expr> = Rc::new(first_result);
-                            InternalExprResult::incomplete(
-                                InCompleteExpressionContext::Then,
-                                move |second_result| {
-                                    let first_result: Rc<Expr> = Rc::clone(&first_result);
-                                    InternalExprResult::incomplete(
-                                        InCompleteExpressionContext::Else,
-                                        move |else_result| {
-                                            let first_result: Expr =
-                                                (*Rc::clone(&first_result)).clone();
-                                            InternalExprResult::complete(Expr::Cond(
-                                                Box::new(first_result),
-                                                Box::new(second_result.clone()),
-                                                Box::new(else_result),
-                                            ))
-                                        },
-                                    )
-                                },
-                            )
-                        },
-                    );
+                    let if_expr = if_condition::create_if_condition(tokenizer)?;
 
-                    let captured_predicate = capture_expression_until(
-                        tokenizer,
-                        vec![&Token::if_token()],
-                        Some(&Token::then()),
-                        future_expr,
-                        go,
-                    )?;
+                    dbg!(&if_expr);
 
-                    go(tokenizer, captured_predicate)
+                    let res = go(tokenizer, prev_expression.apply_with(if_expr))?;
+                    dbg!(&res);
+                    Ok(res)
                 }
 
                 Token::MultiChar(MultiCharTokens::Match) => {
@@ -341,16 +303,16 @@ pub(crate) fn parse_code(
                     go(tokenizer, prev_expression.apply_with(expr?))
                 }
 
-                Token::RCurly => go(tokenizer,  prev_expression),
-                Token::RSquare => go(tokenizer,  prev_expression),
-                Token::RParen => go(tokenizer,  prev_expression),
-                Token::Space => go(tokenizer,  prev_expression),
-                Token::NewLine => go(tokenizer,  prev_expression),
-                Token::LetEqual => go(tokenizer,  prev_expression),
-                Token::SemiColon => go(tokenizer,  prev_expression),
-                Token::MultiChar(MultiCharTokens::Arrow) => go(tokenizer,  prev_expression),
-                Token::Comma => go(tokenizer,  prev_expression),
-                Token::Colon => go(tokenizer,  prev_expression),
+                Token::RCurly => go(tokenizer, prev_expression),
+                Token::RSquare => go(tokenizer, prev_expression),
+                Token::RParen => go(tokenizer, prev_expression),
+                Token::Space => go(tokenizer, prev_expression),
+                Token::NewLine => go(tokenizer, prev_expression),
+                Token::LetEqual => go(tokenizer, prev_expression),
+                Token::SemiColon => go(tokenizer, prev_expression),
+                Token::MultiChar(MultiCharTokens::Arrow) => go(tokenizer, prev_expression),
+                Token::Comma => go(tokenizer, prev_expression),
+                Token::Colon => go(tokenizer, prev_expression),
             }
         } else {
             match prev_expression {
@@ -362,7 +324,7 @@ pub(crate) fn parse_code(
         }
     }
 
-    let mut tokenizer: Tokenizer = tokenise(input);
+    let mut tokenizer: Tokenizer =  Tokenizer::new(input.as_ref());
 
     go(&mut tokenizer, InternalExprResult::Empty)
 }
@@ -373,12 +335,6 @@ mod internal {
     use crate::parser::ParseError;
     use crate::tokeniser::tokenizer::{Token, Tokenizer};
     use strum_macros::Display;
-
-
-
-    pub(crate) fn tokenise(input: &str) -> Tokenizer {
-        Tokenizer::new(input)
-    }
 
     // While at every node (Token), we can somehow form a complete expression by peeking ahead using tokenizer multiple times,
     // we can avoid this at times, and form an in-complete expression using `InternalExprResult`.
@@ -511,8 +467,7 @@ mod internal {
             Some(captured_string) => {
                 let mut new_tokenizer = Tokenizer::new(captured_string.as_str());
 
-                let inner_expr =
-                    get_expr(&mut new_tokenizer, InternalExprResult::Empty)?;
+                let inner_expr = get_expr(&mut new_tokenizer, InternalExprResult::Empty)?;
 
                 Ok(future_expression.apply_with(inner_expr))
             }

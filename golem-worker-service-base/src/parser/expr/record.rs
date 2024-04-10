@@ -1,6 +1,6 @@
 use crate::expression::Expr;
 use crate::parser::expr::util;
-use crate::parser::expr_parser::{parse_code};
+use crate::parser::expr_parser::parse_code;
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
@@ -41,8 +41,7 @@ pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseErro
 
                                 match last_value {
                                     Some(last_value) => {
-                                        let expr =
-                                            parse_code(last_value.as_str())?;
+                                        let expr = parse_code(last_value.as_str())?;
                                         record.push((key.to_string(), expr));
                                         Ok(())
                                     }

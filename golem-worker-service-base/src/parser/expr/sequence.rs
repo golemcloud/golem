@@ -1,6 +1,6 @@
 use crate::expression::Expr;
 use crate::parser::expr::util;
-use crate::parser::expr_parser::{parse_code};
+use crate::parser::expr_parser::parse_code;
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
@@ -27,8 +27,7 @@ pub(crate) fn create_sequence(tokenizer: &mut Tokenizer) -> Result<Expr, ParseEr
 
             match possible_sequence_elem {
                 Some(sequence_element_string) => {
-                    let sequence_elem_expr =
-                        parse_code(sequence_element_string.as_str())?;
+                    let sequence_elem_expr = parse_code(sequence_element_string.as_str())?;
                     record.push(sequence_elem_expr);
                     tokenizer.next_non_empty_token();
                     go(tokenizer, record)

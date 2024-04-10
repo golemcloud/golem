@@ -1,6 +1,6 @@
 use crate::expression;
 use crate::expression::Expr;
-use crate::parser::expr_parser::{parse_code};
+use crate::parser::expr_parser::parse_code;
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 

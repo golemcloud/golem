@@ -1,5 +1,5 @@
 use crate::expression::Expr;
-use crate::parser::expr_parser::{parse_text};
+use crate::parser::expr_parser::parse_text;
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
@@ -9,9 +9,7 @@ pub(crate) fn create_expr_between_quotes(tokenizer: &mut Tokenizer) -> Result<Ex
     let non_code_string = tokenizer.capture_string_until_and_skip_end(&Token::Quote);
 
     match non_code_string {
-        Some(string) => {
-            parse_text(string.as_str())
-        }
+        Some(string) => parse_text(string.as_str()),
         None => Ok(Expr::Literal("".to_string())),
     }
 }

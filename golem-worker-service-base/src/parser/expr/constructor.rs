@@ -1,5 +1,5 @@
 use crate::expression::{ConstructorPattern, Expr};
-use crate::parser::expr_parser::{parse_code};
+use crate::parser::expr_parser::parse_code;
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
@@ -20,13 +20,15 @@ pub(crate) fn get_constructor_pattern(
                             vec![],
                         )
                     } else {
-                        let construction_variables = collect_construction_variables(construction_variables.as_str())?;
-                        let constructor_patterns =
-                            construction_variables.iter().map(|expr| ConstructorPattern::Literal(Box::new(expr.clone()))).collect::<Vec<ConstructorPattern>>();
+                        let construction_variables =
+                            collect_construction_variables(construction_variables.as_str())?;
+                        let constructor_patterns = construction_variables
+                            .iter()
+                            .map(|expr| ConstructorPattern::Literal(Box::new(expr.clone())))
+                            .collect::<Vec<ConstructorPattern>>();
 
                         ConstructorPattern::constructor(constructor_name, constructor_patterns)
                     }
-
                 }
                 None => Err(ParseError::Message(format!(
                     "Empty value inside the constructor {}",
@@ -35,7 +37,7 @@ pub(crate) fn get_constructor_pattern(
             }
         }
 
-        _ => ConstructorPattern::constructor(constructor_name.to_string().as_str(), vec![], ),
+        _ => ConstructorPattern::constructor(constructor_name.to_string().as_str(), vec![]),
     }
 }
 
@@ -46,7 +48,7 @@ fn collect_construction_variables(constructor_variable_str: &str) -> Result<Vec<
         if let Some(value) = tokenizer.capture_string_until_and_skip_end(&Token::Comma) {
             let construction_variable = parse_code(value.as_str())?;
             construction_variables.push(construction_variable);
-        } else  {
+        } else {
             let rest = tokenizer.rest();
 
             if !rest.is_empty() {
