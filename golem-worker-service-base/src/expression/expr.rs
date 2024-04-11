@@ -151,9 +151,10 @@ fn validate_single_variable_constructor(
     variables: Vec<ArmPattern>,
 ) -> Result<ArmPattern, ParseError> {
     if variables.len() != 1 {
-        Err(ParseError::Message(
-            "constructor should have exactly one variable".to_string(),
-        ))
+        Err(ParseError::Message(format!(
+            "constructor should have exactly one variable for {}",
+            constructor_type
+        )))
     } else {
         match variables.first().unwrap() {
             ArmPattern::Literal(_) => Ok(ArmPattern::Constructor(constructor_type, variables)),

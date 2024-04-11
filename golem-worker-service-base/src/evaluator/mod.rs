@@ -934,6 +934,161 @@ mod tests {
     }
 
     #[test]
+    fn test_evaluation_with_pattern_match_variant_positive() {
+        let worker_response = WorkerResponse {
+            result: TypeAnnotatedValue::Variant {
+                case_name: "Foo".to_string(),
+                case_value: Some(Box::new(TypeAnnotatedValue::Record {
+                    typ: vec![("id".to_string(), AnalysedType::Str)],
+                    value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
+                })),
+                typ: vec![(
+                    "Foo".to_string(),
+                    Some(AnalysedType::Record(vec![(
+                        "id".to_string(),
+                        AnalysedType::Str,
+                    )])),
+                )],
+            },
+        };
+
+        let expr =
+            expression::from_string("${match worker.response { Foo(value) => ok(value.id) }}")
+                .unwrap();
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+
+        let expected = TypeAnnotatedValue::Result {
+            value: Ok(Some(Box::new(TypeAnnotatedValue::Str("pId".to_string())))),
+            error: None,
+            ok: Some(Box::new(AnalysedType::Str)),
+        };
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_variant_negative() {
+        let worker_response = WorkerResponse {
+            result: TypeAnnotatedValue::Variant {
+                case_name: "Foo".to_string(),
+                case_value: Some(Box::new(TypeAnnotatedValue::Record {
+                    typ: vec![("id".to_string(), AnalysedType::Str)],
+                    value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
+                })),
+                typ: vec![
+                    (
+                        "Foo".to_string(),
+                        Some(AnalysedType::Record(vec![(
+                            "id".to_string(),
+                            AnalysedType::Str,
+                        )])),
+                    ),
+                    (
+                        "Bar".to_string(),
+                        Some(AnalysedType::Record(vec![(
+                            "id".to_string(),
+                            AnalysedType::Str,
+                        )])),
+                    ),
+                ],
+            },
+        };
+
+        let expr =
+            expression::from_string("${match worker.response { Bar(value) => ok('not found') }}")
+                .unwrap();
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+
+        let expected = TypeAnnotatedValue::Result {
+            value: Err(Some(Box::new(TypeAnnotatedValue::Str(
+                "not found".to_string(),
+            )))),
+            error: Some(Box::new(AnalysedType::Str)),
+            ok: None,
+        };
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_variant_nested_with_some() {
+        let output = TypeAnnotatedValue::Variant {
+            case_name: "Foo".to_string(),
+            case_value: Some(Box::new(TypeAnnotatedValue::Option {
+                value: Some(Box::new(TypeAnnotatedValue::Record {
+                    typ: vec![("id".to_string(), AnalysedType::Str)],
+                    value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
+                })),
+                typ: AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]),
+            })),
+            typ: vec![
+                (
+                    "Foo".to_string(),
+                    Some(AnalysedType::Option(Box::new(AnalysedType::Record(vec![
+                        ("id".to_string(), AnalysedType::Str),
+                    ])))),
+                ),
+                (
+                    "Bar".to_string(),
+                    Some(AnalysedType::Option(Box::new(AnalysedType::Record(vec![
+                        ("id".to_string(), AnalysedType::Str),
+                    ])))),
+                ),
+            ],
+        };
+
+        let worker_response = WorkerResponse { result: output };
+
+        let expr = expression::from_string(
+            "${match worker.response { Foo(some(value)) => value.id, err(msg) => 'not found' }}",
+        )
+        .unwrap();
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+
+        let expected = TypeAnnotatedValue::Str("pId".to_string());
+
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_variant_nested_with_none() {
+        let output = TypeAnnotatedValue::Variant {
+            case_name: "Foo".to_string(),
+            case_value: Some(Box::new(TypeAnnotatedValue::Option {
+                value: Some(Box::new(TypeAnnotatedValue::Record {
+                    typ: vec![("id".to_string(), AnalysedType::Str)],
+                    value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
+                })),
+                typ: AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]),
+            })),
+            typ: vec![
+                (
+                    "Foo".to_string(),
+                    Some(AnalysedType::Option(Box::new(AnalysedType::Record(vec![
+                        ("id".to_string(), AnalysedType::Str),
+                    ])))),
+                ),
+                (
+                    "Bar".to_string(),
+                    Some(AnalysedType::Option(Box::new(AnalysedType::Record(vec![
+                        ("id".to_string(), AnalysedType::Str),
+                    ])))),
+                ),
+            ],
+        };
+
+        let worker_response = WorkerResponse { result: output };
+
+        let expr = expression::from_string(
+            "${match worker.response { Foo(none) => err('not found'),  Foo(some(value)) => value.id }}",
+        )
+            .unwrap();
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+
+        let expected = TypeAnnotatedValue::Str("pId".to_string());
+
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
     fn test_evaluation_with_wave_like_syntax_ok_record() {
         let expr = expression::from_string("${{a : ok(1)}}").unwrap();
 
