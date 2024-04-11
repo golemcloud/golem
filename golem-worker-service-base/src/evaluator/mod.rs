@@ -966,49 +966,6 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluation_with_pattern_match_variant_negative() {
-        let worker_response = WorkerResponse {
-            result: TypeAnnotatedValue::Variant {
-                case_name: "Foo".to_string(),
-                case_value: Some(Box::new(TypeAnnotatedValue::Record {
-                    typ: vec![("id".to_string(), AnalysedType::Str)],
-                    value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
-                })),
-                typ: vec![
-                    (
-                        "Foo".to_string(),
-                        Some(AnalysedType::Record(vec![(
-                            "id".to_string(),
-                            AnalysedType::Str,
-                        )])),
-                    ),
-                    (
-                        "Bar".to_string(),
-                        Some(AnalysedType::Record(vec![(
-                            "id".to_string(),
-                            AnalysedType::Str,
-                        )])),
-                    ),
-                ],
-            },
-        };
-
-        let expr =
-            expression::from_string("${match worker.response { Bar(value) => ok('not found') }}")
-                .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
-
-        let expected = TypeAnnotatedValue::Result {
-            value: Err(Some(Box::new(TypeAnnotatedValue::Str(
-                "not found".to_string(),
-            )))),
-            error: Some(Box::new(AnalysedType::Str)),
-            ok: None,
-        };
-        assert_eq!(result, Ok(expected));
-    }
-
-    #[test]
     fn test_evaluation_with_pattern_match_variant_nested_with_some() {
         let output = TypeAnnotatedValue::Variant {
             case_name: "Foo".to_string(),
@@ -1049,14 +1006,47 @@ mod tests {
     }
 
     #[test]
+    fn test_evaluation_with_pattern_match_variant_nested_with_some_result() {
+        let output = get_complex_variant_typed_value();
+
+        let worker_response = WorkerResponse { result: output };
+
+        let expr = expression::from_string(
+            "${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => 'not found' }}",
+        )
+            .unwrap();
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+
+        let expected = TypeAnnotatedValue::Str("pId".to_string());
+
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_variant_nested_type_mismatch() {
+        let output = get_complex_variant_typed_value();
+
+        let worker_response = WorkerResponse { result: output };
+
+        let expr = expression::from_string(
+            "${match worker.response { Foo(ok(some(value))) => value.id, err(msg) => 'not found' }}",
+        )
+            .unwrap();
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+
+        assert!(result
+            .err()
+            .unwrap()
+            .to_string()
+            .starts_with("Type mismatch"))
+    }
+
+    #[test]
     fn test_evaluation_with_pattern_match_variant_nested_with_none() {
         let output = TypeAnnotatedValue::Variant {
             case_name: "Foo".to_string(),
             case_value: Some(Box::new(TypeAnnotatedValue::Option {
-                value: Some(Box::new(TypeAnnotatedValue::Record {
-                    typ: vec![("id".to_string(), AnalysedType::Str)],
-                    value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
-                })),
+                value: None,
                 typ: AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]),
             })),
             typ: vec![
@@ -1078,12 +1068,12 @@ mod tests {
         let worker_response = WorkerResponse { result: output };
 
         let expr = expression::from_string(
-            "${match worker.response { Foo(none) => err('not found'),  Foo(some(value)) => value.id }}",
+            "${match worker.response { Foo(none) => 'not found',  Foo(some(value)) => value.id }}",
         )
-            .unwrap();
+        .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
 
-        let expected = TypeAnnotatedValue::Str("pId".to_string());
+        let expected = TypeAnnotatedValue::Str("not found".to_string());
 
         assert_eq!(result, Ok(expected));
     }
@@ -1259,6 +1249,57 @@ mod tests {
         use http::{HeaderMap, Method, Uri};
         use serde_json::{json, Value};
         use std::collections::HashMap;
+
+        pub(crate) fn get_complex_variant_typed_value() -> TypeAnnotatedValue {
+            TypeAnnotatedValue::Variant {
+                case_name: "Foo".to_string(),
+                case_value: Some(Box::new(TypeAnnotatedValue::Option {
+                    value: Some(Box::new(TypeAnnotatedValue::Result {
+                        value: Ok(Some(Box::new(TypeAnnotatedValue::Record {
+                            typ: vec![("id".to_string(), AnalysedType::Str)],
+                            value: vec![(
+                                "id".to_string(),
+                                TypeAnnotatedValue::Str("pId".to_string()),
+                            )],
+                        }))),
+                        ok: Some(Box::new(AnalysedType::Record(vec![(
+                            "id".to_string(),
+                            AnalysedType::Str,
+                        )]))),
+                        error: None,
+                    })),
+                    typ: AnalysedType::Result {
+                        ok: Some(Box::new(AnalysedType::Record(vec![(
+                            "id".to_string(),
+                            AnalysedType::Str,
+                        )]))),
+                        error: None,
+                    },
+                })),
+                typ: vec![
+                    (
+                        "Foo".to_string(),
+                        Some(AnalysedType::Option(Box::new(AnalysedType::Result {
+                            ok: Some(Box::new(AnalysedType::Record(vec![(
+                                "id".to_string(),
+                                AnalysedType::Str,
+                            )]))),
+                            error: None,
+                        }))),
+                    ),
+                    (
+                        "Bar".to_string(),
+                        Some(AnalysedType::Option(Box::new(AnalysedType::Result {
+                            ok: Some(Box::new(AnalysedType::Record(vec![(
+                                "id".to_string(),
+                                AnalysedType::Str,
+                            )]))),
+                            error: None,
+                        }))),
+                    ),
+                ],
+            }
+        }
 
         pub(crate) fn get_err_worker_response() -> WorkerResponse {
             let worker_response_value = get_typed_value_from_json(

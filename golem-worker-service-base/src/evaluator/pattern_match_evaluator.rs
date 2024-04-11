@@ -125,9 +125,11 @@ fn evaluate_arm_pattern(
                 binding_variable: Some(BindingVariable(variable.clone())),
                 result: match_expr_result.clone(),
             })),
-            _ => Err(EvaluationError::Message(
-                "Currently only variable pattern is supported".to_string(),
-            )),
+
+            expr => {
+                let arm_pattern = ArmPattern::from_expr(expr.clone());
+                evaluate_arm_pattern(&arm_pattern, match_expr_result)
+            }
         },
     }
 }
