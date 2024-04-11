@@ -22,6 +22,7 @@ pub enum Token {
     LetEqual,
     SemiColon,
     WildCard,
+    At,
 }
 
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
@@ -156,6 +157,7 @@ impl Display for Token {
                 Token::LetEqual => "=",
                 Token::SemiColon => ";",
                 Token::WildCard => "_",
+                Token::At => "@",
                 Token::MultiChar(multi_char) => match multi_char {
                     MultiCharTokens::Else => "else",
                     MultiCharTokens::EqualTo => "==",
@@ -489,6 +491,7 @@ impl<'t> Tokenizer<'t> {
             '_' => Some(Token::WildCard),
             ':' => Some(Token::Colon),
             ';' => Some(Token::SemiColon),
+            '@' => Some(Token::At),
             '=' => self
                 .rest()
                 .chars()

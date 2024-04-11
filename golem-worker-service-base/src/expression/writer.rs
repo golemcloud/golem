@@ -290,7 +290,7 @@ mod internal {
             ArmPattern::WildCard => writer.write_str("_"),
             ArmPattern::As(name, pattern) => {
                 writer.write_str(name)?;
-                writer.write_str(" as ")?;
+                writer.write_str(" @ ")?;
                 write_constructor(pattern, writer)
             }
             ArmPattern::Constructor(constructor_type, variables) => {

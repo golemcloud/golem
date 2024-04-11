@@ -220,8 +220,20 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
 
                 previous_expression.build(expr);
             }
+            Token::WildCard => {
+                return Err(
+                    format!("Wild card at {} is not a valid expression", tokenizer.pos()).into(),
+                )
+            }
+            Token::At => {
+                return Err(format!("@ at {} is not a valid expression", tokenizer.pos()).into())
+            }
 
-            Token::MultiChar(MultiCharTokens::Arrow) => {}
+            Token::MultiChar(MultiCharTokens::Arrow) => {
+                return Err(
+                    format!("Arrow at {} is not a valid expression", tokenizer.pos()).into(),
+                )
+            }
             Token::RCurly => {}
             Token::RSquare => {}
             Token::RParen => {}
@@ -230,7 +242,6 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             Token::LetEqual => {}
             Token::Comma => {}
             Token::Colon => {}
-            Token::WildCard => {}
         }
     }
 

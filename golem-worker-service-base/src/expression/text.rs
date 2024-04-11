@@ -1501,6 +1501,100 @@ mod match_tests {
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
+
+    #[test]
+    fn test_pattern_match_variants_with_alias() {
+        let input_expr = Expr::PatternMatch(
+            Box::new(Expr::Request()),
+            vec![
+                MatchArm((
+                    ArmPattern::As(
+                        "name".to_string(),
+                        Box::new(ArmPattern::from("foo1", vec![ArmPattern::WildCard]).unwrap()),
+                    ),
+                    Box::new(Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string()))))),
+                )),
+                MatchArm((
+                    ArmPattern::from(
+                        "bar",
+                        vec![ArmPattern::Literal(Box::new(Expr::Variable(
+                            "c".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Result(Err(Box::new(Expr::Literal(
+                        "bar".to_string(),
+                    ))))),
+                )),
+            ],
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        dbg!(expr_str.clone());
+        let expected_str =
+            "${match request {  name @ foo1(_) => ok('foo'), bar(c) => err('bar') } }".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_pattern_match_variants_with_nested_alias() {
+        let input_expr = Expr::PatternMatch(
+            Box::new(Expr::Request()),
+            vec![
+                MatchArm((
+                    ArmPattern::As(
+                        "a".to_string(),
+                        Box::new(
+                            ArmPattern::from(
+                                "foo",
+                                vec![ArmPattern::As(
+                                    "b".to_string(),
+                                    Box::new(ArmPattern::WildCard),
+                                )],
+                            )
+                            .unwrap(),
+                        ),
+                    ),
+                    Box::new(Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string()))))),
+                )),
+                MatchArm((
+                    ArmPattern::As(
+                        "c".to_string(),
+                        Box::new(
+                            ArmPattern::from(
+                                "bar",
+                                vec![ArmPattern::As(
+                                    "d".to_string(),
+                                    Box::new(
+                                        ArmPattern::from(
+                                            "baz",
+                                            vec![ArmPattern::Literal(Box::new(Expr::Variable(
+                                                "x".to_string(),
+                                            )))],
+                                        )
+                                        .unwrap(),
+                                    ),
+                                )],
+                            )
+                            .unwrap(),
+                        ),
+                    ),
+                    Box::new(Expr::Result(Err(Box::new(Expr::Literal(
+                        "bar".to_string(),
+                    ))))),
+                )),
+            ],
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        dbg!(expr_str.clone());
+        let expected_str =
+            "${match request {  a @ foo(b @ _) => ok('foo'), c @ bar(d @ baz(x)) => err('bar') } }"
+                .to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
 }
 
 #[cfg(test)]
