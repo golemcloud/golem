@@ -55,8 +55,17 @@ where
 }
 
 pub struct WorkerGrpcApi {
-    pub template_service: TemplateService,
-    pub worker_service: WorkerService,
+    template_service: TemplateService,
+    worker_service: WorkerService,
+}
+
+impl WorkerGrpcApi {
+    pub fn new(template_service: TemplateService, worker_service: WorkerService) -> Self {
+        Self {
+            template_service,
+            worker_service,
+        }
+    }
 }
 
 #[async_trait::async_trait]

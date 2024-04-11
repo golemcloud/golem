@@ -16,14 +16,13 @@ use crate::error::GolemError;
 use crate::services::rpc::RpcError;
 use anyhow::anyhow;
 use bincode::{Decode, Encode};
-use serde::{Deserialize, Serialize};
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
 use wasmtime_wasi::preview2::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::preview2::bindings::{filesystem, sockets};
 use wasmtime_wasi::preview2::{FsError, SocketError, StreamError};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode)]
 pub struct SerializableDateTime {
     seconds: u64,
     nanoseconds: u32,
@@ -79,7 +78,7 @@ impl From<cap_std::time::SystemTime> for SerializableDateTime {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode)]
 pub enum SerializableError {
     Generic { message: String },
     FsError { code: u8 },
@@ -406,7 +405,7 @@ impl From<SerializableError> for RpcError {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode)]
 pub enum SerializableStreamError {
     Closed,
     LastOperationFailed(SerializableError),
@@ -439,7 +438,7 @@ impl From<GolemError> for SerializableStreamError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum SerializableIpAddress {
     IPv4 { address: [u8; 4] },
     IPv6 { address: [u16; 8] },
@@ -475,7 +474,7 @@ impl From<SerializableIpAddress> for IpAddress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct SerializableIpAddresses(Vec<SerializableIpAddress>);
 
 impl From<Vec<IpAddress>> for SerializableIpAddresses {
@@ -490,7 +489,7 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode)]
 pub struct SerializableFileTimes {
     pub data_access_timestamp: Option<SerializableDateTime>,
     pub data_modification_timestamp: Option<SerializableDateTime>,

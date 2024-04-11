@@ -14,10 +14,9 @@
 
 use bincode::{Decode, Encode};
 use bytes::{BufMut, Bytes, BytesMut};
-use serde::de::DeserializeOwned;
 use tracing::error;
 
-/// serde_json
+/// serde_json - no longer supported
 pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
 /// bincode 2 with bincode::config::standard()
@@ -32,12 +31,12 @@ pub fn serialize<T: Encode>(value: &T) -> Result<Bytes, String> {
     Ok(bytes.freeze())
 }
 
-pub fn deserialize<T: DeserializeOwned + Decode>(bytes: &[u8]) -> Result<T, String> {
+pub fn deserialize<T: Decode>(bytes: &[u8]) -> Result<T, String> {
     let (version, data) = bytes.split_at(1);
     deserialize_with_version(data, version[0])
 }
 
-pub fn try_deserialize<T: DeserializeOwned + Decode>(bytes: &[u8]) -> Result<Option<T>, String> {
+pub fn try_deserialize<T: Decode>(bytes: &[u8]) -> Result<Option<T>, String> {
     if bytes.is_empty() {
         Ok(None)
     } else {
@@ -46,10 +45,7 @@ pub fn try_deserialize<T: DeserializeOwned + Decode>(bytes: &[u8]) -> Result<Opt
     }
 }
 
-pub fn deserialize_with_version<T: DeserializeOwned + Decode>(
-    data: &[u8],
-    version: u8,
-) -> Result<T, String> {
+pub fn deserialize_with_version<T: Decode>(data: &[u8], version: u8) -> Result<T, String> {
     match try_deserialize_with_version(data, version)? {
         Some(value) => Ok(value),
         None => {
@@ -62,15 +58,13 @@ pub fn deserialize_with_version<T: DeserializeOwned + Decode>(
     }
 }
 
-pub fn try_deserialize_with_version<T: DeserializeOwned + Decode>(
+pub fn try_deserialize_with_version<T: Decode>(
     data: &[u8],
     version: u8,
 ) -> Result<Option<T>, String> {
     match version {
         SERIALIZATION_VERSION_V1 => {
-            let value = serde_json::from_slice(data)
-                .map_err(|e| format!("Failed to deserialize value: {e}"))?;
-            Ok(Some(value))
+            panic!("Support for v1 serialization format has been dropped");
         }
         SERIALIZATION_VERSION_V2 => {
             let (entry, _) = bincode::decode_from_slice(data, bincode::config::standard())
@@ -120,18 +114,6 @@ mod tests {
             let example = Example::random(&mut rng);
             let serialized = super::serialize(&example).unwrap();
             let deserialized = super::deserialize(&serialized).unwrap();
-            assert_eq!(example, deserialized);
-        }
-    }
-
-    #[test]
-    pub fn from_v1() {
-        let mut rng = rand::thread_rng();
-        for _ in 0..1000 {
-            let example = Example::random(&mut rng);
-            let serialized = serde_json::to_vec(&example).unwrap();
-            let prefixed = [vec![1], serialized].concat();
-            let deserialized = super::deserialize(&prefixed).unwrap();
             assert_eq!(example, deserialized);
         }
     }

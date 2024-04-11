@@ -5,7 +5,6 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
-use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
@@ -39,10 +38,9 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
             )
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
-        SerializedSuccess: Encode + Decode + DeserializeOwned + Debug + Send + Sync,
+        SerializedSuccess: Encode + Decode + Debug + Send + Sync,
         SerializedErr: Encode
             + Decode
-            + DeserializeOwned
             + for<'b> From<&'b Err>
             + From<GolemError>
             + Into<Err>
@@ -85,17 +83,9 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
             )
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
-        SerializedSuccess: Encode
-            + Decode
-            + DeserializeOwned
-            + From<Success>
-            + Into<Success>
-            + Debug
-            + Send
-            + Sync,
+        SerializedSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send + Sync,
         SerializedErr: Encode
             + Decode
-            + DeserializeOwned
             + for<'b> From<&'b Err>
             + From<GolemError>
             + Into<Err>
@@ -132,15 +122,9 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             )
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
-        SerializedSuccess: Encode + Decode + DeserializeOwned + Debug + Send,
-        SerializedErr: Encode
-            + Decode
-            + DeserializeOwned
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug
-            + Send,
+        SerializedSuccess: Encode + Decode + Debug + Send,
+        SerializedErr:
+            Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send,
     {
         self.state.consume_hint_entries().await;
         let begin_index = self
@@ -169,7 +153,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
                 crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)
                     .map_err(|err| Into::<SerializedErr>::into(err).into())?;
             let response = oplog_entry
-                .response::<Result<SerializedSuccess, SerializedErr>>()
+                .payload::<Result<SerializedSuccess, SerializedErr>>()
                 .unwrap_or_else(|err| {
                     panic!(
                         "failed to deserialize function response: {:?}: {err}",
@@ -207,16 +191,9 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             )
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
-        SerializedSuccess:
-            Encode + Decode + DeserializeOwned + From<Success> + Into<Success> + Debug + Send,
-        SerializedErr: Encode
-            + Decode
-            + DeserializeOwned
-            + for<'b> From<&'b Err>
-            + From<GolemError>
-            + Into<Err>
-            + Debug
-            + Send,
+        SerializedSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send,
+        SerializedErr:
+            Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send,
     {
         self.state.consume_hint_entries().await;
         let begin_index = self
@@ -245,7 +222,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
                 crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)
                     .map_err(|err| Into::<SerializedErr>::into(err).into())?;
             let response = oplog_entry
-                .response::<Result<SerializedSuccess, SerializedErr>>()
+                .payload::<Result<SerializedSuccess, SerializedErr>>()
                 .unwrap_or_else(|err| {
                     panic!(
                         "failed to deserialize function response: {:?}: {err}",

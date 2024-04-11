@@ -602,7 +602,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             let oplog_entry = get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
 
             let serialized_response = oplog_entry
-                .response::<SerializableResponse>()
+                .payload::<SerializableResponse>()
                 .unwrap_or_else(|err| {
                     panic!(
                         "failed to deserialize function response: {:?}: {err}",

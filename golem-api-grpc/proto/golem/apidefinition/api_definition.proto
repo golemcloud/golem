@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package golem.apidefinition;
+
+import "golem/template/template_id.proto";
+
+message ApiDefinition {
+  ApiDefinitionId id = 1;
+  string version = 2;
+  oneof definition {
+    HttpApiDefinition http = 3;
+  }
+}
+
+message ApiDefinitionList {
+  repeated ApiDefinition definitions = 1;
+}
+
+message HttpApiDefinition {
+  repeated HttpRoute routes = 1;
+}
+
+message ApiDefinitionId {
+  string value = 1;
+}
+
+message HttpRoute {
+  HttpMethod method = 1;
+  string path = 2;
+  WorkerBinding binding = 3;
+}
+
+enum HttpMethod {
+  GET = 0;
+  CONNECT = 1;
+  POST = 2;
+  DELETE = 3;
+  PUT = 4;
+  PATCH = 5;
+  OPTIONS = 6;
+  TRACE = 7;
+  HEAD = 8;
+}
+
+message WorkerBinding {
+  golem.template.TemplateId template = 1;
+  string worker_id = 2;
+  string function_name = 3;
+  repeated string function_params = 4;
+  optional string response = 5;
+}

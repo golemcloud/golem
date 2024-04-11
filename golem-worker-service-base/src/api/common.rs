@@ -89,6 +89,11 @@ impl ApiEndpointError {
 }
 
 mod conversion {
+    use golem_api_grpc::proto::golem::{
+        apidefinition,
+        apidefinition::{api_definition_error, ApiDefinitionError, RouteValidationErrorsBody},
+        common::ErrorBody,
+    };
     use poem_openapi::payload::Json;
 
     use crate::repo::api_definition_repo::ApiRegistrationRepoError;
@@ -136,6 +141,47 @@ mod conversion {
             });
 
             ApiEndpointError::BadRequest(Json(error))
+        }
+    }
+
+    impl From<ApiRegistrationError<RouteValidationError>> for ApiDefinitionError {
+        fn from(error: ApiRegistrationError<RouteValidationError>) -> ApiDefinitionError {
+            match error {
+                ApiRegistrationError::RepoError(error) => match error {
+                    ApiRegistrationRepoError::AlreadyExists(_) => ApiDefinitionError {
+                        error: Some(api_definition_error::Error::AlreadyExists(ErrorBody {
+                            error: error.to_string(),
+                        })),
+                    },
+                    ApiRegistrationRepoError::InternalError(_) => ApiDefinitionError {
+                        error: Some(api_definition_error::Error::InternalError(ErrorBody {
+                            error: error.to_string(),
+                        })),
+                    },
+                },
+                ApiRegistrationError::ValidationError(e) => {
+                    let errors = e
+                        .errors
+                        .into_iter()
+                        .map(|r| apidefinition::RouteValidationError {
+                            method: r.method.to_string(),
+                            path: r.path.to_string(),
+                            template: Some(r.template.into()),
+                            detail: r.detail,
+                        })
+                        .collect();
+                    ApiDefinitionError {
+                        error: Some(api_definition_error::Error::InvalidRoutes(
+                            RouteValidationErrorsBody { errors },
+                        )),
+                    }
+                }
+                ApiRegistrationError::TemplateNotFoundError(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::NotFound(ErrorBody {
+                        error: error.to_string(),
+                    })),
+                },
+            }
         }
     }
 }

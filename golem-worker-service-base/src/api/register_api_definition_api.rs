@@ -9,6 +9,7 @@ use crate::api_definition::http::MethodPattern;
 use crate::api_definition::{ApiDefinitionId, ApiVersion};
 use crate::expression;
 use crate::expression::Expr;
+use crate::parser::ParseError;
 
 // Mostly this data structures that represents the actual incoming request
 // exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.
@@ -165,5 +166,190 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             function_params,
             response,
         })
+    }
+}
+
+use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
+
+impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinition::ApiDefinition {
+    type Error = String;
+
+    fn try_from(
+        value: crate::api_definition::http::HttpApiDefinition,
+    ) -> Result<Self, Self::Error> {
+        let routes = value
+            .routes
+            .into_iter()
+            .map(grpc_apidefinition::HttpRoute::try_from)
+            .collect::<Result<Vec<grpc_apidefinition::HttpRoute>, String>>()?;
+
+        let id = value.id.0;
+
+        let definition = grpc_apidefinition::HttpApiDefinition { routes };
+
+        let result = grpc_apidefinition::ApiDefinition {
+            id: Some(grpc_apidefinition::ApiDefinitionId { value: id }),
+            version: value.version.0,
+            definition: Some(grpc_apidefinition::api_definition::Definition::Http(
+                definition,
+            )),
+        };
+
+        Ok(result)
+    }
+}
+
+impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http::HttpApiDefinition {
+    type Error = String;
+
+    fn try_from(value: grpc_apidefinition::ApiDefinition) -> Result<Self, Self::Error> {
+        let routes = match value.definition.ok_or("definition is missing")? {
+            grpc_apidefinition::api_definition::Definition::Http(http) => http
+                .routes
+                .into_iter()
+                .map(crate::api_definition::http::Route::try_from)
+                .collect::<Result<Vec<crate::api_definition::http::Route>, String>>()?,
+        };
+
+        let id = value.id.ok_or("Api Definition ID is missing")?;
+
+        let result = crate::api_definition::http::HttpApiDefinition {
+            id: crate::api_definition::ApiDefinitionId(id.value),
+            version: crate::api_definition::ApiVersion(value.version),
+            routes,
+        };
+
+        Ok(result)
+    }
+}
+
+impl TryFrom<crate::api_definition::http::Route> for grpc_apidefinition::HttpRoute {
+    type Error = String;
+
+    fn try_from(value: crate::api_definition::http::Route) -> Result<Self, Self::Error> {
+        let path = value.path.to_string();
+        let binding = grpc_apidefinition::WorkerBinding::try_from(value.binding)?;
+        let method: grpc_apidefinition::HttpMethod = value.method.into();
+
+        let result = grpc_apidefinition::HttpRoute {
+            method: method as i32,
+            path,
+            binding: Some(binding),
+        };
+
+        Ok(result)
+    }
+}
+
+impl From<MethodPattern> for grpc_apidefinition::HttpMethod {
+    fn from(value: MethodPattern) -> Self {
+        match value {
+            MethodPattern::Get => grpc_apidefinition::HttpMethod::Get,
+            MethodPattern::Post => grpc_apidefinition::HttpMethod::Post,
+            MethodPattern::Put => grpc_apidefinition::HttpMethod::Put,
+            MethodPattern::Delete => grpc_apidefinition::HttpMethod::Delete,
+            MethodPattern::Patch => grpc_apidefinition::HttpMethod::Patch,
+            MethodPattern::Head => grpc_apidefinition::HttpMethod::Head,
+            MethodPattern::Options => grpc_apidefinition::HttpMethod::Options,
+            MethodPattern::Trace => grpc_apidefinition::HttpMethod::Trace,
+            MethodPattern::Connect => grpc_apidefinition::HttpMethod::Connect,
+        }
+    }
+}
+
+impl TryFrom<grpc_apidefinition::HttpRoute> for crate::api_definition::http::Route {
+    type Error = String;
+
+    fn try_from(value: grpc_apidefinition::HttpRoute) -> Result<Self, Self::Error> {
+        let path = crate::api_definition::http::AllPathPatterns::parse(value.path.as_str())
+            .map_err(|e| e.to_string())?;
+        let binding = value.binding.ok_or("binding is missing")?.try_into()?;
+
+        let method: MethodPattern = value.method.try_into()?;
+
+        let result = crate::api_definition::http::Route {
+            method,
+            path,
+            binding,
+        };
+
+        Ok(result)
+    }
+}
+
+impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::WorkerBinding {
+    type Error = String;
+
+    fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
+        let response: Option<String> = match value.response {
+            Some(v) => {
+                let r = v.0.to_string().map_err(|e| e.to_string())?;
+                Some(r)
+            }
+            None => None,
+        };
+
+        let worker_id = expression::to_string(&value.worker_id).map_err(|e| e.to_string())?;
+        let function_params = value
+            .function_params
+            .into_iter()
+            .map(|p| expression::to_string(&p).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<String>, String>>()?;
+
+        let result = grpc_apidefinition::WorkerBinding {
+            template: Some(value.template.into()),
+            worker_id,
+            function_name: value.function_name,
+            function_params,
+            response,
+        };
+
+        Ok(result)
+    }
+}
+
+impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::GolemWorkerBinding {
+    type Error = String;
+
+    fn try_from(value: grpc_apidefinition::WorkerBinding) -> Result<Self, Self::Error> {
+        let response: Option<crate::worker_binding::ResponseMapping> = match value.response {
+            Some(v) => {
+                let r: Expr = v.parse().map_err(|e: ParseError| e.to_string())?;
+                Some(crate::worker_binding::ResponseMapping(r))
+            }
+            None => None,
+        };
+
+        let worker_id = value
+            .worker_id
+            .parse()
+            .map_err(|e: ParseError| e.to_string())?;
+
+        let function_params: Vec<Expr> = value
+            .function_params
+            .into_iter()
+            .map(|p| p.parse().map_err(|e: ParseError| e.to_string()))
+            .collect::<Result<_, String>>()?;
+
+        let template_id = value.template.ok_or("template is missing")?.try_into()?;
+
+        let result = crate::worker_binding::GolemWorkerBinding {
+            template: template_id,
+            worker_id,
+            function_name: value.function_name,
+            function_params,
+            response,
+        };
+
+        Ok(result)
+    }
+}
+
+#[test]
+fn test_method_pattern() {
+    for method in 0..8 {
+        let method_pattern: MethodPattern = method.try_into().unwrap();
+        let method_grpc: grpc_apidefinition::HttpMethod = method_pattern.into();
+        assert_eq!(method, method_grpc as i32);
     }
 }

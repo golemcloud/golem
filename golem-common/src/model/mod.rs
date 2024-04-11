@@ -614,7 +614,7 @@ impl WorkerMetadata {
 /// This status is just cached information, all fields must be computable by the oplog alone.
 /// By having an associated oplog_idx, the cached information can be used together with the
 /// tail of the oplog to determine the actual status of the worker.
-#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, Encode, Decode)]
 pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
     pub deleted_regions: DeletedRegions,
@@ -673,14 +673,14 @@ impl FromStr for WorkerStatus {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Running" => Ok(WorkerStatus::Running),
-            "Idle" => Ok(WorkerStatus::Idle),
-            "Suspended" => Ok(WorkerStatus::Suspended),
-            "Interrupted" => Ok(WorkerStatus::Interrupted),
-            "Retrying" => Ok(WorkerStatus::Retrying),
-            "Failed" => Ok(WorkerStatus::Failed),
-            "Exited" => Ok(WorkerStatus::Exited),
+        match s.to_lowercase().as_str() {
+            "running" => Ok(WorkerStatus::Running),
+            "idle" => Ok(WorkerStatus::Idle),
+            "suspended" => Ok(WorkerStatus::Suspended),
+            "interrupted" => Ok(WorkerStatus::Interrupted),
+            "retrying" => Ok(WorkerStatus::Retrying),
+            "failed" => Ok(WorkerStatus::Failed),
+            "exited" => Ok(WorkerStatus::Exited),
             _ => Err(format!("Unknown worker status: {}", s)),
         }
     }
@@ -1232,7 +1232,7 @@ impl FromStr for WorkerFilter {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let elements = s.split(' ').collect::<Vec<&str>>();
+        let elements = s.split_whitespace().collect::<Vec<&str>>();
 
         if elements.len() == 3 {
             let arg = elements[0];
@@ -1253,7 +1253,7 @@ impl FromStr for WorkerFilter {
                     comparator.parse()?,
                     value.parse()?,
                 )),
-                "created_at" => Ok(WorkerFilter::new_created_at(
+                "created_at" | "createdAt" => Ok(WorkerFilter::new_created_at(
                     comparator.parse()?,
                     value.parse()?,
                 )),
@@ -1760,7 +1760,7 @@ mod tests {
     #[test]
     fn worker_filter_parse() {
         assert_eq!(
-            WorkerFilter::from_str("name == worker-1").unwrap(),
+            WorkerFilter::from_str(" name =  worker-1").unwrap(),
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
         );
 
@@ -1775,7 +1775,7 @@ mod tests {
         );
 
         assert_eq!(
-            WorkerFilter::from_str("env.tag1 == abc").unwrap(),
+            WorkerFilter::from_str("env.tag1 == abc ").unwrap(),
             WorkerFilter::new_env(
                 "tag1".to_string(),
                 StringFilterComparator::Equal,
