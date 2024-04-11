@@ -283,8 +283,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
         let response: Option<String> = match value.response {
             Some(v) => {
-                let r = v.0.to_string().map_err(|e| e.to_string())?;
-                Some(r)
+                Some(v.0.to_string())
             }
             None => None,
         };
