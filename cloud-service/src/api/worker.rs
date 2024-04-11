@@ -194,7 +194,11 @@ impl WorkerApi {
     /// - `name` is the name of the created worker. This has to be unique, but only for a given template
     /// - `args` is a list of strings which appear as command line arguments for the worker
     /// - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
-    #[oai(path = "/:template_id/workers", method = "post")]
+    #[oai(
+        path = "/:template_id/workers",
+        method = "post",
+        operation_id = "launch_new_worker"
+    )]
     async fn launch_new_worker(
         &self,
         template_id: Path<TemplateId>,
@@ -234,7 +238,11 @@ impl WorkerApi {
     /// Delete a worker
     ///
     /// Interrupts and deletes an existing worker.
-    #[oai(path = "/:template_id/workers/:worker_name", method = "delete")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name",
+        method = "delete",
+        operation_id = "delete_worker"
+    )]
     async fn delete_worker(
         &self,
         template_id: Path<TemplateId>,
@@ -253,7 +261,11 @@ impl WorkerApi {
     ///
     /// Creates an invocation key for a given worker.
     /// An invocation key is passed to the below defined invoke APIs to guarantee that retrying those invocations only performs the operation on the worker once.
-    #[oai(path = "/:template_id/workers/:worker_name/key", method = "post")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name/key",
+        method = "post",
+        operation_id = "get_invocation_key"
+    )]
     async fn get_invocation_key(
         &self,
         template_id: Path<TemplateId>,
@@ -276,7 +288,8 @@ impl WorkerApi {
     /// Supply the parameters in the request body as JSON.
     #[oai(
         path = "/:template_id/workers/:worker_name/invoke-and-await",
-        method = "post"
+        method = "post",
+        operation_id = "invoke_and_await_function"
     )]
     async fn invoke_and_await_function(
         &self,
@@ -319,7 +332,11 @@ impl WorkerApi {
     ///
     /// A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns. Custom calling convention and invocation key is not supported.
     /// To understand how to get the function name and how to encode the function parameters check Template interface
-    #[oai(path = "/:template_id/workers/:worker_name/invoke", method = "post")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name/invoke",
+        method = "post",
+        operation_id = "invoke_function"
+    )]
     async fn invoke_function(
         &self,
         template_id: Path<TemplateId>,
@@ -344,7 +361,11 @@ impl WorkerApi {
     /// Completes a promise with a given custom array of bytes.
     /// The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
     /// The data field is sent back to the worker and it has no predefined meaning.
-    #[oai(path = "/:template_id/workers/:worker_name/complete", method = "post")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name/complete",
+        method = "post",
+        operation_id = "complete_promise"
+    )]
     async fn complete_promise(
         &self,
         template_id: Path<TemplateId>,
@@ -370,7 +391,11 @@ impl WorkerApi {
     /// The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
     /// An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
     /// For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
-    #[oai(path = "/:template_id/workers/:worker_name/interrupt", method = "post")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name/interrupt",
+        method = "post",
+        operation_id = "interrupt_worker"
+    )]
     async fn interrupt_worker(
         &self,
         template_id: Path<TemplateId>,
@@ -407,7 +432,11 @@ impl WorkerApi {
     ///     - `Retrying` if the worker failed, and an automatic retry was scheduled for it
     ///     - `Failed` if the worker failed and there are no more retries scheduled for it
     ///     - `Exited` if the worker explicitly exited using the exit WASI function
-    #[oai(path = "/:template_id/workers/:worker_name", method = "get")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name",
+        method = "get",
+        operation_id = "get_worker_metadata"
+    )]
     async fn get_worker_metadata(
         &self,
         template_id: Path<TemplateId>,
@@ -498,7 +527,11 @@ impl WorkerApi {
     }
 
     /// Resume a worker
-    #[oai(path = "/:template_id/workers/:worker_name/resume", method = "post")]
+    #[oai(
+        path = "/:template_id/workers/:worker_name/resume",
+        method = "post",
+        operation_id = "resume_worker"
+    )]
     async fn resume_worker(
         &self,
         template_id: Path<TemplateId>,
