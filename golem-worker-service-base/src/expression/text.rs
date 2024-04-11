@@ -1454,6 +1454,45 @@ mod match_tests {
     }
 
     #[test]
+    fn test_pattern_match_empty_with_nested_constructor_patterns() {
+        let input_expr = Expr::PatternMatch(
+            Box::new(Expr::Request()),
+            vec![
+                PatternMatchArm((
+                    ConstructorPattern::constructor(
+                        "foo",
+                        vec![ConstructorPattern::constructor(
+                            "bar",
+                            vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                                "v1".to_string(),
+                            )))],
+                        )
+                        .unwrap()],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Literal("success".to_string())),
+                )),
+                PatternMatchArm((
+                    ConstructorPattern::constructor(
+                        "bar",
+                        vec![ConstructorPattern::Literal(Box::new(Expr::Variable(
+                            "c".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Literal("failure".to_string())),
+                )),
+            ],
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${match request {  foo(bar(v1)) => 'success', bar(c) => 'failure' } }".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
     fn test_pattern_match_variants_in_arm_rhs() {
         let input_expr = Expr::PatternMatch(
             Box::new(Expr::Request()),

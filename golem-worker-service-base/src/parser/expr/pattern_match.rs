@@ -5,21 +5,16 @@ use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
 pub(crate) fn create_pattern_match_expr(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
-    if let Some(match_expr_str) = tokenizer.capture_string_until(&Token::LCurly) {
-        let match_expression = parse_code(match_expr_str.as_str())?;
-        tokenizer.skip_next_non_empty_token(); // Skip LCurly
-        let constructors = get_arms(tokenizer)?;
-        Ok(Expr::PatternMatch(Box::new(match_expression), constructors))
-    } else {
-        Err(ParseError::Message(
-            "Expecting a valid expression after match".to_string(),
-        ))
-    }
+    let match_expr_str = tokenizer.capture_string_until(&Token::LCurly)
+        .ok_or_else(|| ParseError::Message("Expecting a valid expression after match".to_string()))?;
+
+    let match_expression = parse_code(match_expr_str.as_str())?;
+    tokenizer.skip_next_non_empty_token(); // Skip LCurly
+    let constructors = get_arms(tokenizer)?;
+    Ok(Expr::PatternMatch(Box::new(match_expression), constructors))
 }
 
-// To parse collection of terms under match expression
-// Ex: some(x) => x
-// Handles Ok, Err, Some, None
+
 pub(crate) fn get_arms(tokenizer: &mut Tokenizer) -> Result<Vec<PatternMatchArm>, ParseError> {
     let mut constructor_patterns: Vec<PatternMatchArm> = vec![];
 
@@ -51,50 +46,24 @@ fn accumulate_arms<F>(
     collected_exprs: &mut Vec<PatternMatchArm>,
     accumulator: F,
 ) -> Result<(), ParseError>
-where
-    F: FnOnce(&mut Tokenizer, &mut Vec<PatternMatchArm>) -> Result<(), ParseError>,
+    where
+        F: FnOnce(&mut Tokenizer, &mut Vec<PatternMatchArm>) -> Result<(), ParseError>,
 {
     match tokenizer.next_non_empty_token() {
         Some(Token::MultiChar(MultiCharTokens::Arrow)) => {
-            let index_of_closed_curly_brace = tokenizer.index_of_end_token(&Token::RCurly);
-            let index_of_commaseparator = tokenizer.index_of_end_token(&Token::Comma);
+            if let Some((end_token, captured_string)) = tokenizer.capture_string_until_either(&Token::Comma, &Token::RCurly) {
+                let individual_expr = parse_code(captured_string)
+                    .map(|expr| PatternMatchArm((constructor_pattern, Box::new(expr))))?;
+                collected_exprs.push(individual_expr);
 
-            match (index_of_closed_curly_brace, index_of_commaseparator) {
-                (Some(end_of_constructors), Some(comma)) => {
-                    if end_of_constructors > comma {
-                        let captured_string = tokenizer.capture_string_until(&Token::Comma);
-
-                        let individual_expr = parse_code(captured_string.unwrap().as_str())
-                            .map(|expr| PatternMatchArm((constructor_pattern, Box::new(expr))))?;
-                        collected_exprs.push(individual_expr);
-                        tokenizer.next_non_empty_token(); // Skip CommaSeparator
-                        accumulator(tokenizer, collected_exprs)
-                    } else {
-                        // End of constructor
-                        let captured_string = tokenizer.capture_string_until(&Token::RCurly);
-                        let individual_expr = parse_code(captured_string.unwrap().as_str())
-                            .map(|expr| PatternMatchArm((constructor_pattern, Box::new(expr))))?;
-                        collected_exprs.push(individual_expr);
-                        Ok(())
-                    }
-                }
-
-                // Last constructor
-                (Some(_), None) => {
-                    let captured_string = tokenizer.capture_string_until(&Token::RCurly);
-
-                    if let Some(captured_string) = captured_string {
-                        let individual_expr = parse_code(captured_string.as_str())
-                            .map(|expr| PatternMatchArm((constructor_pattern, Box::new(expr))))?;
-                        collected_exprs.push(individual_expr);
-                    }
-
+                if end_token == &Token::RCurly {
                     Ok(())
+                } else {
+                    tokenizer.skip_next_non_empty_token(); // Skip comma
+                    accumulator(tokenizer, collected_exprs)
                 }
-
-                _ => Err(ParseError::Message(
-                    "Invalid constructor pattern".to_string(),
-                )),
+            } else {
+                Ok(())
             }
         }
         _ => Err(ParseError::Message(

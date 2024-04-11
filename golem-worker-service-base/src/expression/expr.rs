@@ -34,7 +34,7 @@ pub enum Expr {
     LessThan(Box<Expr>, Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
     PatternMatch(Box<Expr>, Vec<PatternMatchArm>),
-    Constructor0(ConstructorPattern), // Can exist standalone from pattern match
+    Constructor0(ConstructorPattern),
 }
 
 impl Expr {
@@ -71,7 +71,9 @@ impl Display for InnerNumber {
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct PatternMatchArm(pub (ConstructorPattern, Box<Expr>));
 
-// A constructor pattern by itself is an expr,
+// Person(Ok(Some(age)) is
+// Constructor(Person, vec![Constructor(Ok, vec![Constructor(Some, vec![Literal(Expr::Variable(age))])])])
+// and age becomes the binding variable
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum ConstructorPattern {
     WildCard,
@@ -81,6 +83,13 @@ pub enum ConstructorPattern {
 }
 
 impl ConstructorPattern {
+    pub fn from_expr(expr: Expr) -> ConstructorPattern {
+        match expr {
+            Expr::Constructor0(constructor_pattern) => constructor_pattern,
+            _ => ConstructorPattern::Literal(Box::new(expr)),
+        }
+    }
+
     pub fn constructor(
         constructor_name: &str,
         variables: Vec<ConstructorPattern>,
