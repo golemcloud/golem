@@ -327,20 +327,20 @@ impl Evaluator for Expr {
 mod tests {
     use std::str::FromStr;
 
+    use golem_service_base::type_inference::infer_analysed_type;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, Uri};
     use serde_json::{json, Value};
-    use golem_service_base::type_inference::infer_analysed_type;
 
     use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expression;
     use crate::merge::Merge;
-    use test_utils::*;
     use crate::worker_bridge_execution::WorkerResponse;
+    use test_utils::*;
 
     #[test]
     fn test_evaluation_with_request_path() {
@@ -613,15 +613,20 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_optional() {
-        let value: Value = serde_json::from_str(r#"
+        let value: Value = serde_json::from_str(
+            r#"
                         {
 
                            "id": "pId"
                         }
-                   "#,).expect("Failed to parse json");
+                   "#,
+        )
+        .expect("Failed to parse json");
 
         let expected_type = infer_analysed_type(&value);
-        let result_as_typed_value = get_typed_value_from_json(&value, &AnalysedType::Option(Box::new(expected_type))).unwrap();
+        let result_as_typed_value =
+            get_typed_value_from_json(&value, &AnalysedType::Option(Box::new(expected_type)))
+                .unwrap();
         let worker_response = WorkerResponse {
             result: result_as_typed_value,
         };
@@ -1084,7 +1089,6 @@ mod tests {
 
         assert_eq!(result, expected);
     }
-
 
     mod test_utils {
         use crate::api_definition::http::{AllPathPatterns, PathPattern};
