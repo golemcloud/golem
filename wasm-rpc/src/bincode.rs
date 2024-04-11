@@ -4,6 +4,26 @@ use bincode::enc::Encoder;
 use bincode::error::{AllowedEnumVariants, DecodeError, EncodeError};
 use bincode::*;
 
+impl Encode for Uri {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        self.value.encode(encoder)
+    }
+}
+
+impl Decode for Uri {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let value = String::decode(decoder)?;
+        Ok(Uri { value })
+    }
+}
+
+impl<'de> BorrowDecode<'de> for Uri {
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let value = String::borrow_decode(decoder)?;
+        Ok(Uri { value })
+    }
+}
+
 impl Encode for WitValue {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
         self.nodes.encode(encoder)
@@ -342,12 +362,19 @@ mod tests {
             cases: CASES, .. ProptestConfig::default()
         })]
         #[test]
-        fn round_trip(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(v))) {
+        fn round_trip_wit_value(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(v))) {
             let wit_value: WitValue = value.clone().into();
             let encoded = bincode::encode_to_vec(wit_value, bincode::config::standard()).unwrap();
             let (decoded, _): (WitValue, usize) = bincode::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
             let round_trip_value: Value = decoded.into();
             prop_assert_eq!(value, round_trip_value);
+        }
+
+        #[test]
+        fn round_trip_value(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(v))) {
+            let encoded = bincode::encode_to_vec(value.clone(), bincode::config::standard()).unwrap();
+            let (decoded, _): (Value, usize) = bincode::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
+            prop_assert_eq!(value, decoded);
         }
     }
 }

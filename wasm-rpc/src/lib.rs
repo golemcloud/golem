@@ -103,6 +103,7 @@ impl PartialEq for Uri {
 /// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bincode", derive(::bincode::Encode, ::bincode::Decode))]
 pub enum Value {
     Bool(bool),
     U8(u8),
