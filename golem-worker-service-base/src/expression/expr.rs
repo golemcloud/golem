@@ -201,16 +201,6 @@ impl Expr {
             _ => false,
         }
     }
-
-    // A primitive string can be converted to Expr. Not that if the string is already as complex as yaml or json, use functions such as Expr::from_yaml_value, Expr::from_json_value
-    pub fn from_str(input: &str) -> Result<Expr, ParseError> {
-        let expr_parser = ExprParser {};
-        expr_parser.parse(input)
-    }
-
-    pub fn to_string(&self) -> Result<String, String> {
-        expression::to_string(self).map_err(|x| x.to_string())
-    }
 }
 
 impl FromStr for Expr {
@@ -219,6 +209,12 @@ impl FromStr for Expr {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let expr_parser = ExprParser {};
         expr_parser.parse(s)
+    }
+}
+
+impl Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", expression::to_string(self).unwrap())
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::expression::{ConstructorPattern, Expr};
+use crate::expression::{ConstructorPattern};
 use crate::parser::{expr_parser::parse_code, ParseError};
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
@@ -46,6 +46,5 @@ fn collect_construction_variables(
         }
     }
 
-    dbg!(construction_variables.clone());
     Ok(construction_variables)
 }

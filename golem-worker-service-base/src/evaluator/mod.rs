@@ -1501,7 +1501,7 @@ mod tests {
                 .evaluate(&worker_response.result_with_worker_response_key())
                 .unwrap();
 
-            let expr2_string = expr1.to_string().unwrap();
+            let expr2_string = expr1.to_string();
             let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
             let value2 = expr2
                 .evaluate(&worker_response.result_with_worker_response_key())
@@ -1522,7 +1522,7 @@ mod tests {
                 .evaluate(&worker_response.result_with_worker_response_key())
                 .unwrap();
 
-            let expr2_string = expr1.to_string().unwrap();
+            let expr2_string = expr1.to_string();
             let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
             let value2 = expr2
                 .evaluate(&worker_response.result_with_worker_response_key())
@@ -1543,7 +1543,7 @@ mod tests {
                 .evaluate(&worker_response.result_with_worker_response_key())
                 .unwrap();
 
-            let expr2_string = expr1.to_string().unwrap();
+            let expr2_string = expr1.to_string();
             let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
             let value2 = expr2
                 .evaluate(&worker_response.result_with_worker_response_key())
