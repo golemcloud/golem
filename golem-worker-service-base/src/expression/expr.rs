@@ -105,33 +105,29 @@ impl ArmPattern {
         }
     }
 
-    pub fn constructor(
-        constructor_name: &str,
-        variables: Vec<ArmPattern>,
-    ) -> Result<ArmPattern, ParseError> {
-        if constructor_name == "ok" {
+    pub fn from(pattern_name: &str, variables: Vec<ArmPattern>) -> Result<ArmPattern, ParseError> {
+        if pattern_name == "ok" {
             validate_single_variable_constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Ok),
                 variables,
             )
-        } else if constructor_name == "err" {
+        } else if pattern_name == "err" {
             validate_single_variable_constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Err),
                 variables,
             )
-        } else if constructor_name == "none" {
+        } else if pattern_name == "none" {
             validate_empty_constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::None),
                 variables,
             )
-        } else if constructor_name == "some" {
+        } else if pattern_name == "some" {
             validate_single_variable_constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Some),
                 variables,
             )
         } else {
-            let constructor_type =
-                ConstructorTypeName::CustomConstructor(constructor_name.to_string());
+            let constructor_type = ConstructorTypeName::CustomConstructor(pattern_name.to_string());
             Ok(ArmPattern::Constructor(constructor_type, variables))
         }
     }

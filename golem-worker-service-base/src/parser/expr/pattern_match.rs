@@ -54,7 +54,7 @@ pub(crate) fn get_arm_patterns(tokenizer: &mut Tokenizer) -> Result<ArmPattern, 
         } else {
             Ok(vec![])
         };
-        ArmPattern::constructor(constructor_name.to_string().as_str(), patterns?)
+        ArmPattern::from(constructor_name.to_string().as_str(), patterns?)
     } else {
         Err(ParseError::Message(
             "Expecting a constructor name".to_string(),
