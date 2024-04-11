@@ -5,10 +5,12 @@ use bytes::Bytes;
 
 use crate::config::RetryConfig;
 use crate::model::regions::OplogRegion;
-use crate::model::{AccountId, CallingConvention, InvocationKey, Timestamp, VersionedWorkerId};
+use crate::model::{
+    AccountId, CallingConvention, InvocationKey, Timestamp, VersionedWorkerId, WorkerInvocation,
+};
 use crate::serialization::{serialize, try_deserialize};
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
     Create {
         timestamp: Timestamp,
@@ -84,6 +86,11 @@ pub enum OplogEntry {
     EndRemoteWrite {
         timestamp: Timestamp,
         begin_index: u64,
+    },
+    /// An invocation request arrived while the worker was busy
+    PendingWorkerInvocation {
+        timestamp: Timestamp,
+        invocation: WorkerInvocation,
     },
 }
 
@@ -233,6 +240,7 @@ impl OplogEntry {
                 | OplogEntry::Error { .. }
                 | OplogEntry::Interrupted { .. }
                 | OplogEntry::Exited { .. }
+                | OplogEntry::PendingWorkerInvocation { .. }
         )
     }
 

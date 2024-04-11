@@ -17,10 +17,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
-use golem_common::config::RetryConfig;
 use golem_common::metrics::redis::record_redis_serialized_size;
 use golem_common::model::oplog::OplogEntry;
-use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord};
 use golem_common::redis::RedisPool;
 use tracing::debug;
@@ -44,14 +42,7 @@ pub trait WorkerService {
 
     async fn enumerate(&self) -> Vec<WorkerMetadata>;
 
-    async fn update_status(
-        &self,
-        worker_id: &WorkerId,
-        status: WorkerStatus,
-        deleted_regions: DeletedRegions,
-        overridden_retry_config: Option<RetryConfig>,
-        oplog_idx: u64,
-    );
+    async fn update_status(&self, worker_id: &WorkerId, status_value: &WorkerStatusRecord);
 }
 
 #[derive(Clone)]
@@ -300,23 +291,11 @@ impl WorkerService for WorkerServiceRedis {
         self.enum_workers_at_key(key).await
     }
 
-    async fn update_status(
-        &self,
-        worker_id: &WorkerId,
-        status: WorkerStatus,
-        deleted_regions: DeletedRegions,
-        overridden_retry_config: Option<RetryConfig>,
-        oplog_idx: u64,
-    ) {
+    async fn update_status(&self, worker_id: &WorkerId, status_value: &WorkerStatusRecord) {
         record_worker_call("update_status");
 
         let status_key = get_worker_status_redis_key(worker_id);
-        let status_value = WorkerStatusRecord {
-            status: status.clone(),
-            deleted_regions,
-            overridden_retry_config,
-            oplog_idx,
-        };
+
         let serialized_status_value = self.redis.serialize(&status_value).unwrap_or_else(|err| {
             panic!(
                 "failed to serialize worker status to {:?} in Redis: {err}",
@@ -348,7 +327,7 @@ impl WorkerService for WorkerServiceRedis {
             .serialize(&worker_id)
             .expect("failed to serialize worker id");
 
-        if status == WorkerStatus::Running {
+        if status_value.status == WorkerStatus::Running {
             debug!("adding worker {worker_id} to the set of running workers in shard {shard_id}");
 
             let _: u32 = self
@@ -438,21 +417,9 @@ impl WorkerService for WorkerServiceInMemory {
         self.workers.iter().map(|i| i.clone()).collect()
     }
 
-    async fn update_status(
-        &self,
-        worker_id: &WorkerId,
-        status: WorkerStatus,
-        deleted_regions: DeletedRegions,
-        overridden_retry_config: Option<RetryConfig>,
-        oplog_idx: u64,
-    ) {
+    async fn update_status(&self, worker_id: &WorkerId, status_value: &WorkerStatusRecord) {
         self.workers.entry(worker_id.clone()).and_modify(|worker| {
-            worker.last_known_status = WorkerStatusRecord {
-                status,
-                deleted_regions,
-                overridden_retry_config,
-                oplog_idx,
-            }
+            worker.last_known_status = status_value.clone();
         });
     }
 }
@@ -497,14 +464,7 @@ impl WorkerService for WorkerServiceMock {
         unimplemented!()
     }
 
-    async fn update_status(
-        &self,
-        _worker_id: &WorkerId,
-        _status: WorkerStatus,
-        _deleted_regions: DeletedRegions,
-        _overridden_retry_config: Option<RetryConfig>,
-        _oplog_idx: u64,
-    ) {
+    async fn update_status(&self, _worker_id: WorkerId, _status_value: &WorkerStatusRecord) {
         unimplemented!()
     }
 }

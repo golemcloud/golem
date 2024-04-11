@@ -25,6 +25,7 @@ pub mod blob_store;
 pub mod compiled_template;
 pub mod golem_config;
 pub mod invocation_key;
+pub mod invocation_queue;
 pub mod key_value;
 pub mod oplog;
 pub mod promise;
@@ -118,6 +119,14 @@ pub trait HasSchedulerService {
 
 pub trait HasExtraDeps<Ctx: WorkerCtx> {
     fn extra_deps(&self) -> Ctx::ExtraDeps;
+}
+
+pub trait HasInvocationQueue {
+    fn invocation_queue(&self) -> Arc<dyn invocation_queue::InvocationQueue>;
+
+    /// Because an invocation queue belongs to a worker, but requires the worker to perform the invocation,
+    /// we need to attach the invocation queue to the worker after it is created.
+    fn attach_invocation_queue(&self, invocation_queue: Arc<dyn invocation_queue::InvocationQueue>);
 }
 
 /// HasAll is a shortcut for requiring all available service dependencies

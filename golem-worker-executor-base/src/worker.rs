@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::fmt::{Debug, Formatter};
-use std::ops::DerefMut;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
@@ -25,7 +24,7 @@ use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder};
 use golem_common::model::{
     AccountId, CallingConvention, InvocationKey, Timestamp, VersionedWorkerId, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::Receiver;
@@ -33,15 +32,16 @@ use tracing::{debug, error, info};
 use wasmtime::{Store, UpdateDeadline};
 
 use crate::error::GolemError;
-use crate::invocation::invoke_worker;
 use crate::metrics::wasm::{record_create_worker, record_create_worker_failure};
 use crate::model::{ExecutionStatus, InterruptKind, TrapType, WorkerConfig};
 use crate::services::golem_config::GolemConfig;
 use crate::services::invocation_key::LookupResult;
+use crate::services::invocation_queue::DefaultInvocationQueue;
 use crate::services::recovery::is_worker_error_retriable;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    HasAll, HasConfig, HasInvocationKeyService, HasOplogService, HasWorkerService,
+    HasAll, HasConfig, HasInvocationKeyService, HasInvocationQueue, HasOplogService,
+    HasWorkerService,
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
@@ -224,6 +224,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 public_state,
                 execution_status,
             });
+
+            let invocation_queue = DefaultInvocationQueue::new(result.clone()); // TODO: pass the entries read from oplog to worker_metadata.last_known_status
+            result
+                .public_state
+                .attach_invocation_queue(invocation_queue);
 
             info!("Worker {}/{} activated", worker_id.slug(), template_version);
 
@@ -581,52 +586,30 @@ where
 
                 if requires_invoke {
                     // Invoke the function in the background
-                    let worker_clone = worker.clone();
-                    tokio::spawn(async move {
-                        let instance = &worker_clone.instance;
-                        let store = &worker_clone.store;
-                        let mut store_mutex = store.lock().await;
-                        let store = store_mutex.deref_mut();
-
-                        store
-                            .data_mut()
-                            .set_current_invocation_key(invocation_key)
-                            .await;
-                        let _ = invoke_worker(
+                    worker
+                        .public_state
+                        .invocation_queue()
+                        .enqueue(
+                            invocation_key,
                             full_function_name,
                             vec![],
-                            store,
-                            instance,
-                            &CallingConvention::Component,
-                            true,
+                            CallingConvention::Component,
                         )
                         .await;
-                    });
                 }
                 Ok(None)
             } else {
                 // Invoke the function in the background
-                let worker_clone = worker.clone();
-                tokio::spawn(async move {
-                    let instance = &worker_clone.instance;
-                    let store = &worker_clone.store;
-                    let mut store_mutex = store.lock().await;
-                    let store = store_mutex.deref_mut();
-
-                    store
-                        .data_mut()
-                        .set_current_invocation_key(invocation_key)
-                        .await;
-                    let _ = invoke_worker(
+                worker
+                    .public_state
+                    .invocation_queue()
+                    .enqueue(
+                        invocation_key,
                         full_function_name,
                         function_input,
-                        store,
-                        instance,
-                        &calling_convention,
-                        true,
+                        calling_convention,
                     )
                     .await;
-                });
                 Ok(None)
             }
         }
@@ -727,11 +710,14 @@ where
             &new_entries,
         );
         let deleted_regions = calculate_deleted_regions(last_known.deleted_regions, &new_entries);
+        let pending_invocations =
+            calculate_pending_invocations(last_known.pending_invocations, &new_entries);
 
         Ok(WorkerStatusRecord {
             oplog_idx: last_oplog_index,
             status,
             overridden_retry_config,
+            pending_invocations,
             deleted_regions,
         })
     }
@@ -810,6 +796,7 @@ fn calculate_latest_worker_status(
             OplogEntry::EndRemoteWrite { .. } => {
                 result = WorkerStatus::Running;
             }
+            OplogEntry::PendingWorkerInvocation { .. } => {}
         }
     }
     result
@@ -855,6 +842,20 @@ fn calculate_overridden_retry_policy(
         if let OplogEntry::ChangeRetryPolicy { new_policy, .. } = entry {
             result = Some(new_policy.clone());
         }
+    }
+    result
+}
+
+fn calculate_pending_invocations(
+    initial: Vec<WorkerInvocation>,
+    entries: &[OplogEntry],
+) -> Vec<WorkerInvocation> {
+    let mut result = initial;
+    for entry in entries {
+        if let OplogEntry::PendingWorkerInvocation { invocation, .. } = entry {
+            result.push(invocation.clone());
+        }
+        // TODO: remove invocation if it happened - maybe we need to make invocation key required for that
     }
     result
 }

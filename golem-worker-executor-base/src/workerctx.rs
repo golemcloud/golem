@@ -41,7 +41,7 @@ use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
-use crate::services::{worker_enumeration, HasAll};
+use crate::services::{worker_enumeration, HasAll, HasInvocationQueue};
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -60,10 +60,10 @@ pub trait WorkerCtx:
     + Sized
     + 'static
 {
-    /// PublicState is a subset of the worker context which is accessible outside of the worker
+    /// PublicState is a subset of the worker context which is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
-    type PublicState: PublicWorkerIo + Clone + Send + Sync;
+    type PublicState: PublicWorkerIo + HasInvocationQueue + Clone + Send + Sync;
 
     /// Creates a new worker context
     ///
@@ -250,7 +250,7 @@ pub trait InvocationHooks {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        calling_convention: Option<&CallingConvention>,
+        calling_convention: Option<CallingConvention>,
     ) -> anyhow::Result<()>;
 
     /// Called when a worker invocation fails, before the worker gets deactivated

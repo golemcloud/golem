@@ -541,7 +541,7 @@ impl Display for InvocationKey {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode, Enum)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode, Enum)]
 pub enum CallingConvention {
     Component,
     Stdio,
@@ -619,6 +619,7 @@ pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
     pub deleted_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
+    pub pending_invocations: Vec<WorkerInvocation>,
     pub oplog_idx: u64,
 }
 
@@ -628,6 +629,7 @@ impl Default for WorkerStatusRecord {
             status: WorkerStatus::Idle,
             deleted_regions: DeletedRegions::new(),
             overridden_retry_config: None,
+            pending_invocations: Vec::new(),
             oplog_idx: 0,
         }
     }
@@ -733,6 +735,14 @@ impl From<WorkerStatus> for i32 {
             WorkerStatus::Exited => 6,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+pub struct WorkerInvocation {
+    pub invocation_key: Option<InvocationKey>,
+    pub full_function_name: String,
+    pub function_input: Vec<golem_wasm_rpc::Value>,
+    pub calling_convention: CallingConvention,
 }
 
 #[derive(

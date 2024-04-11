@@ -19,7 +19,7 @@ use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::string::FromUtf8Error;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::error::GolemError;
@@ -36,7 +36,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
-use crate::services::{worker_enumeration, HasAll};
+use crate::services::{worker_enumeration, HasAll, HasInvocationQueue};
 use crate::wasi_host::managed_stdio::ManagedStandardIo;
 use crate::workerctx::{
     ExternalOperations, InvocationHooks, InvocationManagement, IoCapturing, PublicWorkerIo,
@@ -91,6 +91,7 @@ mod sockets;
 pub mod wasm_rpc;
 
 mod durability;
+use crate::services::invocation_queue::InvocationQueue;
 pub use durability::*;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
@@ -170,18 +171,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     worker_id: worker_id.clone(),
                     public_state: PublicDurableWorkerState {
                         promise_service: promise_service.clone(),
-                        event_service: event_service.clone(),
+                        event_service,
                         managed_stdio: stdio,
+                        invocation_queue: Arc::new(Mutex::new(None)),
                     },
                     state: PrivateDurableWorkerState {
                         buffer: VecDeque::new(),
                         oplog_idx: 1,
                         oplog_size,
                         oplog_service,
-                        promise_service: promise_service.clone(),
+                        promise_service,
                         scheduler_service,
-                        worker_service: worker_service.clone(),
-                        worker_enumeration_service: worker_enumeration_service.clone(),
+                        worker_service,
+                        worker_enumeration_service,
                         invocation_key_service,
                         key_value_service,
                         blob_store_service,
@@ -299,24 +301,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub async fn store_worker_status(&self, status: WorkerStatus) {
         let oplog_idx = self.state.oplog_idx;
-        self.state
-            .worker_service
-            .update_status(
-                &self.worker_id.worker_id,
-                status.clone(),
-                self.state.deleted_regions.clone(),
-                self.state.overridden_retry_policy.clone(),
-                oplog_idx,
-            )
-            .await;
-
-        let mut execution_status = self.execution_status.write().unwrap();
-        execution_status.set_last_known_status(WorkerStatusRecord {
+        let status_record = WorkerStatusRecord {
             status,
             deleted_regions: self.state.deleted_regions.clone(),
             overridden_retry_config: self.state.overridden_retry_policy.clone(),
+            pending_invocations: self.public_state.invocation_queue().pending_invocations(),
             oplog_idx,
-        });
+        };
+        self.state
+            .worker_service
+            .update_status(&self.worker_id.worker_id, &status_record)
+            .await;
+
+        let mut execution_status = self.execution_status.write().unwrap();
+        execution_status.set_last_known_status(status_record);
     }
 
     pub fn get_stdio(&self) -> ManagedStandardIo {
@@ -423,7 +421,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        calling_convention: Option<&CallingConvention>,
+        calling_convention: Option<CallingConvention>,
     ) -> anyhow::Result<()> {
         let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
             .iter()
@@ -433,7 +431,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             full_function_name.to_string(),
             &proto_function_input,
             self.get_current_invocation_key().await,
-            calling_convention.cloned(),
+            calling_convention,
         )
         .unwrap_or_else(|err| {
             panic!(
@@ -577,15 +575,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         status: WorkerStatus,
     ) -> Result<(), GolemError> {
         let metadata = this.worker_service().get(worker_id).await;
-        let latest_status = calculate_last_known_status(this, worker_id, &metadata).await?;
+        let mut latest_status = calculate_last_known_status(this, worker_id, &metadata).await?;
+        latest_status.status = status;
         this.worker_service()
-            .update_status(
-                worker_id,
-                status,
-                latest_status.deleted_regions,
-                latest_status.overridden_retry_config,
-                latest_status.oplog_idx,
-            )
+            .update_status(worker_id, &latest_status)
             .await;
         Ok(())
     }
@@ -639,7 +632,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             function_input,
                             store,
                             instance,
-                            &calling_convention.unwrap_or(CallingConvention::Component),
+                            calling_convention.unwrap_or(CallingConvention::Component),
                             false, // we know it was not live before, because cont=true
                         )
                         .await;
@@ -1156,9 +1149,10 @@ impl<Ctx: WorkerCtx> HasOplogService for PrivateDurableWorkerState<Ctx> {
 
 #[derive(Clone)]
 pub struct PublicDurableWorkerState {
-    pub promise_service: Arc<dyn PromiseService + Send + Sync>,
-    pub event_service: Arc<dyn WorkerEventService + Send + Sync>,
-    pub managed_stdio: ManagedStandardIo,
+    promise_service: Arc<dyn PromiseService + Send + Sync>,
+    event_service: Arc<dyn WorkerEventService + Send + Sync>,
+    managed_stdio: ManagedStandardIo,
+    invocation_queue: Arc<Mutex<Option<Arc<dyn InvocationQueue>>>>,
 }
 
 #[async_trait]
@@ -1169,6 +1163,21 @@ impl PublicWorkerIo for PublicDurableWorkerState {
 
     async fn enqueue(&self, message: Bytes, invocation_key: InvocationKey) {
         self.managed_stdio.enqueue(message, invocation_key).await
+    }
+}
+
+impl HasInvocationQueue for PublicDurableWorkerState {
+    fn invocation_queue(&self) -> Arc<dyn InvocationQueue> {
+        self.invocation_queue
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("invocation queue is not initialized")
+            .clone()
+    }
+
+    fn attach_invocation_queue(&self, invocation_queue: Arc<dyn InvocationQueue>) {
+        *self.invocation_queue.lock().unwrap() = Some(invocation_queue);
     }
 }
 

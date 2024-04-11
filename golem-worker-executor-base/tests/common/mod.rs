@@ -508,7 +508,7 @@ impl InvocationHooks for TestWorkerCtx {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        calling_convention: Option<&golem_common::model::CallingConvention>,
+        calling_convention: Option<golem_common::model::CallingConvention>,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .on_exported_function_invoked(full_function_name, function_input, calling_convention)
