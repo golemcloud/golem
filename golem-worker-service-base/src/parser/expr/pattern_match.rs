@@ -1,8 +1,7 @@
-use crate::expression::{Expr, PatternMatchArm};
-use crate::parser::expr::constructor;
+use crate::expression::{ArmPattern, Expr, MatchArm};
 use crate::parser::expr_parser::parse_code;
 use crate::parser::ParseError;
-use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
+use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
 pub(crate) fn create_pattern_match_expr(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
     let match_expr_str = tokenizer
@@ -13,23 +12,20 @@ pub(crate) fn create_pattern_match_expr(tokenizer: &mut Tokenizer) -> Result<Exp
 
     let match_expression = parse_code(match_expr_str.as_str())?;
     tokenizer.skip_next_non_empty_token(); // Skip LCurly
-    let arms = accumulate_arms(tokenizer)?;
+    let arms = accumulate_match_arms(tokenizer)?;
     Ok(Expr::PatternMatch(Box::new(match_expression), arms))
 }
 
-pub(crate) fn accumulate_arms(
+pub(crate) fn accumulate_match_arms(
     tokenizer: &mut Tokenizer,
-) -> Result<Vec<PatternMatchArm>, ParseError> {
+) -> Result<Vec<MatchArm>, ParseError> {
     let mut constructor_patterns = Vec::new();
 
-    while let Some(arm_pattern_token) = tokenizer.next_non_empty_token() {
-        let constructor_pattern = constructor::get_constructor_pattern(
-            tokenizer,
-            arm_pattern_token.to_string().as_str(),
-        )?;
+    loop {
+        let arm_pattern = get_arm_patterns(tokenizer)?;
         let ArmBody { cursor, arm_body } = ArmBody::from_tokenizer(tokenizer)?;
-        let arm = PatternMatchArm((constructor_pattern, arm_body));
-        constructor_patterns.push(arm);
+        let complete_arm = MatchArm((arm_pattern, arm_body));
+        constructor_patterns.push(complete_arm);
 
         if cursor == Cursor::Break {
             break;
@@ -43,6 +39,60 @@ pub(crate) fn accumulate_arms(
     }
 
     Ok(constructor_patterns)
+}
+
+pub(crate) fn get_arm_patterns(tokenizer: &mut Tokenizer) -> Result<ArmPattern, ParseError> {
+    if let Some(constructor_name) = tokenizer.next_non_empty_token() {
+        let patterns = if tokenizer.peek_next_non_empty_token_is(&Token::LParen) {
+            tokenizer.skip_next_non_empty_token(); // Skip LParen
+            match tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
+                Some(constructor_str) => collect_arm_pattern_variables(constructor_str.as_str()),
+                None => Err(ParseError::Message(
+                    "Empty value inside the constructor".to_string(),
+                )),
+            }
+        } else {
+            Ok(vec![])
+        };
+        ArmPattern::constructor(constructor_name.to_string().as_str(), patterns?)
+    } else {
+        Err(ParseError::Message(
+            "Expecting a constructor name".to_string(),
+        ))
+    }
+}
+
+fn collect_arm_pattern_variables(
+    constructor_variable_str: &str,
+) -> Result<Vec<ArmPattern>, ParseError> {
+    let mut tokenizer = Tokenizer::new(constructor_variable_str);
+    let mut arm_patterns = vec![];
+    loop {
+        if let Some(value) = tokenizer.capture_string_until_and_skip_end(&Token::Comma) {
+            let arm_pattern = parse_code(value.as_str())
+                .map(|x| ArmPattern::from_expr(x))
+                .or_else(|_| {
+                    let mut tokenizer = Tokenizer::new(value.as_str());
+                    get_arm_patterns(&mut tokenizer)
+                })?;
+            arm_patterns.push(arm_pattern);
+        } else {
+            let rest = tokenizer.rest();
+            if !rest.is_empty() {
+                let arm_pattern =
+                    parse_code(rest)
+                        .map(|x| ArmPattern::from_expr(x))
+                        .or_else(|_| {
+                            let mut tokenizer = Tokenizer::new(rest);
+                            get_arm_patterns(&mut tokenizer)
+                        })?;
+                arm_patterns.push(arm_pattern);
+            }
+            break;
+        }
+    }
+
+    Ok(arm_patterns)
 }
 
 #[derive(Debug, PartialEq)]

@@ -198,7 +198,26 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_str(" } ")
             }
-            Expr::Constructor0(constructor) => internal::write_constructor(constructor, self),
+            Expr::OptionExpr(constructor) => match constructor {
+                Some(expr) => {
+                    self.write_str("some(")?;
+                    self.write_expr(expr)?;
+                    self.write_str(")")
+                }
+                None => self.write_str("non"),
+            },
+            Expr::ResultExpr(constructor) => match constructor {
+                Ok(expr) => {
+                    self.write_str("ok(")?;
+                    self.write_expr(expr)?;
+                    self.write_str(")")
+                }
+                Err(expr) => {
+                    self.write_str("err(")?;
+                    self.write_expr(expr)?;
+                    self.write_str(")")
+                }
+            },
         }
     }
 
@@ -215,7 +234,7 @@ impl<W: Write> Writer<W> {
 
 mod internal {
     use crate::expression::writer::{Writer, WriterError};
-    use crate::expression::{ConstructorPattern, Expr};
+    use crate::expression::{ArmPattern, Expr};
 
     pub(crate) enum ExprType<'a> {
         Code(&'a Expr),
@@ -261,20 +280,20 @@ mod internal {
     }
 
     pub(crate) fn write_constructor<W>(
-        match_case: &ConstructorPattern,
+        match_case: &ArmPattern,
         writer: &mut Writer<W>,
     ) -> Result<(), WriterError>
     where
         W: std::io::Write,
     {
         match match_case {
-            ConstructorPattern::WildCard => writer.write_str("_"),
-            ConstructorPattern::As(name, pattern) => {
+            ArmPattern::WildCard => writer.write_str("_"),
+            ArmPattern::As(name, pattern) => {
                 writer.write_str(name)?;
                 writer.write_str(" as ")?;
                 write_constructor(pattern, writer)
             }
-            ConstructorPattern::Constructor(constructor_type, variables) => {
+            ArmPattern::Constructor(constructor_type, variables) => {
                 writer.write_display(constructor_type)?;
                 writer.write_str("(")?;
 
@@ -287,7 +306,7 @@ mod internal {
 
                 writer.write_str(")")
             }
-            ConstructorPattern::Literal(expr) => match *expr.clone() {
+            ArmPattern::Literal(expr) => match *expr.clone() {
                 Expr::Variable(s) => writer.write_str(s),
                 any_expr => writer.write_expr(&any_expr),
             },

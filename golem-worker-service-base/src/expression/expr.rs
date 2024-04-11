@@ -33,9 +33,9 @@ pub enum Expr {
     EqualTo(Box<Expr>, Box<Expr>),
     LessThan(Box<Expr>, Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
-    // match worker.response { some(x) => foo, none => bar }
-    PatternMatch(Box<Expr>, Vec<PatternMatchArm>),
-    Constructor0(ConstructorPattern),
+    PatternMatch(Box<Expr>, Vec<MatchArm>),
+    OptionExpr(Option<Box<Expr>>),
+    ResultExpr(Result<Box<Expr>, Box<Expr>>),
 }
 
 impl Expr {
@@ -71,29 +71,44 @@ impl Display for InnerNumber {
 
 // Ex: Some(x) => foo
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
-pub struct PatternMatchArm(pub (ConstructorPattern, Box<Expr>));
+pub struct MatchArm(pub (ArmPattern, Box<Expr>));
 
 // Ex: Some(x)
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
-pub enum ConstructorPattern {
+pub enum ArmPattern {
     WildCard,
-    As(String, Box<ConstructorPattern>),
-    Constructor(ConstructorTypeName, Vec<ConstructorPattern>),
+    As(String, Box<ArmPattern>),
+    Constructor(ConstructorTypeName, Vec<ArmPattern>),
     Literal(Box<Expr>),
 }
 
-impl ConstructorPattern {
-    pub fn from_expr(expr: Expr) -> ConstructorPattern {
+impl ArmPattern {
+    pub fn from_expr(expr: Expr) -> ArmPattern {
         match expr {
-            Expr::Constructor0(constructor_pattern) => constructor_pattern,
-            _ => ConstructorPattern::Literal(Box::new(expr)),
+            Expr::OptionExpr(Some(expr)) => ArmPattern::Constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Some),
+                vec![ArmPattern::Literal(expr)],
+            ),
+            Expr::OptionExpr(None) => ArmPattern::Constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::None),
+                vec![],
+            ),
+            Expr::ResultExpr(Ok(expr)) => ArmPattern::Constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Ok),
+                vec![ArmPattern::Literal(expr)],
+            ),
+            Expr::ResultExpr(Err(expr)) => ArmPattern::Constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Err),
+                vec![ArmPattern::Literal(expr)],
+            ),
+            _ => ArmPattern::Literal(Box::new(expr)),
         }
     }
 
     pub fn constructor(
         constructor_name: &str,
-        variables: Vec<ConstructorPattern>,
-    ) -> Result<ConstructorPattern, ParseError> {
+        variables: Vec<ArmPattern>,
+    ) -> Result<ArmPattern, ParseError> {
         if constructor_name == "ok" {
             validate_single_variable_constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Ok),
@@ -117,40 +132,38 @@ impl ConstructorPattern {
         } else {
             let constructor_type =
                 ConstructorTypeName::CustomConstructor(constructor_name.to_string());
-            Ok(ConstructorPattern::Constructor(constructor_type, variables))
+            Ok(ArmPattern::Constructor(constructor_type, variables))
         }
     }
 }
 
 fn validate_empty_constructor(
     constructor_type: ConstructorTypeName,
-    variables: Vec<ConstructorPattern>,
-) -> Result<ConstructorPattern, ParseError> {
+    variables: Vec<ArmPattern>,
+) -> Result<ArmPattern, ParseError> {
     if !variables.is_empty() {
         Err(ParseError::Message(
             "constructor should have zero variables".to_string(),
         ))
     } else {
-        Ok(ConstructorPattern::Constructor(constructor_type, variables))
+        Ok(ArmPattern::Constructor(constructor_type, variables))
     }
 }
 
 fn validate_single_variable_constructor(
     constructor_type: ConstructorTypeName,
-    variables: Vec<ConstructorPattern>,
-) -> Result<ConstructorPattern, ParseError> {
+    variables: Vec<ArmPattern>,
+) -> Result<ArmPattern, ParseError> {
     if variables.len() != 1 {
         Err(ParseError::Message(
             "constructor should have exactly one variable".to_string(),
         ))
     } else {
         match variables.first().unwrap() {
-            ConstructorPattern::Literal(_) => {
-                Ok(ConstructorPattern::Constructor(constructor_type, variables))
-            }
+            ArmPattern::Literal(_) => Ok(ArmPattern::Constructor(constructor_type, variables)),
 
-            ConstructorPattern::Constructor(_, _) => {
-                Ok(ConstructorPattern::Constructor(constructor_type, variables))
+            ArmPattern::Constructor(_, _) => {
+                Ok(ArmPattern::Constructor(constructor_type, variables))
             }
             _ => Err(ParseError::Message(
                 "Ok constructor should have exactly one variable".to_string(),

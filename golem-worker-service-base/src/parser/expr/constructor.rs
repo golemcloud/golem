@@ -1,50 +1,42 @@
-use crate::expression::ConstructorPattern;
+use crate::expression::Expr;
 use crate::parser::{expr_parser::parse_code, ParseError};
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
 // To parse expressions such as some(x), foo(bar)
-pub(crate) fn get_constructor_pattern(
+pub(crate) fn create_constructor(
     tokenizer: &mut Tokenizer,
     constructor_name: &str,
-) -> Result<ConstructorPattern, ParseError> {
+) -> Result<Expr, ParseError> {
     if tokenizer.peek_next_non_empty_token_is(&Token::LParen) {
         tokenizer.skip_next_non_empty_token(); // Skip LParen
-        let construction_variables =
-            match tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
-                Some(value) => collect_construction_variables(value.as_str())?,
-                None => {
-                    return Err(ParseError::Message(format!(
-                        "Empty value inside the constructor {}",
+        match tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
+            Some(value) => {
+                let expr = parse_code(value)?;
+                if constructor_name == "err" {
+                    Ok(Expr::ResultExpr(Err(Box::new(expr))))
+                } else if constructor_name == "ok" {
+                    Ok(Expr::ResultExpr(Ok(Box::new(expr))))
+                } else if constructor_name == "some" {
+                    Ok(Expr::OptionExpr(Some(Box::new(expr))))
+                } else {
+                    Err(ParseError::Message(format!(
+                        "Unknown constructor {}",
                         constructor_name
                     )))
                 }
-            };
-        ConstructorPattern::constructor(constructor_name, construction_variables)
-    } else {
-        ConstructorPattern::constructor(constructor_name, vec![])
-    }
-}
-
-fn collect_construction_variables(
-    constructor_variable_str: &str,
-) -> Result<Vec<ConstructorPattern>, ParseError> {
-    let mut tokenizer = Tokenizer::new(constructor_variable_str);
-    let mut construction_variables = vec![];
-    loop {
-        if let Some(value) = tokenizer.capture_string_until_and_skip_end(&Token::Comma) {
-            let expr = parse_code(value.as_str())?;
-            let constructor_pattern = ConstructorPattern::from_expr(expr);
-            construction_variables.push(constructor_pattern);
-        } else {
-            let rest = tokenizer.rest();
-            if !rest.is_empty() {
-                let expr = parse_code(rest)?;
-                let constructor_pattern = ConstructorPattern::from_expr(expr);
-                construction_variables.push(constructor_pattern);
             }
-            break;
+            None => {
+                return Err(ParseError::Message(format!(
+                    "Empty value inside the constructor {}",
+                    constructor_name
+                )))
+            }
+        }
+    } else {
+        if constructor_name == "none" {
+            Ok(Expr::OptionExpr(None))
+        } else {
+            Err(format!("Unknown constructor. {}", constructor_name).into())
         }
     }
-
-    Ok(construction_variables)
 }
