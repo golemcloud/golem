@@ -934,6 +934,31 @@ mod tests {
     }
 
     #[test]
+    fn test_evaluation_with_pattern_match_with_wild_card() {
+        let worker_response = get_worker_response(
+            r#"
+                    {
+                        "err": {
+                           "ids": ["id1", "id2"]
+                        }
+                    }"#,
+        );
+
+        let expr = expression::from_string(
+            "${match worker.response { ok(_) => ok(1), err(_) => err(2) }}",
+        )
+        .unwrap();
+        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+
+        let expected = TypeAnnotatedValue::Result {
+            value: Err(Some(Box::new(TypeAnnotatedValue::U64(2)))),
+            error: Some(Box::new(AnalysedType::U64)),
+            ok: None,
+        };
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
     fn test_evaluation_with_pattern_match_variant_positive() {
         let worker_response = WorkerResponse {
             result: TypeAnnotatedValue::Variant {

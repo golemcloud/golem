@@ -1470,6 +1470,37 @@ mod match_tests {
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
+
+    #[test]
+    fn test_pattern_match_variants_in_wild_pattern() {
+        let input_expr = Expr::PatternMatch(
+            Box::new(Expr::Request()),
+            vec![
+                MatchArm((
+                    ArmPattern::from("foo1", vec![ArmPattern::WildCard]).unwrap(),
+                    Box::new(Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string()))))),
+                )),
+                MatchArm((
+                    ArmPattern::from(
+                        "bar",
+                        vec![ArmPattern::Literal(Box::new(Expr::Variable(
+                            "c".to_string(),
+                        )))],
+                    )
+                    .unwrap(),
+                    Box::new(Expr::Result(Err(Box::new(Expr::Literal(
+                        "bar".to_string(),
+                    ))))),
+                )),
+            ],
+        );
+
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${match request {  foo1(_) => ok('foo'), bar(c) => err('bar') } }".to_string();
+        let output_expr = from_string(expr_str.clone()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
 }
 
 #[cfg(test)]

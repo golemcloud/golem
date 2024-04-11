@@ -69,6 +69,7 @@ impl Rules {
             // A `:` can exist within another `{`
             Token::Colon => vec![TokenStartEnd::of_lcurly()],
             Token::SemiColon => vec![],
+            Token::WildCard => vec![],
             Token::MultiChar(multi) => {
                 match multi {
                     MultiCharTokens::Worker => vec![],  // hardly act as an end token

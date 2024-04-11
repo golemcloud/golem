@@ -101,6 +101,8 @@ impl ArmPattern {
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Err),
                 vec![ArmPattern::Literal(expr)],
             ),
+            // Need to revisit, that we represented wild card with Expr::Empty
+            Expr::Multiple(exprs) if exprs.is_empty() => ArmPattern::WildCard,
             _ => ArmPattern::Literal(Box::new(expr)),
         }
     }
@@ -162,6 +164,7 @@ fn validate_single_variable_constructor(
             ArmPattern::Constructor(_, _) => {
                 Ok(ArmPattern::Constructor(constructor_type, variables))
             }
+            ArmPattern::WildCard => Ok(ArmPattern::Constructor(constructor_type, variables)),
             _ => Err(ParseError::Message(
                 "Ok constructor should have exactly one variable".to_string(),
             )),

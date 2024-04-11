@@ -230,6 +230,7 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             Token::LetEqual => {}
             Token::Comma => {}
             Token::Colon => {}
+            Token::WildCard => {}
         }
     }
 

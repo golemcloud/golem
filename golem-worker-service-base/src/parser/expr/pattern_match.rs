@@ -43,18 +43,26 @@ pub(crate) fn accumulate_match_arms(
 
 pub(crate) fn get_arm_patterns(tokenizer: &mut Tokenizer) -> Result<ArmPattern, ParseError> {
     if let Some(constructor_name) = tokenizer.next_non_empty_token() {
-        let patterns = if tokenizer.peek_next_non_empty_token_is(&Token::LParen) {
-            tokenizer.skip_next_non_empty_token(); // Skip LParen
-            match tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
-                Some(constructor_str) => collect_arm_pattern_variables(constructor_str.as_str()),
-                None => Err(ParseError::Message(
-                    "Empty value inside the constructor".to_string(),
-                )),
+        match constructor_name {
+            Token::WildCard => Ok(ArmPattern::WildCard),
+            _ => {
+                let patterns = if tokenizer.peek_next_non_empty_token_is(&Token::LParen) {
+                    tokenizer.skip_next_non_empty_token(); // Skip LParen
+                    match tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
+                        Some(constructor_str) => {
+                            collect_arm_pattern_variables(constructor_str.as_str())
+                        }
+                        None => Err(ParseError::Message(
+                            "Empty value inside the constructor".to_string(),
+                        )),
+                    }
+                } else {
+                    Ok(vec![])
+                };
+
+                ArmPattern::from(constructor_name.to_string().as_str(), patterns?)
             }
-        } else {
-            Ok(vec![])
-        };
-        ArmPattern::from(constructor_name.to_string().as_str(), patterns?)
+        }
     } else {
         Err(ParseError::Message(
             "Expecting a constructor name".to_string(),
