@@ -254,10 +254,10 @@ impl Evaluator for Expr {
 
                 Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(*bool)),
                 Expr::PatternMatch(match_expression, arms) => {
-                    pattern_match_evaluator::evaluate_pattern_match(match_expression, &arms, input)
+                    pattern_match_evaluator::evaluate_pattern_match(match_expression, arms, input)
                 }
 
-                Expr::OptionExpr(option_expr) => match option_expr {
+                Expr::Option(option_expr) => match option_expr {
                     Some(expr) => {
                         let value = go(expr, input)?;
                         let analysed_type = AnalysedType::from(&value);
@@ -272,7 +272,7 @@ impl Evaluator for Expr {
                     }),
                 },
 
-                Expr::ResultExpr(result_expr) => match result_expr {
+                Expr::Result(result_expr) => match result_expr {
                     Ok(expr) => {
                         let value = go(expr, input)?;
                         let analysed_type = AnalysedType::from(&value);

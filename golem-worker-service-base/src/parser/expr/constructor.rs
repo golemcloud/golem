@@ -13,11 +13,11 @@ pub(crate) fn create_constructor(
             Some(value) => {
                 let expr = parse_code(value)?;
                 if constructor_name == "err" {
-                    Ok(Expr::ResultExpr(Err(Box::new(expr))))
+                    Ok(Expr::Result(Err(Box::new(expr))))
                 } else if constructor_name == "ok" {
-                    Ok(Expr::ResultExpr(Ok(Box::new(expr))))
+                    Ok(Expr::Result(Ok(Box::new(expr))))
                 } else if constructor_name == "some" {
-                    Ok(Expr::OptionExpr(Some(Box::new(expr))))
+                    Ok(Expr::Option(Some(Box::new(expr))))
                 } else {
                     Err(ParseError::Message(format!(
                         "Unknown constructor {}",
@@ -25,18 +25,14 @@ pub(crate) fn create_constructor(
                     )))
                 }
             }
-            None => {
-                return Err(ParseError::Message(format!(
-                    "Empty value inside the constructor {}",
-                    constructor_name
-                )))
-            }
+            None => Err(ParseError::Message(format!(
+                "Empty value inside the constructor {}",
+                constructor_name
+            ))),
         }
+    } else if constructor_name == "none" {
+        Ok(Expr::Option(None))
     } else {
-        if constructor_name == "none" {
-            Ok(Expr::OptionExpr(None))
-        } else {
-            Err(format!("Unknown constructor. {}", constructor_name).into())
-        }
+        Err(format!("Unknown constructor. {}", constructor_name).into())
     }
 }

@@ -70,7 +70,7 @@ fn collect_arm_pattern_variables(
     loop {
         if let Some(value) = tokenizer.capture_string_until_and_skip_end(&Token::Comma) {
             let arm_pattern = parse_code(value.as_str())
-                .map(|x| ArmPattern::from_expr(x))
+                .map(ArmPattern::from_expr)
                 .or_else(|_| {
                     let mut tokenizer = Tokenizer::new(value.as_str());
                     get_arm_patterns(&mut tokenizer)
@@ -79,13 +79,10 @@ fn collect_arm_pattern_variables(
         } else {
             let rest = tokenizer.rest();
             if !rest.is_empty() {
-                let arm_pattern =
-                    parse_code(rest)
-                        .map(|x| ArmPattern::from_expr(x))
-                        .or_else(|_| {
-                            let mut tokenizer = Tokenizer::new(rest);
-                            get_arm_patterns(&mut tokenizer)
-                        })?;
+                let arm_pattern = parse_code(rest).map(ArmPattern::from_expr).or_else(|_| {
+                    let mut tokenizer = Tokenizer::new(rest);
+                    get_arm_patterns(&mut tokenizer)
+                })?;
                 arm_patterns.push(arm_pattern);
             }
             break;

@@ -34,8 +34,8 @@ pub enum Expr {
     LessThan(Box<Expr>, Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
     PatternMatch(Box<Expr>, Vec<MatchArm>),
-    OptionExpr(Option<Box<Expr>>),
-    ResultExpr(Result<Box<Expr>, Box<Expr>>),
+    Option(Option<Box<Expr>>),
+    Result(Result<Box<Expr>, Box<Expr>>),
 }
 
 impl Expr {
@@ -85,19 +85,19 @@ pub enum ArmPattern {
 impl ArmPattern {
     pub fn from_expr(expr: Expr) -> ArmPattern {
         match expr {
-            Expr::OptionExpr(Some(expr)) => ArmPattern::Constructor(
+            Expr::Option(Some(expr)) => ArmPattern::Constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Some),
                 vec![ArmPattern::Literal(expr)],
             ),
-            Expr::OptionExpr(None) => ArmPattern::Constructor(
+            Expr::Option(None) => ArmPattern::Constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::None),
                 vec![],
             ),
-            Expr::ResultExpr(Ok(expr)) => ArmPattern::Constructor(
+            Expr::Result(Ok(expr)) => ArmPattern::Constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Ok),
                 vec![ArmPattern::Literal(expr)],
             ),
-            Expr::ResultExpr(Err(expr)) => ArmPattern::Constructor(
+            Expr::Result(Err(expr)) => ArmPattern::Constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Err),
                 vec![ArmPattern::Literal(expr)],
             ),

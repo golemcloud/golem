@@ -198,7 +198,7 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_str(" } ")
             }
-            Expr::OptionExpr(constructor) => match constructor {
+            Expr::Option(constructor) => match constructor {
                 Some(expr) => {
                     self.write_str("some(")?;
                     self.write_expr(expr)?;
@@ -206,7 +206,7 @@ impl<W: Write> Writer<W> {
                 }
                 None => self.write_str("non"),
             },
-            Expr::ResultExpr(constructor) => match constructor {
+            Expr::Result(constructor) => match constructor {
                 Ok(expr) => {
                     self.write_str("ok(")?;
                     self.write_expr(expr)?;

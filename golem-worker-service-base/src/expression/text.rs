@@ -403,13 +403,11 @@ mod record_tests {
         let input_expr = Expr::Record(vec![
             (
                 "a".to_string(),
-                Box::new(Expr::ResultExpr(Ok(Box::new(Expr::Literal(
-                    "foo".to_string(),
-                ))))),
+                Box::new(Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string()))))),
             ),
             (
                 "b".to_string(),
-                Box::new(Expr::ResultExpr(Err(Box::new(Expr::Literal(
+                Box::new(Expr::Result(Err(Box::new(Expr::Literal(
                     "msg".to_string(),
                 ))))),
             ),
@@ -695,8 +693,8 @@ mod sequence_tests {
     #[test]
     fn test_round_trip_read_write_sequence_of_constructor() {
         let input_expr = Expr::Sequence(vec![
-            Expr::ResultExpr(Ok(Box::new(Expr::Literal("foo".to_string())))),
-            Expr::ResultExpr(Err(Box::new(Expr::Literal("msg".to_string())))),
+            Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string())))),
+            Expr::Result(Err(Box::new(Expr::Literal("msg".to_string())))),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[ok('foo'), err('msg')]}".to_string();
@@ -849,8 +847,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_constructor() {
         let input_expr = Expr::Tuple(vec![
-            Expr::ResultExpr(Ok(Box::new(Expr::Literal("foo".to_string())))),
-            Expr::ResultExpr(Err(Box::new(Expr::Literal("msg".to_string())))),
+            Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string())))),
+            Expr::Result(Err(Box::new(Expr::Literal("msg".to_string())))),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${(ok('foo'), err('msg'))}".to_string();
@@ -1449,9 +1447,7 @@ mod match_tests {
             vec![
                 MatchArm((
                     ArmPattern::constructor("foo1", vec![]).unwrap(),
-                    Box::new(Expr::ResultExpr(Ok(Box::new(Expr::Literal(
-                        "foo".to_string(),
-                    ))))),
+                    Box::new(Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string()))))),
                 )),
                 MatchArm((
                     ArmPattern::constructor(
@@ -1461,7 +1457,7 @@ mod match_tests {
                         )))],
                     )
                     .unwrap(),
-                    Box::new(Expr::ResultExpr(Err(Box::new(Expr::Literal(
+                    Box::new(Expr::Result(Err(Box::new(Expr::Literal(
                         "bar".to_string(),
                     ))))),
                 )),

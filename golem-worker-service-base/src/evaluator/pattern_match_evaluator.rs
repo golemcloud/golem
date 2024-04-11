@@ -228,7 +228,7 @@ fn handle_none(
 fn handle_variant(
     variant_name: &str,
     match_expr_result: &TypeAnnotatedValue,
-    variables: &Vec<ArmPattern>,
+    variables: &[ArmPattern],
 ) -> Result<PatternMatchOutput, EvaluationError> {
     match match_expr_result {
         TypeAnnotatedValue::Variant {
