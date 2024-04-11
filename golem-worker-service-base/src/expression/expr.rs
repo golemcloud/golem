@@ -165,9 +165,11 @@ fn validate_single_variable_constructor(
                 Ok(ArmPattern::Constructor(constructor_type, variables))
             }
             ArmPattern::WildCard => Ok(ArmPattern::Constructor(constructor_type, variables)),
-            _ => Err(ParseError::Message(
-                "Ok constructor should have exactly one variable".to_string(),
-            )),
+            ArmPattern::As(_, _) => Ok(ArmPattern::Constructor(constructor_type, variables)),
+            _ => Err(ParseError::Message(format!(
+                "{} constructor should have exactly one variable",
+                constructor_type
+            ))),
         }
     }
 }

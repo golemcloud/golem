@@ -805,7 +805,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => value.ids[0], none => 'not found' }}",
+            "${match worker.response { ok(value) => value.ids[0], err(msg) => 'not found' }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -824,7 +824,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => some(value.ids[0]), none => 'not found' }}",
+            "${match worker.response { ok(value) => some(value.ids[0]), err(msg) => 'not found' }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -956,6 +956,47 @@ mod tests {
             ok: None,
         };
         assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn test_evaluation_with_pattern_match_with_name_alias() {
+        let worker_response = get_worker_response(
+            r#"
+                    {
+                        "err": {
+                           "ok": {
+                             "id": 1
+                            }
+                        }
+                    }"#,
+        );
+
+        let expr = expression::from_string(
+            "${match worker.response { a @ ok(b @ _) => ok(1), c @ err(d @ ok(e)) => {p : c, q: d, r: e.id} }}",
+        )
+            .unwrap();
+        let result = expr
+            .evaluate(&worker_response.result_with_worker_response_key())
+            .unwrap();
+
+        let output_json = golem_wasm_rpc::json::get_json_from_typed_value(&result);
+
+        let expected_json = json!({
+            "p": {
+                "err": {
+                    "ok": {
+                        "id": 1
+                    }
+                }
+            },
+            "q": {
+                "ok": {
+                    "id": 1
+                }
+            },
+            "r": 1
+        });
+        assert_eq!(output_json, expected_json);
     }
 
     #[test]
