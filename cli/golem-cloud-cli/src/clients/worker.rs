@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_cloud_client::model::{
     CallingConvention, InvokeParameters, InvokeResult, VersionedWorkerId, WorkerCreationRequest,
-    WorkerMetadata,
+    WorkerMetadata, WorkersMetadataResponse,
 };
 use golem_cloud_client::Context;
 use native_tls::TlsConnector;
@@ -81,6 +81,14 @@ pub trait WorkerClient {
         name: WorkerName,
         template_id: RawTemplateId,
     ) -> Result<WorkerMetadata, GolemError>;
+    async fn list_metadata(
+        &self,
+        template_id: RawTemplateId,
+        filter: Option<Vec<String>>,
+        cursor: Option<u64>,
+        count: Option<u64>,
+        precise: Option<bool>,
+    ) -> Result<WorkersMetadataResponse, GolemError>;
     async fn connect(&self, name: WorkerName, template_id: RawTemplateId)
         -> Result<(), GolemError>;
 }
@@ -105,7 +113,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
         Ok(self
             .client
-            .post(
+            .launch_new_worker(
                 &template_id.0,
                 &WorkerCreationRequest {
                     name: name.0,
@@ -125,7 +133,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
         let key = self
             .client
-            .worker_name_key_post(&template_id.0, &name.0)
+            .get_invocation_key(&template_id.0, &name.0)
             .await?;
 
         Ok(key_api_to_cli(key))
@@ -153,7 +161,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
         Ok(self
             .client
-            .worker_name_invoke_and_await_post(
+            .invoke_and_await_function(
                 &template_id.0,
                 &name.0,
                 &invocation_key.0,
@@ -175,7 +183,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
         let _ = self
             .client
-            .worker_name_invoke_post(&template_id.0, &name.0, &function, &parameters)
+            .invoke_function(&template_id.0, &name.0, &function, &parameters)
             .await?;
         Ok(())
     }
@@ -189,7 +197,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
         let _ = self
             .client
-            .worker_name_interrupt_post(&template_id.0, &name.0, Some(false))
+            .interrupt_worker(&template_id.0, &name.0, Some(false))
             .await?;
         Ok(())
     }
@@ -203,7 +211,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
         let _ = self
             .client
-            .worker_name_interrupt_post(&template_id.0, &name.0, Some(true))
+            .interrupt_worker(&template_id.0, &name.0, Some(true))
             .await?;
         Ok(())
     }
@@ -211,10 +219,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
     async fn delete(&self, name: WorkerName, template_id: RawTemplateId) -> Result<(), GolemError> {
         info!("Deleting worker {}/{}", template_id.0, name.0);
 
-        let _ = self
-            .client
-            .worker_name_delete(&template_id.0, &name.0)
-            .await?;
+        let _ = self.client.delete_worker(&template_id.0, &name.0).await?;
         Ok(())
     }
 
@@ -225,7 +230,35 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
     ) -> Result<WorkerMetadata, GolemError> {
         info!("Getting worker {}/{} metadata", template_id.0, name.0);
 
-        Ok(self.client.worker_name_get(&template_id.0, &name.0).await?)
+        Ok(self
+            .client
+            .get_worker_metadata(&template_id.0, &name.0)
+            .await?)
+    }
+
+    async fn list_metadata(
+        &self,
+        template_id: RawTemplateId,
+        filter: Option<Vec<String>>,
+        cursor: Option<u64>,
+        count: Option<u64>,
+        precise: Option<bool>,
+    ) -> Result<WorkersMetadataResponse, GolemError> {
+        info!(
+            "Getting workers metadata for template: {}, filter: {}",
+            template_id.0,
+            filter
+                .clone()
+                .map(|fs| fs.join(" AND "))
+                .unwrap_or("N/A".to_string())
+        );
+
+        let filter: Option<&[String]> = filter.as_deref();
+
+        Ok(self
+            .client
+            .get_workers_metadata(&template_id.0, filter, cursor, count, precise)
+            .await?)
     }
 
     async fn connect(
