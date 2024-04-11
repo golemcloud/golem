@@ -13,8 +13,8 @@ pub(crate) fn create_pattern_match_expr(tokenizer: &mut Tokenizer) -> Result<Exp
 
     let match_expression = parse_code(match_expr_str.as_str())?;
     tokenizer.skip_next_non_empty_token(); // Skip LCurly
-    let constructors = accumulate_arms(tokenizer)?;
-    Ok(Expr::PatternMatch(Box::new(match_expression), constructors))
+    let arms = accumulate_arms(tokenizer)?;
+    Ok(Expr::PatternMatch(Box::new(match_expression), arms))
 }
 
 pub(crate) fn accumulate_arms(
@@ -59,34 +59,32 @@ struct ArmBody {
 
 impl ArmBody {
     fn from_tokenizer(tokenizer: &mut Tokenizer) -> Result<ArmBody, ParseError> {
-        match tokenizer.next_non_empty_token() {
-            Some(Token::MultiChar(MultiCharTokens::Arrow)) => {
-                if let Some((end_token, captured_string)) =
-                    tokenizer.capture_string_until_either(&Token::Comma, &Token::RCurly)
-                {
-                    let arm = parse_code(captured_string).map(|expr| Box::new(expr))?;
+        if tokenizer.next_non_empty_token_is(&Token::arrow()) {
+            if let Some((end_token, captured_string)) =
+                tokenizer.capture_string_until_either(&Token::Comma, &Token::RCurly)
+            {
+                let arm = parse_code(captured_string)?;
 
-                    if end_token == &Token::RCurly {
-                        Ok(ArmBody {
-                            cursor: Cursor::Break,
-                            arm_body: arm,
-                        })
-                    } else {
-                        tokenizer.skip_next_non_empty_token(); // Skip comma
-                        Ok(ArmBody {
-                            cursor: Cursor::Continue,
-                            arm_body: arm,
-                        })
-                    }
+                let cursor = if end_token == &Token::RCurly {
+                    Cursor::Break
                 } else {
-                    Err(ParseError::Message(
-                        "Expecting an arm body after Some arrow".to_string(),
-                    ))
-                }
+                    tokenizer.skip_next_non_empty_token(); // Skip comma
+                    Cursor::Continue
+                };
+
+                Ok(ArmBody {
+                    cursor,
+                    arm_body: Box::new(arm),
+                })
+            } else {
+                Err(ParseError::Message(
+                    "Expecting an arm body after Some arrow".to_string(),
+                ))
             }
-            _ => Err(ParseError::Message(
+        } else {
+            Err(ParseError::Message(
                 "Expecting an arrow after Some expression".to_string(),
-            )),
+            ))
         }
     }
 }

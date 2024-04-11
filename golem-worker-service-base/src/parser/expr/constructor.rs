@@ -1,4 +1,4 @@
-use crate::expression::{ConstructorPattern};
+use crate::expression::ConstructorPattern;
 use crate::parser::{expr_parser::parse_code, ParseError};
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
