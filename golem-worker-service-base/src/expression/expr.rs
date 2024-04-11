@@ -158,19 +158,7 @@ fn validate_single_variable_constructor(
             constructor_type
         )))
     } else {
-        match variables.first().unwrap() {
-            ArmPattern::Literal(_) => Ok(ArmPattern::Constructor(constructor_type, variables)),
-
-            ArmPattern::Constructor(_, _) => {
-                Ok(ArmPattern::Constructor(constructor_type, variables))
-            }
-            ArmPattern::WildCard => Ok(ArmPattern::Constructor(constructor_type, variables)),
-            ArmPattern::As(_, _) => Ok(ArmPattern::Constructor(constructor_type, variables)),
-            _ => Err(ParseError::Message(format!(
-                "{} constructor should have exactly one variable",
-                constructor_type
-            ))),
-        }
+        Ok(ArmPattern::Constructor(constructor_type, variables))
     }
 }
 
