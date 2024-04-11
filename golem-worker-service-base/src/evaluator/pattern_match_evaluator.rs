@@ -6,20 +6,20 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::ops::Deref;
 
-pub struct BindingVariable(String);
+struct BindingVariable(String);
 
-pub(crate) enum PatternMatchOutput {
+enum PatternMatchOutput {
     Matched(MatchResult),
     NoneMatched,
     TypeMisMatch(TypeMisMatchResult),
 }
 
-pub(crate) struct MatchResult {
+struct MatchResult {
     binding_variable: Option<BindingVariable>,
     result: TypeAnnotatedValue,
 }
 
-pub(crate) struct TypeMisMatchResult {
+struct TypeMisMatchResult {
     expected_type: String,
     actual_type: String,
 }
@@ -132,7 +132,7 @@ fn evaluate_arm_pattern(
     }
 }
 
-pub fn handle_ok(
+fn handle_ok(
     match_expr_result: &TypeAnnotatedValue,
     ok_variable: &ArmPattern,
 ) -> Result<PatternMatchOutput, EvaluationError> {
@@ -156,7 +156,7 @@ pub fn handle_ok(
     }
 }
 
-pub fn handle_err(
+fn handle_err(
     match_expr_result: &TypeAnnotatedValue,
     err_variable: &ArmPattern,
 ) -> Result<PatternMatchOutput, EvaluationError> {
@@ -180,7 +180,7 @@ pub fn handle_err(
     }
 }
 
-pub fn handle_some(
+fn handle_some(
     match_expr_result: &TypeAnnotatedValue,
     some_variable: &ArmPattern,
 ) -> Result<PatternMatchOutput, EvaluationError> {
@@ -202,7 +202,7 @@ pub fn handle_some(
     }
 }
 
-pub fn handle_none(
+fn handle_none(
     match_expr_result: &TypeAnnotatedValue,
 ) -> Result<PatternMatchOutput, EvaluationError> {
     match match_expr_result {
@@ -225,7 +225,7 @@ pub fn handle_none(
     }
 }
 
-pub fn handle_variant(
+fn handle_variant(
     variant_name: &str,
     match_expr_result: &TypeAnnotatedValue,
     variables: &Vec<ArmPattern>,

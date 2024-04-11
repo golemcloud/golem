@@ -2,7 +2,7 @@ use crate::evaluator::EvaluationError;
 use crate::primitive::{GetPrimitive, Primitive};
 use golem_wasm_rpc::TypeAnnotatedValue;
 
-pub fn evaluate_math_op<F>(
+pub(crate) fn evaluate_math_op<F>(
     left: &TypeAnnotatedValue,
     right: &TypeAnnotatedValue,
     compare: F,
