@@ -33,6 +33,7 @@ pub enum Expr {
     EqualTo(Box<Expr>, Box<Expr>),
     LessThan(Box<Expr>, Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
+    // match worker.response { some(x) => foo, none => bar }
     PatternMatch(Box<Expr>, Vec<PatternMatchArm>),
     Constructor0(ConstructorPattern),
 }
@@ -68,12 +69,11 @@ impl Display for InnerNumber {
     }
 }
 
+// Ex: Some(x) => foo
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct PatternMatchArm(pub (ConstructorPattern, Box<Expr>));
 
-// Person(Ok(Some(age)) is
-// Constructor(Person, vec![Constructor(Ok, vec![Constructor(Some, vec![Literal(Expr::Variable(age))])])])
-// and age becomes the binding variable
+// Ex: Some(x)
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum ConstructorPattern {
     WildCard,

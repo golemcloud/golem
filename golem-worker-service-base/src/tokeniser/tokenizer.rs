@@ -205,6 +205,10 @@ pub struct Tokenizer<'a> {
 }
 
 impl<'t> Tokenizer<'t> {
+    pub fn pos(&self) -> usize {
+        self.state.pos
+    }
+
     pub fn peek_at(&mut self, index: usize) -> Option<Token> {
         let original_state = self.state.pos;
         self.state.pos = index;
@@ -249,17 +253,28 @@ impl<'t> Tokenizer<'t> {
         }
     }
 
-    pub fn capture_string_until_either(&mut self, token1: &'t Token, token2: &'t Token) -> Option<(&'t Token, String)> {
+    pub fn capture_string_until_either(
+        &mut self,
+        token1: &'t Token,
+        token2: &'t Token,
+    ) -> Option<(&'t Token, String)> {
         let left_index = self.index_of_end_token(token1);
         let right_index = self.index_of_end_token(token2);
 
-
         match (left_index, right_index) {
-            (Some(x), Some(y)) if x > y => self.capture_string_until(token2).map(|string| (token2, string)),
-            (Some(_), Some(_))=> self.capture_string_until(token1).map(|string| (token1, string)),
-            (Some(_), None) => self.capture_string_until(token1).map(|string| (token1, string)),
-            (None, Some(_)) => self.capture_string_until(token2).map(|string| (token2, string)),
-            (None, None) => None
+            (Some(x), Some(y)) if x > y => self
+                .capture_string_until(token2)
+                .map(|string| (token2, string)),
+            (Some(_), Some(_)) => self
+                .capture_string_until(token1)
+                .map(|string| (token1, string)),
+            (Some(_), None) => self
+                .capture_string_until(token1)
+                .map(|string| (token1, string)),
+            (None, Some(_)) => self
+                .capture_string_until(token2)
+                .map(|string| (token2, string)),
+            (None, None) => None,
         }
     }
 
@@ -272,7 +287,6 @@ impl<'t> Tokenizer<'t> {
     pub fn capture_string_until(&mut self, end: &Token) -> Option<String> {
         let capture_until = self.index_of_end_token(end)?;
         let tokens = self.all_tokens_until(capture_until);
-
 
         Some(
             tokens

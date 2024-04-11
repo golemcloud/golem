@@ -25,7 +25,9 @@ pub(crate) fn get_constructor_pattern(
     }
 }
 
-fn collect_construction_variables(constructor_variable_str: &str) -> Result<Vec<ConstructorPattern>, ParseError> {
+fn collect_construction_variables(
+    constructor_variable_str: &str,
+) -> Result<Vec<ConstructorPattern>, ParseError> {
     let mut tokenizer = Tokenizer::new(constructor_variable_str);
     let mut construction_variables = vec![];
     loop {
@@ -47,4 +49,3 @@ fn collect_construction_variables(constructor_variable_str: &str) -> Result<Vec<
     dbg!(construction_variables.clone());
     Ok(construction_variables)
 }
-
