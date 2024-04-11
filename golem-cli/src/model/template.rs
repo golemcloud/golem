@@ -16,6 +16,12 @@ pub struct TemplateView {
     pub exports: Vec<String>,
 }
 
+impl From<Template> for TemplateView {
+    fn from(value: Template) -> Self {
+        (&value).into()
+    }
+}
+
 impl From<&Template> for TemplateView {
     fn from(value: &Template) -> Self {
         TemplateView {

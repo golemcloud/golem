@@ -20,22 +20,18 @@ use golem_client::model::Template;
 use tokio::fs::File;
 use tracing::info;
 
-use crate::model::template::TemplateView;
-use crate::model::{GolemError, PathBufOrStdin, RawTemplateId, TemplateName};
+use crate::model::{GolemError, PathBufOrStdin, TemplateId, TemplateName};
 
 #[async_trait]
 pub trait TemplateClient {
-    async fn find(&self, name: Option<TemplateName>) -> Result<Vec<TemplateView>, GolemError>;
-    async fn add(
+    async fn get_metadata(
         &self,
-        name: TemplateName,
-        file: PathBufOrStdin,
-    ) -> Result<TemplateView, GolemError>;
-    async fn update(
-        &self,
-        id: RawTemplateId,
-        file: PathBufOrStdin,
-    ) -> Result<TemplateView, GolemError>;
+        template_id: &TemplateId,
+        version: i32,
+    ) -> Result<Template, GolemError>;
+    async fn find(&self, name: Option<TemplateName>) -> Result<Vec<Template>, GolemError>;
+    async fn add(&self, name: TemplateName, file: PathBufOrStdin) -> Result<Template, GolemError>;
+    async fn update(&self, id: TemplateId, file: PathBufOrStdin) -> Result<Template, GolemError>;
 }
 
 #[derive(Clone)]
@@ -45,21 +41,28 @@ pub struct TemplateClientLive<C: golem_client::api::TemplateClient + Sync + Send
 
 #[async_trait]
 impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for TemplateClientLive<C> {
-    async fn find(&self, name: Option<TemplateName>) -> Result<Vec<TemplateView>, GolemError> {
+    async fn get_metadata(
+        &self,
+        template_id: &TemplateId,
+        version: i32,
+    ) -> Result<Template, GolemError> {
+        info!("Getting template version");
+
+        Ok(self
+            .client
+            .get_template_metadata(&template_id.0, &version.to_string())
+            .await?)
+    }
+
+    async fn find(&self, name: Option<TemplateName>) -> Result<Vec<Template>, GolemError> {
         info!("Getting templates");
 
         let name = name.map(|n| n.0);
 
-        let templates: Vec<Template> = self.client.get_templates(name.as_deref()).await?;
-        let views = templates.iter().map(|c| c.into()).collect();
-        Ok(views)
+        Ok(self.client.get_templates(name.as_deref()).await?)
     }
 
-    async fn add(
-        &self,
-        name: TemplateName,
-        path: PathBufOrStdin,
-    ) -> Result<TemplateView, GolemError> {
+    async fn add(&self, name: TemplateName, path: PathBufOrStdin) -> Result<Template, GolemError> {
         info!("Adding template {name:?} from {path:?}");
 
         let template = match path {
@@ -81,14 +84,10 @@ impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for Temp
             }
         };
 
-        Ok((&template).into())
+        Ok(template)
     }
 
-    async fn update(
-        &self,
-        id: RawTemplateId,
-        path: PathBufOrStdin,
-    ) -> Result<TemplateView, GolemError> {
+    async fn update(&self, id: TemplateId, path: PathBufOrStdin) -> Result<Template, GolemError> {
         info!("Updating template {id:?} from {path:?}");
 
         let template = match path {
@@ -110,6 +109,6 @@ impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for Temp
             }
         };
 
-        Ok((&template).into())
+        Ok(template)
     }
 }

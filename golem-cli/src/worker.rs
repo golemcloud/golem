@@ -15,14 +15,21 @@
 use async_trait::async_trait;
 use clap::builder::ValueParser;
 use clap::Subcommand;
-use golem_client::model::{InvokeParameters, WorkerMetadata, WorkersMetadataResponse};
+use golem_client::model::{
+    InvokeParameters, InvokeResult, Template, WorkerMetadata, WorkersMetadataResponse,
+};
+use tokio::task::JoinHandle;
+use golem_client::Context;
+use crate::clients::template::TemplateClientLive;
 
-use crate::clients::worker::WorkerClient;
+use crate::clients::worker::{WorkerClient, WorkerClientLive};
+use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::{
-    GolemError, GolemResult, InvocationKey, JsonValueParser, TemplateIdOrName, WorkerName,
+    GolemError, GolemResult, InvocationKey, JsonValueParser, TemplateId, TemplateIdOrName,
+    WorkerName,
 };
 use crate::parse_key_val;
-use crate::template::TemplateHandler;
+use crate::template::{TemplateHandler, TemplateHandlerLive};
 
 #[derive(Subcommand, Debug)]
 #[command()]
@@ -85,6 +92,12 @@ pub enum WorkerSubcommand {
         /// Enables the STDIO cal;ing convention, passing the parameters through stdin instead of a typed exported interface
         #[arg(short = 's', long, default_value_t = false)]
         use_stdio: bool,
+
+        /// Human-readable response format.
+        ///
+        /// Temporary flag. Should be replaced with the new --format option.
+        #[arg(short = 'H', long, default_value_t = false)]
+        human_readable: bool,
     },
 
     /// Triggers a function invocation on a worker without waiting for its completion
@@ -206,6 +219,78 @@ pub trait WorkerHandler {
 pub struct WorkerHandlerLive<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> {
     pub client: C,
     pub templates: &'r R,
+    pub worker_context: Context,
+    pub template_context: Context,
+    pub allow_insecure: bool,
+}
+
+// same as resolve_worker_template_version, but with no borrowing, so we can spawn it.
+async fn resolve_worker_template_version_no_ref(
+    worker_context: Context,
+    template_context: Context,
+    allow_insecure: bool,
+    template_id: TemplateId,
+    worker_name: WorkerName,
+) -> Result<Template, GolemError> {
+    let client = WorkerClientLive {
+        client: golem_client::api::WorkerClientLive {
+            context: worker_context.clone(),
+        },
+        context: worker_context.clone(),
+        allow_insecure,
+    };
+
+    let templates = TemplateHandlerLive {
+        client: TemplateClientLive {
+            client: golem_client::api::TemplateClientLive {
+                context: template_context.clone(),
+            },
+        },
+    };
+    resolve_worker_template_version(&client, &templates, template_id, worker_name).await
+}
+
+async fn resolve_worker_template_version<
+    C: WorkerClient + Send + Sync,
+    R: TemplateHandler + Send + Sync,
+>(
+    client: &C,
+    templates: &R,
+    template_id: TemplateId,
+    worker_name: WorkerName,
+) -> Result<Template, GolemError> {
+    let worker_meta = client
+        .get_metadata(worker_name, template_id.clone())
+        .await?;
+
+    templates
+        .get_metadata(&template_id, worker_meta.template_version)
+        .await
+}
+
+async fn to_invoke_result_view<C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync>(
+    res: InvokeResult,
+    join_meta: JoinHandle<Result<Template, GolemError>>,
+    client: &C,
+    templates: &R,
+    template_id: &TemplateId,
+    worker_name: &WorkerName,
+    function: &str,
+) -> Result<InvokeResultView, GolemError> {
+    let template_meta = match join_meta.await.unwrap() {
+        Ok(template_meta) => template_meta,
+        Err(_) => {
+            // If `get_metadata` might fail if `invoke_and_await` creates a new worker after `get_metadata` call
+            resolve_worker_template_version(client, templates, template_id.clone(), worker_name.clone())
+                .await?
+        }
+    };
+
+    Ok(InvokeResultView::try_parse_or_json(
+        res,
+        &template_meta,
+        function,
+    ))
 }
 
 #[async_trait]
@@ -249,8 +334,21 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 function,
                 parameters,
                 use_stdio,
+                human_readable,
             } => {
                 let template_id = self.templates.resolve_id(template_id_or_name).await?;
+
+                let join_template_meta = if human_readable {
+                    Some(tokio::spawn(resolve_worker_template_version_no_ref(
+                        self.worker_context.clone(),
+                        self.template_context.clone(),
+                        self.allow_insecure,
+                        template_id.clone(),
+                        worker_name.clone(),
+                    )))
+                } else {
+                    None
+                };
 
                 let invocation_key = match invocation_key {
                     None => {
@@ -264,16 +362,32 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 let res = self
                     .client
                     .invoke_and_await(
-                        worker_name,
-                        template_id,
-                        function,
+                        worker_name.clone(),
+                        template_id.clone(),
+                        function.clone(),
                         InvokeParameters { params: parameters },
                         invocation_key,
                         use_stdio,
                     )
                     .await?;
 
-                Ok(GolemResult::Json(res.result))
+                match join_template_meta {
+                    None => Ok(GolemResult::Json(res.result)),
+                    Some(join_template_meta) => {
+                        let view = to_invoke_result_view(
+                            res,
+                            join_template_meta,
+                            &self.client,
+                            self.templates,
+                            &template_id,
+                            &worker_name,
+                            &function,
+                        )
+                            .await?;
+
+                        Ok(GolemResult::Ok(Box::new(view)))
+                    }
+                }
             }
             WorkerSubcommand::Invoke {
                 template_id_or_name,

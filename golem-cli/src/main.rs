@@ -198,6 +198,9 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     let worker_srv = WorkerHandlerLive {
         client: worker_client,
         templates: &template_srv,
+        worker_context: worker_context.clone(),
+        template_context: template_context.clone(),
+        allow_insecure,
     };
 
     let api_definition_client = ApiDefinitionClientLive {

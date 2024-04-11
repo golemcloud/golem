@@ -1,10 +1,12 @@
-use golem_client::model::{ExportFunction, ResourceMode, Type, TypeHandle, TypeRecord, TypeResult, TypeTuple, TypeVariant};
+use golem_client::model::{
+    ExportFunction, ResourceMode, Type, TypeHandle, TypeRecord, TypeResult, TypeTuple, TypeVariant,
+};
+use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType};
 use std::borrow::Cow;
 use std::fmt::Display;
-use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType};
 use wasm_wave::wasm::{DisplayType, WasmFunc};
 
-fn type_wave_compatible(typ: &Type) -> bool {
+pub fn type_wave_compatible(typ: &Type) -> bool {
     fn variant_wave_compatible(tv: &TypeVariant) -> bool {
         tv.cases
             .iter()
@@ -61,7 +63,7 @@ fn wrap_analysed_type(typ: AnalysedType) -> golem_wasm_rpc::AnalysedType {
     golem_wasm_rpc::AnalysedType(typ)
 }
 
-fn wrap_type(typ: &Type) -> golem_wasm_rpc::AnalysedType {
+pub fn wrap_type(typ: &Type) -> golem_wasm_rpc::AnalysedType {
     wrap_analysed_type(type_to_analysed(typ))
 }
 
@@ -102,27 +104,39 @@ impl WasmFunc for WrapExportFunction {
 
 pub fn type_to_analysed(typ: &Type) -> AnalysedType {
     fn variant_to_analysed(tv: &TypeVariant) -> AnalysedType {
-        AnalysedType::Variant(tv.cases.iter().map(|notp| (notp.name.clone(), notp.typ.as_ref().map(type_to_analysed))).collect())
+        AnalysedType::Variant(
+            tv.cases
+                .iter()
+                .map(|notp| (notp.name.clone(), notp.typ.as_ref().map(type_to_analysed)))
+                .collect(),
+        )
     }
 
     fn result_to_analysed(tr: &TypeResult) -> AnalysedType {
         AnalysedType::Result {
             ok: tr.ok.as_ref().map(|t| Box::new(type_to_analysed(t))),
-            error: tr.err.as_ref().map(|t| Box::new(type_to_analysed(t)))
+            error: tr.err.as_ref().map(|t| Box::new(type_to_analysed(t))),
         }
     }
 
     fn record_to_analysed(tr: &TypeRecord) -> AnalysedType {
-        AnalysedType::Record(tr.cases.iter().map(|ntp| (ntp.name.clone(), type_to_analysed(&ntp.typ))).collect())
+        AnalysedType::Record(
+            tr.cases
+                .iter()
+                .map(|ntp| (ntp.name.clone(), type_to_analysed(&ntp.typ)))
+                .collect(),
+        )
     }
 
     fn handle_to_analysed(th: &TypeHandle) -> AnalysedType {
         AnalysedType::Resource {
-            id: AnalysedResourceId{value: th.resource_id},
+            id: AnalysedResourceId {
+                value: th.resource_id,
+            },
             resource_mode: match th.mode {
                 ResourceMode::Borrowed => AnalysedResourceMode::Borrowed,
                 ResourceMode::Owned => AnalysedResourceMode::Owned,
-            }
+            },
         }
     }
 
