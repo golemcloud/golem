@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod compfn;
+
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
 
 use crate::bindings::golem::api::host::{get_oplog_index, set_oplog_index, OplogIndex};
 use crate::mark_atomic_operation;
+
+pub use compfn::*;
 
 /// Represents an atomic operation of the transaction which has a rollback action.
 ///
@@ -494,7 +498,11 @@ mod macro_tests {
         Ok(true)
     }
 
-    fn test_compensation(input1: u64, input2: f32, _: Result<bool, String>) -> Result<(), String> {
+    fn test_compensation(
+        _: Option<Result<bool, String>>,
+        input1: u64,
+        input2: f32,
+    ) -> Result<(), String> {
         println!("Compensation input: {input1}, {input2}");
         Ok(())
     }
@@ -505,12 +513,19 @@ mod macro_tests {
         Ok(true)
     }
 
-    fn test_compensation_2(
-        input1: u64,
-        input2: f32,
-        result: Result<bool, String>,
-    ) -> Result<(), String> {
-        println!("Compensation input: {input1}, {input2} for operation {result:?}");
+    fn test_compensation_2(result: Option<Result<bool, String>>) -> Result<(), String> {
+        println!("Compensation for operation result {result:?}");
+        Ok(())
+    }
+
+    #[golem_operation(compensation=test_compensation_3)]
+    fn test_operation_3(input: String) -> Result<(), String> {
+        println!("Op input: {input}");
+        Ok(())
+    }
+
+    fn test_compensation_3() -> Result<(), String> {
+        println!("Compensation for operation, not using any input");
         Ok(())
     }
 

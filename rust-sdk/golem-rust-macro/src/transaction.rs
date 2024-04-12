@@ -62,20 +62,16 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
     let input_args: Vec<proc_macro2::TokenStream> =
         input_names.iter().map(|name| quote! { #name }).collect();
 
-    let compensate = match compensation {
-        Some(f) => quote! { #f },
+    let compensate = match &compensation {
+        Some(_) => quote! { golem_rust::call_compensation_function },
         None => quote! {},
     };
 
     let compensation_pattern =
-        quote! { #input_pattern, op_result: std::result::Result<#succ, #err> };
-    let compensation_args = {
-        let mut args = input_args.clone();
-        args.push(quote! { op_result });
-        args
-    };
+        quote! { #input_pattern, op_result: Option<std::result::Result<#succ, #err>> };
+    let compensation_args = input_args.clone();
 
-    let operation = quote! { operation_with_result };
+    let operation = quote! { operation };
 
     fnsig.inputs.insert(
         0,
@@ -109,7 +105,12 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
                             #fnname(#(#input_args), *)
                         },
                         |#compensation_pattern| {
-                            #compensate(#(#compensation_args), *)
+                            let op_result = match op_result {
+                                Some(Ok(ok)) => Some(Ok((ok,))),
+                                Some(Err(err)) => Some(Err((err,))),
+                                None => None,
+                            };
+                            #compensate(#compensation, op_result, (#(#compensation_args), *)).map_err(|err| err.0)
                         }
                     ),
                     (#(#input_args), *)
