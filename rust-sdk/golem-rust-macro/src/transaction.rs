@@ -22,6 +22,7 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
     let args = parse_macro_input!(args with Punctuated::<Meta, syn::Token![,]>::parse_terminated);
 
     let mut compensation = None;
+    let mut compensation_with_result = None;
     for arg in args {
         if let Meta::NameValue(name_value) = arg {
             let name = name_value.path.get_ident().unwrap().to_string();
@@ -29,6 +30,8 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
 
             if name == "compensation" {
                 compensation = Some(value);
+            } else if name == "compensation_with_result" {
+                compensation_with_result = Some(value);
             }
         }
     }
@@ -60,9 +63,34 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
     };
     let input_args: Vec<proc_macro2::TokenStream> =
         input_names.iter().map(|name| quote! { #name }).collect();
-    let compensate = match compensation {
-        Some(f) => quote! { #f },
-        None => quote! {},
+
+    let (compensate, with_result) = match (compensation, compensation_with_result) {
+        (Some(f), None) => (quote! { #f }, false),
+        (None, Some(f)) => (quote! { #f }, true),
+        (Some(_), Some(_)) => {
+            panic!("Cannot specify both compensation and compensation_with_result")
+        }
+        (None, None) => (quote! {}, false),
+    };
+
+    let compensation_pattern = if with_result {
+        quote! { #input_pattern, op_result: std::result::Result<#succ, #err> }
+    } else {
+        input_pattern.clone()
+    };
+
+    let compensation_args = if with_result {
+        let mut args = input_args.clone();
+        args.push(quote! { op_result });
+        args
+    } else {
+        input_args.clone()
+    };
+
+    let operation = if with_result {
+        quote! { operation_with_result }
+    } else {
+        quote! { operation }
     };
 
     fnsig.inputs.insert(
@@ -82,12 +110,12 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
     let result = quote! {
         #fnsig {
             tx.execute(
-                golem_rust::operation(
+                golem_rust::#operation(
                     |#input_pattern| {
                         #body
                     },
-                    |#input_pattern| {
-                        #compensate(#(#input_args), *)
+                    |#compensation_pattern| {
+                        #compensate(#(#compensation_args), *)
                     }
                 ),
                 (#(#input_args), *)

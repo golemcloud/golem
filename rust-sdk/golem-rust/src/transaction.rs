@@ -532,6 +532,21 @@ mod macro_tests {
         Ok(())
     }
 
+    #[golem_operation(compensation_with_result=test_compensation_2)]
+    fn test_operation_2(input1: u64, input2: f32) -> Result<bool, String> {
+        println!("Op input: {input1}, {input2}");
+        Ok(true)
+    }
+
+    fn test_compensation_2(
+        input1: u64,
+        input2: f32,
+        result: Result<bool, String>,
+    ) -> Result<(), String> {
+        println!("Compensation input: {input1}, {input2} for operation {result:?}");
+        Ok(())
+    }
+
     // Not a real test, just verifying that the code compiles
     #[test]
     #[ignore]
@@ -539,6 +554,7 @@ mod macro_tests {
         let result = fallible_transaction(|tx| {
             println!("Executing the annotated function as an operation directly");
             test_operation(tx, 1, 0.1)?;
+            test_operation_2(tx, 1, 0.1)?;
             Ok(11)
         });
 
