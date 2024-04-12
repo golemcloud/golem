@@ -263,7 +263,7 @@ async fn get_workers() {
         cursor = cursor1;
     }
 
-    check!(found_worker_ids == worker_ids);
+    check!(found_worker_ids.eq(&worker_ids));
 
     if let Some(cursor) = cursor {
         let (_, values) = DEPS
@@ -367,7 +367,11 @@ async fn get_running_workers() {
 
     http_server.abort();
 
-    check!(found_worker_ids == worker_ids);
+    check!(found_worker_ids.len() == workers_count);
+    check!(found_worker_ids.eq(&worker_ids));
 
-    check!(get_worker_ids(values) == worker_ids);
+    let found_worker_ids2 = get_worker_ids(values);
+
+    check!(found_worker_ids2.len() == workers_count);
+    check!(found_worker_ids2.eq(&worker_ids));
 }
