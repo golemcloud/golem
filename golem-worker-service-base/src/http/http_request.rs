@@ -23,6 +23,11 @@ pub struct InputHttpRequest {
 }
 
 impl InputHttpRequest {
+
+    pub fn get_host(&self) -> Option<String> {
+        self.headers.get("host").and_then(|hv| hv.to_str().ok()).map(|s| s.to_string())
+    }
+
     // Converts all request details to type-annotated-value
     // and place them under the key `request`
     pub fn get_type_annotated_value(
