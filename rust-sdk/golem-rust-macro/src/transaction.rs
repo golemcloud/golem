@@ -103,7 +103,7 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
 
     match fnsig.output {
         ReturnType::Type(_, ref mut typ) => {
-            *typ = parse_quote! { Result<#succ, golem_rust::TransactionFailure<#err>> };
+            *typ = parse_quote! { Result<#succ, #err> };
         }
         _ => panic!("Expected function to have a return type of Result<_, _>"),
     };

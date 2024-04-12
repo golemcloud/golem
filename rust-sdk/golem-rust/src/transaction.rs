@@ -174,10 +174,13 @@ impl<Err: Display> Display for TransactionFailure<Err> {
 /// operation's compensation actions are executed in reverse order and the transaction
 /// returns with a failure.
 pub fn fallible_transaction<Out, Err: Clone + 'static>(
-    f: impl FnOnce(&mut FallibleTransaction<Err>) -> TransactionResult<Out, Err>,
+    f: impl FnOnce(&mut FallibleTransaction<Err>) -> Result<Out, Err>,
 ) -> TransactionResult<Out, Err> {
     let mut transaction = FallibleTransaction::new();
-    f(&mut transaction)
+    match f(&mut transaction) {
+        Ok(output) => Ok(output),
+        Err(error) => Err(transaction.on_fail(error)),
+    }
 }
 
 /// Retry the transaction in case of failure. If any operation returns with a failure, all
@@ -208,7 +211,7 @@ pub fn infallible_transaction_with_strong_rollback_guarantees<Out>(
 pub fn transaction<Out, Err, F, T>(f: F) -> TransactionResult<Out, Err>
 where
     T: Transaction<Err>,
-    F: FnOnce(&mut T) -> TransactionResult<Out, Err>,
+    F: FnOnce(&mut T) -> Result<Out, Err>,
 {
     T::run(f)
 }
@@ -257,7 +260,7 @@ impl<Err: Clone + 'static> FallibleTransaction<Err> {
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
-    ) -> TransactionResult<OpOut, Err> {
+    ) -> Result<OpOut, Err> {
         let cloned_op = operation.clone();
         let cloned_in = input.clone();
         let mut cell = CompensationActionCell {
@@ -269,22 +272,19 @@ impl<Err: Clone + 'static> FallibleTransaction<Err> {
         let result = operation.execute(input);
         cell.result = Some(result.clone());
         self.compensations.push(Box::new(cell));
-        match result {
-            Ok(output) => Ok(output),
-            Err(error) => Err(self.fail(error).unwrap_err()),
-        }
+        result
     }
 
-    pub fn fail(&mut self, failure: Err) -> TransactionResult<(), Err> {
+    fn on_fail(&mut self, failure: Err) -> TransactionFailure<Err> {
         for compensation_action in self.compensations.drain(..).rev() {
             if let Err(compensation_failure) = compensation_action.execute() {
-                return Err(TransactionFailure::FailedAndRolledBackPartially {
+                return TransactionFailure::FailedAndRolledBackPartially {
                     failure,
                     compensation_failure,
-                });
+                };
             }
         }
-        Err(TransactionFailure::FailedAndRolledBackCompletely(failure))
+        TransactionFailure::FailedAndRolledBackCompletely(failure)
     }
 }
 
@@ -336,13 +336,14 @@ impl InfallibleTransaction {
         match result {
             Ok(output) => output,
             Err(_) => {
-                self.fail();
+                self.retry();
                 unreachable!()
             }
         }
     }
 
-    pub fn fail(&mut self) {
+    /// Stop executing the transaction and retry from the beginning, after executing the compensation actions
+    pub fn retry(&mut self) {
         for compensation_action in self.compensations.drain(..).rev() {
             let _ = compensation_action.execute();
         }
@@ -358,13 +359,11 @@ pub trait Transaction<Err> {
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
-    ) -> TransactionResult<OpOut, Err>;
+    ) -> Result<OpOut, Err>;
 
-    fn fail(&mut self, error: Err) -> TransactionResult<(), Err>;
+    fn fail(&mut self, error: Err) -> Result<(), Err>;
 
-    fn run<Out>(
-        f: impl FnOnce(&mut Self) -> TransactionResult<Out, Err>,
-    ) -> TransactionResult<Out, Err>;
+    fn run<Out>(f: impl FnOnce(&mut Self) -> Result<Out, Err>) -> TransactionResult<Out, Err>;
 }
 
 impl<Err: Clone + 'static> Transaction<Err> for FallibleTransaction<Err> {
@@ -372,17 +371,15 @@ impl<Err: Clone + 'static> Transaction<Err> for FallibleTransaction<Err> {
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
-    ) -> TransactionResult<OpOut, Err> {
+    ) -> Result<OpOut, Err> {
         FallibleTransaction::execute(self, operation, input)
     }
 
-    fn fail(&mut self, error: Err) -> TransactionResult<(), Err> {
-        FallibleTransaction::fail(self, error)
+    fn fail(&mut self, error: Err) -> Result<(), Err> {
+        Err(error)
     }
 
-    fn run<Out>(
-        f: impl FnOnce(&mut Self) -> TransactionResult<Out, Err>,
-    ) -> TransactionResult<Out, Err> {
+    fn run<Out>(f: impl FnOnce(&mut Self) -> Result<Out, Err>) -> TransactionResult<Out, Err> {
         fallible_transaction(f)
     }
 }
@@ -392,18 +389,16 @@ impl<Err: Debug + Clone + 'static> Transaction<Err> for InfallibleTransaction {
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
-    ) -> TransactionResult<OpOut, Err> {
+    ) -> Result<OpOut, Err> {
         Ok(InfallibleTransaction::execute(self, operation, input))
     }
 
-    fn fail(&mut self, error: Err) -> TransactionResult<(), Err> {
-        InfallibleTransaction::fail(self);
-        Err(TransactionFailure::FailedAndRolledBackCompletely(error)) // never reached
+    fn fail(&mut self, error: Err) -> Result<(), Err> {
+        InfallibleTransaction::retry(self);
+        Err(error)
     }
 
-    fn run<Out>(
-        f: impl FnOnce(&mut Self) -> TransactionResult<Out, Err>,
-    ) -> TransactionResult<Out, Err> {
+    fn run<Out>(f: impl FnOnce(&mut Self) -> Result<Out, Err>) -> TransactionResult<Out, Err> {
         Ok(infallible_transaction(|tx| f(tx).unwrap()))
     }
 }
