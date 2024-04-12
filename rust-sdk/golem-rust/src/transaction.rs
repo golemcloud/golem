@@ -127,7 +127,6 @@ impl<Err: Display> Display for TransactionFailure<Err> {
 pub fn normal_transaction<Out, Err>(
     f: impl FnOnce(&mut NormalTransaction<Err>) -> TransactionResult<Out, Err>,
 ) -> TransactionResult<Out, Err> {
-    let _atomic_region = mark_atomic_operation();
     let mut transaction = NormalTransaction::new();
     f(&mut transaction)
 }
